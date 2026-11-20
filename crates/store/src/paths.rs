@@ -51,10 +51,10 @@ pub fn state_db_path_in(dir: &Path) -> PathBuf {
 }
 
 /// Normalize a filesystem path into a comparison key: forward slashes, no
-/// verbatim (`\?\`) prefix, no trailing slash (except a bare root), lowercase
+/// verbatim (`\\?\`) prefix, no trailing slash (except a bare root), lowercase
 /// (Windows paths are case-insensitive).
 pub fn normalize_key(path: &str) -> String {
-    let mut s = path.trim().replace('\', "/");
+    let mut s = path.trim().replace('\\', "/");
     if let Some(rest) = s.strip_prefix("//?/") {
         s = rest.to_string();
     }
@@ -64,14 +64,18 @@ pub fn normalize_key(path: &str) -> String {
     s.to_lowercase()
 }
 
-/// Display form of a path: native-agnostic cleanup (no verbatim prefix, no
-/// trailing separator) but original case preserved.
+/// Display form of a path: no verbatim prefix, no trailing separator, original
+/// case preserved.
 pub fn clean_display(path: &str) -> String {
     let mut s = path.trim().to_string();
-    if let Some(rest) = s.strip_prefix(r"\?\") {
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
         s = rest.to_string();
     }
-    while s.len() > 1 && (s.ends_with('\') || s.ends_with('/')) && !s.ends_with(":\\") && !s.ends_with(":/") {
+    while s.len() > 1
+        && (s.ends_with('\\') || s.ends_with('/'))
+        && !s.ends_with(":\\")
+        && !s.ends_with(":/")
+    {
         s.pop();
     }
     s
@@ -84,14 +88,24 @@ mod tests {
     #[test]
     fn normalize() {
         assert_eq!(normalize_key(r"C:\Users\Me\Proj\"), "c:/users/me/proj");
-        assert_eq!(normalize_key(r"\?\C:\Foo"), "c:/foo");
-        assert_eq!(normalize_key("C:\\"), "c:/");
+        assert_eq!(normalize_key(r"\\?\C:\Foo"), "c:/foo");
+        assert_eq!(normalize_key(r"C:\"), "c:/");
         assert_eq!(normalize_key("/home/a/"), "/home/a");
     }
 
     #[test]
     fn display() {
-        assert_eq!(clean_display(r"\?\C:\Foo\"), r"C:\Foo");
+        assert_eq!(clean_display(r"\\?\C:\Foo\"), r"C:\Foo");
         assert_eq!(clean_display(r"C:\"), r"C:\");
+    }
+
+    #[test]
+    fn data_dir_is_selachi() {
+        // Only checks the default shape; the env override is not mutated here
+        // (tests run in parallel).
+        if std::env::var_os(DATA_DIR_ENV).is_none() {
+            let p = app_data_dir_path().unwrap();
+            assert!(p.ends_with("Selachi"));
+        }
     }
 }

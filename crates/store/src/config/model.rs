@@ -20,6 +20,9 @@ pub struct Config {
     pub git: GitConfig,
     pub processes: Processes,
     pub retention: RetentionConfig,
+    /// Shell layout: preset, overrides, custom presets, per-project overrides
+    /// (see `config/layout.rs`).
+    pub layout: super::LayoutConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -78,7 +81,11 @@ pub fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
     match h.len() {
         6 => Some((byte(0)?, byte(2)?, byte(4)?)),
         3 => {
-            let nib = |i: usize| u8::from_str_radix(h.get(i..i + 1)?, 16).ok().map(|v| v * 17);
+            let nib = |i: usize| {
+                u8::from_str_radix(h.get(i..i + 1)?, 16)
+                    .ok()
+                    .map(|v| v * 17)
+            };
             Some((nib(0)?, nib(1)?, nib(2)?))
         }
         _ => None,
@@ -259,7 +266,10 @@ impl Config {
             ));
         }
         if !(a.mono_size.is_finite() && (4.0..=96.0).contains(&a.mono_size)) {
-            problems.push(format!("appearance.mono_size = {} must be within 4..=96", a.mono_size));
+            problems.push(format!(
+                "appearance.mono_size = {} must be within 4..=96",
+                a.mono_size
+            ));
         }
         if !(a.line_height.is_finite() && (0.8..=3.0).contains(&a.line_height)) {
             problems.push(format!(

@@ -295,7 +295,12 @@ impl Document {
         }
         match &self.inner.transcoded {
             Some(t) => t,
-            None => self.inner.data.bytes().get(self.inner.text_start..).unwrap_or(&[]),
+            None => self
+                .inner
+                .data
+                .bytes()
+                .get(self.inner.text_start..)
+                .unwrap_or(&[]),
         }
     }
 
@@ -469,7 +474,13 @@ impl Document {
                 bytes: chunk.to_vec(),
                 ascii: chunk
                     .iter()
-                    .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+                    .map(|&b| {
+                        if (0x20..0x7f).contains(&b) {
+                            b as char
+                        } else {
+                            '.'
+                        }
+                    })
                     .collect(),
             })
             .collect()
@@ -487,23 +498,14 @@ impl Document {
         if !self.inner.textual || buckets == 0 || range.start >= range.end {
             return Vec::new();
         }
-        let text_len = self.text_bytes().len() as u64;
         let idx = self.ensure(range.end);
         let end = range.end.min(idx.offsets.len());
         if range.start >= end {
             return Vec::new();
         }
         let lengths = (range.start..end).map(|i| {
-            let start = idx.offsets[i];
-            let next = match idx.offsets.get(i + 1) {
-                Some(&n) => n,
-                None => text_len,
-            };
-            let raw = next - start;
-            // The trailing LF is part of the span except on an unterminated last line.
-            let terminated = idx.offsets.get(i + 1).is_some()
-                || self.text_bytes().last() == Some(&b'\n');
-            (raw - u64::from(terminated && raw > 0)).min(u64::from(u16::MAX)) as u16
+            let len = self.span_of(&idx, i).map_or(0, |r| r.len());
+            len.min(usize::from(u16::MAX)) as u16
         });
         minimap_from_lengths(lengths, end - range.start, buckets)
     }
@@ -514,7 +516,10 @@ impl Document {
         let inner = &self.inner;
         if !inner.textual
             || inner.encoding == Encoding::Latin1
-            || inner.transcoded.as_ref().map_or(inner.data.bytes().len(), Vec::len) as u64
+            || inner
+                .transcoded
+                .as_ref()
+                .map_or(inner.data.bytes().len(), Vec::len) as u64
                 > inner.limits.max_highlight_bytes
         {
             return None;
@@ -592,7 +597,7 @@ impl Document {
             _ => None,
         };
         if let Some(spans) = ready {
-            return highlight::slice_spans(&spans, 0, text, &lines);
+            return highlight::slice_spans(&spans, 0, &lines);
         }
 
         // Window fallback.
@@ -617,7 +622,7 @@ impl Document {
             return empty(lines.len());
         };
         let spans = highlight::highlight_bytes(lang, window, None);
-        highlight::slice_spans(&spans, win_start, text, &lines)
+        highlight::slice_spans(&spans, win_start, &lines)
     }
 }
 
@@ -678,11 +683,11 @@ fn decode(bytes: &[u8], enc: Encoding) -> Cow<'_, str> {
 
 fn transcode_utf16(raw: &[u8], le: bool) -> Vec<u8> {
     let body = raw.get(2..).unwrap_or(&[]);
-    let units = body.chunks_exact(2).map(|c| {
+    let units = body.as_chunks::<2>().0.iter().map(|&[a, b]| {
         if le {
-            u16::from_le_bytes([c[0], c[1]])
+            u16::from_le_bytes([a, b])
         } else {
-            u16::from_be_bytes([c[0], c[1]])
+            u16::from_be_bytes([a, b])
         }
     });
     let mut s = String::with_capacity(body.len() / 2);

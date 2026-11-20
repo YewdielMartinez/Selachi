@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyView, Context, Div, Entity, IntoElement, Render, SharedString, Subscription, Window, div,
+    AnyView, Context, Div, Entity, IntoElement, Render, SharedString, Stateful, Subscription, Window, div,
     prelude::*, px,
 };
 use theme::{Theme, rgb};
@@ -114,7 +114,7 @@ impl StatusBar {
 
     /// Dither meter for `percent` (0..=100): solid segments, then one half-tone segment when the
     /// remainder is at least a quarter segment.
-    fn meter(&self, percent: f64) -> impl IntoElement {
+    fn meter(&self, percent: f64) -> Div {
         let c = self.theme.colors;
         let cell = 2.0;
         let exact = (percent.clamp(0.0, 100.0) / 100.0) * METER_SEGMENTS as f64;
@@ -141,7 +141,7 @@ impl StatusBar {
             .children((0..METER_SEGMENTS).map(seg))
     }
 
-    fn git_pill(&self, info: &GitInfo) -> impl IntoElement {
+    fn git_pill(&self, info: &GitInfo) -> Stateful<Div> {
         let c = self.theme.colors;
         let yellow = rgb(self.theme.terminal.ansi[3]);
         let mut tip = format!("Rama {}", info.branch);
@@ -162,7 +162,7 @@ impl StatusBar {
             .tooltip(self.tip(tip))
     }
 
-    fn usage_pill(&self, info: &UsageInfo) -> impl IntoElement {
+    fn usage_pill(&self, info: &UsageInfo) -> Stateful<Div> {
         let official = info.fresh_official().cloned();
         let tip = match &official {
             Some(o) => {

@@ -1,0 +1,6 @@
+{
+  "name": "selachi",
+  "version": 1,
+  "tags": ["a", "b", null, true],
+  "nested": { "pi": 3.14, "empty": {} }
+}

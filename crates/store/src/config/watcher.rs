@@ -50,14 +50,19 @@ impl ConfigWatcher {
         std::fs::create_dir_all(&dir).map_err(|e| StoreError::io(&dir, e))?;
 
         let (raw_tx, raw_rx) = channel::<()>();
-        let name_filter = file_name.clone();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(ev) = res {
-                if ev.paths.iter().any(|p| p.file_name() == Some(name_filter.as_os_str())) {
-                    let _ = raw_tx.send(());
+        let name_filter = file_name;
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(ev) = res {
+                    if ev
+                        .paths
+                        .iter()
+                        .any(|p| p.file_name() == Some(name_filter.as_os_str()))
+                    {
+                        let _ = raw_tx.send(());
+                    }
                 }
-            }
-        })?;
+            })?;
         watcher.watch(&dir, RecursiveMode::NonRecursive)?;
 
         let current = Arc::new(RwLock::new(initial));
@@ -165,7 +170,7 @@ mod tests {
     fn next_event(rx: &mut UnboundedReceiver<ConfigEvent>, secs: u64) -> Option<ConfigEvent> {
         let deadline = std::time::Instant::now() + Duration::from_secs(secs);
         loop {
-            if let Ok(Some(ev)) = rx.try_next() {
+            if let Ok(ev) = rx.try_recv() {
                 return Some(ev);
             }
             if std::time::Instant::now() > deadline {

@@ -61,6 +61,87 @@ usage_raw_days = 30
 # Hard cap on stored commands (0 = no cap).
 history_max_rows = 500000
 
+[layout]
+# Organización visual de Selachi (también se cambia en vivo desde el panel de
+# layout, Ctrl+Shift+L). Preset de partida, uno de:
+#   "terminal"     rail + pestañas arriba + terminal; sin sidebar (por defecto)
+#   "espacios"     sidebar con espacios, proyectos y agentes; pestañas arriba; 2 splits
+#   "orquestador"  proyecto > worktree > agentes con pestañas verticales; 3 paneles; barra completa
+#   "chat"         hilos agrupados por estado a la izquierda y panel de contexto a la derecha
+#   "zen"          solo la terminal; el resto aparece al pasar el ratón por el borde
+# o el nombre de uno de tus presets propios (ver [[layout.custom_presets]] más abajo).
+preset = "terminal"
+
+# Ajustes finos sobre el preset. Todo es opcional: descomenta solo lo que quieras
+# cambiar. Cambiar de preset desde el panel borra estos ajustes. Las combinaciones
+# imposibles se corrigen solas y Selachi muestra un aviso (nunca falla).
+[layout.overrides]
+# Dónde van las pestañas: "top" (arriba) | "sidebar" (verticales, exige sidebar) | "hidden"
+# tabs_position = "top"
+# Rail de iconos: "visible" | "hidden" (ocultarlo exige una sidebar visible)
+# rail = "visible"
+# Panel derecho: "git" | "context" | "procs" | "viewer" | "none" (u otro id registrado)
+# right_panel = "none"
+# Barra inferior: "compact" (píldoras) | "full" (medidores por agente) | "hidden"
+# bottom_bar = "compact"
+# Divisiones del área principal: "single" | "two_vertical" | "two_horizontal"
+#   | "one_and_two_stacked" (1 + 2 apiladas, como Orca) | "grid2x2"
+# splits = "single"
+# Densidad: "compact" | "comfortable"
+# density = "comfortable"
+# Translucidez de la sidebar (Mica/Acrylic de Windows): 0 (opaca) .. 100
+# sidebar_translucency = 0
+# Breadcrumb (proyecto > rama) en la barra de título.
+# breadcrumb = false
+# Reducir movimiento: los cambios de layout son instantáneos, sin animación.
+# reduced_motion = false
+# Modo zen: sin sidebar, rail ni barra inferior; las pestañas aparecen al pasar el ratón.
+# zen = false
+#
+# Sidebar. Descomenta también el encabezado de abajo si usas alguna de estas claves.
+# [layout.overrides.sidebar]
+# Lado: "left" | "right" | "hidden"
+# side = "left"
+# Ancho en píxeles (se limita a 180..480). También se arrastra con el ratón.
+# width_px = 240
+# Secciones, en orden; la que no aparece está desactivada:
+# "projects" | "worktrees" | "agents" | "threads" | "spaces"
+# sections = ["projects", "agents"]
+# Agrupar pestañas e hilos por: "project" | "status" | "agent" | "none"
+# group_by = "none"
+
+# Un layout distinto para un proyecto: se aplica a todo directorio dentro de "path"
+# (sin distinguir mayúsculas; gana la ruta más específica). Mismas claves que
+# [layout.overrides]. Ejemplo:
+#
+# [[layout.project_overrides]]
+# path = "C:\\Users\\me\\code\\app"
+# [layout.project_overrides.overrides]
+# density = "compact"
+# right_panel = "git"
+
+# Presets propios: un nombre y un layout completo (las claves que falten toman el
+# valor del preset "terminal"). Se eligen con preset = "<name>" y el panel de layout
+# puede guardarlos por ti. Ejemplo:
+#
+# [[layout.custom_presets]]
+# name = "Revisión"
+# tabs_position = "top"
+# rail = "visible"
+# right_panel = "git"
+# bottom_bar = "compact"
+# splits = "two_vertical"
+# density = "compact"
+# sidebar_translucency = 0
+# breadcrumb = true
+# reduced_motion = false
+# zen = false
+# [layout.custom_presets.sidebar]
+# side = "left"
+# width_px = 260
+# sections = ["projects", "worktrees"]
+# group_by = "project"
+
 # Extra shell profiles. Example:
 #
 # [[profiles]]

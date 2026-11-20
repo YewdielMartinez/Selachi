@@ -108,8 +108,15 @@ impl StateDb {
     /// everything. Results are distinct commands ranked by recency, frequency and
     /// a boost when the command was run in `cwd` (a boost, not a filter), with a
     /// small penalty for commands that mostly fail.
-    pub fn search(&self, query: &str, cwd: Option<&str>, limit: usize) -> Result<Vec<HistoryEntry>> {
-        let cwd_key = cwd.map(|c| normalize_key(&clean_display(c))).unwrap_or_default();
+    pub fn search(
+        &self,
+        query: &str,
+        cwd: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>> {
+        let cwd_key = cwd
+            .map(|c| normalize_key(&clean_display(c)))
+            .unwrap_or_default();
         let query_lc = query.trim().to_lowercase();
         let fts = fts_query(&query_lc);
         let like = format!("%{}%", escape_like(&query_lc));
@@ -150,7 +157,11 @@ impl StateDb {
                         r.get::<_, i64>(2)?,
                         count,
                         same > 0,
-                        if finished > 0 { failed as f64 / finished as f64 } else { 0.0 },
+                        if finished > 0 {
+                            failed as f64 / finished as f64
+                        } else {
+                            0.0
+                        },
                     ),
                 })
             };
@@ -159,7 +170,8 @@ impl StateDb {
             } else {
                 stmt.query_map(params![cwd_key, MAX_CANDIDATES, match_arg], map_row)?
             };
-            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
         })?;
 
         if !query_lc.is_empty() {
@@ -193,7 +205,8 @@ fn score(now: i64, last_ts: i64, count: i64, in_cwd: bool, fail_ratio: f64) -> f
     // ln(1+n)/ln(33): 1 run = 0.2, 32 runs = 1.0 (capped).
     let frequency = (((1 + count.max(0)) as f64).ln() / 33f64.ln()).min(1.0);
     let cwd = if in_cwd { 1.0 } else { 0.0 };
-    (W_RECENCY * recency + W_FREQUENCY * frequency + W_CWD * cwd) * (1.0 - FAIL_PENALTY * fail_ratio)
+    (W_RECENCY * recency + W_FREQUENCY * frequency + W_CWD * cwd)
+        * (1.0 - FAIL_PENALTY * fail_ratio)
 }
 
 /// `"git"* "ch"*` from the alphanumeric words of `q`; `None` if there are none.
@@ -254,19 +267,33 @@ pub fn looks_sensitive(command: &str) -> bool {
                 return true;
             }
             // `PASSWORD=...`, `$env:X_TOKEN = "..."`, `secret: ...`
-            let after = lc[end..].trim_start_matches(|c: char| c == '"' || c == '\'' || c == ' ');
+            let after = lc[end..].trim_start_matches(['"', '\'', ' ']);
             if after.starts_with('=') || (after.starts_with(':') && !after.starts_with("::")) {
                 return true;
             }
             from = end;
         }
     }
-    if lc.contains("authorization:") || lc.contains("bearer ") || lc.contains("-asplaintext")
-        || lc.contains("begin rsa private") || lc.contains("begin openssh private") {
+    if lc.contains("authorization:")
+        || lc.contains("bearer ")
+        || lc.contains("-asplaintext")
+        || lc.contains("begin rsa private")
+        || lc.contains("begin openssh private")
+    {
         return true;
     }
     // Well-known token shapes: prefix followed by a long run of token characters.
-    const PREFIXES: &[&str] = &["ghp_", "gho_", "ghs_", "github_pat_", "sk-ant-", "sk-", "xoxb-", "xoxp-", "akia"];
+    const PREFIXES: &[&str] = &[
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "github_pat_",
+        "sk-ant-",
+        "sk-",
+        "xoxb-",
+        "xoxp-",
+        "akia",
+    ];
     for p in PREFIXES {
         let mut from = 0;
         while let Some(i) = lc[from..].find(p) {
@@ -326,7 +353,8 @@ mod tests {
     #[test]
     fn record_skips_secrets_and_space_prefixed() {
         let (_d, db) = temp_db();
-        db.record_command(NewCommand::new("export API_KEY=abc", "C:\\a")).unwrap();
+        db.record_command(NewCommand::new("export API_KEY=abc", "C:\\a"))
+            .unwrap();
         db.record_command(NewCommand::new(" ls", "C:\\a")).unwrap();
         db.record_command(NewCommand::new("   ", "C:\\a")).unwrap();
         db.record_command(NewCommand::new("ls", "C:\\a")).unwrap();
@@ -354,9 +382,19 @@ mod tests {
         let r = db.search("make test", None, 5).unwrap();
         let e = r.iter().find(|e| e.command == "make test").unwrap();
         assert_eq!((e.last_exit_code, e.last_duration_ms), (Some(2), Some(700)));
-        let e = db.search("make", None, 5).unwrap().into_iter().find(|e| e.command == "make").unwrap();
+        let e = db
+            .search("make", None, 5)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.command == "make")
+            .unwrap();
         assert_eq!((e.last_exit_code, e.last_duration_ms), (Some(0), Some(50)));
-        let e = db.search("ls", None, 5).unwrap().into_iter().find(|e| e.command == "ls").unwrap();
+        let e = db
+            .search("ls", None, 5)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.command == "ls")
+            .unwrap();
         assert_eq!(e.last_exit_code, None);
     }
 
@@ -364,12 +402,22 @@ mod tests {
     fn fts_token_prefix_matching() {
         let (_d, db) = temp_db();
         let now = now_ms();
-        for c in ["git checkout main", "git commit -m x", "cargo build --release", "ls"] {
+        for c in [
+            "git checkout main",
+            "git commit -m x",
+            "cargo build --release",
+            "ls",
+        ] {
             db.record_command(cmd(c, "C:\\p", now)).unwrap();
         }
         db.flush().unwrap();
         let names = |q: &str| -> Vec<String> {
-            let mut v: Vec<String> = db.search(q, None, 10).unwrap().into_iter().map(|e| e.command).collect();
+            let mut v: Vec<String> = db
+                .search(q, None, 10)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.command)
+                .collect();
             v.sort();
             v
         };
@@ -389,7 +437,8 @@ mod tests {
         db.record_command(cmd("old thing", "C:\\p", 1)).unwrap();
         db.flush().unwrap();
         assert_eq!(db.search("old", None, 5).unwrap().len(), 1);
-        db.exec_sync(|c| Ok(c.execute("DELETE FROM command_history", [])?)).unwrap();
+        db.exec_sync(|c| Ok(c.execute("DELETE FROM command_history", [])?))
+            .unwrap();
         assert!(db.search("old", None, 5).unwrap().is_empty());
     }
 
@@ -399,25 +448,31 @@ mod tests {
         let now = now_ms();
 
         // Recency: same shape, one fresh, one 60 days old.
-        db.record_command(cmd("deploy stale", "C:\\a", now - 60 * DAY)).unwrap();
-        db.record_command(cmd("deploy fresh", "C:\\a", now - 1000)).unwrap();
+        db.record_command(cmd("deploy stale", "C:\\a", now - 60 * DAY))
+            .unwrap();
+        db.record_command(cmd("deploy fresh", "C:\\a", now - 1000))
+            .unwrap();
         db.flush().unwrap();
         let r = db.search("deploy", None, 5).unwrap();
         assert_eq!(r[0].command, "deploy fresh");
 
         // Frequency: both a week old, one run 10 times.
         for i in 0..10 {
-            db.record_command(cmd("build often", "C:\\a", now - 7 * DAY + i)).unwrap();
+            db.record_command(cmd("build often", "C:\\a", now - 7 * DAY + i))
+                .unwrap();
         }
-        db.record_command(cmd("build once", "C:\\a", now - 7 * DAY)).unwrap();
+        db.record_command(cmd("build once", "C:\\a", now - 7 * DAY))
+            .unwrap();
         db.flush().unwrap();
         let r = db.search("build", None, 5).unwrap();
         assert_eq!(r[0].command, "build often");
         assert_eq!(r[0].count, 10);
 
         // Same-cwd boost beats a somewhat fresher command from elsewhere.
-        db.record_command(cmd("serve here", "C:\\proj\\web", now - 3 * DAY)).unwrap();
-        db.record_command(cmd("serve there", "C:\\other", now - DAY)).unwrap();
+        db.record_command(cmd("serve here", "C:\\proj\\web", now - 3 * DAY))
+            .unwrap();
+        db.record_command(cmd("serve there", "C:\\other", now - DAY))
+            .unwrap();
         db.flush().unwrap();
         let r = db.search("serve", Some("c:/proj/web/"), 5).unwrap();
         assert_eq!(r[0].command, "serve here");
@@ -438,8 +493,10 @@ mod tests {
         assert_eq!(r[0].command, "test ok");
 
         // Whole-command prefix beats a mid-string token match.
-        db.record_command(cmd("echo cargo", "C:\\a", now - 100)).unwrap();
-        db.record_command(cmd("cargo run", "C:\\a", now - 200)).unwrap();
+        db.record_command(cmd("echo cargo", "C:\\a", now - 100))
+            .unwrap();
+        db.record_command(cmd("cargo run", "C:\\a", now - 200))
+            .unwrap();
         db.flush().unwrap();
         let r = db.search("cargo", None, 5).unwrap();
         assert_eq!(r[0].command, "cargo run");
@@ -451,7 +508,8 @@ mod tests {
         let now = now_ms();
         for i in 0..5 {
             db.record_command(cmd("same", "C:\\a", now - i)).unwrap();
-            db.record_command(cmd(&format!("uniq {i}"), "C:\\a", now - i)).unwrap();
+            db.record_command(cmd(&format!("uniq {i}"), "C:\\a", now - i))
+                .unwrap();
         }
         db.flush().unwrap();
         let all = db.search("", None, 100).unwrap();
@@ -471,13 +529,25 @@ mod tests {
         ];
         let subs = [
             "status", "checkout", "commit", "build", "test", "run", "push", "pull", "log", "diff",
-            "install", "start", "clippy", "fmt", "compose", "logs", "exec", "watch", "bench", "doc",
+            "install", "start", "clippy", "fmt", "compose", "logs", "exec", "watch", "bench",
+            "doc",
         ];
         let args = [
-            "--release", "-m wip", "main", "feature/login", "src/main.rs", "-p store", "--all",
-            "--watch", "-A", "origin", "",
+            "--release",
+            "-m wip",
+            "main",
+            "feature/login",
+            "src/main.rs",
+            "-p store",
+            "--all",
+            "--watch",
+            "-A",
+            "origin",
+            "",
         ];
-        let cwds: Vec<String> = (0..60).map(|i| format!("C:\\Users\\me\\code\\proj{i}")).collect();
+        let cwds: Vec<String> = (0..60)
+            .map(|i| format!("C:\\Users\\me\\code\\proj{i}"))
+            .collect();
         let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut next = move || {
             x ^= x << 13;
@@ -515,7 +585,16 @@ mod tests {
         assert_eq!(total, 100_000);
 
         let cwd = Some("C:\\Users\\me\\code\\proj7");
-        let queries = ["", "git", "git c", "cargo b", "dotnet test", "--release", "kubectl logs", "zzzz"];
+        let queries = [
+            "",
+            "git",
+            "git c",
+            "cargo b",
+            "dotnet test",
+            "--release",
+            "kubectl logs",
+            "zzzz",
+        ];
         // Warm up (statement cache, page cache).
         for q in queries {
             let _ = db.search(q, cwd, 20).unwrap();

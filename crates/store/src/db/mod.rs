@@ -23,7 +23,7 @@ pub use favorites::Favorite;
 pub use frecency::PathEntry;
 pub use history::{HistoryEntry, NewCommand};
 pub use layout::SessionLayout;
-pub use projects::{DiscoveredProject, Project, ProjectKind};
+pub use projects::{detect_project, discover_projects, DiscoveredProject, Project, ProjectKind};
 pub use retention::PruneStats;
 pub use schema::{latest_version, migrate};
 
@@ -83,7 +83,9 @@ pub struct StateDb {
 
 impl std::fmt::Debug for StateDb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StateDb").field("path", &self.inner.path).finish()
+        f.debug_struct("StateDb")
+            .field("path", &self.inner.path)
+            .finish()
     }
 }
 
@@ -258,6 +260,9 @@ fn run_batch(conn: &mut Connection, batch: Vec<Op>) {
 }
 
 #[cfg(test)]
+pub(crate) use tests::temp_db;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -328,6 +333,3 @@ mod tests {
         assert_eq!(db.frecent("", 10).unwrap().len(), 1);
     }
 }
-
-#[cfg(test)]
-pub(crate) use tests::temp_db;

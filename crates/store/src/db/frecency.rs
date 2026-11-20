@@ -67,20 +67,28 @@ impl StateDb {
     pub fn frecent(&self, query: &str, limit: usize) -> Result<Vec<PathEntry>> {
         let now = now_ms();
         let rows: Vec<(String, String, u32, i64)> = self.read(|conn| {
-            let mut stmt = conn.prepare_cached("SELECT key, path, visits, last_visit FROM path_history")?;
+            let mut stmt =
+                conn.prepare_cached("SELECT key, path, visits, last_visit FROM path_history")?;
             let rows = stmt.query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)?.max(0) as u32, r.get(3)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, i64>(2)?.max(0) as u32,
+                    r.get(3)?,
+                ))
             })?;
-            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
         })?;
 
         let keywords: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-        let to_entry = |(_, path, visits, last): &(String, String, u32, i64), factor: f64| PathEntry {
-            path: path.clone(),
-            visits: *visits,
-            last_visit: *last,
-            score: frecency(*visits, *last, now) * factor,
-        };
+        let to_entry =
+            |(_, path, visits, last): &(String, String, u32, i64), factor: f64| PathEntry {
+                path: path.clone(),
+                visits: *visits,
+                last_visit: *last,
+                score: frecency(*visits, *last, now) * factor,
+            };
 
         let mut out: Vec<PathEntry> = if keywords.is_empty() {
             rows.iter().map(|r| to_entry(r, 1.0)).collect()
@@ -125,7 +133,8 @@ impl StateDb {
         let rows: Vec<(String, String)> = self.read(|conn| {
             let mut stmt = conn.prepare_cached("SELECT key, path FROM path_history")?;
             let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
         })?;
         let missing: Vec<String> = rows
             .into_iter()
@@ -201,7 +210,8 @@ mod tests {
         let now = now_ms();
         // old but very frequent: 20 * 0.25 = 5
         for i in 0..20 {
-            db.record_visit_at("C:\\code\\legacy", now - 30 * DAY + i).unwrap();
+            db.record_visit_at("C:\\code\\legacy", now - 30 * DAY + i)
+                .unwrap();
         }
         // recent, few visits: 2 * 4 = 8
         db.record_visit_at("C:\\code\\fresh", now - 1000).unwrap();
@@ -209,8 +219,16 @@ mod tests {
         // yesterday-ish, once: 1 * 2 = 2
         db.record_visit_at("C:\\code\\mid", now - 5 * HOUR).unwrap();
         db.flush().unwrap();
-        let paths: Vec<String> = db.frecent("", 10).unwrap().into_iter().map(|e| e.path).collect();
-        assert_eq!(paths, ["C:\\code\\fresh", "C:\\code\\legacy", "C:\\code\\mid"]);
+        let paths: Vec<String> = db
+            .frecent("", 10)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(
+            paths,
+            ["C:\\code\\fresh", "C:\\code\\legacy", "C:\\code\\mid"]
+        );
         assert_eq!(db.frecent("", 2).unwrap().len(), 2);
     }
 
@@ -229,7 +247,13 @@ mod tests {
             }
         }
         db.flush().unwrap();
-        let top = |q: &str| db.frecent(q, 5).unwrap().into_iter().map(|e| e.path).collect::<Vec<_>>();
+        let top = |q: &str| {
+            db.frecent(q, 5)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.path)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(top("sela")[0], "C:\\work\\selachi");
         assert_eq!(top("selachi store"), ["C:\\work\\selachi\\crates\\store"]);
         assert_eq!(top("WORK")[0], "C:\\work\\selachi");
@@ -246,7 +270,8 @@ mod tests {
         let real = dir.path().join("real");
         std::fs::create_dir(&real).unwrap();
         db.record_visit(real.to_str().unwrap()).unwrap();
-        db.record_visit(dir.path().join("gone").to_str().unwrap()).unwrap();
+        db.record_visit(dir.path().join("gone").to_str().unwrap())
+            .unwrap();
         db.record_visit("C:\\zzz\\nope").unwrap();
         db.flush().unwrap();
         assert_eq!(db.remove_missing_paths().unwrap(), 2);

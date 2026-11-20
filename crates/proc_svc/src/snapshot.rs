@@ -231,3 +231,23 @@ fn command_line(h: &OwnedHandle) -> Option<String> {
     }
     None
 }
+
+/// Creation time of a single process (None if it cannot be opened / is gone).
+pub fn start_time_of(pid: u32) -> Option<SystemTime> {
+    let h = sys::open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION).ok()?;
+    let mut info = ProcInfo {
+        pid,
+        ppid: 0,
+        name: String::new(),
+        exe_path: None,
+        cmdline: None,
+        start_time: None,
+        working_set: 0,
+        private_bytes: 0,
+        cpu_time: Duration::ZERO,
+        threads: 0,
+        access_denied: false,
+    };
+    fill_times(&h, &mut info);
+    info.start_time
+}

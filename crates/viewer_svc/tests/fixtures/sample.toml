@@ -1,0 +1,12 @@
+[package]
+name = "selachi"
+version = "0.1.0"
+authors = ["a", "b"]
+published = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[[bin]]
+name = "x"
+when = 1979-05-27T07:32:00Z

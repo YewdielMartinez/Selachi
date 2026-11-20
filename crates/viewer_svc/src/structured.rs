@@ -6,9 +6,9 @@ use crate::error::{Error, Result};
 
 /// Children shown per container before the rest is reported as hidden.
 pub const MAX_CHILDREN: usize = 1000;
-/// Nodes materialised eagerly by [`Structured::root`]; containers met after the
-/// budget is spent come back unloaded (`child_count > 0`, `children` empty) and are
-/// filled with [`Structured::children`].
+/// Nodes materialised eagerly by [`Structured::root`]. Once spent, containers stop
+/// loading children (`Node::hidden()` reports how many are missing) and the rest is
+/// fetched with [`Structured::children`].
 pub const NODE_BUDGET: usize = 20_000;
 const PREVIEW_CHARS: usize = 120;
 

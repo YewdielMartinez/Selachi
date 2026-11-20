@@ -153,7 +153,7 @@ const ANSI_LIGHT: [u32; 16] = [
     0x0067B3, // 4 blue
     0x8A3FC0, // 5 magenta
     0x00707F, // 6 cyan
-    0xC5C6CE, // 7 white
+    0x44474E, // 7 white (PSReadLine paints plain arguments with it: must read on #FFFFFF)
     0x5B5E66, // 8 bright black
     0xD02B2B, // 9 bright red
     0x15803D, // 10 bright green

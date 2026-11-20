@@ -1,0 +1,5 @@
+:root { --c: #00aaff; }
+.shark > a:hover {
+  color: var(--c);
+  margin: 0 4px; /* tight */
+}

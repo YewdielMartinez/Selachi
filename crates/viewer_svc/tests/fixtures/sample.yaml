@@ -1,0 +1,8 @@
+name: selachi
+version: 1
+items:
+  - a
+  - b: 2
+    c: [1, 2, 3]
+flag: true
+nothing: ~

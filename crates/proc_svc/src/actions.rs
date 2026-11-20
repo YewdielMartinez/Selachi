@@ -435,17 +435,17 @@ pub fn console_break(pid: u32) -> bool {
         return false;
     }
     // SAFETY: ignore Ctrl events in this process while attached, then restore.
-    let sent = unsafe {
+    unsafe {
         let _ = SetConsoleCtrlHandler(None, true);
         let r = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid).is_ok();
         let _ = FreeConsole();
         let _ = SetConsoleCtrlHandler(None, false);
         r
-    };
-    sent
+    }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

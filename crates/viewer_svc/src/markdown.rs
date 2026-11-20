@@ -1,8 +1,6 @@
 //! Markdown to a small block/inline model a UI layer can render directly.
 
-use pulldown_cmark::{
-    Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd,
-};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// Inline content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,7 +136,11 @@ impl<'a> Builder<'a> {
             | Event::InlineMath(_) => true,
             Event::Start(t) => matches!(
                 t,
-                Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. } | Tag::Image { .. }
+                Tag::Emphasis
+                    | Tag::Strong
+                    | Tag::Strikethrough
+                    | Tag::Link { .. }
+                    | Tag::Image { .. }
             ),
             _ => false,
         }

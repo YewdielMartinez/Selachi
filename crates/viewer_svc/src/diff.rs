@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use similar::{ChangeTag, TextDiff};
+use similar::{capture_diff_slices, Algorithm, ChangeTag, DiffOp, TextDiff};
 
 use crate::error::{Error, Result};
 
@@ -92,42 +92,35 @@ pub fn diff_text(old: &str, new: &str) -> Vec<Hunk> {
         let new_range = first.new_range().start..last.new_range().end;
         let mut lines = Vec::new();
         for op in &group {
-            for change in diff.iter_inline_changes(op) {
+            let mut removed: Vec<DiffLine> = Vec::new();
+            let mut added: Vec<DiffLine> = Vec::new();
+            for change in diff.iter_changes(op) {
                 let kind = match change.tag() {
                     ChangeTag::Equal => LineKind::Context,
                     ChangeTag::Insert => LineKind::Added,
                     ChangeTag::Delete => LineKind::Removed,
                 };
-                let mut text = String::new();
-                let mut inline = Vec::new();
-                for (emphasized, value) in change.iter_strings_lossy() {
-                    let start = text.len();
-                    text.push_str(&value);
-                    if emphasized && kind != LineKind::Context {
-                        inline.push(start..text.len());
-                    }
-                }
-                // Drop the line terminator and clip ranges accordingly.
-                while text.ends_with('\n') || text.ends_with('\r') {
-                    text.pop();
-                }
-                let max = text.len();
-                inline.retain_mut(|r| {
-                    r.end = r.end.min(max);
-                    r.start < r.end
-                });
-                // A line that is entirely "changed" carries no extra information.
-                if inline.len() == 1 && inline[0] == (0..max) {
-                    inline.clear();
-                }
-                lines.push(DiffLine {
+                let line = DiffLine {
                     kind,
                     old_line: change.old_index().map(|i| i + 1),
                     new_line: change.new_index().map(|i| i + 1),
-                    text,
-                    inline,
-                });
+                    text: change.value().trim_end_matches(['\n', '\r']).to_string(),
+                    inline: Vec::new(),
+                };
+                match kind {
+                    LineKind::Context => lines.push(line),
+                    LineKind::Removed => removed.push(line),
+                    LineKind::Added => added.push(line),
+                }
             }
+            // A replaced block: pair lines one to one and mark the words that differ.
+            for (old, new) in removed.iter_mut().zip(added.iter_mut()) {
+                let (o, n) = inline_diff(&old.text, &new.text);
+                old.inline = o;
+                new.inline = n;
+            }
+            lines.extend(removed);
+            lines.extend(added);
         }
         hunks.push(Hunk {
             old_start: old_range.start + 1,
@@ -138,6 +131,100 @@ pub fn diff_text(old: &str, new: &str) -> Vec<Hunk> {
         });
     }
     hunks
+}
+
+/// Split into identifier runs, whitespace runs and single punctuation characters.
+fn tokenize(s: &str) -> Vec<Range<usize>> {
+    #[derive(PartialEq, Clone, Copy)]
+    enum Class {
+        Word,
+        Space,
+        Other,
+    }
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            Class::Word
+        } else if c.is_whitespace() {
+            Class::Space
+        } else {
+            Class::Other
+        }
+    };
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut cur: Option<Class> = None;
+    for (i, c) in s.char_indices() {
+        let k = class(c);
+        match cur {
+            Some(prev) if prev == k && k != Class::Other => {}
+            _ => {
+                if cur.is_some() {
+                    out.push(start..i);
+                }
+                start = i;
+                cur = Some(k);
+            }
+        }
+    }
+    if cur.is_some() {
+        out.push(start..s.len());
+    }
+    out
+}
+
+/// Byte ranges (in `old` and in `new`) of the tokens that differ. Both empty when the
+/// lines share too little for a word diff to be useful.
+fn inline_diff(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    let ot = tokenize(old);
+    let nt = tokenize(new);
+    let os: Vec<&str> = ot.iter().map(|r| &old[r.clone()]).collect();
+    let ns: Vec<&str> = nt.iter().map(|r| &new[r.clone()]).collect();
+    let ops = capture_diff_slices(Algorithm::Myers, &os, &ns);
+
+    let mut old_marks: Vec<Range<usize>> = Vec::new();
+    let mut new_marks: Vec<Range<usize>> = Vec::new();
+    let mut common = 0usize;
+    for op in ops {
+        match op {
+            DiffOp::Equal { old_index, len, .. } => {
+                common += ot[old_index..old_index + len]
+                    .iter()
+                    .map(|r| r.len())
+                    .sum::<usize>();
+            }
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => push_span(&mut old_marks, &ot[old_index..old_index + old_len]),
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => push_span(&mut new_marks, &nt[new_index..new_index + new_len]),
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                push_span(&mut old_marks, &ot[old_index..old_index + old_len]);
+                push_span(&mut new_marks, &nt[new_index..new_index + new_len]);
+            }
+        }
+    }
+    // Less than a third in common: highlighting everything adds no information.
+    if common * 3 < old.len().max(new.len()) {
+        return (Vec::new(), Vec::new());
+    }
+    (old_marks, new_marks)
+}
+
+/// Append the byte span covered by `tokens`, merging with the previous mark when adjacent.
+fn push_span(marks: &mut Vec<Range<usize>>, tokens: &[Range<usize>]) {
+    let (Some(first), Some(last)) = (tokens.first(), tokens.last()) else {
+        return;
+    };
+    match marks.last_mut() {
+        Some(prev) if prev.end == first.start => prev.end = last.end,
+        _ => marks.push(first.start..last.end),
+    }
 }
 
 fn normalize_eol(s: &str) -> Cow<'_, str> {

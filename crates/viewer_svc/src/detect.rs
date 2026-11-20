@@ -145,7 +145,55 @@ impl Lang {
         }
     }
 
-    /// True when a tree-sitter grammar for this language is compiled into the crate.
+    /// Stable lowercase identifier, used as the plugin folder name and in manifests
+    /// (`csharp`, `typescript`, `powershell`...).
+    pub fn id(self) -> &'static str {
+        match self {
+            Lang::Rust => "rust",
+            Lang::TypeScript => "typescript",
+            Lang::Tsx => "tsx",
+            Lang::JavaScript => "javascript",
+            Lang::Json => "json",
+            Lang::Toml => "toml",
+            Lang::Yaml => "yaml",
+            Lang::Python => "python",
+            Lang::Markdown => "markdown",
+            Lang::Css => "css",
+            Lang::Html => "html",
+            Lang::Bash => "bash",
+            Lang::PowerShell => "powershell",
+            Lang::CSharp => "csharp",
+        }
+    }
+
+    /// Inverse of [`Lang::id`].
+    pub fn from_id(id: &str) -> Option<Lang> {
+        Lang::ALL.into_iter().find(|l| l.id() == id)
+    }
+
+    /// File extensions (lowercase, no dot) that [`Lang::from_extension`] maps to `self`.
+    pub fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Lang::Rust => &["rs"],
+            Lang::TypeScript => &["ts", "mts", "cts"],
+            Lang::Tsx => &["tsx"],
+            Lang::JavaScript => &["js", "mjs", "cjs", "jsx"],
+            Lang::Json => &["json", "jsonc", "json5", "geojson", "webmanifest"],
+            Lang::Toml => &["toml"],
+            Lang::Yaml => &["yaml", "yml"],
+            Lang::Python => &["py", "pyw", "pyi"],
+            Lang::Markdown => &["md", "markdown", "mdx"],
+            Lang::Css => &["css"],
+            Lang::Html => &["html", "htm", "xhtml"],
+            Lang::Bash => &["sh", "bash", "zsh"],
+            Lang::PowerShell => &["ps1", "psm1", "psd1"],
+            Lang::CSharp => &["cs", "csx"],
+        }
+    }
+
+    /// True when a grammar for this language can be used right now: compiled into the
+    /// crate, or installed as a plugin in the process-wide registry
+    /// (see [`crate::set_plugin_registry`]).
     pub fn has_grammar(self) -> bool {
         crate::highlight::grammar_available(self)
     }
@@ -380,12 +428,15 @@ pub(crate) fn sniff(head: &[u8], ext: Option<&str>, truncated: bool) -> Sniff {
     if memchr::memchr(0, head).is_some() {
         return Sniff::Binary;
     }
+    // Valid UTF-8 can still be a binary format that happens to avoid NUL.
+    if control_ratio(head) > 0.10 {
+        return Sniff::Binary;
+    }
     match std::str::from_utf8(head) {
         Ok(_) => Sniff::Text(Encoding::Utf8),
         // A multi-byte sequence cut by the 8 KB window is not an error.
         Err(e) if truncated && e.error_len().is_none() => Sniff::Text(Encoding::Utf8),
-        // Mostly-printable text with stray high bytes is Latin-1-ish; control-heavy is binary.
-        Err(_) if control_ratio(head) > 0.10 => Sniff::Binary,
+        // Mostly-printable text with stray high bytes is Latin-1-ish.
         Err(_) => Sniff::Text(Encoding::Latin1),
     }
 }

@@ -1,9 +1,11 @@
 //! `config.toml`: typed model, loading with defaults, comment-preserving save and
 //! hot reload ([`ConfigWatcher`]).
 
+mod layout;
 mod model;
 mod watcher;
 
+pub use layout::*;
 pub use model::*;
 pub use watcher::{ConfigEvent, ConfigWatcher};
 
@@ -46,7 +48,9 @@ impl Config {
         if !problems.is_empty() {
             return Err(StoreError::ConfigParse(problems.join("; ")));
         }
-        let warnings = unknown_keys(text);
+        let mut warnings = unknown_keys(text);
+        // Layout problems are corrected, never fatal: report them as warnings.
+        warnings.extend(config.layout_warnings());
         Ok(ParsedConfig { config, warnings })
     }
 
@@ -116,17 +120,62 @@ impl Config {
             .trim_start_matches('\u{feff}')
             .parse()
             .map_err(|e: toml_edit::TomlError| StoreError::ConfigParse(e.to_string()))?;
-        let new = toml_edit::ser::to_document(self)
+        let mut new = toml_edit::ser::to_document(self)
             .map_err(|e| StoreError::ConfigSerialize(e.to_string()))?;
-        let defaults = toml_edit::ser::to_document(&Config::default())
+        let mut defaults = toml_edit::ser::to_document(&Config::default())
             .map_err(|e| StoreError::ConfigSerialize(e.to_string()))?;
-        merge_table(doc.as_table_mut(), new.as_table(), Some(defaults.as_table()), "");
+        expand_inline(new.as_table_mut());
+        expand_inline(defaults.as_table_mut());
+        merge_table(
+            doc.as_table_mut(),
+            new.as_table(),
+            Some(defaults.as_table()),
+            "",
+        );
         write_atomic(path, &doc.to_string())
     }
 }
 
+/// The serializer emits inline tables (`a = { b = 1 }`); turn them into regular
+/// `[a]` tables (and arrays of inline tables into `[[a]]`) so they line up with
+/// how a hand-written file is laid out.
+fn expand_inline(table: &mut Table) {
+    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for key in keys {
+        let Some(item) = table.get_mut(&key) else {
+            continue;
+        };
+        let taken = std::mem::take(item);
+        *item = match taken {
+            Item::Value(toml_edit::Value::InlineTable(t)) => {
+                let mut t = t.into_table();
+                expand_inline(&mut t);
+                Item::Table(t)
+            }
+            Item::Value(toml_edit::Value::Array(arr))
+                if !arr.is_empty() && arr.iter().all(|v| v.is_inline_table()) =>
+            {
+                let mut aot = toml_edit::ArrayOfTables::new();
+                for v in arr.into_iter() {
+                    if let toml_edit::Value::InlineTable(t) = v {
+                        let mut t = t.into_table();
+                        expand_inline(&mut t);
+                        aot.push(t);
+                    }
+                }
+                Item::ArrayOfTables(aot)
+            }
+            other => other,
+        };
+    }
+}
+
 /// Tables whose keys are user-defined: stale keys are removed on save.
-const OPEN_MAPS: &[&str] = &["keybindings"];
+const OPEN_MAPS: &[&str] = &[
+    "keybindings",
+    "layout.overrides",
+    "layout.overrides.sidebar",
+];
 
 fn merge_table(old: &mut Table, new: &Table, defaults: Option<&Table>, path: &str) {
     for (key, new_item) in new.iter() {
@@ -136,6 +185,14 @@ fn merge_table(old: &mut Table, new: &Table, defaults: Option<&Table>, path: &st
             format!("{path}.{key}")
         };
         let def_item = defaults.and_then(|d| d.get(key));
+        // A list of `[[tables]]` that became empty disappears from the file
+        // instead of leaving a dangling `key = []`.
+        let emptied = matches!(new_item, Item::Value(toml_edit::Value::Array(a)) if a.is_empty())
+            && matches!(old.get(key), Some(Item::ArrayOfTables(_)));
+        if emptied {
+            old.remove(key);
+            continue;
+        }
         match old.get_mut(key) {
             Some(old_item) => merge_item(old_item, new_item, def_item, &child_path),
             None => {
@@ -159,23 +216,21 @@ fn merge_table(old: &mut Table, new: &Table, defaults: Option<&Table>, path: &st
 }
 
 fn merge_item(old: &mut Item, new: &Item, def: Option<&Item>, path: &str) {
-    match (&mut *old, new) {
-        (Item::Table(ot), Item::Table(nt)) => {
-            merge_table(ot, nt, def.and_then(|d| d.as_table()), path);
-        }
-        (Item::Value(ov), Item::Value(nv)) => {
-            if !same_content(old, new) {
-                let decor = ov.decor().clone();
-                let mut replacement = nv.clone();
-                *replacement.decor_mut() = decor;
-                *old = Item::Value(replacement);
-            }
-        }
-        _ => {
-            if !same_content(old, new) {
-                *old = new.clone();
-            }
-        }
+    if let (Item::Table(ot), Item::Table(nt)) = (&mut *old, new) {
+        merge_table(ot, nt, def.and_then(|d| d.as_table()), path);
+        return;
+    }
+    if same_content(old, new) {
+        return;
+    }
+    if let (Item::Value(ov), Item::Value(nv)) = (&*old, new) {
+        // Keep the user's inline comment/whitespace around the value.
+        let decor = ov.decor().clone();
+        let mut replacement = nv.clone();
+        *replacement.decor_mut() = decor;
+        *old = Item::Value(replacement);
+    } else {
+        *old = new.clone();
     }
 }
 
@@ -281,7 +336,10 @@ mod tests {
         let mut keys = Vec::new();
         leaves(&schema, &mut keys);
         for k in keys {
-            if k == "profiles" {
+            if matches!(
+                k.as_str(),
+                "profiles" | "custom_presets" | "project_overrides"
+            ) {
                 continue;
             }
             assert!(TEMPLATE.contains(&format!("{k} =")), "template misses {k}");
@@ -309,7 +367,8 @@ mod tests {
         c.terminal.cursor_style = CursorStyle::Bar;
         c.agents.permission_default = PermissionDefault::AcceptEdits;
         c.processes.auto_stop_on_thread_close = AutoStop::Never;
-        c.keybindings.insert("terminal.new_tab".into(), "ctrl+t".into());
+        c.keybindings
+            .insert("terminal.new_tab".into(), "ctrl+t".into());
         c.profiles.push(Profile {
             name: "Dev".into(),
             program: "pwsh.exe".into(),
@@ -326,7 +385,10 @@ mod tests {
         let text = "future = 1\n[appearance]\nmode = \"light\"\nsparkle = true\n[keybindings]\nanything = \"x\"\n";
         let p = Config::parse(text).unwrap();
         assert_eq!(p.config.appearance.mode, ThemeMode::Light);
-        assert_eq!(p.warnings, vec!["appearance.sparkle".to_string(), "future".to_string()]);
+        assert_eq!(
+            p.warnings,
+            vec!["appearance.sparkle".to_string(), "future".to_string()]
+        );
     }
 
     #[test]
@@ -372,10 +434,16 @@ mod tests {
         let load = Config::load_or_default_at(&path);
         assert!(load.error.is_some());
         assert_eq!(load.config, Config::default());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[appearance\nbroken");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[appearance\nbroken"
+        );
         // And save refuses to clobber it.
         assert!(Config::default().save_to(&path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[appearance\nbroken");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[appearance\nbroken"
+        );
     }
 
     #[test]
@@ -401,10 +469,17 @@ mod tests {
         assert!(saved.contains("# my header comment"));
         assert!(saved.contains("future_key = \"keep me\""));
         assert!(saved.contains("x = 1 # trailing"));
-        assert!(saved.contains("# Brand accent, #RRGGBB."));
-        assert!(saved.contains("accent = \"#FF00AA\" # my favourite"), "{saved}");
+        assert!(saved.contains("# Brand accent, #RRGGBB."), "{saved}");
+        assert!(
+            saved.contains("accent = \"#FF00AA\" # my favourite"),
+            "{saved}"
+        );
         assert!(saved.contains("scrollback = 20000"));
-        assert!(saved.contains("\"a.b\" = \"ctrl+k\"") || saved.contains("a.b = \"ctrl+k\"") || saved.contains("[keybindings]"));
+        assert!(
+            saved.contains("\"a.b\" = \"ctrl+k\"")
+                || saved.contains("a.b = \"ctrl+k\"")
+                || saved.contains("[keybindings]")
+        );
         assert_eq!(Config::parse(&saved).unwrap().config, cfg);
 
         // Removing a keybinding removes it from the file; saving defaults is stable.

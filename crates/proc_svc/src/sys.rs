@@ -9,7 +9,7 @@ use windows::Win32::Security::{
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+    QueryFullProcessImageNameW,
     WaitForSingleObject,
 };
 use windows::core::PWSTR;
@@ -47,11 +47,6 @@ pub(crate) fn open_process(
 ) -> windows::core::Result<OwnedHandle> {
     // SAFETY: plain FFI call; the returned handle is wrapped immediately.
     unsafe { OpenProcess(access, false, pid).map(OwnedHandle::new) }
-}
-
-/// Handle good enough to query info and to wait for exit.
-pub(crate) fn open_process_for_wait(pid: u32) -> windows::core::Result<OwnedHandle> {
-    open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE)
 }
 
 /// True while the process behind `h` (opened with SYNCHRONIZE) has not exited.

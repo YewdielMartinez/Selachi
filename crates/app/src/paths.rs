@@ -1,6 +1,6 @@
 //! Display helpers for working directories: `~` for home, middle truncation, tab labels.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Longest breadcrumb path (in characters) before the middle is elided.

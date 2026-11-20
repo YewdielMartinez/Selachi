@@ -1,0 +1,13 @@
+[package]
+name = "ui_kit"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi UI kit: theme-driven gpui components (pills, buttons, meters, popovers, lists, wireframes) and the embedded icon/logo assets"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gpui.workspace = true
+theme = { version = "0.1.0", path = "../theme" }

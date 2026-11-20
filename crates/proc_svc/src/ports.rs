@@ -197,6 +197,7 @@ fn udp6() -> Vec<PortInfo> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

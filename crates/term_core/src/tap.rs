@@ -35,7 +35,7 @@ impl<P: EventedPty> io::Read for TappedPty<P> {
         let n = self.pty.reader().read(buf)?;
         if n > 0 {
             let sink = &mut self.sink;
-            self.scanner.feed(&buf[..n], |event| sink(event));
+            self.scanner.feed(&buf[..n], sink);
         }
         Ok(n)
     }
