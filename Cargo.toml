@@ -37,3 +37,9 @@ panic = "abort"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Fork local de gpui 0.2.2 con el parche de rendimiento de Selachi (bench/patches/gpui-selachi.patch):
+# reloj de frames bajo demanda (0% CPU en reposo) y texturas de paths perezosas (-47 MB).
+# Quitar cuando upstream lo corrija.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }

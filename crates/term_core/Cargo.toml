@@ -3,8 +3,12 @@ name = "term_core"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 alacritty_terminal.workspace = true
 futures.workspace = true
 log.workspace = true
+polling = "3.8"
 thiserror.workspace = true

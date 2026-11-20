@@ -11,6 +11,10 @@ Requirements: Windows 10/11, PowerShell 7 (`pwsh`). No other dependencies. Run f
 | `bench/measure.ps1` | Launch one app N times, measure startup, memory of the whole process tree, idle CPU. Appends to a CSV. |
 | `bench/compare.ps1` | Runs `measure.ps1` for Selachi, Windows Terminal and Warp and writes `bench/results/latest.md`. |
 | `bench/flood.ps1` | Output throughput test. Run it *inside* the terminal under test. |
+| `bench/threads.ps1` | Per-thread CPU of a process over N seconds (thread names via `GetThreadDescription`). Answers "which thread burns CPU at idle?". |
+| `bench/vmregions.ps1` | VMMap-style breakdown of a process' committed memory (private / image / mapped, biggest private regions). Answers "where do the Private Bytes come from?". |
+| `bench/shot.ps1` | Launches an exe, optionally types keys into it, saves a PNG of its window (visual check after render-path changes). |
+| `bench/patches/gpui-selachi.patch` | Patch for gpui 0.2.2 (demand-driven vsync thread + lazy path textures); see the perf notes below. |
 
 Output goes to `bench/results/` (`results.csv` = raw rows, `latest.md` = last comparison).
 
@@ -41,7 +45,7 @@ terminal that sits open all day.
 
 | Column (CSV) | Meaning |
 |---|---|
-| `startup_ms` | Launch (just before `Start-Process`) until the first **visible, un-cloaked, top-level window** owned by a process of the tree (EnumWindows by PID). Resolution is about 10-20 ms. It is "first window visible", not "first prompt painted"; compare it with a screen recording if you care about the difference. |
+| `startup_ms` | Launch (just before `Start-Process`) until the first **visible, un-cloaked, top-level window** owned by a process of the tree (EnumWindows by PID). Resolution is about 10-20 ms (the CIM process-table refresh is skipped during the first 1.5 s of the poll, otherwise it stalled the loop for 100-300 ms and inflated every startup number). It is "first window visible", not "first prompt painted"; compare it with a screen recording if you care about the difference. |
 | `private_mb_total` / `private_mb_app` | **Private Bytes** (committed private memory, `Win32_Process.PrivatePageCount`). The honest number: it is not inflated by shared DLLs. Median over the idle samples. |
 | `ws_mb_total` / `ws_mb_app` | **Working Set**: physical pages resident, *including pages shared between processes* (each Chromium/WebView2 process counts the shared DLLs again, so sums over-state). It is what Task Manager's "Memory" column roughly shows; reported because people compare it. |
 | `cpu_idle_pct` | Average CPU of the tree over the idle window as % of **one core** (100 = one full core). Computed from per-process `UserModeTime + KernelModeTime` deltas, so processes that start or exit during the window are accounted for. |

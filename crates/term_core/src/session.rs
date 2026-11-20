@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -15,7 +15,9 @@ use alacritty_terminal::tty;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
 use crate::color::{Palette, color_by_table_index};
+use crate::osc::{Mark, OscEvent};
 use crate::snapshot::{Snapshot, build_snapshot_into};
+use crate::tap::TappedPty;
 
 /// Errors raised while creating or driving a [`Session`].
 #[derive(thiserror::Error, Debug)]
@@ -69,6 +71,13 @@ pub enum SessionEvent {
     Bell,
     /// The child process exited (sent at most once).
     Exit,
+    /// The shell reported its working directory (OSC 7; needs the shell integration).
+    Cwd(PathBuf),
+    /// A command finished (OSC 133 `D`); `exit_code` is `None` if the shell did not report one.
+    CommandFinished {
+        /// Exit code of the command.
+        exit_code: Option<i32>,
+    },
 }
 
 /// State shared between the session handle, the event loop thread and the listener.
@@ -79,7 +88,8 @@ struct Shared {
     exited: AtomicBool,
     /// Packed `cols | rows << 16 | cell_w << 32 | cell_h << 48`.
     size: AtomicU64,
-    palette: Palette,
+    /// Current palette; swapped by [`Session::set_palette`], read on every snapshot.
+    palette: Mutex<Arc<Palette>>,
     /// PTY sender, set once the event loop exists (needed to answer `PtyWrite`).
     pty: OnceLock<EventLoopSender>,
 }
@@ -101,6 +111,22 @@ impl Shared {
     fn emit(&self, event: SessionEvent) {
         // The receiver may have been dropped; that is fine.
         let _ = self.tx.unbounded_send(event);
+    }
+
+    fn palette(&self) -> Arc<Palette> {
+        Arc::clone(&self.palette.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Turns what the OSC scanner found on the PTY stream into session events.
+    fn on_osc(&self, event: OscEvent) {
+        match event {
+            OscEvent::Cwd(path) => self.emit(SessionEvent::Cwd(path)),
+            OscEvent::Mark(Mark::Finished(exit_code)) => {
+                self.emit(SessionEvent::CommandFinished { exit_code });
+            },
+            // Prompt/command starts carry nothing the UI needs yet.
+            OscEvent::Mark(Mark::PromptStart | Mark::CommandStart | Mark::Executed) => {},
+        }
     }
 
     fn write_pty(&self, bytes: Vec<u8>) {
@@ -143,7 +169,7 @@ impl EventListener for Listener {
             Event::PtyWrite(text) => s.write_pty(text.into_bytes()),
             Event::ColorRequest(index, format) => {
                 // The term lock is held while this runs, so only the base palette is used here.
-                if let Some(c) = color_by_table_index(&s.palette, index) {
+                if let Some(c) = color_by_table_index(&s.palette(), index) {
                     s.write_pty(format(c.into()).into_bytes());
                 }
             },
@@ -201,7 +227,7 @@ impl Session {
             wakeup_pending: AtomicBool::new(false),
             exited: AtomicBool::new(false),
             size: AtomicU64::new(pack_size(cols, rows, cfg.cell_width, cfg.cell_height)),
-            palette: cfg.palette.clone(),
+            palette: Mutex::new(Arc::new(cfg.palette.clone())),
             pty: OnceLock::new(),
         });
         let listener = Listener(shared.clone());
@@ -239,6 +265,9 @@ impl Session {
         #[cfg(not(windows))]
         let pid = None;
 
+        // Reads go through the OSC scanner (cwd / prompt marks) before reaching the terminal.
+        let osc_shared = shared.clone();
+        let pty = TappedPty::new(pty, Box::new(move |event| osc_shared.on_osc(event)));
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)
             .map_err(TermError::EventLoop)?;
         let sender = event_loop.channel();
@@ -275,6 +304,13 @@ impl Session {
         }
     }
 
+    /// Replaces the color palette. Cells are re-resolved on the next [`Session::snapshot`], so
+    /// the caller only has to repaint. Colors set explicitly by programs (OSC 4/10/11) and
+    /// truecolor cells are not affected.
+    pub fn set_palette(&self, palette: Palette) {
+        *self.shared.palette.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(palette);
+    }
+
     /// Copies the visible viewport. Also re-arms [`SessionEvent::Wakeup`] delivery.
     pub fn snapshot(&self) -> Snapshot {
         let mut snap = Snapshot::default();
@@ -286,8 +322,9 @@ impl Session {
     pub fn snapshot_into(&self, out: &mut Snapshot) {
         // Clear before locking so output arriving meanwhile produces a fresh Wakeup.
         self.shared.wakeup_pending.store(false, Ordering::Release);
+        let palette = self.shared.palette();
         let term = self.term.lock();
-        build_snapshot_into(&term, &self.shared.palette, out);
+        build_snapshot_into(&term, &palette, out);
     }
 
     /// Scrolls the viewport by `delta_lines`; positive scrolls up into history.
