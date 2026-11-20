@@ -55,9 +55,11 @@ function global:prompt {
 }
 
 # C: emitted when the command line is submitted. PSReadLine is the only place that sees Enter.
+# The original function's scriptblock is kept (calling the CommandInfo would resolve the name
+# again and recurse into the wrapper).
 $rl = Get-Command PSConsoleHostReadLine -CommandType Function -ErrorAction SilentlyContinue
 if ($rl) {
-    $global:__selachi_integration.ReadLine = $rl
+    $global:__selachi_integration.ReadLine = $rl.ScriptBlock
     function global:PSConsoleHostReadLine {
         $line = & $global:__selachi_integration.ReadLine
         if ($line -and $line.Trim()) { [Console]::Write("$([char]27)]133;C$([char]7)") }

@@ -1,0 +1,77 @@
+# Selachi configuration
+# ---------------------------------------------------------------------------
+# Edit by hand; changes are picked up while Selachi is running. If the file
+# has a mistake, Selachi keeps the last good configuration and shows the error.
+# Delete any line to go back to its default. Unknown keys are kept as they are.
+
+[appearance]
+# "dark" | "light" | "oled" | "system"
+mode = "dark"
+# Brand accent, #RRGGBB. Only used for active states, progress and confirmation.
+accent = "#00AAFF"
+ui_font = "DM Sans"
+mono_font = "Geist Mono"
+# Terminal font size in points, and line height as a multiplier.
+mono_size = 13.0
+line_height = 1.3
+
+[appearance.translucency]
+# 0.0 (transparent) .. 1.0 (opaque)
+sidebar = 1.0
+main = 1.0
+# Blur what is behind translucent areas (Windows acrylic).
+blur = false
+
+[terminal]
+# Name of a profile (see [[profiles]] below). Empty = auto-detect (pwsh > powershell > cmd).
+default_profile = ""
+# Lines of scrollback kept in memory. Scrollback is never written to disk.
+scrollback = 10000
+# "block" | "bar" | "underline"
+cursor_style = "block"
+copy_on_select = false
+# Ctrl+V pastes instead of sending ^V to the running program.
+paste_ctrl_v = true
+
+[agents]
+# Day the weekly usage window starts: "monday" .. "sunday"
+usage_week_start = "monday"
+# Show estimated cost (from the local pricing table) next to token counts.
+show_estimates = true
+# Starting permission mode for new agent threads:
+# "ask" | "accept_edits" | "read_only" | "full"
+permission_default = "ask"
+# Install the Claude Code statusline hook to read exact context and cost.
+claude_statusline_hook = false
+
+[git]
+# Ask before force-push, hard reset, branch delete and similar actions.
+confirm_sensitive = true
+
+[processes]
+# What to do with processes started by a thread when the thread is closed:
+# "ask" | "always" | "never"
+auto_stop_on_thread_close = "ask"
+
+[retention]
+# Command history older than this is deleted (0 = keep forever).
+history_days = 90
+# Raw agent usage events older than this are deleted (daily totals are kept).
+usage_raw_days = 30
+# Hard cap on stored commands (0 = no cap).
+history_max_rows = 500000
+
+# Extra shell profiles. Example:
+#
+# [[profiles]]
+# name = "Dev"
+# program = "pwsh.exe"
+# args = ["-NoLogo"]
+# cwd = "C:\\Users\\me\\code"
+# [profiles.env]
+# RUST_LOG = "info"
+
+# Keybinding overrides: action = "chord". Only list what you want to change.
+# Example:
+#   "terminal.new_tab" = "ctrl+shift+t"
+[keybindings]

@@ -2,7 +2,6 @@
 
 use gpui::{
     Div, ImageSource, IntoElement, Resource, Stateful, WindowControlArea, div, img, prelude::*, px,
-    rgb,
 };
 use theme::{Mode, Theme};
 
@@ -13,11 +12,13 @@ use crate::titlebar::TITLEBAR_H;
 pub const RAIL_W: f32 = 52.0;
 const BTN: f32 = 36.0;
 
+/// Rail button. Exactly one is `active` (the current view): `surface_3` pill, icon `text`.
+/// Hover is a different, lighter pill (`surface_2`) and keeps the muted icon, so a hovered
+/// button can never be mistaken for the active one. Press is not brighter than active either.
 fn rail_button(theme: &Theme, id: &'static str, name: &'static str, active: bool) -> Stateful<Div> {
     let c = theme.colors;
     let base = div()
         .id(id)
-        .group(id)
         .size(px(BTN))
         .flex_none()
         .flex()
@@ -27,9 +28,16 @@ fn rail_button(theme: &Theme, id: &'static str, name: &'static str, active: bool
         .cursor_pointer();
     let fg = if active { c.text } else { c.muted };
     base.when(active, |d| d.bg(c.surface_3))
-        .hover(move |s| s.bg(if active { c.surface_3 } else { c.surface_2 }))
-        .active(move |s| s.bg(c.surface_4))
-        .child(icon(name, 16.0, fg).group_hover(id, move |s| s.text_color(c.text)))
+        .when(!active, |d| d.hover(move |s| s.bg(c.surface_2)).active(move |s| s.bg(c.surface_2)))
+        .child(icon(name, 16.0, fg))
+}
+
+/// Embedded logo for a theme mode.
+fn logo_asset(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Light => "logo-light-mode.png",
+        Mode::Dark | Mode::Oled => "logo-dark-mode.png",
+    }
 }
 
 pub fn rail(theme: &Theme) -> impl IntoElement {
@@ -52,22 +60,11 @@ pub fn rail(theme: &Theme) -> impl IntoElement {
                 .justify_center()
                 .window_control_area(WindowControlArea::Drag)
                 .child(
-                    // The logo art is light-on-dark: on the light theme it sits on a dark chip.
-                    div()
-                        .w(px(44.0))
-                        .h(px(30.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(10.0))
-                        .when(theme.mode == Mode::Light, |d| d.bg(rgb(0x131316)))
-                        .child(
-                            img(ImageSource::Resource(Resource::Embedded("logo.png".into())))
-                                .w(px(40.0))
-                                .h(px(40.0))
-                                .flex_none(),
-                        ),
+                    // Light art on dark/OLED, dark art on light: the file changes, never a chip.
+                    img(ImageSource::Resource(Resource::Embedded(logo_asset(theme.mode).into())))
+                        .w(px(40.0))
+                        .h(px(40.0))
+                        .flex_none(),
                 ),
         )
         .child(

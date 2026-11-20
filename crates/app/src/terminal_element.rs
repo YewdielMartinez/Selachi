@@ -24,6 +24,7 @@ use gpui::{
     point, px, relative, size,
 };
 use term_core::{CellView, Rgb8, Snapshot};
+use theme::TerminalColors;
 
 use crate::terminal_view::{TerminalView, hsla};
 
@@ -66,7 +67,8 @@ struct Epoch {
     cell_width: f32,
     cell_height: f32,
     scale: f32,
-    background: u32,
+    /// Palette and background: a theme change restyles every row.
+    colors: TerminalColors,
     family: &'static str,
     font_size: f32,
 }
@@ -251,7 +253,7 @@ impl gpui::Element for TerminalElement {
             cell_width: f32::from(cw),
             cell_height: f32::from(ch),
             scale: window.scale_factor(),
-            background: theme.terminal.background,
+            colors: theme.terminal,
             family: theme.typography.mono_family,
             font_size: theme.typography.mono_size,
         };

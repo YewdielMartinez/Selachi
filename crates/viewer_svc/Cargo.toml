@@ -1,0 +1,66 @@
+[package]
+name = "viewer_svc"
+version = "0.1.0"
+edition = "2021"
+description = "UI-agnostic read-only file viewing engine for Selachi: type detection, mmap line index, tree-sitter highlighting, diff, structured trees, markdown blocks, terminal path detection"
+
+[lints]
+workspace = true
+
+[features]
+default = [
+    "lang-rust",
+    "lang-typescript",
+    "lang-javascript",
+    "lang-json",
+    "lang-toml",
+    "lang-python",
+    "lang-markdown",
+    "lang-css",
+    "lang-html",
+    "lang-bash",
+    "lang-csharp",
+]
+# Umbrella: pulls in tree-sitter + the highlighter. Implied by every lang-* feature.
+highlight = ["dep:tree-sitter", "dep:tree-sitter-highlight"]
+lang-rust = ["highlight", "dep:tree-sitter-rust"]
+lang-typescript = ["highlight", "dep:tree-sitter-typescript"]
+lang-javascript = ["highlight", "dep:tree-sitter-javascript"]
+lang-json = ["highlight", "dep:tree-sitter-json"]
+lang-toml = ["highlight", "dep:tree-sitter-toml-ng"]
+lang-python = ["highlight", "dep:tree-sitter-python"]
+lang-markdown = ["highlight", "dep:tree-sitter-md"]
+lang-css = ["highlight", "dep:tree-sitter-css"]
+lang-html = ["highlight", "dep:tree-sitter-html"]
+lang-bash = ["highlight", "dep:tree-sitter-bash"]
+lang-powershell = ["highlight", "dep:tree-sitter-powershell"]
+lang-csharp = ["highlight", "dep:tree-sitter-c-sharp"]
+
+[dependencies]
+thiserror.workspace = true
+memmap2 = "0.9"
+memchr = "2"
+similar = { version = "2", features = ["inline"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = { version = "0.9", features = ["preserve_order"] }
+yaml-rust2 = "0.10"
+pulldown-cmark = { version = "0.13", default-features = false }
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "perf"] }
+
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-highlight = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-md = { version = "0.5", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-powershell = { version = "0.25", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

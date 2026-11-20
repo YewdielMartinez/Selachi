@@ -206,3 +206,19 @@ fn shell_integration_reports_cwd_and_exit_codes() {
     assert_eq!(code, Some(Some(0)));
     assert!(wait_for(&session, "ok-2"));
 }
+
+#[test]
+fn shell_integration_chains_an_existing_prompt() {
+    let (program, _) = default_shell();
+    let script = install_pwsh_integration().expect("write integration script");
+    let mut args = pwsh_integration_args(&script);
+    args.insert(1, "-NoProfile".to_string());
+    // Simulates a profile that defines its own prompt before the integration loads.
+    let load = args.pop().expect("command");
+    args.push(format!("function global:prompt {{ 'custom-prompt> ' }}; {load}"));
+    let mut cfg = config(&program, &[]);
+    cfg.args = args;
+    let (session, mut rx) = Session::spawn(cfg).expect("spawn integrated shell");
+    assert!(wait_event(&mut rx, |e| matches!(e, SessionEvent::Cwd(_)).then_some(())).is_some());
+    assert!(wait_for(&session, "custom-prompt>"), "screen:\n{}", session.snapshot().text());
+}

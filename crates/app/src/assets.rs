@@ -29,7 +29,9 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("icons/maximize.svg", "icons/maximize.svg"),
     asset!("icons/restore.svg", "icons/restore.svg"),
     // The logo is multi-tone, so it is drawn as an image (an svg would be flattened to a mask).
-    asset!("logo.png", "transparent/png/128x128.png"),
+    // One file per mode (DESIGN.md "Logo por modo"): light art for dark/OLED, dark art for light.
+    asset!("logo-dark-mode.png", "transparent-for-dark-mode/png/128x128@2x.png"),
+    asset!("logo-light-mode.png", "transparent-for-light-mode/png/128x128@2x.png"),
 ];
 
 pub struct Assets;

@@ -4,10 +4,11 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use futures::StreamExt;
 use gpui::{
-    App, Bounds, Context, EntityInputHandler, FocusHandle, Focusable, Hsla, KeyDownEvent,
+    App, Bounds, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Hsla, KeyDownEvent,
     MouseButton, MouseDownEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
     UTF16Selection, Window, div, font, prelude::*, px,
 };
@@ -17,6 +18,15 @@ use theme::{Radius, TerminalColors, Theme, Typography};
 use crate::app_shell::{RAIL_W, TAB_H, TERM_PAD};
 use crate::status_bar::STATUS_H;
 use crate::terminal_element::{PaintState, TerminalElement};
+
+/// What a terminal tells the rest of the window (breadcrumb, tab label, git pill).
+#[derive(Clone, Debug)]
+pub enum TerminalEvent {
+    /// The shell's working directory changed (OSC 7).
+    CwdChanged(PathBuf),
+    /// A command finished (OSC 133 `D`).
+    CommandFinished,
+}
 
 /// Scrollback lines kept per session.
 const SCROLLBACK: usize = 10_000;
@@ -83,7 +93,8 @@ pub struct TerminalView {
     pub(crate) paint_state: RefCell<PaintState>,
     metrics: Cell<Option<CellMetrics>>,
     shell_name: SharedString,
-    title: SharedString,
+    /// Last known working directory (starts as the process cwd, then follows OSC 7).
+    cwd: Option<PathBuf>,
     exited: bool,
     got_output: bool,
     spawn_error: Option<SharedString>,
@@ -132,7 +143,7 @@ impl TerminalView {
             paint_state: RefCell::default(),
             metrics: Cell::new(Some(metrics)),
             shell_name,
-            title: SharedString::default(),
+            cwd: std::env::current_dir().ok(),
             exited: false,
             got_output: false,
             spawn_error: None,
@@ -171,9 +182,19 @@ impl TerminalView {
         &self.shell_name
     }
 
-    /// Window title reported by the shell (empty if none yet).
-    pub fn title(&self) -> &SharedString {
-        &self.title
+    /// Working directory of the shell, if known.
+    pub fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+
+    /// Applies a new theme: the terminal palette is swapped in the session (re-resolved on the
+    /// next snapshot) and the view repaints; the row cache is invalidated by its epoch.
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        if let Some(session) = &self.session {
+            session.set_palette(palette_from(&theme.terminal));
+        }
+        cx.notify();
     }
 
     /// Cell metrics, re-measured if the display scale changed.
@@ -200,11 +221,19 @@ impl TerminalView {
                 }
                 cx.notify();
             }
-            SessionEvent::Title(t) => {
-                self.title = t.into();
-                cx.notify();
+            // The breadcrumb shows the cwd (OSC 7), not the window title.
+            SessionEvent::Title(_) | SessionEvent::Bell => {}
+            SessionEvent::Cwd(path) => {
+                if self.cwd.as_deref() != Some(path.as_path()) {
+                    self.cwd = Some(path.clone());
+                    cx.emit(TerminalEvent::CwdChanged(path));
+                    cx.notify();
+                }
             }
-            SessionEvent::Bell => {}
+            SessionEvent::CommandFinished { exit_code } => {
+                log::debug!("command finished (exit code {exit_code:?})");
+                cx.emit(TerminalEvent::CommandFinished);
+            }
             SessionEvent::Exit => {
                 log::info!("shell exited");
                 self.exited = true;
@@ -299,6 +328,8 @@ impl TerminalView {
         }
     }
 }
+
+impl EventEmitter<TerminalEvent> for TerminalView {}
 
 impl Focusable for TerminalView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {

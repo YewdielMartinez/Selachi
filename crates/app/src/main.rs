@@ -1,16 +1,20 @@
 //! Selachi: a lightweight GPU terminal for Windows.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod app_shell;
 mod assets;
+mod git_monitor;
 mod icons;
 mod mem;
+mod paths;
 mod rail;
 mod status_bar;
 mod terminal_element;
 mod terminal_view;
 mod titlebar;
+mod usage_monitor;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Size, TitlebarOptions, WindowBounds, WindowOptions,

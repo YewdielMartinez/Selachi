@@ -126,7 +126,7 @@ fn new_tab_button(theme: &Theme) -> impl IntoElement {
 
 pub fn titlebar(
     theme: &Theme,
-    shell: SharedString,
+    tab_label: SharedString,
     detail: SharedString,
     maximized: bool,
 ) -> impl IntoElement {
@@ -150,7 +150,7 @@ pub fn titlebar(
                 .flex_row()
                 .items_center()
                 .gap(px(4.0))
-                .child(tab(theme, shell))
+                .child(tab(theme, tab_label))
                 .child(new_tab_button(theme)),
         )
         .child(div().flex_1())
