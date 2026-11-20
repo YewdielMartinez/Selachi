@@ -49,12 +49,14 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::UnboundedSender;
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 
+use crate::coalesce::{self, Coalescer};
 use crate::proc::{self, truncate};
 use crate::types::*;
 
@@ -609,7 +611,7 @@ pub struct CodexDriver {
 }
 
 fn write_all(stdin: &Mutex<Option<ChildStdin>>, msgs: &[Value]) -> Result<()> {
-    let mut g = stdin.lock().unwrap();
+    let mut g = stdin.lock();
     let w = g.as_mut().ok_or(DriverError::Closed)?;
     for m in msgs {
         let mut line = m.to_string();
@@ -649,19 +651,20 @@ impl CodexDriver {
 
         {
             let (session, stdin, child, tx) = (session.clone(), stdin.clone(), child.clone(), tx.clone());
+            let lines = coalesce::spawn_line_reader("codex-stdout-io", stdout)?;
             std::thread::Builder::new().name("codex-stdout".into()).spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(|l| l.ok()) {
-                    let step = session.lock().unwrap().on_line(&line);
+                let mut co = Coalescer::new(tx.clone());
+                let alive = coalesce::pump(&lines, &mut co, |line| {
+                    let step = session.lock().on_line(line);
                     if !step.outgoing.is_empty() {
                         if let Err(e) = write_all(&stdin, &step.outgoing) {
                             log::warn!("codex: write failed: {e}");
                         }
                     }
-                    for ev in step.events {
-                        if tx.unbounded_send(ev).is_err() {
-                            return;
-                        }
-                    }
+                    step.events
+                });
+                if !alive {
+                    return;
                 }
                 let code = wait_exit(&child, Duration::from_secs(5));
                 let _ = tx.unbounded_send(AgentEvent::Exited { code });
@@ -686,7 +689,7 @@ fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
     let deadline = Instant::now() + grace;
     loop {
         {
-            let mut c = child.lock().unwrap();
+            let mut c = child.lock();
             if let Ok(Some(st)) = c.try_wait() {
                 return st.code();
             }
@@ -701,26 +704,26 @@ fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
 
 impl AgentDriver for CodexDriver {
     fn send(&mut self, text: &str) -> Result<()> {
-        let step = self.session.lock().unwrap().user_message(text);
+        let step = self.session.lock().user_message(text);
         self.apply(step)
     }
 
     fn interrupt(&mut self) -> Result<()> {
-        let step = self.session.lock().unwrap().interrupt()?;
+        let step = self.session.lock().interrupt()?;
         self.apply(step)
     }
 
     fn approve(&mut self, id: &str, allow: bool) -> Result<()> {
-        let step = self.session.lock().unwrap().approve(id, allow)?;
+        let step = self.session.lock().approve(id, allow)?;
         self.apply(step)
     }
 
     fn shutdown(&mut self) {
-        self.stdin.lock().unwrap().take();
+        self.stdin.lock().take();
         let deadline = Instant::now() + Duration::from_millis(1500);
         loop {
             {
-                let mut c = self.child.lock().unwrap();
+                let mut c = self.child.lock();
                 if matches!(c.try_wait(), Ok(Some(_))) {
                     return;
                 }

@@ -12,7 +12,7 @@
 use crate::types::*;
 
 pub struct AcpDriver {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "reserved for the future ACP implementation (stub driver)")]
     command: String,
 }
 

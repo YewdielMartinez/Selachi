@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "UI-agnostic git service for Selachi: status, log, diff, typed actions and a debounced watcher, built on the real git CLI"
 
+[lints]
+workspace = true
+
 [dependencies]
 thiserror.workspace = true
 futures.workspace = true

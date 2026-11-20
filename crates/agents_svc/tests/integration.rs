@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use agents_svc::{Agent, IngestConfig, Ingestor, PricingTable, Range, ScanReport, Store};
 use chrono::{FixedOffset, TimeZone, Utc, Weekday};
 use std::fs;

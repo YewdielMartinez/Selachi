@@ -57,6 +57,10 @@ pub fn normalize_model_id(id: &str) -> String {
 }
 
 impl PricingTable {
+    #[expect(
+        clippy::expect_used,
+        reason = "embedded table validated by test pricing_embedded_parses"
+    )]
     pub fn embedded() -> PricingTable {
         Self::from_toml(EMBEDDED_PRICING).expect("embedded pricing.toml must be valid")
     }
@@ -113,6 +117,16 @@ impl PricingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pricing_embedded_parses() {
+        let t = PricingTable::from_toml(EMBEDDED_PRICING).expect("embedded pricing.toml must parse");
+        assert!(!t.version.is_empty());
+        assert!(!t.models.is_empty());
+        assert!(t.models.iter().all(|m| !m.id.is_empty() && m.input >= 0.0 && m.output >= 0.0));
+        // `embedded()` is the panicking wrapper over the same call.
+        assert_eq!(PricingTable::embedded().models.len(), t.models.len());
+    }
 
     #[test]
     fn embedded_parses_and_prices_known_models() {

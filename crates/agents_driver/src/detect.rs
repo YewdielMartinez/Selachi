@@ -94,10 +94,8 @@ fn probe(name: &'static str) -> Option<DetectedAgent> {
 /// Find the supported agent CLIs on PATH. Runs the `--version` probes in
 /// parallel (hidden windows, 5 s timeout each); blocking, call it off the UI thread.
 pub fn detect() -> Vec<DetectedAgent> {
-    let handles: Vec<_> = ["claude", "codex", "gemini"]
-        .into_iter()
-        .map(|n| std::thread::spawn(move || probe(n)))
-        .collect();
+    // Array `map` is eager: every probe thread starts before the first join.
+    let handles = ["claude", "codex", "gemini"].map(|n| std::thread::spawn(move || probe(n)));
     handles
         .into_iter()
         .filter_map(|h| h.join().ok().flatten())

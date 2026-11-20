@@ -12,6 +12,7 @@
 //! # let _ = (report, week);
 //! # Ok::<(), anyhow::Error>(())
 //! ```
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod claude;
 pub mod codex;

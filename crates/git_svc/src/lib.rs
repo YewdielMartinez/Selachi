@@ -5,6 +5,7 @@
 //! ([`GitAction`]) and expose their exact argv so the UI can run them visibly in a terminal;
 //! non-interactive ones can also be run directly with [`Repo::run`]. [`Repo::watch`] provides a
 //! debounced, notification-based (no polling) change stream.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod action;
 mod commits;

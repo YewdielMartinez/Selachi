@@ -16,10 +16,12 @@
 //! Backends: Claude Code (`stream-json`, [`claude`]), Codex (`app-server`
 //! JSON-RPC, [`codex`]), ACP (stub, [`acp`]). No API keys: they use the user's own
 //! CLI login. Plan reference: `docs/PLAN.md` section 14.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod acp;
 pub mod claude;
 pub mod codex;
+pub mod coalesce;
 pub mod detect;
 pub mod proc;
 mod types;

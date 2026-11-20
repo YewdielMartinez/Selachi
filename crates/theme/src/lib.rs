@@ -1,5 +1,6 @@
 //! Selachi design tokens (PLAN section 11): colors, typography, spacing,
 //! radii, motion and embedded fonts.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod fonts;
 pub mod motion;

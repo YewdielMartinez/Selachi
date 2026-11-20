@@ -46,12 +46,14 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::UnboundedSender;
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 
+use crate::coalesce::{self, Coalescer};
 use crate::proc::{self, truncate};
 use crate::types::*;
 
@@ -200,7 +202,7 @@ impl ClaudeParser {
             Some("control_request") => self.on_control_request(&v, &mut out),
             Some("control_cancel_request") => {
                 if let Some(id) = str_field(&v, "request_id") {
-                    self.pending.lock().unwrap().remove(id);
+                    self.pending.lock().remove(id);
                 }
             }
             _ => {}
@@ -379,7 +381,7 @@ impl ClaudeParser {
         };
         let input = req.get("input").cloned().unwrap_or_else(|| json!({}));
         let detail = approval_detail(tool, &input);
-        self.pending.lock().unwrap().insert(rid.to_string(), input);
+        self.pending.lock().insert(rid.to_string(), input);
         out.push(AgentEvent::ApprovalRequest {
             id: rid.to_string(),
             tool: tool.to_string(),
@@ -471,15 +473,13 @@ impl ClaudeDriver {
             let tx = tx.clone();
             let child = child.clone();
             let mut parser = ClaudeParser::new(pending.clone(), interrupted.clone());
+            let lines = coalesce::spawn_line_reader("claude-stdout-io", stdout)?;
             std::thread::Builder::new()
                 .name("claude-stdout".into())
                 .spawn(move || {
-                    for line in BufReader::new(stdout).lines().map_while(|l| l.ok()) {
-                        for ev in parser.parse_line(&line) {
-                            if tx.unbounded_send(ev).is_err() {
-                                return; // receiver dropped: nobody listens anymore
-                            }
-                        }
+                    let mut co = Coalescer::new(tx.clone());
+                    if !coalesce::pump(&lines, &mut co, |l| parser.parse_line(l)) {
+                        return; // receiver dropped: nobody listens anymore
                     }
                     let code = wait_exit(&child, Duration::from_secs(5));
                     let _ = tx.unbounded_send(AgentEvent::Exited { code });
@@ -498,7 +498,7 @@ impl ClaudeDriver {
     }
 
     fn write_json(&self, v: &Value) -> Result<()> {
-        let mut guard = self.stdin.lock().unwrap();
+        let mut guard = self.stdin.lock();
         let stdin = guard.as_mut().ok_or(DriverError::Closed)?;
         let mut line = v.to_string();
         line.push('\n');
@@ -515,7 +515,7 @@ fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
     let deadline = Instant::now() + grace;
     loop {
         {
-            let mut c = child.lock().unwrap();
+            let mut c = child.lock();
             if let Ok(Some(st)) = c.try_wait() {
                 return st.code();
             }
@@ -553,7 +553,6 @@ impl AgentDriver for ClaudeDriver {
         let input = self
             .pending
             .lock()
-            .unwrap()
             .remove(id)
             .ok_or_else(|| DriverError::Protocol(format!("unknown approval id {id}")))?;
         let body = if allow {
@@ -571,11 +570,11 @@ impl AgentDriver for ClaudeDriver {
 
     fn shutdown(&mut self) {
         // Closing stdin lets `claude -p` finish and exit by itself.
-        self.stdin.lock().unwrap().take();
+        self.stdin.lock().take();
         let deadline = Instant::now() + Duration::from_millis(1500);
         loop {
             {
-                let mut c = self.child.lock().unwrap();
+                let mut c = self.child.lock();
                 if matches!(c.try_wait(), Ok(Some(_))) {
                     return;
                 }
@@ -679,9 +678,9 @@ mod tests {
         let pending = Pending::default();
         let mut p = ClaudeParser::new(pending.clone(), Arc::default());
         p.parse_line(r#"{"type":"control_request","request_id":"r9","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"a.txt","content":"x"}}}"#);
-        assert_eq!(pending.lock().unwrap()["r9"]["file_path"], "a.txt");
+        assert_eq!(pending.lock()["r9"]["file_path"], "a.txt");
         p.parse_line(r#"{"type":"control_cancel_request","request_id":"r9"}"#);
-        assert!(pending.lock().unwrap().is_empty());
+        assert!(pending.lock().is_empty());
     }
 
     #[test]
@@ -746,7 +745,7 @@ mod tests {
         cfg.permission_mode = PermissionMode::Ask;
         let mut d = ClaudeDriver::spawn(&cfg, tx).unwrap();
         std::thread::sleep(Duration::from_millis(1500));
-        assert!(d.child.lock().unwrap().try_wait().unwrap().is_none(), "claude exited early (bad flags?)");
+        assert!(d.child.lock().try_wait().unwrap().is_none(), "claude exited early (bad flags?)");
         d.shutdown();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut exited = false;
