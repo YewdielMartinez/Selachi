@@ -4,9 +4,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod app_shell;
-mod assets;
 mod git_monitor;
-mod icons;
 mod mem;
 mod paths;
 mod rail;
@@ -23,7 +21,7 @@ use gpui::{
 use theme::Theme;
 
 use crate::app_shell::{AppShell, ToggleTheme};
-use crate::assets::Assets;
+use ui_kit::Assets;
 
 fn main() {
     env_logger::init();

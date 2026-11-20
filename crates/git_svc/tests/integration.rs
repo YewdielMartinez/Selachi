@@ -283,6 +283,33 @@ fn wait_event(rx: &mut futures::channel::mpsc::UnboundedReceiver<()>, within: Du
 }
 
 #[test]
+fn watcher_follows_directories_created_after_start() {
+    let (td, repo) = new_repo();
+    let d = td.path();
+    commit_file(d, "a.txt", "a
+", "c1");
+    fs::create_dir_all(d.join("existing")).unwrap();
+
+    let (_handle, mut rx) = repo.watch(Duration::from_millis(100)).unwrap();
+    sleep(Duration::from_millis(500));
+    drain(&mut rx);
+
+    // A file inside a top-level directory that existed at start.
+    fs::write(d.join("existing/x.txt"), "x").unwrap();
+    assert!(wait_event(&mut rx, Duration::from_secs(5)), "no event for existing dir");
+
+    // A new top-level directory: its creation fires, and so do later edits inside it.
+    sleep(Duration::from_millis(400));
+    drain(&mut rx);
+    fs::create_dir_all(d.join("fresh")).unwrap();
+    assert!(wait_event(&mut rx, Duration::from_secs(5)), "no event for new dir");
+    sleep(Duration::from_millis(600));
+    drain(&mut rx);
+    fs::write(d.join("fresh/y.txt"), "y").unwrap();
+    assert!(wait_event(&mut rx, Duration::from_secs(5)), "new dir was not watched");
+}
+
+#[test]
 fn watcher_fires_after_git_add_and_stops_on_drop() {
     let (td, repo) = new_repo();
     let d = td.path();

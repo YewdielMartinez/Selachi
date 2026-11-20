@@ -10,7 +10,7 @@ use theme::Theme;
 use crate::icon::{Icon, icon};
 use crate::tooltip::Tooltip;
 
-type ClickFn = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+pub(crate) type ClickFn = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// Square icon button. Exactly one in a group is usually `active` (the current view):
 /// `surface_3` pill with the icon in `text`. Hover is a lighter pill (`surface_2`) that keeps

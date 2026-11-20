@@ -34,27 +34,84 @@ pub(crate) struct Span {
     pub kind: HighlightKind,
 }
 
-/// Whether the grammar for `lang` was compiled in (cargo feature `lang-*`).
+/// Whether a grammar for `lang` can be used right now: compiled in (cargo feature
+/// `lang-*`) or an installed plugin in the process-wide registry.
 pub fn grammar_available(lang: Lang) -> bool {
+    builtin_available(lang) || plugin_installed(lang.id())
+}
+
+/// Whether the grammar for `lang` was compiled into the binary.
+pub(crate) fn builtin_available(lang: Lang) -> bool {
     imp::available(lang)
+}
+
+/// The compiled-in highlight configuration of `lang`, built on first use.
+#[cfg(feature = "plugins")]
+pub(crate) fn builtin_config(lang: Lang) -> Option<&'static HighlightConfig> {
+    imp::config(lang)
+}
+
+#[cfg(feature = "plugins")]
+fn plugin_installed(id: &str) -> bool {
+    crate::grammars::plugin_registry().is_some_and(|r| r.has_plugin(id))
+}
+
+#[cfg(not(feature = "plugins"))]
+fn plugin_installed(_id: &str) -> bool {
+    false
+}
+
+/// Id of the grammar to use for a file extension that [`Lang`] does not know, as
+/// declared by installed plugin manifests.
+pub(crate) fn plugin_id_for_extension(ext: &str) -> Option<String> {
+    #[cfg(feature = "plugins")]
+    {
+        crate::grammars::plugin_registry()?.id_for_extension(ext)
+    }
+    #[cfg(not(feature = "plugins"))]
+    {
+        let _ = ext;
+        None
+    }
+}
+
+/// Why the plugin for a document is not highlighting (installed but failed to load):
+/// by language id, or by file extension for languages [`Lang`] does not know.
+pub(crate) fn plugin_failure(id: Option<&str>, ext: Option<&str>) -> Option<String> {
+    #[cfg(feature = "plugins")]
+    {
+        let registry = crate::grammars::plugin_registry()?;
+        let err = match (id, ext) {
+            (Some(id), _) => registry.failure(id),
+            (None, Some(ext)) => registry.failure_for_extension(ext),
+            (None, None) => None,
+        };
+        err.map(|e| e.to_string())
+    }
+    #[cfg(not(feature = "plugins"))]
+    {
+        let _ = (id, ext);
+        None
+    }
 }
 
 /// Languages with a compiled-in grammar, in [`Lang::ALL`] order.
 pub fn available_languages() -> Vec<Lang> {
     Lang::ALL
         .into_iter()
-        .filter(|l| grammar_available(*l))
+        .filter(|l| builtin_available(*l))
         .collect()
 }
 
-/// Highlight `bytes` as `lang`. Returns no spans when the grammar is missing, the
-/// input is not valid UTF-8 (offsets would not map onto decoded text) or `cancel` is
-/// raised (non-zero).
-pub(crate) fn highlight_bytes(lang: Lang, bytes: &[u8], cancel: Option<&AtomicUsize>) -> Vec<Span> {
+/// Highlight `bytes` with the grammar `id` (a [`Lang::id`] or a plugin id): compiled-in
+/// first, then plugins. Returns no spans when the grammar is missing or failed to
+/// load, the input is not valid UTF-8 (offsets would not map onto decoded text) or
+/// `cancel` is raised (non-zero).
+pub(crate) fn highlight_bytes(id: &str, bytes: &[u8], cancel: Option<&AtomicUsize>) -> Vec<Span> {
     if std::str::from_utf8(bytes).is_err() {
         return Vec::new();
     }
-    imp::highlight(lang, bytes, cancel)
+    imp::highlight(id, bytes, cancel)
 }
 
 /// Cut `spans` (offsets relative to a buffer that starts at `base` within the text)
@@ -120,6 +177,12 @@ pub(crate) fn kind_for_capture(name: &str) -> HighlightKind {
     }
 }
 
+#[cfg(feature = "highlight")]
+pub(crate) use imp::make_config;
+
+#[cfg(feature = "highlight")]
+pub(crate) use tree_sitter_highlight::HighlightConfiguration as HighlightConfig;
+
 #[cfg(not(feature = "highlight"))]
 mod imp {
     use super::*;
@@ -128,7 +191,7 @@ mod imp {
         false
     }
 
-    pub fn highlight(_lang: Lang, _bytes: &[u8], _cancel: Option<&AtomicUsize>) -> Vec<Span> {
+    pub fn highlight(_id: &str, _bytes: &[u8], _cancel: Option<&AtomicUsize>) -> Vec<Span> {
         Vec::new()
     }
 }
@@ -243,9 +306,23 @@ mod imp {
             Lang::Html => cfg!(feature = "lang-html"),
             Lang::Bash => cfg!(feature = "lang-bash"),
             Lang::CSharp => cfg!(feature = "lang-csharp"),
-            // YAML and PowerShell have no bundled grammar (candidates for runtime plugins).
+            // YAML and PowerShell have no bundled grammar (runtime plugins only).
             Lang::Yaml | Lang::PowerShell => false,
         }
+    }
+
+    /// Compile queries into a configuration bound to [`NAMES`].
+    pub fn make_config(
+        language: Language,
+        name: &str,
+        highlights: &str,
+        injections: &str,
+        locals: &str,
+    ) -> Result<HighlightConfiguration, String> {
+        let mut cfg = HighlightConfiguration::new(language, name, highlights, injections, locals)
+            .map_err(|e| e.to_string())?;
+        cfg.configure(NAMES);
+        Ok(cfg)
     }
 
     fn make(
@@ -419,7 +496,7 @@ mod imp {
         }
     }
 
-    fn config(lang: Lang) -> Option<&'static HighlightConfiguration> {
+    pub fn config(lang: Lang) -> Option<&'static HighlightConfiguration> {
         if !available(lang) {
             return None;
         }
@@ -447,15 +524,39 @@ mod imp {
         None
     }
 
+    /// Configuration for an injected language name: compiled-in, then plugins.
     fn injection(name: &str) -> Option<&'static HighlightConfiguration> {
         if name == "markdown_inline" {
             return md_inline();
         }
-        Lang::from_name(name).and_then(config)
+        if let Some(cfg) = Lang::from_name(name).and_then(config) {
+            return Some(cfg);
+        }
+        #[cfg(feature = "plugins")]
+        {
+            let registry = crate::grammars::plugin_registry()?;
+            let id = registry.plugin_id_for_name(name)?;
+            registry.plugin_config(&id).ok()
+        }
+        #[cfg(not(feature = "plugins"))]
+        None
     }
 
-    pub fn highlight(lang: Lang, bytes: &[u8], cancel: Option<&AtomicUsize>) -> Vec<Span> {
-        let Some(cfg) = config(lang) else {
+    /// Configuration for a grammar id: compiled-in first, then the plugin registry.
+    fn resolve(id: &str) -> Option<&'static HighlightConfiguration> {
+        if let Some(cfg) = Lang::from_id(id).and_then(config) {
+            return Some(cfg);
+        }
+        #[cfg(feature = "plugins")]
+        {
+            crate::grammars::plugin_registry()?.plugin_config(id).ok()
+        }
+        #[cfg(not(feature = "plugins"))]
+        None
+    }
+
+    pub fn highlight(id: &str, bytes: &[u8], cancel: Option<&AtomicUsize>) -> Vec<Span> {
+        let Some(cfg) = resolve(id) else {
             return Vec::new();
         };
         let mut highlighter = Highlighter::new();

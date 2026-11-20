@@ -7,12 +7,15 @@
 //! * [`diff_text`] / [`diff_against_git`]: hunks with inline word diffs.
 //! * [`json_tree`] / [`toml_tree`] / [`yaml_tree`]: collapsible [`Node`] trees.
 //! * [`markdown_blocks`]: a small block/inline model for rendering.
+//! * [`grammars`]: language grammars as installable plugins (registry, index, installer).
 //! * [`find_paths`] / [`resolve`]: Ctrl+click path detection for terminal output.
 
 mod detect;
 mod diff;
 mod document;
 mod error;
+#[cfg(feature = "plugins")]
+pub mod grammars;
 mod highlight;
 mod markdown;
 mod paths;

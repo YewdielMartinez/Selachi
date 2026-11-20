@@ -1,5 +1,6 @@
 # Rust
 /target/
+**/target/
 **/*.rs.bk
 *.pdb
 
@@ -31,3 +32,6 @@ desktop.ini
 .env
 .env.*
 .claude/settings.local.json
+
+# Plugins de gramáticas compilados (se publican en releases, no en git)
+/packaging/grammars/dist/

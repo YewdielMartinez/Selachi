@@ -48,6 +48,8 @@ impl AppShell {
         let git = cx.new(|_| GitMonitor::new());
         let usage = cx.new(UsageMonitor::new);
         let status = cx.new(|cx| StatusBar::new(theme, git.clone(), usage.clone(), cx));
+        let focused = window.is_window_active();
+        status.update(cx, |s, cx| s.set_active(focused, cx));
 
         if let Some(cwd) = terminal.read(cx).cwd().map(Path::to_path_buf) {
             git.update(cx, |g, cx| g.set_cwd(cwd, cx));
@@ -65,6 +67,7 @@ impl AppShell {
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
                 this.usage.update(cx, |u, cx| u.set_active(active, cx));
+                this.status.update(cx, |s, cx| s.set_active(active, cx));
             }),
         ];
         Self { theme, terminal, status, git, usage, _subs: subs }

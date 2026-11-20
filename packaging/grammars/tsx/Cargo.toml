@@ -1,0 +1,15 @@
+[package]
+name = "selachi-grammar-tsx"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Selachi grammar plugin: TSX (tree-sitter) as a loadable grammar.dll"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "selachi_grammar_tsx"
+crate-type = ["cdylib"]
+
+[dependencies]
+tree-sitter-typescript = "0.23"

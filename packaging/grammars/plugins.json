@@ -1,0 +1,252 @@
+[
+  {
+    "id": "csharp",
+    "symbol": "tree_sitter_c_sharp",
+    "display_name": "C#",
+    "extensions": [
+      "cs",
+      "csx"
+    ],
+    "names": [
+      "csharp",
+      "c#",
+      "cs"
+    ],
+    "crate": "tree-sitter-c-sharp",
+    "license_crate": "tree-sitter-c-sharp",
+    "highlights": [
+      {
+        "crate": "tree-sitter-c-sharp",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": []
+  },
+  {
+    "id": "rust",
+    "symbol": "tree_sitter_rust",
+    "display_name": "Rust",
+    "extensions": [
+      "rs"
+    ],
+    "names": [
+      "rust",
+      "rs"
+    ],
+    "crate": "tree-sitter-rust",
+    "license_crate": "tree-sitter-rust",
+    "highlights": [
+      {
+        "crate": "tree-sitter-rust",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": []
+  },
+  {
+    "id": "typescript",
+    "symbol": "tree_sitter_typescript",
+    "display_name": "TypeScript",
+    "extensions": [
+      "ts",
+      "mts",
+      "cts"
+    ],
+    "names": [
+      "typescript",
+      "ts"
+    ],
+    "crate": "tree-sitter-typescript",
+    "license_crate": "tree-sitter-typescript",
+    "highlights": [
+      {
+        "crate": "tree-sitter-javascript",
+        "file": "queries/highlights.scm"
+      },
+      {
+        "crate": "tree-sitter-typescript",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": [
+      {
+        "crate": "tree-sitter-typescript",
+        "file": "queries/locals.scm"
+      }
+    ]
+  },
+  {
+    "id": "tsx",
+    "symbol": "tree_sitter_tsx",
+    "display_name": "TSX",
+    "extensions": [
+      "tsx"
+    ],
+    "names": [
+      "tsx"
+    ],
+    "crate": "tree-sitter-typescript",
+    "license_crate": "tree-sitter-typescript",
+    "highlights": [
+      {
+        "crate": "tree-sitter-javascript",
+        "file": "queries/highlights.scm"
+      },
+      {
+        "crate": "tree-sitter-javascript",
+        "file": "queries/highlights-jsx.scm"
+      },
+      {
+        "crate": "tree-sitter-typescript",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": [
+      {
+        "crate": "tree-sitter-typescript",
+        "file": "queries/locals.scm"
+      }
+    ]
+  },
+  {
+    "id": "javascript",
+    "symbol": "tree_sitter_javascript",
+    "display_name": "JavaScript",
+    "extensions": [
+      "js",
+      "mjs",
+      "cjs",
+      "jsx"
+    ],
+    "names": [
+      "javascript",
+      "js",
+      "jsx",
+      "node",
+      "mjs"
+    ],
+    "crate": "tree-sitter-javascript",
+    "license_crate": "tree-sitter-javascript",
+    "highlights": [
+      {
+        "crate": "tree-sitter-javascript",
+        "file": "queries/highlights.scm"
+      },
+      {
+        "crate": "tree-sitter-javascript",
+        "file": "queries/highlights-jsx.scm"
+      }
+    ],
+    "injections": [],
+    "locals": [
+      {
+        "crate": "tree-sitter-javascript",
+        "file": "queries/locals.scm"
+      }
+    ]
+  },
+  {
+    "id": "python",
+    "symbol": "tree_sitter_python",
+    "display_name": "Python",
+    "extensions": [
+      "py",
+      "pyw",
+      "pyi"
+    ],
+    "names": [
+      "python",
+      "py",
+      "python3"
+    ],
+    "crate": "tree-sitter-python",
+    "license_crate": "tree-sitter-python",
+    "highlights": [
+      {
+        "crate": "tree-sitter-python",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": []
+  },
+  {
+    "id": "bash",
+    "symbol": "tree_sitter_bash",
+    "display_name": "Bash",
+    "extensions": [
+      "sh",
+      "bash",
+      "zsh"
+    ],
+    "names": [
+      "bash",
+      "sh",
+      "shell",
+      "zsh",
+      "console"
+    ],
+    "crate": "tree-sitter-bash",
+    "license_crate": "tree-sitter-bash",
+    "highlights": [
+      {
+        "crate": "tree-sitter-bash",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": []
+  },
+  {
+    "id": "yaml",
+    "symbol": "tree_sitter_yaml",
+    "display_name": "YAML",
+    "extensions": [
+      "yaml",
+      "yml"
+    ],
+    "names": [
+      "yaml",
+      "yml"
+    ],
+    "crate": "tree-sitter-yaml",
+    "license_crate": "tree-sitter-yaml",
+    "highlights": [
+      {
+        "crate": "tree-sitter-yaml",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": []
+  },
+  {
+    "id": "powershell",
+    "symbol": "tree_sitter_powershell",
+    "display_name": "PowerShell",
+    "extensions": [
+      "ps1",
+      "psm1",
+      "psd1"
+    ],
+    "names": [
+      "powershell",
+      "pwsh",
+      "ps1"
+    ],
+    "crate": "tree-sitter-powershell",
+    "license_crate": "tree-sitter-powershell",
+    "highlights": [
+      {
+        "crate": "tree-sitter-powershell",
+        "file": "queries/highlights.scm"
+      }
+    ],
+    "injections": [],
+    "locals": []
+  }
+]

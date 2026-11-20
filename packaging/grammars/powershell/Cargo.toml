@@ -1,0 +1,15 @@
+[package]
+name = "selachi-grammar-powershell"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Selachi grammar plugin: PowerShell (tree-sitter) as a loadable grammar.dll"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "selachi_grammar_powershell"
+crate-type = ["cdylib"]
+
+[dependencies]
+tree-sitter-powershell = "0.25"

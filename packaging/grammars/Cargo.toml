@@ -1,0 +1,25 @@
+# Selachi grammar plugins: one cdylib per tree-sitter grammar.
+#
+# This is a SEPARATE cargo workspace (it is not a member of the app workspace). Build
+# everything with `./build.ps1`, which also writes the plugin folders, manifests, the
+# release zips and the grammars.toml index into `dist/`.
+[workspace]
+resolver = "2"
+members = [
+    "csharp",
+    "rust",
+    "typescript",
+    "tsx",
+    "javascript",
+    "python",
+    "bash",
+    "yaml",
+    "powershell",
+]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

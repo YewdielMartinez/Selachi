@@ -2,7 +2,7 @@
 
 use gpui::{
     AnyElement, App, Div, IntoElement, ParentElement, RenderOnce, SharedString, Styled,
-    StyleRefinement, Window, div, prelude::*, px,
+    StyleRefinement, Window, div, px,
 };
 use theme::{Radius, Rgba, Theme};
 

@@ -193,7 +193,7 @@ impl Lang {
 
     /// True when a grammar for this language can be used right now: compiled into the
     /// crate, or installed as a plugin in the process-wide registry
-    /// (see [`crate::set_plugin_registry`]).
+    /// (see [`crate::grammars::set_plugin_registry`]).
     pub fn has_grammar(self) -> bool {
         crate::highlight::grammar_available(self)
     }

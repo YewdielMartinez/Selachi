@@ -6,6 +6,7 @@ use gpui::{
 };
 use theme::Theme;
 
+use crate::button::ClickFn;
 use crate::icon::{Icon, icon};
 use crate::tooltip::Tooltip;
 
@@ -37,7 +38,7 @@ pub struct Pill {
     label: Option<SharedString>,
     active: bool,
     tooltip: Option<SharedString>,
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    on_click: Option<ClickFn>,
     children: Vec<AnyElement>,
 }
 

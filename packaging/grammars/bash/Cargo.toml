@@ -1,0 +1,15 @@
+[package]
+name = "selachi-grammar-bash"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Selachi grammar plugin: Bash (tree-sitter) as a loadable grammar.dll"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "selachi_grammar_bash"
+crate-type = ["cdylib"]
+
+[dependencies]
+tree-sitter-bash = "0.25"

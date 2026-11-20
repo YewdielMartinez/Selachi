@@ -512,25 +512,54 @@ impl Document {
 
     // ---- highlighting ------------------------------------------------------------
 
-    fn highlight_lang(&self) -> Option<Lang> {
+    /// Whether the size/encoding of this document allow highlighting at all.
+    fn highlightable(&self) -> bool {
         let inner = &self.inner;
-        if !inner.textual
-            || inner.encoding == Encoding::Latin1
-            || inner
+        inner.textual
+            && inner.encoding != Encoding::Latin1
+            && (inner
                 .transcoded
                 .as_ref()
-                .map_or(inner.data.bytes().len(), Vec::len) as u64
-                > inner.limits.max_highlight_bytes
-        {
+                .map_or(inner.data.bytes().len(), Vec::len) as u64)
+                <= inner.limits.max_highlight_bytes
+    }
+
+    /// Id of the grammar that will highlight this document: a compiled-in one or an
+    /// installed plugin (see [`crate::grammars`]). `None` when the file is not source
+    /// code, too big, or its language has no usable grammar (it shows without colour).
+    pub fn grammar_id(&self) -> Option<String> {
+        if !self.highlightable() {
             return None;
         }
-        inner.kind.lang().filter(|l| l.has_grammar())
+        match self.inner.kind.lang() {
+            Some(lang) => lang.has_grammar().then(|| lang.id().to_owned()),
+            // Languages the viewer does not know by name can still come from a plugin
+            // that declares the extension in its manifest.
+            None if matches!(self.inner.kind, FileKind::Text { .. }) => {
+                let ext = self.inner.path.extension()?.to_str()?;
+                highlight::plugin_id_for_extension(ext)
+            }
+            None => None,
+        }
+    }
+
+    /// When the document's language has an installed plugin that failed to load (hash
+    /// mismatch, incompatible ABI, missing symbol...), the reason. The file is shown
+    /// without colour; the UI can surface this as a warning.
+    pub fn highlight_warning(&self) -> Option<String> {
+        match self.inner.kind.lang() {
+            Some(lang) => highlight::plugin_failure(Some(lang.id()), None),
+            None => {
+                let ext = self.inner.path.extension()?.to_str()?;
+                highlight::plugin_failure(None, Some(ext))
+            }
+        }
     }
 
     /// Kick off the whole-file parse on a background thread (done by `open`). No-op
     /// when the file is too big, not source code, or has no compiled grammar.
     pub fn start_highlighting(&self) {
-        let Some(lang) = self.highlight_lang() else {
+        let Some(lang) = self.grammar_id() else {
             return;
         };
         {
@@ -548,7 +577,7 @@ impl Document {
                     Some(t) => t,
                     None => inner.data.bytes().get(inner.text_start..).unwrap_or(&[]),
                 };
-                let spans = highlight::highlight_bytes(lang, text, Some(&inner.cancel));
+                let spans = highlight::highlight_bytes(&lang, text, Some(&inner.cancel));
                 let mut st = lock(&inner.hl);
                 *st = if inner.cancel.load(Ordering::Relaxed) != 0 {
                     HlState::Idle
@@ -563,10 +592,10 @@ impl Document {
 
     /// Run the whole-file highlight on the calling thread (tests, tools).
     pub fn highlight_blocking(&self) {
-        let Some(lang) = self.highlight_lang() else {
+        let Some(lang) = self.grammar_id() else {
             return;
         };
-        let spans = highlight::highlight_bytes(lang, self.text_bytes(), None);
+        let spans = highlight::highlight_bytes(&lang, self.text_bytes(), None);
         *lock(&self.inner.hl) = HlState::Ready(Arc::new(spans));
     }
 
@@ -587,7 +616,7 @@ impl Document {
     pub fn highlight_lines(&self, range: Range<usize>) -> Vec<Vec<(Range<usize>, HighlightKind)>> {
         let lines = self.line_spans(range.clone());
         let empty = |n: usize| vec![Vec::new(); n];
-        let Some(lang) = self.highlight_lang() else {
+        let Some(lang) = self.grammar_id() else {
             return empty(lines.len());
         };
         let text = self.text_bytes();
@@ -621,7 +650,7 @@ impl Document {
         let Some(window) = text.get(win_start..win_end) else {
             return empty(lines.len());
         };
-        let spans = highlight::highlight_bytes(lang, window, None);
+        let spans = highlight::highlight_bytes(&lang, window, None);
         highlight::slice_spans(&spans, win_start, &lines)
     }
 }

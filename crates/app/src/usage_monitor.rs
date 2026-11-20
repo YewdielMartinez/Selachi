@@ -7,8 +7,8 @@
 //! pause scans right away).
 //!
 //! Nothing is invented: a percentage is shown only when a fresh official rate-limit snapshot
-//! exists (written by Claude Code itself); otherwise only the local token total is shown and it
-//! is labelled "estimado". If the ingest or the queries fail, the monitor reports nothing.
+//! exists (written by Claude Code itself); otherwise only the local billable total (input +
+//! output + cache creation, no cache reads) is shown and it is labelled "estimado". If the ingest or the queries fail, the monitor reports nothing.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,10 +29,33 @@ pub struct Official {
     pub observed_ms: i64,
 }
 
+/// Claude tokens of one period, by kind (summed from the local logs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TokenBreakdown {
+    pub input: u64,
+    pub output: u64,
+    pub cache_create: u64,
+    pub cache_read: u64,
+}
+
+impl TokenBreakdown {
+    /// What is billed: input + output + cache creation. Cache *reads* are served from the
+    /// prompt cache at a fraction of the price and would dwarf the real usage, so they are not
+    /// part of the headline number.
+    pub fn billable(&self) -> u64 {
+        self.input + self.output + self.cache_create
+    }
+
+    /// Everything, cache reads included.
+    pub fn total(&self) -> u64 {
+        self.billable() + self.cache_read
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageInfo {
-    /// Claude tokens this calendar week (input + output + cache), summed from local logs.
-    pub week_tokens: u64,
+    /// Claude tokens this calendar week, by kind.
+    pub week: TokenBreakdown,
     pub official: Option<Official>,
 }
 
@@ -58,6 +81,32 @@ pub fn compact_tokens(n: u64) -> String {
     };
     // One decimal below 100, none above (`842K`, `12.4M`).
     if v >= 100.0 { format!("{v:.0}{suffix}") } else { format!("{v:.1}{suffix}").replace(".0", "") }
+}
+
+/// Hover text of the usage pill: the billable breakdown, the cache reads that are *not* counted,
+/// and whether the meter is official (a fresh rate-limit snapshot from Claude Code) or just an
+/// estimate from the local logs.
+pub fn usage_tooltip(info: &UsageInfo, now: i64) -> String {
+    let w = &info.week;
+    let mut lines = vec![
+        "Claude · esta semana".to_string(),
+        format!(
+            "Facturables {} = entrada {} + salida {} + caché creada {}",
+            compact_tokens(w.billable()),
+            compact_tokens(w.input),
+            compact_tokens(w.output),
+            compact_tokens(w.cache_create)
+        ),
+        format!("Lecturas de caché {} (no cuentan)", compact_tokens(w.cache_read)),
+    ];
+    lines.push(match info.fresh_official() {
+        Some(o) => {
+            let mins = ((now - o.observed_ms).max(0) / 60_000).max(0);
+            format!("oficial · {:.0} % del límite semanal · hace {mins} min", o.percent)
+        },
+        None => "estimado · suma de los registros locales".to_string(),
+    });
+    lines.join("\n")
 }
 
 fn db_path() -> Option<PathBuf> {
@@ -107,13 +156,17 @@ fn scan_job(existing: Option<Ingestor>) -> ScanOutcome {
 
 fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
     let store = ing.store();
-    let week_tokens = store
+    let week = store
         .usage_summary(&Range::ThisWeek)
         .ok()?
         .iter()
         .filter(|u| u.agent == Agent::Claude)
-        .map(agents_svc::AgentUsage::total_tokens)
-        .sum();
+        .fold(TokenBreakdown::default(), |acc, u| TokenBreakdown {
+            input: acc.input + u.input,
+            output: acc.output + u.output,
+            cache_create: acc.cache_create + u.cache_create,
+            cache_read: acc.cache_read + u.cache_read,
+        });
     let now = now_ms();
     let official = store
         .latest_rate_limits()
@@ -127,7 +180,7 @@ fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
                 observed_ms: s.ts_ms,
             })
         });
-    (week_tokens > 0 || official.is_some()).then_some(UsageInfo { week_tokens, official })
+    (week.total() > 0 || official.is_some()).then_some(UsageInfo { week, official })
 }
 
 pub struct UsageMonitor {
@@ -220,7 +273,31 @@ mod tests {
     fn expired_official_snapshot_is_not_fresh() {
         let past = Official { percent: 40.0, resets_at_ms: now_ms() - 1, observed_ms: 0 };
         let future = Official { percent: 40.0, resets_at_ms: now_ms() + 60_000, observed_ms: 0 };
-        assert!(UsageInfo { week_tokens: 1, official: Some(past) }.fresh_official().is_none());
-        assert!(UsageInfo { week_tokens: 1, official: Some(future) }.fresh_official().is_some());
+        let week = TokenBreakdown { input: 1, ..Default::default() };
+        assert!(UsageInfo { week, official: Some(past) }.fresh_official().is_none());
+        assert!(UsageInfo { week, official: Some(future) }.fresh_official().is_some());
+    }
+
+    #[test]
+    fn billable_excludes_cache_reads() {
+        let w = TokenBreakdown { input: 1_000_000, output: 2_000_000, cache_create: 9_400_000, cache_read: 84_000_000 };
+        assert_eq!(w.billable(), 12_400_000);
+        assert_eq!(w.total(), 96_400_000);
+        assert_eq!(compact_tokens(w.billable()), "12.4M");
+    }
+
+    #[test]
+    fn tooltip_lists_breakdown_and_labels_estimate() {
+        let week = TokenBreakdown { input: 1_000_000, output: 2_000_000, cache_create: 9_400_000, cache_read: 84_000_000 };
+        let est = usage_tooltip(&UsageInfo { week, official: None }, now_ms());
+        assert!(est.contains("Facturables 12.4M"));
+        assert!(est.contains("Lecturas de caché 84M (no cuentan)"));
+        assert!(est.contains("estimado"));
+        assert!(!est.contains("oficial"));
+
+        let official = Official { percent: 42.0, resets_at_ms: now_ms() + 60_000, observed_ms: now_ms() - 120_000 };
+        let off = usage_tooltip(&UsageInfo { week, official: Some(official) }, now_ms());
+        assert!(off.contains("oficial · 42 % del límite semanal · hace 2 min"));
+        assert!(!off.contains("estimado"));
     }
 }

@@ -5,21 +5,19 @@
 
 use gpui::{Div, IntoElement, SharedString, Stateful, WindowControlArea, div, prelude::*, px, rgb};
 use theme::{Radius, Theme};
-
-use crate::icons::icon;
+use ui_kit::{Icon, IconButton, Pill, icon};
 
 /// Height of the titlebar.
 pub const TITLEBAR_H: f32 = 40.0;
 const CTL_W: f32 = 46.0;
 const TAB_PILL_H: f32 = 28.0;
-const PILL_R: f32 = 10.0;
 const CLOSE_HOVER: u32 = 0xC42B1C;
 
 fn control(
     theme: &Theme,
     id: &'static str,
     area: WindowControlArea,
-    name: &'static str,
+    name: Icon,
 ) -> Stateful<Div> {
     let c = theme.colors;
     let close = area == WindowControlArea::Close;
@@ -73,7 +71,7 @@ fn segment(theme: &Theme, text: impl Into<SharedString>, last: bool) -> Div {
 
 fn breadcrumb(theme: &Theme, detail: SharedString) -> impl IntoElement {
     let c = theme.colors;
-    let sep = || icon("chevron-right", 16.0, c.outline);
+    let sep = || icon(Icon::ChevronRight, 16.0, c.outline);
     div()
         .min_w_0()
         .max_w(px(420.0))
@@ -88,40 +86,11 @@ fn breadcrumb(theme: &Theme, detail: SharedString) -> impl IntoElement {
 }
 
 fn tab(theme: &Theme, label: SharedString) -> impl IntoElement {
-    let c = theme.colors;
-    div()
-        .id("tab-0")
-        .occlude()
-        .h(px(TAB_PILL_H))
-        .flex_none()
-        .px(px(12.0))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .rounded(px(PILL_R))
-        .bg(c.surface_3)
-        .text_color(c.text)
-        .child(icon("terminal", 16.0, c.text))
-        .child(label)
+    Pill::new("tab-0", theme).icon(Icon::Terminal).label(label).active(true)
 }
 
 fn new_tab_button(theme: &Theme) -> impl IntoElement {
-    let c = theme.colors;
-    div()
-        .id("tab-new")
-        .group("tab-new")
-        .occlude()
-        .size(px(TAB_PILL_H))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(PILL_R))
-        .cursor_pointer()
-        .hover(move |s| s.bg(c.surface_2))
-        .active(move |s| s.bg(c.surface_3))
-        .child(icon("plus", 16.0, c.muted).group_hover("tab-new", move |s| s.text_color(c.text)))
+    IconButton::new("tab-new", theme, Icon::Plus).size(TAB_PILL_H).emphasize_on_hover(true)
 }
 
 pub fn titlebar(
@@ -158,18 +127,18 @@ pub fn titlebar(
             theme,
             "ctl-min",
             WindowControlArea::Min,
-            "minimize",
+            Icon::Minimize,
         ))
         .child(control(
             theme,
             "ctl-max",
             WindowControlArea::Max,
-            if maximized { "restore" } else { "maximize" },
+            if maximized { Icon::Restore } else { Icon::Maximize },
         ))
         .child(control(
             theme,
             "ctl-close",
             WindowControlArea::Close,
-            "close",
+            Icon::Close,
         ))
 }
