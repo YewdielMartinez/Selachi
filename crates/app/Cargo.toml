@@ -1,0 +1,23 @@
+[package]
+name = "selachi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+gpui.workspace = true
+log.workspace = true
+term_core = { version = "0.1.0", path = "../term_core" }
+theme = { version = "0.1.0", path = "../theme" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"

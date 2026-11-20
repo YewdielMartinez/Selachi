@@ -1,0 +1,13 @@
+[package]
+name = "git_svc"
+version = "0.1.0"
+edition = "2021"
+description = "UI-agnostic git service for Selachi: status, log, diff, typed actions and a debounced watcher, built on the real git CLI"
+
+[dependencies]
+thiserror.workspace = true
+futures.workspace = true
+notify = "8"
+
+[dev-dependencies]
+tempfile = "3"

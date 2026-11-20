@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Documentación interna (plan, diseño, capturas)
+/docs/
+
+# Resultados de benchmarks (dependen de la máquina)
+/bench/results/
+
+# Assets de trabajo pesados (borradores generados)
+/assets/logo/*.gif
+/assets/logo/*.jpeg
+
+# Base de datos local / logs
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Editor / SO
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Entorno y secretos
+.env
+.env.*
+.claude/settings.local.json

@@ -1,0 +1,10 @@
+[package]
+name = "term_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alacritty_terminal.workspace = true
+futures.workspace = true
+log.workspace = true
+thiserror.workspace = true

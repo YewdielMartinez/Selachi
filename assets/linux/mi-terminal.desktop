@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Mi Terminal
+Comment=Emulador de terminal de escritorio
+Exec=mi-terminal
+Icon=mi-terminal
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;Utility;
+StartupNotify=true
