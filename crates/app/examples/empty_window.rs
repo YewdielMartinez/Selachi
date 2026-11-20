@@ -118,7 +118,7 @@ fn main() {
             |window, cx| {
                 log::info!("window created at {} ms", t0.elapsed().as_millis());
                 let body = if term {
-                    Body::Term(cx.new(|cx| TerminalView::new(Theme::dark(), window, cx)))
+                    Body::Term(cx.new(|cx| TerminalView::new(Theme::dark(), None, window, cx)))
                 } else if text {
                     Body::Text
                 } else {

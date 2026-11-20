@@ -24,8 +24,11 @@ use crate::terminal_element::{PaintState, TerminalElement};
 pub enum TerminalEvent {
     /// The shell's working directory changed (OSC 7).
     CwdChanged(PathBuf),
-    /// A command finished (OSC 133 `D`).
-    CommandFinished,
+    /// A command was submitted: Enter pressed on a non-empty command line (see
+    /// [`TerminalView::note_input`]; term_core does not surface OSC 133 `C` yet).
+    CommandStarted,
+    /// A command finished (OSC 133 `D`), with its exit code when the shell reported one.
+    CommandFinished(Option<i32>),
 }
 
 /// Scrollback lines kept per session.
@@ -99,13 +102,16 @@ pub struct TerminalView {
     got_output: bool,
     spawn_error: Option<SharedString>,
     scroll_accum: f32,
+    /// The command line holds something that Enter would run (typed, pasted or recalled text).
+    line_has_text: bool,
     /// In-progress IME / dead-key composition (not rendered yet).
     marked: Option<String>,
     _pump: Option<Task<()>>,
 }
 
 impl TerminalView {
-    pub fn new(theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `cwd` is the directory the shell starts in (`None` = the process directory).
+    pub fn new(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         log::info!("[startup] TerminalView::new at {} since process start", crate::mem::uptime_label());
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
@@ -124,7 +130,7 @@ impl TerminalView {
         let cfg = SessionConfig {
             program: program.clone(),
             args,
-            cwd: None,
+            cwd: cwd.clone(),
             cols,
             rows,
             cell_width: f32::from(metrics.width) as u16,
@@ -143,11 +149,12 @@ impl TerminalView {
             paint_state: RefCell::default(),
             metrics: Cell::new(Some(metrics)),
             shell_name,
-            cwd: std::env::current_dir().ok(),
+            cwd: cwd.or_else(|| std::env::current_dir().ok()),
             exited: false,
             got_output: false,
             spawn_error: None,
             scroll_accum: 0.0,
+            line_has_text: false,
             marked: None,
             _pump: None,
         };
@@ -185,6 +192,12 @@ impl TerminalView {
     /// Working directory of the shell, if known.
     pub fn cwd(&self) -> Option<&Path> {
         self.cwd.as_deref()
+    }
+
+    /// Drops the session (kills the shell, stops its threads). The view stays as an inert surface.
+    pub fn shutdown(&mut self) {
+        self.session = None;
+        self._pump = None;
     }
 
     /// Applies a new theme: the terminal palette is swapped in the session (re-resolved on the
@@ -232,7 +245,8 @@ impl TerminalView {
             }
             SessionEvent::CommandFinished { exit_code } => {
                 log::debug!("command finished (exit code {exit_code:?})");
-                cx.emit(TerminalEvent::CommandFinished);
+                self.line_has_text = false;
+                cx.emit(TerminalEvent::CommandFinished(exit_code));
             }
             SessionEvent::Exit => {
                 log::info!("shell exited");
@@ -247,6 +261,7 @@ impl TerminalView {
         if bytes.is_empty() {
             return;
         }
+        self.note_input(&bytes, cx);
         if let Some(session) = &self.session {
             session.scroll_to_bottom();
             session.write(bytes);
@@ -254,6 +269,26 @@ impl TerminalView {
         if self.display_offset.get() > 0 {
             self.display_offset.set(0);
             cx.notify();
+        }
+    }
+
+    /// Tracks whether the command line has text so that Enter can be told apart from an empty
+    /// Enter: only a submitted, non-empty line starts a command (the status "Working" of the tab).
+    /// History recall (Up/Down) counts as text; Ctrl+C clears the line.
+    fn note_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        match bytes {
+            b"\r" => {
+                if std::mem::take(&mut self.line_has_text) {
+                    cx.emit(TerminalEvent::CommandStarted);
+                }
+            },
+            [0x03] => self.line_has_text = false,
+            [0x1b, b'[' | b'O', b'A' | b'B'] => self.line_has_text = true,
+            _ => {
+                if bytes.iter().any(|b| !b.is_ascii_whitespace() && *b >= 0x20 && *b != 0x1b) {
+                    self.line_has_text = true;
+                }
+            },
         }
     }
 

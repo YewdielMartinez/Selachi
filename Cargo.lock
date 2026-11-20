@@ -4025,6 +4025,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "panel_api"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "store",
+ "theme",
+ "ui_kit",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5100,6 +5110,8 @@ dependencies = [
  "git_svc",
  "gpui",
  "log",
+ "panel_api",
+ "store",
  "term_core",
  "theme",
  "ui_kit",
@@ -6365,6 +6377,17 @@ dependencies = [
  "anyhow",
  "gpui",
  "theme",
+]
+
+[[package]]
+name = "ui_layout"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "store",
+ "theme",
+ "toml 0.8.23",
+ "ui_kit",
 ]
 
 [[package]]

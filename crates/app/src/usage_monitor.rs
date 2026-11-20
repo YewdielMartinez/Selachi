@@ -56,13 +56,21 @@ impl TokenBreakdown {
 pub struct UsageInfo {
     /// Claude tokens this calendar week, by kind.
     pub week: TokenBreakdown,
+    /// Official weekly (`seven_day`) rate-limit snapshot.
     pub official: Option<Official>,
+    /// Official 5-hour window snapshot, when Claude Code reported one.
+    pub five_hour: Option<Official>,
 }
 
 impl UsageInfo {
     /// The official snapshot, unless its window has already reset.
     pub fn fresh_official(&self) -> Option<&Official> {
         self.official.as_ref().filter(|o| o.resets_at_ms > now_ms())
+    }
+
+    /// The 5-hour snapshot, unless its window has already reset.
+    pub fn fresh_five_hour(&self) -> Option<&Official> {
+        self.five_hour.as_ref().filter(|o| o.resets_at_ms > now_ms())
     }
 }
 
@@ -168,19 +176,24 @@ fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
             cache_read: acc.cache_read + u.cache_read,
         });
     let now = now_ms();
-    let official = store
-        .latest_rate_limits()
-        .ok()
-        .and_then(|all| all.into_iter().find(|s| s.agent == Agent::Claude && s.window == "seven_day"))
-        .and_then(|s| {
-            let resets_at_ms = s.resets_at_ms.filter(|&r| r > now)?;
-            (s.used_percent.is_finite() && (0.0..=100.0).contains(&s.used_percent)).then_some(Official {
-                percent: s.used_percent,
-                resets_at_ms,
-                observed_ms: s.ts_ms,
+    let limits = store.latest_rate_limits().ok().unwrap_or_default();
+    let official_for = |window: &str| {
+        limits
+            .iter()
+            .find(|s| s.agent == Agent::Claude && s.window == window)
+            .and_then(|s| {
+                let resets_at_ms = s.resets_at_ms.filter(|&r| r > now)?;
+                (s.used_percent.is_finite() && (0.0..=100.0).contains(&s.used_percent)).then_some(Official {
+                    percent: s.used_percent,
+                    resets_at_ms,
+                    observed_ms: s.ts_ms,
+                })
             })
-        });
-    (week.total() > 0 || official.is_some()).then_some(UsageInfo { week, official })
+    };
+    let official = official_for("seven_day");
+    let five_hour = official_for("five_hour");
+    (week.total() > 0 || official.is_some() || five_hour.is_some())
+        .then_some(UsageInfo { week, official, five_hour })
 }
 
 pub struct UsageMonitor {
@@ -274,8 +287,8 @@ mod tests {
         let past = Official { percent: 40.0, resets_at_ms: now_ms() - 1, observed_ms: 0 };
         let future = Official { percent: 40.0, resets_at_ms: now_ms() + 60_000, observed_ms: 0 };
         let week = TokenBreakdown { input: 1, ..Default::default() };
-        assert!(UsageInfo { week, official: Some(past) }.fresh_official().is_none());
-        assert!(UsageInfo { week, official: Some(future) }.fresh_official().is_some());
+        assert!(UsageInfo { week, official: Some(past), five_hour: None }.fresh_official().is_none());
+        assert!(UsageInfo { week, official: Some(future), five_hour: None }.fresh_official().is_some());
     }
 
     #[test]
@@ -289,14 +302,14 @@ mod tests {
     #[test]
     fn tooltip_lists_breakdown_and_labels_estimate() {
         let week = TokenBreakdown { input: 1_000_000, output: 2_000_000, cache_create: 9_400_000, cache_read: 84_000_000 };
-        let est = usage_tooltip(&UsageInfo { week, official: None }, now_ms());
+        let est = usage_tooltip(&UsageInfo { week, official: None, five_hour: None }, now_ms());
         assert!(est.contains("Facturables 12.4M"));
         assert!(est.contains("Lecturas de caché 84M (no cuentan)"));
         assert!(est.contains("estimado"));
         assert!(!est.contains("oficial"));
 
         let official = Official { percent: 42.0, resets_at_ms: now_ms() + 60_000, observed_ms: now_ms() - 120_000 };
-        let off = usage_tooltip(&UsageInfo { week, official: Some(official) }, now_ms());
+        let off = usage_tooltip(&UsageInfo { week, official: Some(official), five_hour: None }, now_ms());
         assert!(off.contains("oficial · 42 % del límite semanal · hace 2 min"));
         assert!(!off.contains("estimado"));
     }

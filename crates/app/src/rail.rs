@@ -1,6 +1,6 @@
 //! Left icon rail (52 px): shark logo on top, pixel icon buttons, settings at the bottom.
 
-use gpui::{IntoElement, WindowControlArea, div, prelude::*, px};
+use gpui::{App, ClickEvent, IntoElement, Window, WindowControlArea, div, prelude::*, px};
 use theme::Theme;
 use ui_kit::{Icon, IconButton, Logo};
 
@@ -16,7 +16,12 @@ fn rail_button(theme: &Theme, id: &'static str, icon: Icon, active: bool) -> Ico
     IconButton::new(id, theme, icon).active(active)
 }
 
-pub fn rail(theme: &Theme) -> impl IntoElement {
+/// `git_active`: the git panel is open on the right; `on_git` toggles it.
+pub fn rail(
+    theme: &Theme,
+    git_active: bool,
+    on_git: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     div()
         .w(px(RAIL_W))
         .h_full()
@@ -47,7 +52,7 @@ pub fn rail(theme: &Theme) -> impl IntoElement {
                 .gap(px(4.0))
                 .child(rail_button(theme, "rail-terminal", Icon::Terminal, true))
                 .child(rail_button(theme, "rail-files", Icon::Files, false))
-                .child(rail_button(theme, "rail-git", Icon::GitBranch, false))
+                .child(rail_button(theme, "rail-git", Icon::GitBranch, git_active).tooltip("Panel git").on_click(on_git))
                 .child(rail_button(theme, "rail-agents", Icon::Agents, false))
                 .child(rail_button(theme, "rail-history", Icon::History, false)),
         )

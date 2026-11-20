@@ -1,0 +1,17 @@
+[package]
+name = "ui_layout"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi layout customization panel (PLAN section 17): presets, fine options, project scope and live preview"
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+store = { version = "0.0.1", path = "../store" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+
+[dev-dependencies]
+toml = "0.8"

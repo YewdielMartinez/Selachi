@@ -1,45 +1,93 @@
-//! Bottom status bar (28 px): compact pills. Git branch (hidden outside repositories), Claude
-//! usage with a dither meter, and the live RAM of this process.
+//! Bottom bar. `Compact` (28 px): pills with the git branch (hidden outside repositories), Claude
+//! usage with a dither meter, and the live RAM of this process. `Full` (52 px): one block per
+//! agent with its meters (5 h window, weekly) like Orca's bottom bar, then the git pill and RAM.
+//! Meters show official percentages only; without an official snapshot they stay empty and the
+//! block says so (nothing is estimated into a percentage).
 
 use std::time::Duration;
 
-use gpui::{Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div, prelude::*, px};
-use theme::{Theme, rgb};
+use gpui::{
+    Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div, prelude::*, px,
+};
+use store::BottomBar;
+use theme::{Radius, Theme, rgb};
 use ui_kit::{DitherMeter, Icon, Pill};
 
 use crate::git_monitor::{GitInfo, GitMonitor};
 use crate::mem;
-use crate::usage_monitor::{UsageInfo, UsageMonitor, compact_tokens, now_ms, usage_tooltip};
+use crate::usage_monitor::{Official, UsageInfo, UsageMonitor, compact_tokens, now_ms, usage_tooltip};
 
-/// Height of the status bar in logical pixels.
+/// Height of the compact bar in logical pixels.
 pub const STATUS_H: f32 = 28.0;
+/// Height of the full bar (per-agent meters).
+pub const STATUS_FULL_H: f32 = 52.0;
 /// How often the RAM reading is refreshed, only while the window is focused.
 const REFRESH: Duration = Duration::from_secs(2);
+
+/// Height of the bottom bar for a mode (0 when hidden).
+pub fn bar_height(mode: BottomBar) -> f32 {
+    match mode {
+        BottomBar::Compact => STATUS_H,
+        BottomBar::Full => STATUS_FULL_H,
+        BottomBar::Hidden => 0.0,
+    }
+}
+
+/// `2 h 10 min` / `45 min` / `3 d 5 h` until a reset, from unix milliseconds.
+pub fn format_reset(resets_at_ms: i64, now: i64) -> String {
+    let mins = ((resets_at_ms - now).max(0) / 60_000) as u64;
+    match (mins / 1440, mins / 60 % 24, mins % 60) {
+        (0, 0, m) => format!("{m} min"),
+        (0, h, m) => format!("{h} h {m:02} min"),
+        (d, h, _) => format!("{d} d {h} h"),
+    }
+}
 
 pub struct StatusBar {
     theme: Theme,
     mem_label: SharedString,
-    git: Entity<GitMonitor>,
+    mode: BottomBar,
+    /// Git monitor of the active tab.
+    git: Option<Entity<GitMonitor>>,
+    git_sub: Option<Subscription>,
     usage: Entity<UsageMonitor>,
     /// RAM refresh loop; `Some` only while the window is focused (dropping it cancels the timer,
     /// so a background window has no wake-ups from here).
     ram_timer: Option<Task<()>>,
-    _subs: [Subscription; 2],
+    _usage_sub: Subscription,
 }
 
 impl StatusBar {
-    pub fn new(
-        theme: Theme,
-        git: Entity<GitMonitor>,
-        usage: Entity<UsageMonitor>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(theme: Theme, mode: BottomBar, usage: Entity<UsageMonitor>, cx: &mut Context<Self>) -> Self {
         // The monitors call `cx.notify()` when their data changes: repaint with it.
-        let subs = [
-            cx.observe(&git, |_, _, cx| cx.notify()),
-            cx.observe(&usage, |_, _, cx| cx.notify()),
-        ];
-        Self { theme, mem_label: Self::read_label(), git, usage, ram_timer: None, _subs: subs }
+        let usage_sub = cx.observe(&usage, |_, _, cx| cx.notify());
+        Self {
+            theme,
+            mem_label: Self::read_label(),
+            mode,
+            git: None,
+            git_sub: None,
+            usage,
+            ram_timer: None,
+            _usage_sub: usage_sub,
+        }
+    }
+
+    /// The active tab changed: follow its git monitor.
+    pub fn set_git(&mut self, git: Option<Entity<GitMonitor>>, cx: &mut Context<Self>) {
+        if self.git == git {
+            return;
+        }
+        self.git_sub = git.as_ref().map(|g| cx.observe(g, |_, _, cx| cx.notify()));
+        self.git = git;
+        cx.notify();
+    }
+
+    pub fn set_mode(&mut self, mode: BottomBar, cx: &mut Context<Self>) {
+        if self.mode != mode {
+            self.mode = mode;
+            cx.notify();
+        }
     }
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
@@ -114,6 +162,59 @@ impl StatusBar {
         }
     }
 
+    /// One meter line of the full bar: `5 h  ▮▮▮▯  42 %  ·  reinicia en 2 h 10 min`. Without an
+    /// official snapshot the meter is empty and the text says `sin datos`.
+    fn meter_cell(&self, label: &'static str, official: Option<&Official>) -> impl IntoElement {
+        let c = self.theme.colors;
+        let ty = self.theme.typography;
+        let (value, text) = match official {
+            Some(o) => (
+                Some((o.percent / 100.0) as f32),
+                format!("{:.0} %  ·  reinicia en {}", o.percent, format_reset(o.resets_at_ms, now_ms())),
+            ),
+            None => (None, "sin datos".to_string()),
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .child(div().w(px(34.0)).text_color(c.muted).text_size(px(ty.ui_size_sm)).child(label))
+            .child(DitherMeter::new(&self.theme).value(value))
+            .child(div().text_color(c.text).text_size(px(ty.ui_size_sm)).child(text))
+    }
+
+    /// The per-agent block of the full bar.
+    fn agent_block(&self, name: &'static str, info: &UsageInfo) -> impl IntoElement {
+        let c = self.theme.colors;
+        let ty = self.theme.typography;
+        let week = info
+            .fresh_official()
+            .is_none()
+            .then(|| format!("{} sem · estimado", compact_tokens(info.week.billable())));
+        div()
+            .id(SharedString::from(format!("agent-{name}")))
+            .h(px(42.0))
+            .px(px(12.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(16.0))
+            .rounded(px(Radius::XS))
+            .bg(c.surface_1)
+            .font_family(ty.ui_family)
+            .child(div().text_size(px(ty.ui_size_md)).text_color(c.text).child(name))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(self.meter_cell("5 h", info.fresh_five_hour()))
+                    .child(self.meter_cell("sem", info.fresh_official())),
+            )
+            .children(week.map(|w| div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(w)))
+    }
+
     fn read_label() -> SharedString {
         match mem::working_set_bytes() {
             Some(b) => format!("RAM {}", mem::format_mb(b)).into(),
@@ -125,8 +226,31 @@ impl StatusBar {
 impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ty = self.theme.typography;
-        let git = self.git.read(cx).info().cloned();
+        let git = self.git.as_ref().and_then(|g| g.read(cx).info().cloned());
         let usage = self.usage.read(cx).info().cloned();
+        if self.mode == BottomBar::Full {
+            return div()
+                .h(px(STATUS_FULL_H))
+                .flex_none()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(8.0))
+                .font_family(ty.ui_family)
+                .text_size(px(ty.ui_size_sm))
+                .children(usage.as_ref().map(|u| self.agent_block("Claude", u)))
+                .children(
+                    usage
+                        .is_none()
+                        .then(|| div().text_color(self.theme.colors.muted).child("Sin datos de uso todavía")),
+                )
+                .children(git.map(|g| self.git_pill(&g)))
+                .child(div().flex_1())
+                .child(Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone()))
+                .into_any_element();
+        }
         div()
             .h(px(STATUS_H))
             .flex_none()
@@ -142,5 +266,26 @@ impl Render for StatusBar {
             .children(usage.map(|u| self.usage_pill(&u)))
             .child(div().flex_1())
             .child(Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone()))
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_formatting() {
+        let now = 1_000_000;
+        assert_eq!(format_reset(now + 45 * 60_000, now), "45 min");
+        assert_eq!(format_reset(now + 130 * 60_000, now), "2 h 10 min");
+        assert_eq!(format_reset(now + (3 * 24 + 5) * 3_600_000, now), "3 d 5 h");
+        assert_eq!(format_reset(now - 5, now), "0 min");
+    }
+
+    #[test]
+    fn bar_heights() {
+        assert_eq!(bar_height(BottomBar::Hidden), 0.0);
+        assert!(bar_height(BottomBar::Full) > bar_height(BottomBar::Compact));
     }
 }

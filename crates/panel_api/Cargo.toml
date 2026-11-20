@@ -1,0 +1,14 @@
+[package]
+name = "panel_api"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi panel contract: PanelProvider (a view that can live in any zone), TabModel (a tab that can be painted as a pill or a sidebar row) and the PanelRegistry"
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+store = { version = "0.0.1", path = "../store" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }

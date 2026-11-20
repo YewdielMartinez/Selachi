@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
-use git_svc::{Repo, RepoStatus, WatchHandle};
+use git_svc::{ChangeKind, Repo, RepoStatus, WatchHandle};
 use gpui::{Context, Task};
 
 use crate::paths::is_within;
@@ -29,17 +29,69 @@ pub struct GitInfo {
     pub dirty: bool,
     pub ahead: u32,
     pub behind: u32,
+    /// Upstream branch (`origin/main`), if any.
+    pub upstream: Option<String>,
+    /// Counts by kind (a file staged *and* modified again counts in both).
+    pub staged: u32,
+    pub modified: u32,
+    pub untracked: u32,
+    pub conflicted: u32,
+    /// The first [`MAX_FILES`] changed files, conflicts first, for the compact list.
+    pub files: Vec<ChangedFile>,
+    /// Working tree root.
+    pub root: PathBuf,
 }
 
-fn info_from(st: &RepoStatus) -> GitInfo {
+/// Files kept in [`GitInfo::files`].
+pub const MAX_FILES: usize = 40;
+
+/// One row of the changed-files list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedFile {
+    /// Single-letter status shown to the user: `A`dded, `M`odified, `D`eleted, `R`enamed,
+    /// `C`opied, `T`ype, `?` untracked, `!` conflicted.
+    pub code: char,
+    pub staged: bool,
+    pub path: String,
+}
+
+fn code_of(kind: ChangeKind) -> char {
+    match kind {
+        ChangeKind::Added => 'A',
+        ChangeKind::Modified => 'M',
+        ChangeKind::Deleted => 'D',
+        ChangeKind::Renamed => 'R',
+        ChangeKind::Copied => 'C',
+        ChangeKind::TypeChanged => 'T',
+    }
+}
+
+fn info_from(st: &RepoStatus, root: &Path) -> GitInfo {
     let branch = st.branch.clone().unwrap_or_else(|| {
         st.head_oid.as_deref().map_or_else(|| "HEAD".to_string(), |oid| oid.chars().take(7).collect())
     });
+    let shown = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let files = st
+        .conflicted
+        .iter()
+        .map(|p| ChangedFile { code: '!', staged: false, path: shown(p) })
+        .chain(st.staged.iter().map(|c| ChangedFile { code: code_of(c.kind), staged: true, path: shown(&c.path) }))
+        .chain(st.unstaged.iter().map(|c| ChangedFile { code: code_of(c.kind), staged: false, path: shown(&c.path) }))
+        .chain(st.untracked.iter().map(|p| ChangedFile { code: '?', staged: false, path: shown(p) }))
+        .take(MAX_FILES)
+        .collect();
     GitInfo {
         branch,
         dirty: st.is_dirty() || !st.untracked.is_empty(),
         ahead: st.ahead,
         behind: st.behind,
+        upstream: st.upstream.clone(),
+        staged: st.staged.len() as u32,
+        modified: st.unstaged.len() as u32,
+        untracked: st.untracked.len() as u32,
+        conflicted: st.conflicted.len() as u32,
+        files,
+        root: root.to_path_buf(),
     }
 }
 
@@ -52,7 +104,7 @@ struct Found {
 /// Blocking: discovery, first status and watcher setup. Only call it off the UI thread.
 fn discover(cwd: &Path) -> Option<Found> {
     let repo = Repo::discover(cwd).ok().flatten()?;
-    let info = repo.status().ok().map(|s| info_from(&s));
+    let info = repo.status().ok().map(|s| info_from(&s, &repo.root));
     let watch = match repo.watch(DEBOUNCE) {
         Ok(w) => Some(w),
         Err(e) => {
@@ -159,7 +211,7 @@ impl GitMonitor {
         cx.spawn(async move |this, cx| {
             let info = cx
                 .background_executor()
-                .spawn(async move { repo.status().ok().map(|s| info_from(&s)) })
+                .spawn(async move { repo.status().ok().map(|s| info_from(&s, &repo.root)) })
                 .await;
             let _ = this.update(cx, |m, cx| {
                 if m.epoch != epoch {
@@ -193,13 +245,17 @@ mod tests {
             b"# branch.oid abcdef0123456789\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +2 -1\0",
         )
         .unwrap();
-        assert_eq!(
-            info_from(&st),
-            GitInfo { branch: "main".into(), dirty: false, ahead: 2, behind: 1 }
-        );
+        let root = Path::new("C:/repo");
+        let info = info_from(&st, root);
+        assert_eq!((info.branch.as_str(), info.dirty, info.ahead, info.behind), ("main", false, 2, 1));
+        assert_eq!(info.upstream.as_deref(), Some("origin/main"));
+        assert!(info.files.is_empty());
         let st = parse_status(b"# branch.oid abcdef0123456789\0# branch.head main\0? new.txt\0").unwrap();
-        assert!(info_from(&st).dirty, "untracked files count as dirty");
+        let info = info_from(&st, root);
+        assert!(info.dirty, "untracked files count as dirty");
+        assert_eq!(info.untracked, 1);
+        assert_eq!(info.files, vec![ChangedFile { code: '?', staged: false, path: "new.txt".into() }]);
         let st = parse_status(b"# branch.oid abcdef0123456789\0# branch.head (detached)\0").unwrap();
-        assert_eq!(info_from(&st).branch, "abcdef0");
+        assert_eq!(info_from(&st, root).branch, "abcdef0");
     }
 }

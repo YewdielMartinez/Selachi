@@ -14,6 +14,8 @@ futures.workspace = true
 git_svc = { version = "0.1.0", path = "../git_svc" }
 gpui.workspace = true
 log.workspace = true
+panel_api = { version = "0.1.0", path = "../panel_api" }
+store = { version = "0.0.1", path = "../store" }
 term_core = { version = "0.1.0", path = "../term_core" }
 theme = { version = "0.1.0", path = "../theme" }
 ui_kit = { version = "0.1.0", path = "../ui_kit" }

@@ -1,11 +1,18 @@
-//! Custom 40 px titlebar (DESIGN.md): breadcrumb, pill tabs, "+" and window controls.
+//! Custom 40 px titlebar pieces (DESIGN.md): breadcrumb, pill tabs, "+" and window controls.
 //!
-//! The row is a native drag area (`WindowControlArea::Drag`); every interactive child
-//! `occlude()`s it so its own clicks are not swallowed by the caption hit test.
+//! The shell composes them (see `app_shell`): the row is a native drag area
+//! (`WindowControlArea::Drag`); every interactive child `occlude()`s it so its own clicks are not
+//! swallowed by the caption hit test.
 
-use gpui::{Div, IntoElement, SharedString, Stateful, WindowControlArea, div, prelude::*, px, rgb};
-use theme::{Radius, Theme};
-use ui_kit::{Icon, IconButton, Pill, icon};
+use gpui::{
+    App, ClickEvent, Div, IntoElement, SharedString, Stateful, Window, WindowControlArea, div, prelude::*,
+    px, rgb,
+};
+use panel_api::TabInfo;
+use theme::Theme;
+use ui_kit::{Icon, IconButton, Pill, StatusGlyph, icon};
+
+use crate::paths;
 
 /// Height of the titlebar.
 pub const TITLEBAR_H: f32 = 40.0;
@@ -69,7 +76,7 @@ fn segment(theme: &Theme, text: impl Into<SharedString>, last: bool) -> Div {
     .child(text.into())
 }
 
-fn breadcrumb(theme: &Theme, detail: SharedString) -> impl IntoElement {
+pub fn breadcrumb(theme: &Theme, detail: SharedString) -> impl IntoElement {
     let c = theme.colors;
     let sep = || icon(Icon::ChevronRight, 16.0, c.outline);
     div()
@@ -85,20 +92,76 @@ fn breadcrumb(theme: &Theme, detail: SharedString) -> impl IntoElement {
         .child(segment(theme, detail, true))
 }
 
-fn tab(theme: &Theme, label: SharedString) -> impl IntoElement {
-    Pill::new("tab-0", theme).icon(Icon::Terminal).label(label).active(true)
-}
-
-fn new_tab_button(theme: &Theme) -> impl IntoElement {
-    IconButton::new("tab-new", theme, Icon::Plus).size(TAB_PILL_H).emphasize_on_hover(true)
-}
-
-pub fn titlebar(
+/// Top pill of a tab: icon, title, a status glyph while it has one, and a close mark on the
+/// active one. `on_select` / `on_close` get the tab's own handlers.
+pub fn tab_pill(
     theme: &Theme,
-    tab_label: SharedString,
-    detail: SharedString,
-    maximized: bool,
+    info: &TabInfo,
+    active: bool,
+    on_select: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let c = theme.colors;
+    let id = info.id.as_u64();
+    let mut pill = Pill::new(format!("tab-{id}"), theme)
+        .icon(info.icon.icon())
+        .label(paths::middle_truncate(&info.title, 24))
+        .active(active)
+        .on_click(on_select);
+    if let Some(status) = info.status {
+        pill = pill.child(StatusGlyph::new(theme, status));
+    }
+    if active {
+        pill = pill.child(
+            div()
+                .id(SharedString::from(format!("tab-close-{id}")))
+                .size(px(18.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(c.surface_4))
+                .on_click(move |e, w, cx| {
+                    cx.stop_propagation();
+                    on_close(e, w, cx);
+                })
+                .child(icon(Icon::Close, 10.0, c.muted)),
+        );
+    }
+    pill
+}
+
+pub fn new_tab_button(
+    theme: &Theme,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    IconButton::new("tab-new", theme, Icon::Plus)
+        .size(TAB_PILL_H)
+        .emphasize_on_hover(true)
+        .tooltip("Nueva pestaña (Ctrl+Shift+N)")
+        .on_click(on_click)
+}
+
+/// The three window controls (minimize, maximize / restore, close), 138 x 40.
+pub fn window_controls(theme: &Theme, maximized: bool) -> impl IntoElement + use<> {
+    div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .child(control(theme, "ctl-min", WindowControlArea::Min, Icon::Minimize))
+        .child(control(
+            theme,
+            "ctl-max",
+            WindowControlArea::Max,
+            if maximized { Icon::Restore } else { Icon::Maximize },
+        ))
+        .child(control(theme, "ctl-close", WindowControlArea::Close, Icon::Close))
+}
+
+/// An empty 40 px drag row with the shell's font; the caller adds the content.
+pub fn title_row(theme: &Theme) -> Div {
     let ty = theme.typography;
     div()
         .h(px(TITLEBAR_H))
@@ -107,38 +170,8 @@ pub fn titlebar(
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(16.0))
-        .pl(px(Radius::XS))
+        .gap(px(12.0))
         .window_control_area(WindowControlArea::Drag)
         .font_family(ty.ui_family)
         .text_size(px(ty.ui_size_md))
-        .child(breadcrumb(theme, detail))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .child(tab(theme, tab_label))
-                .child(new_tab_button(theme)),
-        )
-        .child(div().flex_1())
-        .child(control(
-            theme,
-            "ctl-min",
-            WindowControlArea::Min,
-            Icon::Minimize,
-        ))
-        .child(control(
-            theme,
-            "ctl-max",
-            WindowControlArea::Max,
-            if maximized { Icon::Restore } else { Icon::Maximize },
-        ))
-        .child(control(
-            theme,
-            "ctl-close",
-            WindowControlArea::Close,
-            Icon::Close,
-        ))
 }
