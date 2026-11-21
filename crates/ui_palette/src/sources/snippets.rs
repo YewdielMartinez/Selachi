@@ -113,7 +113,7 @@ impl PaletteSource for SnippetsSource {
             let tags = s.tags.join(" ");
             let Some(score) = matcher.score(
                 &needle,
-                &[(&s.name, 1.0), (&s.description, 0.6), (&tags, 0.6), (&s.template, 0.4)],
+                &[(&s.name, 1.0), (&s.description, 0.6), (&tags, 0.6)],
             ) else {
                 continue;
             };

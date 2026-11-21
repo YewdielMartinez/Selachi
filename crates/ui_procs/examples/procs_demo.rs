@@ -10,7 +10,7 @@
 //!
 //! * tab "api" (Claude): active shell + a dev server holding a port,
 //! * tab "web" (Codex): its shell exits after a few seconds, leaving an orphan + a port zombie,
-//! * a process tree under a renamed copy of `cmd.exe` called `codex.exe`, started *outside* every
+//! * a process tree under a renamed copy of `cmd.exe` called `codex-demo.exe`, started *outside* every
 //!   tracked job: it shows up as "atribución probable".
 //!
 //! `--confirm` opens the "Limpiar huérfanos" confirmation after the first samples.
@@ -29,7 +29,7 @@ use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
 use proc_svc::{JobGroup, JobOptions, OwnerMeta, Tracker};
 use theme::{Mode, Theme};
 use ui_kit::{Card, CardTone, Icon, Logo, Pill};
-use ui_procs::{ProcsModel, ProcsPanel, ProcsPanelProvider, SharedTracker, open_owner};
+use ui_procs::{ProcsModel, ProcsPanel, ProcsPanelProvider, SharedTracker, TrackerSource, open_owner};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const LISTENER: &str = "$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$l.Start();Start-Sleep 90";
@@ -83,7 +83,7 @@ fn start_fleet() -> (SharedTracker, Fleet, Vec<futures::channel::mpsc::Unbounded
         }
     }
 
-    // Outside every tracked job: a renamed cmd.exe called codex.exe -> heuristic attribution.
+    // Outside every tracked job: a renamed cmd.exe called codex-demo.exe -> heuristic attribution.
     let external = spawn_external_agent();
     (tracker.clone(), Fleet { _tracker: tracker, _external: external }, events)
 }
@@ -91,17 +91,22 @@ fn start_fleet() -> (SharedTracker, Fleet, Vec<futures::channel::mpsc::Unbounded
 fn spawn_external_agent() -> Option<JobGroup> {
     let dir = std::env::temp_dir().join("selachi-procs-demo");
     std::fs::create_dir_all(&dir).ok()?;
-    let exe = dir.join("codex.exe");
+    let exe = dir.join("codex-demo.exe");
     let system = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32").join("cmd.exe");
-    std::fs::copy(system, &exe).ok()?;
+    if !exe.exists() && let Err(e) = std::fs::copy(system, &exe) {
+        eprintln!("copy cmd.exe: {e}");
+        return None;
+    }
     let job = JobGroup::with_options("demo-external", JobOptions { kill_on_close: true, ..JobOptions::default() }).ok()?;
     let mut cmd = Command::new(&exe);
     cmd.args(["/c", "pwsh", "-NoProfile", "-NonInteractive", "-Command", LISTENER])
-        .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    job.spawn_command(&mut cmd, 0).ok()?;
+    if let Err(e) = job.spawn_command(&mut cmd, CREATE_NO_WINDOW) {
+        eprintln!("spawn codex-demo: {e}");
+        return None;
+    }
     Some(job)
 }
 
@@ -111,6 +116,8 @@ struct Host {
     panel: AnyView,
     panel_width: f32,
     panel_height: Option<f32>,
+    /// Keeps the demo processes (and their kill-on-close jobs) alive as long as the window.
+    _fleet: Fleet,
 }
 
 impl Render for Host {
@@ -228,14 +235,15 @@ fn main() {
         let theme = Theme::for_mode(mode);
         let (tracker, fleet, events) = start_fleet();
         let model: Entity<ProcsModel> = cx.new(|cx| {
-            let mut m = ProcsModel::with_tracker(tracker);
+            // Only the demo agent name, so real agents on this machine never show up.
+            let mut m = ProcsModel::new(Arc::new(TrackerSource::new(tracker).agents(["codex-demo"])));
             for rx in events {
                 m.watch_job_events(rx, cx);
             }
             m
         });
         let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-        let model_for_window = model.clone();
+        let model_for_window = model;
         let _ = cx.open_window(
             WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
             move |window, cx| {
@@ -260,10 +268,13 @@ fn main() {
                     .detach();
                 }
                 // Keep the processes (and their kill-on-close jobs) alive as long as the window.
-                let keep = fleet;
-                cx.new(move |_| {
-                    let _keep = &keep;
-                    Host { theme, zone, panel, panel_width, panel_height: Some(h - 40.0 - 8.0 - 150.0) }
+                cx.new(move |_| Host {
+                    theme,
+                    zone,
+                    panel,
+                    panel_width,
+                    panel_height: Some(h - 40.0 - 8.0 - 150.0),
+                    _fleet: fleet,
                 })
             },
         );

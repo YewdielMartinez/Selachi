@@ -31,6 +31,7 @@ use gpui::{
     size,
 };
 use panel_api::PanelRegistry;
+use store::config::ThemeMode;
 use store::{Config, ConfigWatcher, StateDb};
 use theme::Theme;
 
@@ -145,8 +146,13 @@ fn main() {
         })
         .detach();
 
-        let theme = Theme::dark();
         let boot = boot_config();
+        let theme = Theme::for_mode(match boot.config.appearance.mode {
+            ThemeMode::Light => theme::Mode::Light,
+            ThemeMode::Oled => theme::Mode::Oled,
+            // "system" follows the OS once that is wired; dark until then.
+            ThemeMode::Dark | ThemeMode::System => theme::Mode::Dark,
+        });
         let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
         let opened = cx.open_window(
             WindowOptions {

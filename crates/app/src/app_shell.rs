@@ -204,6 +204,8 @@ pub struct AppShell {
     /// Right panel width the user dragged to (`None` = the default share of the window).
     right_w: Option<f32>,
     _toast_task: Option<Task<()>>,
+    /// Wakes the shell once after a transition so the animated zones settle into plain boxes.
+    transition_task: Option<Task<()>>,
     session_db: Option<store::StateDb>,
     session_last: String,
     session_task: Option<Task<()>>,
@@ -339,6 +341,7 @@ impl AppShell {
             scroll_active: false,
             right_w: None,
             _toast_task: Some(toast_task),
+            transition_task: None,
             session_db,
             session_last: String::new(),
             session_task: None,
@@ -652,6 +655,12 @@ impl AppShell {
         if animate && !self.layout.reduced_motion {
             self.epoch += 1;
             self.transition = Some(Transition { from: old.layout, started: Instant::now(), epoch: self.epoch });
+            // Nothing else repaints when the animation ends: one wake-up drops the transition
+            // state (and the oversized, clipped zone contents) right after it.
+            self.transition_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TRANSITION_KEEP + Duration::from_millis(40)).await;
+                this.update(cx, |_, cx| cx.notify()).ok();
+            }));
         } else {
             self.transition = None;
         }
@@ -1603,6 +1612,9 @@ impl AppShell {
             .window_control_area(gpui::WindowControlArea::Drag);
         if opts.collapsed {
             header = header.justify_center();
+            if l.rail == RailVisibility::Hidden {
+                header = header.child(ui_kit::Logo::new(self.theme.mode).size(28.0));
+            }
         } else if l.rail == RailVisibility::Hidden && !right_side {
             header = header.pl(px(m.margin + 8.0)).child(ui_kit::Logo::new(self.theme.mode).size(28.0));
         } else {
@@ -2029,6 +2041,7 @@ impl AppShell {
                 let total = w + m.margin;
                 div()
                     .id("drawer-left")
+                    .bg(self.theme.colors.bg)
                     .absolute()
                     .top_0()
                     .bottom_0()
@@ -2045,6 +2058,7 @@ impl AppShell {
                 let total = w + GUTTER + m.margin;
                 div()
                     .id("drawer-right")
+                    .bg(self.theme.colors.bg)
                     .absolute()
                     .top_0()
                     .bottom_0()

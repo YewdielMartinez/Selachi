@@ -11,7 +11,7 @@ use gpui::{
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
 use theme::{Radius, Theme, rgb};
 use ui_kit::{
-    Button, GhostButton, Segment, SegmentedControl, Spinner, Tooltip, WireFill, WireRect, Wireframe, icon,
+    Button, GhostButton, IconButton, Segment, SegmentedControl, Spinner, Tooltip, WireFill, WireRect, Wireframe, icon,
 };
 
 use crate::assets::{ARROW_UP_RIGHT, runtime_icon_path};
@@ -151,6 +151,21 @@ impl ProcsPanel {
 // ---------------------------------------------------------------------------------------------
 // Small elements
 // ---------------------------------------------------------------------------------------------
+
+/// Character-based truncation. gpui `text_ellipsis` does not truncate `nowrap` text that was
+/// first measured at max-content (its measure cache returns the untruncated size), so long
+/// commands are clipped here and the full text goes in the tooltip.
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn probable_label(compact: bool) -> &'static str {
+    if compact { "probable" } else { "atribución probable" }
+}
 
 fn text_ellipsis_box() -> gpui::Div {
     div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis()
@@ -442,6 +457,7 @@ impl ProcsPanel {
     fn owner_header(&self, owner: &OwnerGroup, key: &str, folded: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
+        let compact = self.is_compact();
         let view = cx.entity();
         let k = key.to_string();
         let mut el = div()
@@ -462,22 +478,23 @@ impl ProcsPanel {
             .child(
                 div()
                     .flex_none()
-                    .max_w(px(160.0))
-                    .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_ellipsis()
                     .text_size(px(theme.typography.ui_size_sm))
-                    .child(owner.label.clone()),
+                    .child(clip(&owner.label, if compact { 14 } else { 22 })),
             );
-        if let Some(detail) = owner.detail.clone() {
-            el = el.child(
-                text_ellipsis_box().text_size(px(11.0)).text_color(c.muted).child(detail),
-            );
-        } else {
-            el = el.child(div().flex_1());
+        match owner.detail.as_deref() {
+            Some(detail) if !(compact && owner.probable) => {
+                el = el.child(
+                    text_ellipsis_box()
+                        .text_size(px(11.0))
+                        .text_color(c.muted)
+                        .child(clip(detail, if compact { 12 } else { 28 })),
+                );
+            }
+            _ => el = el.child(div().flex_1()),
         }
         if owner.probable {
-            el = el.child(tag(&theme, "atribución probable"));
+            el = el.child(tag(&theme, probable_label(compact)));
         }
         let orphans = owner.orphan_count();
         if orphans > 0 {
@@ -492,30 +509,62 @@ impl ProcsPanel {
         el.into_any_element()
     }
 
+    /// The "Detener" control of a row: a text button when there is room, a pixel `x` when compact.
+    fn stop_control(
+        &self,
+        id: String,
+        pid: u32,
+        name: &str,
+        allowed: bool,
+        denied_hint: &'static str,
+        denied_label: &'static str,
+    ) -> AnyElement {
+        let theme = self.ctx.theme;
+        let c = theme.colors;
+        let model = self.model.clone();
+        if !allowed {
+            return div()
+                .id(ElementId::from(SharedString::from(format!("denied-{id}"))))
+                .flex_none()
+                .text_size(px(11.0))
+                .text_color(c.muted)
+                .tooltip(Tooltip::text(&theme, denied_hint))
+                .child(denied_label)
+                .into_any_element();
+        }
+        let tip = format!("Detener {name} y sus subprocesos (con vista previa)");
+        if self.is_compact() {
+            IconButton::new(format!("stop-{id}"), &theme, Icon::Close)
+                .size(24.0)
+                .tooltip(tip)
+                .on_click(move |_, _, cx| model.update(cx, |m, cx| m.request_stop(pid, cx)))
+                .into_any_element()
+        } else {
+            GhostButton::new(format!("stop-{id}"), &theme, "Detener")
+                .tooltip(tip)
+                .on_click(move |_, _, cx| model.update(cx, |m, cx| m.request_stop(pid, cx)))
+                .into_any_element()
+        }
+    }
+
     fn proc_row(&self, r: &ProcRow) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let compact = self.is_compact();
-        let model = self.model.clone();
         let pid = r.pid;
         let indent = 18.0 + 12.0 * f32::from(r.depth.min(3));
 
         let stop: AnyElement = if r.is_root {
             tag(&theme, "shell").into_any_element()
-        } else if r.access_denied {
-            div()
-                .id(ElementId::from(SharedString::from(format!("denied-{pid}"))))
-                .flex_none()
-                .text_size(px(11.0))
-                .text_color(c.muted)
-                .tooltip(Tooltip::text(&theme, "Sin permiso: no se puede verificar este proceso"))
-                .child("sin acceso")
-                .into_any_element()
         } else {
-            GhostButton::new(format!("stop-{pid}"), &theme, "Detener")
-                .tooltip(format!("Detener {} y sus subprocesos (con vista previa)", r.name))
-                .on_click(move |_, _, cx| model.update(cx, |m, cx| m.request_stop(pid, cx)))
-                .into_any_element()
+            self.stop_control(
+                pid.to_string(),
+                pid,
+                &r.name,
+                !r.access_denied,
+                "Sin permiso: no se puede verificar este proceso",
+                "sin acceso",
+            )
         };
 
         let l1 = div()
@@ -528,15 +577,15 @@ impl ProcsPanel {
                 text_ellipsis_box()
                     .text_size(px(theme.typography.ui_size_md))
                     .text_color(if r.access_denied { c.muted } else { c.text })
-                    .child(r.command.clone()),
+                    .child(clip(&r.command, if compact { 20 } else { 30 })),
             )
-            .children(r.ports.iter().take(if compact { 1 } else { 3 }).map(|p| port_pill(&theme, pid, *p)))
             .child(stop);
 
         let mut l2 = div().flex().flex_row().items_center().gap(px(6.0)).pl(px(24.0));
         l2 = l2.child(badge(&theme, r.state));
-        if r.probable {
-            l2 = l2.child(tag(&theme, "atribución probable"));
+        l2 = l2.children(r.ports.iter().take(if compact { 1 } else { 3 }).map(|p| port_pill(&theme, pid, *p)));
+        if r.probable && !compact {
+            l2 = l2.child(tag(&theme, probable_label(false)));
         }
         if let (Some(t), false) = (r.tag, compact) {
             l2 = l2.child(tag(&theme, t));
@@ -549,6 +598,7 @@ impl ProcsPanel {
                 .child(metrics_text(r.ram, r.cpu, r.uptime, compact)),
         );
 
+        let full = r.full_command.clone().unwrap_or_else(|| r.name.clone());
         div()
             .id(ElementId::from(SharedString::from(format!("row-{pid}"))))
             .flex_none()
@@ -560,6 +610,7 @@ impl ProcsPanel {
             .gap(px(3.0))
             .rounded(px(8.0))
             .hover(move |s| s.bg(c.surface_2))
+            .tooltip(Tooltip::text(&theme, format!("{full}\npid {pid}")))
             .child(l1)
             .child(l2)
             .into_any_element()
@@ -623,25 +674,17 @@ impl ProcsPanel {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let compact = self.is_compact();
-        let model = self.model.clone();
         let pid = p.pid;
         let id_key = format!("port-{pid}-{}-{}", p.port, u8::from(p.tcp));
 
-        let stop: AnyElement = if p.can_stop() {
-            GhostButton::new(format!("stop-{id_key}"), &theme, "Detener")
-                .tooltip(format!("Detener {} (con vista previa)", p.process))
-                .on_click(move |_, _, cx| model.update(cx, |m, cx| m.request_stop(pid, cx)))
-                .into_any_element()
-        } else {
-            div()
-                .id(ElementId::from(SharedString::from(format!("denied-{id_key}"))))
-                .flex_none()
-                .text_size(px(11.0))
-                .text_color(c.muted)
-                .tooltip(Tooltip::text(&theme, "Proceso del sistema o sin permiso: no se puede detener desde aquí"))
-                .child("protegido")
-                .into_any_element()
-        };
+        let stop = self.stop_control(
+            id_key.clone(),
+            pid,
+            &p.process,
+            p.can_stop(),
+            "Proceso del sistema o sin permiso: no se puede detener desde aquí",
+            "protegido",
+        );
 
         let pill = PortPill { port: p.port, tcp: p.tcp, exposed: p.exposed };
         let l1 = div()
@@ -650,17 +693,19 @@ impl ProcsPanel {
             .items_center()
             .gap(px(8.0))
             .child(port_pill(&theme, pid, pill))
-            .child(runtime_icon(&theme, p.runtime))
             .child(
                 text_ellipsis_box()
                     .text_size(px(theme.typography.ui_size_md))
-                    .child(p.command.clone()),
+                    .child(clip(&p.command, if compact { 14 } else { 28 })),
             )
             .child(stop);
 
         let mut l2 = div().flex().flex_row().items_center().gap(px(6.0)).pl(px(2.0));
-        l2 = l2.child(
-            text_ellipsis_box().text_size(px(11.0)).text_color(c.muted).child(p.origin.label()),
+        l2 = l2.child(runtime_icon(&theme, p.runtime)).child(
+            text_ellipsis_box()
+                .text_size(px(11.0))
+                .text_color(c.muted)
+                .child(clip(&p.origin.label(), if compact && p.state.is_some_and(|s| s.is_orphan()) { 9 } else if compact { 16 } else { 30 })),
         );
         if let Some(s) = p.state.filter(|s| s.is_orphan()) {
             l2 = l2.child(badge(&theme, s));
@@ -685,6 +730,7 @@ impl ProcsPanel {
             .gap(px(3.0))
             .rounded(px(8.0))
             .hover(move |s| s.bg(c.surface_2))
+            .tooltip(Tooltip::text(&theme, format!("{}\npid {pid}", p.command)))
             .child(l1)
             .child(l2)
             .into_any_element()
@@ -721,7 +767,7 @@ impl ProcsPanel {
                 .child(note("Preparando la vista previa…".into()))
                 .into_any_element(),
             Dialog::Notice(msg) => {
-                let m = model.clone();
+                let m = model;
                 card()
                     .child(note(msg.to_string()))
                     .child(buttons().child(Button::tonal("dlg-close", &theme, "Cerrar").on_click(move |_, _, cx| {
@@ -730,7 +776,7 @@ impl ProcsPanel {
                     .into_any_element()
             }
             Dialog::Confirm(plan) => {
-                let (m_cancel, m_ok) = (model.clone(), model.clone());
+                let (m_cancel, m_ok) = (model.clone(), model);
                 let n = plan.items.len();
                 let mut el = card().child(title(plan.title())).child(note(confirm_note(plan)));
                 el = el.child(plan_list(&theme, plan, self.is_compact()));
@@ -766,7 +812,7 @@ impl ProcsPanel {
                 .child(note("Se pide el cierre y, si no responden en 3 s, se fuerzan.".into()))
                 .into_any_element(),
             Dialog::Done { plan, result } => {
-                let m = model.clone();
+                let m = model;
                 let mut el = card().child(title(if result.stopped() > 0 || result.is_clean() {
                     format!("{} detenidos", result.stopped())
                 } else {
@@ -829,7 +875,7 @@ fn plan_row(theme: &Theme, item: &PlanItem, compact: bool) -> impl IntoElement +
         .child(
             text_ellipsis_box()
                 .text_size(px(theme.typography.ui_size_sm))
-                .child(item.command.clone()),
+                .child(clip(&item.command, if compact { 18 } else { 30 })),
         )
         .children(item.ports.iter().take(2).map(|p| {
             div()

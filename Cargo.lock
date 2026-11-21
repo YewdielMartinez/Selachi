@@ -6486,6 +6486,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_doctor"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "panel_api",
+ "proc_svc",
+ "theme",
+ "ui_kit",
+]
+
+[[package]]
 name = "ui_kit"
 version = "0.1.0"
 dependencies = [

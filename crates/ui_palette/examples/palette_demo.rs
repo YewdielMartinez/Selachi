@@ -10,7 +10,7 @@
 //! the fake terminal. `--keys` dispatches keystrokes after the window opened (for screenshots).
 //! `--bench` opens and closes the palette with a few queries and prints the timings.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{
@@ -77,7 +77,7 @@ impl TabModel for DemoTab {
     }
 }
 
-fn demo_tabs(cx: &mut App, root: &PathBuf) -> Vec<TabHandle> {
+fn demo_tabs(cx: &mut App, root: &Path) -> Vec<TabHandle> {
     let mk = |cx: &mut App, title: &str, sub: Option<&str>, icon: TabIcon, status, cwd: PathBuf| {
         let body: AnyView = cx.new(|_| Blank).into();
         TabHandle::new(cx.new(|_| DemoTab {
@@ -90,20 +90,23 @@ fn demo_tabs(cx: &mut App, root: &PathBuf) -> Vec<TabHandle> {
         }))
     };
     vec![
-        mk(cx, "selachi", Some("main"), TabIcon::Kind(Icon::Terminal), None, root.clone()),
-        mk(cx, "claude", Some("opus-5.5 · feat/palette"), TabIcon::Agent("claude".into()), Some(RowStatus::Working), root.clone()),
+        mk(cx, "selachi", Some("main"), TabIcon::Kind(Icon::Terminal), None, root.to_path_buf()),
+        mk(cx, "claude", Some("opus-5.5 · feat/palette"), TabIcon::Agent("claude".into()), Some(RowStatus::Working), root.to_path_buf()),
         mk(cx, "api", Some("dotnet watch"), TabIcon::Kind(Icon::Terminal), Some(RowStatus::Done), root.join("crates")),
-        mk(cx, "codex", Some("esperando aprobación"), TabIcon::Agent("codex".into()), Some(RowStatus::Waiting), root.clone()),
+        mk(cx, "codex", Some("esperando aprobación"), TabIcon::Agent("codex".into()), Some(RowStatus::Waiting), root.to_path_buf()),
     ]
 }
 
 // ---- the seeded store -----------------------------------------------------------------------
 
-fn seed(root: &PathBuf) -> (PathBuf, StateDb) {
+fn seed(root: &Path) -> (PathBuf, StateDb) {
     let dir = root.join("target").join("palette-demo");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::create_dir_all(&dir);
-    let db = StateDb::open(&dir.join("state.db")).expect("state db");
+    let db = match StateDb::open(&dir.join("state.db")) {
+        Ok(db) => db,
+        Err(e) => panic!("state db: {e}"),
+    };
     let cwd = root.to_string_lossy().into_owned();
     for (cmd, code) in [
         ("cargo test -p ui_palette", 0),

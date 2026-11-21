@@ -165,11 +165,11 @@ impl FormState {
     }
 
     pub fn set_active_value(&mut self, text: &str) {
-        if let Some(v) = self.values.get_mut(self.active) {
-            if v != text {
-                *v = text.to_string();
-                self.error = None;
-            }
+        if let Some(v) = self.values.get_mut(self.active)
+            && v != text
+        {
+            *v = text.to_string();
+            self.error = None;
         }
     }
 

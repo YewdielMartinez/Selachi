@@ -24,6 +24,8 @@ const EXACT_PER_CHAR: f32 = 3.0;
 const MAX_TEXT: usize = 256;
 /// Most tokens of a query that are used.
 const MAX_TOKENS: usize = 5;
+/// Matches scoring below this per token (letters scattered across a long text) are noise.
+const MIN_TOKEN_SCORE: f32 = 0.2;
 const NEG_INF: f32 = f32::NEG_INFINITY;
 
 /// Lowercases a char and drops the accents of the Spanish / Latin-1 letters.
@@ -89,6 +91,9 @@ impl Matcher {
             for (text, weight) in fields {
                 if let Some(s) = self.score_token(tok, text) {
                     let s = s * weight;
+                    if s < MIN_TOKEN_SCORE {
+                        continue;
+                    }
                     best = Some(best.map_or(s, |b| b.max(s)));
                 }
             }
@@ -218,7 +223,7 @@ mod tests {
             (
                 "gs",
                 &["git status", "gist search results", "agents settings", "xgxsx"],
-                &["git status", "gist search results", "agents settings", "xgxsx"],
+                &["git status", "gist search results", "agents settings"],
             ),
             // Prefix beats contained.
             ("term", &["Nueva terminal", "Terminal", "determinar"], &["Terminal", "Nueva terminal", "determinar"]),
@@ -239,6 +244,8 @@ mod tests {
             ),
             // camelCase initials.
             ("fb", &["fooBar", "foobar"], &["fooBar", "foobar"]),
+            // Letters scattered over a long text are noise, not a match.
+            ("nueva", &["dotnet build -c {cfg|Debug|Release} -v {v:minimal}"], &[]),
             // No subsequence, no match.
             ("zzz", &["git", "terminal"], &[]),
         ];

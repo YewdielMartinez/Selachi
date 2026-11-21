@@ -102,7 +102,7 @@ impl PaletteSource for GitSource {
             let score = if needle.is_empty() {
                 Some(super::ordered_score(i))
             } else {
-                matcher.score(&needle, &[(title, 1.0), (keywords, 0.7), (&argv, 0.5)])
+                matcher.score(&needle, &[(title, 1.0), (keywords, 0.7), (&argv, 0.5)]).map(|s| s + super::ordered_score(i) * 0.05)
             };
             let Some(score) = score else { continue };
             let primary = match form {

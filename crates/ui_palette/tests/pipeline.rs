@@ -444,7 +444,7 @@ fn a_newer_query_cancels_the_running_source_promptly() {
     let source = Arc::new(Stuck { started: started.clone() });
     let cancel = Cancel::new();
     let c = cancel.clone();
-    let s = source.clone();
+    let s = source;
     let query = Query::parse("x");
     let c2 = ctx();
     let handle = std::thread::spawn(move || run_source(s.as_ref(), 5, &query, &c2, &c));
@@ -487,7 +487,7 @@ fn latency_budget_in_memory_and_history() {
     db.flush().unwrap();
     let many_actions: Vec<ActionEntry> =
         (0..300).map(|i| ActionEntry::new(format!("a.{i}"), format!("Acción número {i}")).keywords("demo")).collect();
-    let sources = standard_sources(Some(db.clone()), many_actions, vec![]);
+    let sources = standard_sources(Some(db), many_actions, vec![]);
     let c = ctx();
     let query = Query::parse("cargo");
     let cancel = Cancel::new();

@@ -72,7 +72,9 @@ impl PaletteSource for PresetsSource {
             let score = if needle.is_empty() {
                 Some(ordered_score(i))
             } else {
-                matcher.score(&needle, &[(&title, 1.0), ("layout preset diseño", 0.4), (&desc, 0.4)])
+                matcher
+                    .score(&needle, &[(&title, 1.0), ("layout preset diseño", 0.4), (&desc, 0.4)])
+                    .map(|s| s + ordered_score(i) * 0.05)
             };
             let Some(score) = score else { continue };
             out.push(

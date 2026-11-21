@@ -64,7 +64,7 @@ pub fn format_count(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(' ');
         }
         out.push(ch);
@@ -207,14 +207,6 @@ impl Ring {
 
     pub fn to_vec(&self) -> Vec<f32> {
         self.0.iter().copied().collect()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
