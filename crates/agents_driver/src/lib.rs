@@ -14,8 +14,10 @@
 //! ```
 //!
 //! Backends: Claude Code (`stream-json`, [`claude`]), Codex (`app-server`
-//! JSON-RPC, [`codex`]), ACP (stub, [`acp`]). No API keys: they use the user's own
-//! CLI login. Plan reference: `docs/PLAN.md` section 14.
+//! JSON-RPC, [`codex`]), and any Agent Client Protocol agent ([`acp`]): OpenCode
+//! (`opencode acp`, [`opencode`]) and, with `AgentKind::Acp { command }`, Gemini CLI
+//! and friends. No API keys: they use the user's own CLI login. Plan reference:
+//! `docs/PLAN.md` section 14.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod acp;
@@ -23,6 +25,7 @@ pub mod claude;
 pub mod codex;
 pub mod coalesce;
 pub mod detect;
+pub mod opencode;
 pub mod proc;
 mod types;
 
@@ -42,12 +45,8 @@ pub fn spawn(
     let driver: Box<dyn AgentDriver> = match kind {
         AgentKind::ClaudeCode => Box::new(claude::ClaudeDriver::spawn(cfg, tx)?),
         AgentKind::Codex => Box::new(codex::CodexDriver::spawn(cfg, tx)?),
-        AgentKind::Acp { command } => {
-            let _ = acp::AcpDriver::new(command);
-            return Err(DriverError::Unsupported(
-                "ACP agents are not implemented yet (https://agentclientprotocol.com)".into(),
-            ));
-        }
+        AgentKind::OpenCode => Box::new(acp::AcpDriver::spawn_opencode(cfg, tx)?),
+        AgentKind::Acp { command } => Box::new(acp::AcpDriver::spawn_command_line(&command, cfg, tx)?),
     };
     Ok((driver, rx))
 }
@@ -57,9 +56,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spawn_acp_is_unsupported() {
-        let r = spawn(AgentKind::Acp { command: "gemini".into() }, &ThreadConfig::new("."));
-        assert!(matches!(r, Err(DriverError::Unsupported(_))));
+    fn spawn_acp_with_missing_executable_is_not_found() {
+        let r = spawn(
+            AgentKind::Acp { command: "definitely-not-an-acp-agent --acp".into() },
+            &ThreadConfig::new("."),
+        );
+        assert!(matches!(r, Err(DriverError::NotFound(_))));
+        let r = spawn(AgentKind::Acp { command: "  ".into() }, &ThreadConfig::new("."));
+        assert!(matches!(r, Err(DriverError::NotFound(_))));
     }
 
     #[test]

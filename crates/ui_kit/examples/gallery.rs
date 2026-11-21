@@ -13,7 +13,7 @@ use gpui::{
 };
 use theme::{Mode, Theme, rgb};
 use ui_kit::{
-    Assets, Button, Card, CardTone, DitherMeter, GhostButton, Icon, IconButton, ListRow, Logo,
+    ActionSize, Assets, Button, Card, CardTone, DitherMeter, GhostButton, Icon, IconButton, ListRow, Logo,
     Pill, Placement, Popover, RowStatus, SectionLabel, SegmentedControl, Slider, Spinner,
     SwatchRow, Toggle, Tooltip, UniformListScrollHandle, VirtualList, WirePreset, Wireframe,
 };
@@ -140,6 +140,33 @@ impl Render for Gallery {
             .child(Button::primary("b4", &t, "Nuevo hilo").icon(Icon::Plus))
             .child(Button::primary("b5", &t, "Disabled").disabled(true));
 
+        let tone_chip = |label: &'static str, fill: gpui::Rgba| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(div().size(px(14.0)).rounded_full().bg(fill))
+                .child(div().text_size(px(12.0)).text_color(c.muted).child(label))
+        };
+        let actions = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(12.0))
+            .child(Button::action("a0", &t, "Nueva cita").on_click(|_, _, _| {}))
+            .child(Button::action("a1", &t, "Commit").no_icon().size(ActionSize::Lg))
+            .child(Button::action("a2", &t, "Deshabilitado").disabled(true));
+        let action_tones = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(14.0))
+            .child(tone_chip("reposo", c.accent_strong))
+            .child(tone_chip("hover", c.accent_strong_hover))
+            .child(tone_chip("press", c.accent_strong_press))
+            .child(tone_chip("señal", c.accent));
+
         let meters = div()
             .flex()
             .flex_col()
@@ -189,6 +216,9 @@ impl Render for Gallery {
             .child(SectionLabel::new(&t, "Button"))
             .child(buttons)
             .child(buttons2)
+            .child(SectionLabel::new(&t, "Acción (accent_strong · máx. 1 por vista)"))
+            .child(actions)
+            .child(action_tones)
             .child(SectionLabel::new(&t, "DitherMeter"))
             .child(meters)
             .child(SectionLabel::new(&t, "Estado"))

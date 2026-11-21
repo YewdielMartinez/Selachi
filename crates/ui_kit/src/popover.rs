@@ -16,7 +16,7 @@ use gpui::{
 use gpui::{Animation, AnimationExt};
 use theme::{
     Radius, Theme,
-    motion::{POP, duration::BASE},
+    motion::{POP, SHEET, duration::BASE},
 };
 
 use crate::motion::{clamped, reduced_motion};
@@ -55,6 +55,10 @@ impl Placement {
     }
 }
 
+/// Windows narrower than this (logical px) are "XS": a popover that asked for it opens as a
+/// bottom sheet (docs/DESIGN.md, Responsive).
+pub const SHEET_BELOW_WIDTH: f32 = 720.0;
+
 type DismissFn = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
 
 /// A trigger plus a floating panel. The caller owns `open` and flips it from the trigger's
@@ -81,6 +85,7 @@ pub struct Popover {
     placement: Placement,
     width: Option<f32>,
     padding: f32,
+    sheet_when_narrow: bool,
     on_dismiss: Option<DismissFn>,
     children: Vec<AnyElement>,
 }
@@ -95,6 +100,7 @@ impl Popover {
             placement: Placement::default(),
             width: None,
             padding: 8.0,
+            sheet_when_narrow: false,
             on_dismiss: None,
             children: Vec::new(),
         }
@@ -125,6 +131,13 @@ impl Popover {
     /// Inner padding in px (default 8).
     pub fn padding(mut self, padding: f32) -> Self {
         self.padding = padding;
+        self
+    }
+
+    /// In a window narrower than [`SHEET_BELOW_WIDTH`] open as a bottom sheet (full width, docked
+    /// to the bottom edge, `EASE.sheet` entrance) instead of next to the trigger.
+    pub fn sheet_when_narrow(mut self, on: bool) -> Self {
+        self.sheet_when_narrow = on;
         self
     }
 
@@ -186,12 +199,19 @@ impl RenderOnce for Popover {
             watch.update(cx, |w, _| *w.dismiss.borrow_mut() = self.on_dismiss.clone());
         }
         let place = self.placement;
+        let sheet = self.sheet_when_narrow && f32::from(window.viewport_size().width) < SHEET_BELOW_WIDTH;
         let trigger_bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
         let track_trigger = trigger_bounds.clone();
 
         // Zero-height strip on the side the panel opens to; the anchored panel's origin is this
         // strip, so the panel is attached to the trigger's edge without knowing its size.
+        // For the end placements the content sits in a zero-width box at the trigger's right edge:
+        // `anchored` takes its origin from its own layout slot, so a slot as wide as the panel
+        // would push the panel left by its own width.
         let marker = |content: Option<AnyElement>| {
+            let content = content.map(|c| {
+                if place.end() { div().w(px(0.0)).h(px(0.0)).flex_none().child(c).into_any_element() } else { c }
+            });
             div()
                 .w_full()
                 .h(px(0.0))
@@ -205,7 +225,8 @@ impl RenderOnce for Popover {
             let panel_bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
             let track_panel = panel_bounds.clone();
             let dismiss = self.on_dismiss.clone();
-            let dir = if place.below() { -1.0 } else { 1.0 };
+            let dir = if sheet { 1.0 } else if place.below() { -1.0 } else { 1.0 };
+            let travel = if sheet { 48.0 } else { TRAVEL };
             let mut body = div()
                 .relative()
                 .when_some(self.width, |d, w| d.w(px(w)))
@@ -247,22 +268,45 @@ impl RenderOnce for Popover {
             } else {
                 body.with_animation(
                     SharedString::from(format!("{}-pop", self.id)),
-                    Animation::new(BASE).with_easing(clamped(POP)),
-                    move |el, t| el.opacity(t).top(px(dir * TRAVEL * (1.0 - t))),
+                    Animation::new(BASE).with_easing(if sheet { clamped(SHEET) } else { clamped(POP) }),
+                    move |el, t| el.opacity(t).top(px(dir * travel * (1.0 - t))),
                 )
                 .into_any_element()
             };
 
-            let gap = if place.below() { GAP } else { -GAP };
-            deferred(
-                anchored()
-                    .anchor(place.corner())
-                    .offset(point(px(0.0), px(gap)))
-                    .snap_to_window_with_margin(px(8.0))
-                    .child(animated),
-            )
-            .with_priority(1)
-            .into_any_element()
+            if sheet {
+                // Bottom sheet: full width, docked to the bottom edge of the window.
+                let vp = window.viewport_size();
+                let sheet_body = div()
+                    .w(vp.width)
+                    .max_h(vp.height * 0.85)
+                    .flex()
+                    .flex_row()
+                    .justify_center()
+                    .overflow_hidden()
+                    .rounded_t(px(Radius::MD))
+                    .bg(c.surface_2)
+                    .child(animated);
+                deferred(
+                    anchored()
+                        .position(point(px(0.0), vp.height))
+                        .anchor(Corner::BottomLeft)
+                        .child(sheet_body),
+                )
+                .with_priority(1)
+                .into_any_element()
+            } else {
+                let gap = if place.below() { GAP } else { -GAP };
+                deferred(
+                    anchored()
+                        .anchor(place.corner())
+                        .offset(point(px(0.0), px(gap)))
+                        .snap_to_window_with_margin(px(8.0))
+                        .child(animated),
+                )
+                .with_priority(1)
+                .into_any_element()
+            }
         });
 
         let trigger = div()

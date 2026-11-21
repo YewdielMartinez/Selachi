@@ -7,6 +7,7 @@ use std::fmt;
 pub enum Agent {
     Claude,
     Codex,
+    OpenCode,
 }
 
 impl Agent {
@@ -14,6 +15,7 @@ impl Agent {
         match self {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
+            Agent::OpenCode => "opencode",
         }
     }
 
@@ -21,6 +23,7 @@ impl Agent {
         match s {
             "claude" => Some(Agent::Claude),
             "codex" => Some(Agent::Codex),
+            "opencode" => Some(Agent::OpenCode),
             _ => None,
         }
     }
@@ -78,6 +81,21 @@ pub struct UsageEvent {
     pub git_branch: Option<String>,
     /// Globally unique dedupe key.
     pub msg_key: String,
+}
+
+/// Optional per-event data that does not fit [`UsageEvent`] (kept separate so that struct stays
+/// source-compatible). Only OpenCode fills it today.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UsageExtras {
+    /// Reasoning/thinking tokens. A SUBSET of `UsageEvent::tokens.output` (already added there).
+    pub reasoning: u64,
+    /// Cost in USD as reported by the agent itself (OpenCode computes it from its model catalogue).
+    /// `None` when the agent reported none or reported 0 (free / unpriced model).
+    pub reported_cost_usd: Option<f64>,
+    /// Who reported `reported_cost_usd`, e.g. `opencode`.
+    pub cost_source: Option<String>,
+    /// Provider id of the model (`anthropic`, `openrouter`, ...), when the agent logs it.
+    pub provider: Option<String>,
 }
 
 /// A file the agent edited/created (path only, never content).

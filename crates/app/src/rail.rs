@@ -1,6 +1,12 @@
-//! Left icon rail (52 px): shark logo on top, pixel icon buttons, settings at the bottom.
+//! Left icon rail (52 px): shark logo on top, then one icon button per registered panel.
+//!
+//! The buttons come from the shell (`AppShell::rail_items`): the terminal view plus every panel in
+//! the `PanelRegistry` that can live on the right. A panel without a provider has no button, so
+//! nothing on the rail is a placeholder. In XS the same items go into the titlebar's menu.
 
-use gpui::{App, ClickEvent, IntoElement, Window, WindowControlArea, div, prelude::*, px};
+use std::rc::Rc;
+
+use gpui::{App, IntoElement, SharedString, Window, WindowControlArea, div, prelude::*, px};
 use theme::Theme;
 use ui_kit::{Icon, IconButton, Logo};
 
@@ -9,19 +15,31 @@ use crate::titlebar::TITLEBAR_H;
 /// Width of the left icon rail.
 pub const RAIL_W: f32 = 52.0;
 
-/// Rail button. Exactly one is `active` (the current view): `surface_3` pill, icon `text`.
-/// Hover is a different, lighter pill (`surface_2`) and keeps the muted icon, so a hovered
-/// button can never be mistaken for the active one. Press is not brighter than active either.
-fn rail_button(theme: &Theme, id: &'static str, icon: Icon, active: bool) -> IconButton {
-    IconButton::new(id, theme, icon).active(active)
+/// Click handler of a rail item.
+pub type RailClick = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// One rail button (or one row of the XS menu).
+pub struct RailItem {
+    pub id: SharedString,
+    pub icon: Icon,
+    pub title: SharedString,
+    /// The current view / the panel that is open: `surface_3` pill, icon `text`.
+    pub active: bool,
+    /// `None` for the terminal view, which is what the window shows already.
+    pub on_click: Option<RailClick>,
 }
 
-/// `git_active`: the git panel is open on the right; `on_git` toggles it.
-pub fn rail(
-    theme: &Theme,
-    git_active: bool,
-    on_git: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+pub fn rail(theme: &Theme, items: Vec<RailItem>) -> impl IntoElement {
+    let buttons = items.into_iter().map(|item| {
+        let RailItem { id, icon, title, active, on_click } = item;
+        // Active is a pill; hover is a lighter one that keeps the muted icon, so a hovered
+        // button can never be mistaken for the active one.
+        let mut b = IconButton::new(id, theme, icon).active(active).tooltip(title);
+        if let Some(f) = on_click {
+            b = b.on_click(move |_, window, cx| f(window, cx));
+        }
+        b
+    });
     div()
         .w(px(RAIL_W))
         .h_full()
@@ -43,19 +61,5 @@ pub fn rail(
                 // Light art on dark/OLED, dark art on light: the file changes, never a chip.
                 .child(Logo::new(theme.mode).size(40.0)),
         )
-        .child(
-            div()
-                .mt(px(4.0))
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(4.0))
-                .child(rail_button(theme, "rail-terminal", Icon::Terminal, true))
-                .child(rail_button(theme, "rail-files", Icon::Files, false))
-                .child(rail_button(theme, "rail-git", Icon::GitBranch, git_active).tooltip("Panel git").on_click(on_git))
-                .child(rail_button(theme, "rail-agents", Icon::Agents, false))
-                .child(rail_button(theme, "rail-history", Icon::History, false)),
-        )
-        .child(div().flex_1())
-        .child(rail_button(theme, "rail-settings", Icon::Settings, false))
+        .child(div().mt(px(4.0)).flex().flex_col().items_center().gap(px(4.0)).children(buttons))
 }

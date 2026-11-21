@@ -47,7 +47,11 @@ impl PanelProvider for GitPanelProvider {
     }
 
     fn icon(&self) -> Icon {
-        Icon::GitBranch
+        match self.0 {
+            Variant::Git => Icon::GitBranch,
+            // The session's context: its own rail button, not a second git icon.
+            Variant::Context => Icon::Agents,
+        }
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {

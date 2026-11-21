@@ -1,4 +1,4 @@
-//! Detect installed agent CLIs (`claude`, `codex`, `gemini`) on PATH.
+//! Detect installed agent CLIs (`claude`, `codex`, `opencode`, `gemini`) on PATH.
 //!
 //! Login status is a *cheap, offline* heuristic: we only check that a credential
 //! file exists (or an API-key env var is set). File contents are never read.
@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::opencode;
 use crate::proc;
 use crate::types::AgentKind;
 
@@ -50,6 +51,9 @@ fn credential_files(name: &str, home: Option<&Path>) -> Vec<PathBuf> {
             vec![base.join("auth.json")]
         }
         "gemini" => vec![home.join(".gemini").join("oauth_creds.json")],
+        // Legacy file only; v2 installs keep credentials in OpenCode's SQLite database, which
+        // is never opened, so a missing file means "unknown", not "logged out".
+        "opencode" => opencode::auth_file().into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -59,6 +63,7 @@ fn credential_env(name: &str) -> &'static [&'static str] {
         "claude" => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         "codex" => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         "gemini" => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "opencode" => opencode::CREDENTIAL_ENV,
         _ => &[],
     }
 }
@@ -67,15 +72,22 @@ fn kind_for(name: &str, path: &Path) -> AgentKind {
     match name {
         "claude" => AgentKind::ClaudeCode,
         "codex" => AgentKind::Codex,
-        // Gemini CLI speaks ACP; the exact ACP flag is left to the (future) ACP driver.
+        "opencode" => AgentKind::OpenCode,
+        // Gemini CLI speaks ACP, but the flag that switches it into ACP mode depends on the
+        // installed version, so the caller adds it (`AgentKind::Acp { command }` accepts
+        // `"<path>" --flag`); the path is quoted so spaces survive `split_command`.
         _ => AgentKind::Acp {
-            command: path.to_string_lossy().into_owned(),
+            command: format!("\"{}\"", path.to_string_lossy()),
         },
     }
 }
 
 fn probe(name: &'static str) -> Option<DetectedAgent> {
-    let path = proc::resolve_executable(name)?;
+    let path = if name == "opencode" {
+        opencode::resolve()?
+    } else {
+        proc::resolve_executable(name)?
+    };
     let mut cmd = proc::command_for(&path);
     cmd.arg("--version");
     let version = proc::run_capture(cmd, VERSION_TIMEOUT)
@@ -95,7 +107,7 @@ fn probe(name: &'static str) -> Option<DetectedAgent> {
 /// parallel (hidden windows, 5 s timeout each); blocking, call it off the UI thread.
 pub fn detect() -> Vec<DetectedAgent> {
     // Array `map` is eager: every probe thread starts before the first join.
-    let handles = ["claude", "codex", "gemini"].map(|n| std::thread::spawn(move || probe(n)));
+    let handles = ["claude", "codex", "opencode", "gemini"].map(|n| std::thread::spawn(move || probe(n)));
     handles
         .into_iter()
         .filter_map(|h| h.join().ok().flatten())
@@ -115,6 +127,26 @@ mod tests {
         std::fs::write(&f, b"").unwrap();
         assert_eq!(logged_in_from(std::slice::from_ref(&f), &[]), Some(true));
         let _ = std::fs::remove_file(f);
+    }
+
+    #[test]
+    fn kinds_per_agent() {
+        let p = PathBuf::from("C:/x y/gemini.cmd");
+        assert_eq!(kind_for("claude", &p), AgentKind::ClaudeCode);
+        assert_eq!(kind_for("opencode", &p), AgentKind::OpenCode);
+        assert_eq!(
+            kind_for("gemini", &p),
+            AgentKind::Acp { command: "\"C:/x y/gemini.cmd\"".into() }
+        );
+    }
+
+    #[test]
+    fn opencode_login_evidence_is_the_auth_file_or_env() {
+        let files = credential_files("opencode", Some(Path::new("H")));
+        assert!(files.iter().all(|f| f.ends_with("auth.json")));
+        assert!(credential_env("opencode").contains(&"OPENCODE_API_KEY"));
+        // nothing readable -> unknown (never "logged out")
+        assert_eq!(logged_in_from(&[PathBuf::from("Z:/no/such/auth.json")], &[]), None);
     }
 
     #[test]

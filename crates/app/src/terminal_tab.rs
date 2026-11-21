@@ -30,7 +30,15 @@ pub struct TerminalTab {
 impl TerminalTab {
     /// Starts a shell in `cwd` (`None` = the process directory).
     pub fn new(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let view = cx.new(|cx| TerminalView::new(theme, cwd, window, cx));
+        Self::with_view(cx.new(|cx| TerminalView::new(theme, cwd, window, cx)), cx)
+    }
+
+    /// A restored tab: the shell starts the first time the tab is painted.
+    pub fn new_deferred(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with_view(cx.new(|cx| TerminalView::new_deferred(theme, cwd, window, cx)), cx)
+    }
+
+    fn with_view(view: Entity<TerminalView>, cx: &mut Context<Self>) -> Self {
         let git = cx.new(|_| GitMonitor::new());
         if let Some(dir) = view.read(cx).cwd().map(Path::to_path_buf) {
             git.update(cx, |g, cx| g.set_cwd(dir, cx));

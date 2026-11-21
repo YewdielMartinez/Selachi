@@ -38,8 +38,39 @@ impl<T: Copy + PartialEq> PaneSet<T> {
         Self { panes: vec![None; count.max(1)], focused: 0 }
     }
 
+    /// A pane set restored from a saved session (`focused` is clamped).
+    pub fn from_panes(panes: Vec<Option<T>>, focused: usize) -> Self {
+        let panes = if panes.is_empty() { vec![None] } else { panes };
+        let focused = focused.min(panes.len() - 1);
+        Self { panes, focused }
+    }
+
     pub fn len(&self) -> usize {
         self.panes.len()
+    }
+
+    /// Like [`PaneSet::show`] when only the first `visible` panes are on screen (a narrow window
+    /// folds the 2x2 split into two columns): a tab that sits in a hidden pane swaps places with
+    /// the focused pane's tab, so it is shown and nothing is lost.
+    pub fn show_within(&mut self, tab: T, visible: usize) {
+        let visible = visible.clamp(1, self.panes.len());
+        match self.panes.iter().position(|p| *p == Some(tab)) {
+            Some(i) if i < visible => self.focused = i,
+            Some(i) => {
+                let f = self.focused.min(visible - 1);
+                self.focused = f;
+                self.panes.swap(i, f);
+            },
+            None => {
+                self.focused = self.focused.min(visible - 1);
+                self.panes[self.focused] = Some(tab);
+            },
+        }
+    }
+
+    /// Keeps the focus on a visible pane (the window got narrower).
+    pub fn clamp_focus(&mut self, visible: usize) {
+        self.focused = self.focused.min(visible.clamp(1, self.panes.len()) - 1);
     }
 
     #[allow(dead_code)]
@@ -199,5 +230,27 @@ mod tests {
         p.open(2);
         p.remove(2, &[1, 3], 1);
         assert_eq!(p.panes(), &[Some(1), Some(3)]);
+    }
+
+    #[test]
+    fn show_within_swaps_a_hidden_tab_into_the_visible_panes() {
+        let mut p = PaneSet::<u32>::from_panes(vec![Some(1), Some(2), Some(3), Some(4)], 0);
+        p.show_within(4, 2);
+        assert_eq!(p.panes(), &[Some(4), Some(2), Some(3), Some(1)]);
+        assert_eq!(p.focused_tab(), Some(4));
+        p.show_within(2, 2);
+        assert_eq!((p.focused(), p.focused_tab()), (1, Some(2)));
+        // A tab that is not shown at all replaces the focused (visible) pane.
+        p.show_within(9, 1);
+        assert_eq!(p.panes()[0], Some(9));
+    }
+
+    #[test]
+    fn from_panes_clamps_focus_and_clamp_focus_follows_visible() {
+        let mut p = PaneSet::<u32>::from_panes(vec![Some(1), None], 7);
+        assert_eq!(p.focused(), 1);
+        p.clamp_focus(1);
+        assert_eq!(p.focused(), 0);
+        assert_eq!(PaneSet::<u32>::from_panes(vec![], 3).len(), 1);
     }
 }

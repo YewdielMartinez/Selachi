@@ -9,19 +9,22 @@ use serde::{Deserialize, Serialize};
 pub enum AgentKind {
     ClaudeCode,
     Codex,
+    /// OpenCode (`opencode acp`, Agent Client Protocol over stdio; see [`crate::opencode`]).
+    OpenCode,
     /// Any Agent Client Protocol agent (Gemini CLI, ...). `command` is the
-    /// executable (and optional leading args) that speaks ACP over stdio.
+    /// executable (and optional leading args, double quotes group a path with spaces)
+    /// that speaks ACP over stdio, e.g. `"C:/Program Files/x/gemini.exe" --acp`.
     Acp { command: String },
 }
 
 /// UI-level permission pill. Each driver maps it to its CLI's native knobs.
 ///
-/// | Mode        | Claude Code                                        | Codex (`approvalPolicy` / `sandbox`)     |
-/// |-------------|----------------------------------------------------|------------------------------------------|
-/// | Ask         | `--permission-mode default` + stdio prompts        | `untrusted` / `workspace-write`          |
-/// | AcceptEdits | `--permission-mode acceptEdits` + stdio prompts    | `on-request` / `workspace-write`         |
-/// | Full        | `--dangerously-skip-permissions`                   | `never` / `danger-full-access`           |
-/// | ReadOnly    | `--permission-mode plan` + stdio prompts           | `on-request` / `read-only`               |
+/// | Mode        | Claude Code                                        | Codex (`approvalPolicy` / `sandbox`)     | ACP / OpenCode                                         |
+/// |-------------|----------------------------------------------------|------------------------------------------|--------------------------------------------------------|
+/// | Ask         | `--permission-mode default` + stdio prompts        | `untrusted` / `workspace-write`          | every `session/request_permission` is surfaced         |
+/// | AcceptEdits | `--permission-mode acceptEdits` + stdio prompts    | `on-request` / `workspace-write`         | edit/delete/move auto-allowed (once), the rest surfaced |
+/// | Full        | `--dangerously-skip-permissions`                   | `never` / `danger-full-access`           | everything auto-allowed (once), nothing surfaced       |
+/// | ReadOnly    | `--permission-mode plan` + stdio prompts           | `on-request` / `read-only`               | agent mode `plan` if offered; edit/execute auto-rejected |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum PermissionMode {
     #[default]

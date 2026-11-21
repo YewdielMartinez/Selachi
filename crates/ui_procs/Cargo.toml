@@ -1,0 +1,20 @@
+[package]
+name = "ui_procs"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi process monitor panel (PLAN section 15 / A7): agent -> tab -> process tree, listening ports, orphan cleanup with confirmation"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+gpui.workspace = true
+panel_api = { version = "0.1.0", path = "../panel_api" }
+proc_svc = { version = "0.0.1", path = "../proc_svc" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

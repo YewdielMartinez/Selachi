@@ -163,7 +163,7 @@ impl RenderOnce for SegmentedControl {
 // Toggle
 // ---------------------------------------------------------------------------------------------
 
-/// On/off switch, 36 x 20. On = accent track (an active state), off = `surface_3`.
+/// On/off switch, 36 x 20. On = `accent_strong` track (an active state), off = `surface_3`.
 ///
 /// ```ignore
 /// Toggle::new("reduce-motion", &theme).on(true).on_change(|on, _, cx| { /* store */ })
@@ -210,7 +210,7 @@ impl RenderOnce for Toggle {
             .px(px(3.0))
             .rounded_full()
             .cursor_pointer()
-            .bg(if on { c.accent } else { c.surface_3 })
+            .bg(if on { c.accent_strong } else { c.surface_3 })
             .when(on, |d| d.justify_end())
             .child(div().size(px(14.0)).rounded_full().bg(knob));
         if let Some(f) = self.on_change {
@@ -386,7 +386,7 @@ impl RenderOnce for Slider {
                     .rounded_full()
                     .bg(c.surface_3),
             )
-            // Filled part (progress -> accent).
+            // Filled part (strong selection -> accent_strong).
             .child(
                 div()
                     .absolute()
@@ -395,7 +395,7 @@ impl RenderOnce for Slider {
                     .h(px(TRACK_H))
                     .w(px(inner_w * t))
                     .rounded_full()
-                    .bg(c.accent),
+                    .bg(c.accent_strong),
             )
             // Default mark.
             .when_some(default_t, |d, dt| {

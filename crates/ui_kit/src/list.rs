@@ -266,6 +266,7 @@ pub struct ListRow {
     meta: Option<SharedString>,
     status: Option<RowStatus>,
     selected: bool,
+    glass: bool,
     on_click: Option<ClickFn>,
 }
 
@@ -283,8 +284,16 @@ impl ListRow {
             meta: None,
             status: None,
             selected: false,
+            glass: false,
             on_click: None,
         }
+    }
+
+    /// The row sits on a glass surface: hover / selected pills are translucent (white 8 / 12 %)
+    /// so the blurred backdrop shows through.
+    pub fn glass(mut self, glass: bool) -> Self {
+        self.glass = glass;
+        self
     }
 
     pub fn icon(mut self, icon: Icon) -> Self {
@@ -348,8 +357,13 @@ impl RenderOnce for ListRow {
             .gap(px(10.0))
             .rounded(px(10.0))
             .font_family(ty.ui_family)
-            .when(self.selected, |d| d.bg(c.surface_3))
-            .when(!self.selected, |d| d.hover(move |s| s.bg(c.surface_2)))
+            .when(self.selected, |d| {
+                d.bg(if self.glass { crate::glass_selected(&theme) } else { c.surface_3.into() })
+            })
+            .when(!self.selected, |d| {
+                let hover: gpui::Hsla = if self.glass { crate::glass_hover(&theme) } else { c.surface_2.into() };
+                d.hover(move |s| s.bg(hover))
+            })
             .when_some(lead, |d, l| d.child(l))
             .child(
                 div()

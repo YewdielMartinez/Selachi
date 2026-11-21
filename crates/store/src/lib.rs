@@ -4,6 +4,8 @@
 //! * [`db`]: `%APPDATA%\Selachi\state.db`: command history (FTS5), path frecency,
 //!   projects, favorites, session layout, retention.
 //! * [`paths`]: well-known locations.
+//! * [`snippets`]: `{param}` command templates (storage lives in [`db`]).
+//! * [`redact`]: secret redaction for text leaving the machine.
 //!
 //! `state.db` is deliberately a different file from `agents_svc`'s `selachi.db`:
 //! each owns its schema, `PRAGMA user_version` counter, writer and retention.
@@ -15,6 +17,8 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod paths;
+pub mod redact;
+pub mod snippets;
 
 pub use config::{
     layout_changed, wireframe, BottomBar, BuiltinPreset, Config, ConfigEvent, ConfigLoad,
@@ -24,7 +28,10 @@ pub use config::{
     Zone,
 };
 pub use db::{
-    detect_project, discover_projects, DiscoveredProject, Favorite, HistoryEntry, NewCommand,
-    PathEntry, Project, ProjectKind, PruneStats, SessionLayout, StateDb,
+    detect_project, discover_projects, looks_sensitive, now_ms, DiscoveredProject, Favorite,
+    HistoryEntry, NewCommand, NewSnippet, PathEntry, Project, ProjectKind, PruneStats,
+    SessionLayout, Snippet, SnippetScope, StateDb,
 };
 pub use error::{Result, StoreError};
+pub use redact::{redact, Redacted};
+pub use snippets::{parse_template, render, Param, Quoting};

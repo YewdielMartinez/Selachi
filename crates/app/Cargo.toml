@@ -15,9 +15,13 @@ git_svc = { version = "0.1.0", path = "../git_svc" }
 gpui.workspace = true
 log.workspace = true
 panel_api = { version = "0.1.0", path = "../panel_api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 store = { version = "0.0.1", path = "../store" }
 term_core = { version = "0.1.0", path = "../term_core" }
 theme = { version = "0.1.0", path = "../theme" }
+toml = "0.8"
+ui_layout = { version = "0.1.0", path = "../ui_layout" }
 ui_kit = { version = "0.1.0", path = "../ui_kit" }
 
 [target.'cfg(windows)'.dependencies]

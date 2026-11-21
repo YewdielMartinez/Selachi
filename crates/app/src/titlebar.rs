@@ -76,9 +76,13 @@ fn segment(theme: &Theme, text: impl Into<SharedString>, last: bool) -> Div {
     .child(text.into())
 }
 
-pub fn breadcrumb(theme: &Theme, detail: SharedString) -> impl IntoElement {
+/// `last_only` (XS, S): just the last folder, without the `Selachi > Terminal` prefix.
+pub fn breadcrumb(theme: &Theme, detail: SharedString, last_only: bool) -> impl IntoElement {
     let c = theme.colors;
     let sep = || icon(Icon::ChevronRight, 16.0, c.outline);
+    if last_only {
+        return div().min_w_0().max_w(px(220.0)).flex().flex_row().items_center().child(segment(theme, detail, true));
+    }
     div()
         .min_w_0()
         .max_w(px(420.0))

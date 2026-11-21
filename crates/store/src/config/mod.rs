@@ -320,6 +320,41 @@ mod tests {
     }
 
     #[test]
+    fn completion_defaults_and_env() {
+        let c = Config::default();
+        assert_eq!(c.terminal.completion.tab, TabMode::Smart);
+        assert_eq!(
+            c.completion_env(),
+            vec![
+                ("SELACHI_TAB_MODE".to_string(), "smart".to_string()),
+                ("SELACHI_PREDICTION".to_string(), "history".to_string()),
+                ("SELACHI_PREDICTION_VIEW".to_string(), "inline".to_string()),
+                ("SELACHI_ACCEPT_WORD_KEY".to_string(), "Ctrl+RightArrow".to_string()),
+            ]
+        );
+        let text = "[terminal.completion]\ntab = \"menu\"\nprediction = \"history_and_plugin\"\nprediction_view = \"list\"\naccept_word_key = \" Alt+j \"\n";
+        let p = Config::parse(text).unwrap();
+        assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+        let env: std::collections::BTreeMap<_, _> = p.config.completion_env().into_iter().collect();
+        assert_eq!(env["SELACHI_TAB_MODE"], "menu");
+        assert_eq!(env["SELACHI_PREDICTION"], "history_and_plugin");
+        assert_eq!(env["SELACHI_PREDICTION_VIEW"], "list");
+        assert_eq!(env["SELACHI_ACCEPT_WORD_KEY"], "Alt+j");
+        // Empty key = default; native values are passed through.
+        let p = Config::parse("[terminal.completion]\ntab = \"native\"\nprediction = \"native\"\nprediction_view = \"native\"\naccept_word_key = \"\"\n").unwrap();
+        let env: std::collections::BTreeMap<_, _> = p.config.completion_env().into_iter().collect();
+        assert_eq!(env["SELACHI_TAB_MODE"], "native");
+        assert_eq!(env["SELACHI_PREDICTION"], "native");
+        assert_eq!(env["SELACHI_PREDICTION_VIEW"], "native");
+        assert_eq!(env["SELACHI_ACCEPT_WORD_KEY"], "Ctrl+RightArrow");
+        // Bad values are rejected.
+        assert!(Config::parse("[terminal.completion]\ntab = \"tabby\"").is_err());
+        assert!(Config::parse("[terminal.completion]\nprediction = \"magic\"").is_err());
+        assert!(Config::parse("[terminal.completion]\naccept_word_key = \"a'b\"").is_err());
+        assert!(Config::parse("[terminal.completion]\nsparkle = 1").unwrap().warnings.contains(&"terminal.completion.sparkle".to_string()));
+    }
+
+    #[test]
     fn template_documents_every_key() {
         let schema = toml::Value::try_from(Config::default()).unwrap();
         fn leaves(v: &toml::Value, out: &mut Vec<String>) {

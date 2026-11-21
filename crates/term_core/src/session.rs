@@ -7,17 +7,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{self, Term};
+use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::tty;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
 use crate::color::{Palette, color_by_table_index};
 use crate::osc::{Mark, OscEvent};
+use crate::pty_loop::{self, Hooks, Msg, PtySender};
 use crate::snapshot::{Snapshot, build_snapshot_into};
-use crate::tap::TappedPty;
+use crate::block::{Block, BlockEvent, BlockId, BlockTracker, Clock, term_history_cap, truncate_middle};
 
 /// Errors raised while creating or driving a [`Session`].
 #[derive(thiserror::Error, Debug)]
@@ -78,6 +78,25 @@ pub enum SessionEvent {
         /// Exit code of the command.
         exit_code: Option<i32>,
     },
+    /// A command started running (OSC 133 `C`); see [`Session::blocks`].
+    ///
+    /// Only present with the `block-events` cargo feature (off by default so that crates that
+    /// match `SessionEvent` exhaustively keep compiling; enable it together with the new arms).
+    #[cfg(feature = "block-events")]
+    BlockStarted(BlockId),
+    /// A command finished; sent right after [`SessionEvent::CommandFinished`] (also when a new
+    /// prompt closes a command that never reported `D`, with `exit_code: None`).
+    ///
+    /// Only present with the `block-events` cargo feature.
+    #[cfg(feature = "block-events")]
+    BlockFinished {
+        /// The block that finished.
+        id: BlockId,
+        /// Exit code, if reported.
+        exit_code: Option<i32>,
+        /// How long it ran.
+        duration: std::time::Duration,
+    },
 }
 
 /// State shared between the session handle, the event loop thread and the listener.
@@ -91,7 +110,10 @@ struct Shared {
     /// Current palette; swapped by [`Session::set_palette`], read on every snapshot.
     palette: Mutex<Arc<Palette>>,
     /// PTY sender, set once the event loop exists (needed to answer `PtyWrite`).
-    pty: OnceLock<EventLoopSender>,
+    pty: OnceLock<PtySender>,
+    /// Command blocks. Only mutated by the PTY thread while the terminal lock is held; lock
+    /// order is always terminal first, tracker second.
+    blocks: Mutex<BlockTracker>,
 }
 
 fn pack_size(cols: u16, rows: u16, cw: u16, ch: u16) -> u64 {
@@ -117,15 +139,33 @@ impl Shared {
         Arc::clone(&self.palette.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Turns what the OSC scanner found on the PTY stream into session events.
-    fn on_osc(&self, event: OscEvent) {
-        match event {
-            OscEvent::Cwd(path) => self.emit(SessionEvent::Cwd(path)),
+    fn tracker(&self) -> std::sync::MutexGuard<'_, BlockTracker> {
+        self.blocks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Turns what the OSC scanner found on the PTY stream into session events and block updates.
+    /// Runs on the PTY thread with the terminal locked and parsed up to this sequence.
+    fn on_osc(&self, term: &Term<Listener>, event: OscEvent) {
+        match &event {
+            OscEvent::Cwd(path) => self.emit(SessionEvent::Cwd(path.clone())),
             OscEvent::Mark(Mark::Finished(exit_code)) => {
-                self.emit(SessionEvent::CommandFinished { exit_code });
+                self.emit(SessionEvent::CommandFinished { exit_code: *exit_code });
             },
-            // Prompt/command starts carry nothing the UI needs yet.
-            OscEvent::Mark(Mark::PromptStart | Mark::CommandStart | Mark::Executed) => {},
+            OscEvent::Mark(Mark::PromptStart | Mark::CommandStart | Mark::Executed)
+            | OscEvent::Command(_) => {},
+        }
+        let events = self.tracker().on_osc(term, event, Clock::now());
+        for event in events {
+            match event {
+                #[cfg(feature = "block-events")]
+                BlockEvent::Started(id) => self.emit(SessionEvent::BlockStarted(id)),
+                #[cfg(feature = "block-events")]
+                BlockEvent::Finished { id, exit_code, duration } => {
+                    self.emit(SessionEvent::BlockFinished { id, exit_code, duration });
+                },
+                #[cfg(not(feature = "block-events"))]
+                BlockEvent::Started(_) | BlockEvent::Finished { .. } => {},
+            }
         }
     }
 
@@ -185,6 +225,16 @@ impl EventListener for Listener {
     }
 }
 
+impl Hooks for Listener {
+    fn osc(&self, term: &mut Term<Self>, event: OscEvent) {
+        self.0.on_osc(term, event);
+    }
+
+    fn after_slice(&self, term: &mut Term<Self>) {
+        self.0.tracker().after_slice(term);
+    }
+}
+
 struct TermSize {
     cols: usize,
     rows: usize,
@@ -207,7 +257,7 @@ impl Dimensions for TermSize {
 /// A running terminal session. Dropping it shuts the PTY event loop down.
 pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
-    sender: EventLoopSender,
+    sender: PtySender,
     shared: Arc<Shared>,
     pid: Option<u32>,
 }
@@ -219,6 +269,16 @@ impl Session {
     pub fn spawn(
         cfg: SessionConfig,
     ) -> Result<(Session, UnboundedReceiver<SessionEvent>), TermError> {
+        Self::spawn_with_env(cfg, Vec::new())
+    }
+
+    /// Like [`Session::spawn`], with extra environment variables for the child (they win over
+    /// the built-in `TERM`, `COLORTERM` and `TERM_PROGRAM`). The shell integration reads the
+    /// completion settings from here, see `store::Config::completion_env`.
+    pub fn spawn_with_env(
+        cfg: SessionConfig,
+        extra_env: Vec<(String, String)>,
+    ) -> Result<(Session, UnboundedReceiver<SessionEvent>), TermError> {
         let cols = cfg.cols.max(1);
         let rows = cfg.rows.max(1);
         let (tx, rx) = unbounded();
@@ -229,10 +289,14 @@ impl Session {
             size: AtomicU64::new(pack_size(cols, rows, cfg.cell_width, cfg.cell_height)),
             palette: Mutex::new(Arc::new(cfg.palette.clone())),
             pty: OnceLock::new(),
+            blocks: Mutex::new(BlockTracker::new(cfg.scrollback)),
         });
         let listener = Listener(shared.clone());
 
-        let term_config = term::Config { scrolling_history: cfg.scrollback, ..Default::default() };
+        // The terminal may hold more history than the user asked for; the PTY thread trims it
+        // back after every parsed slice so absolute line numbers stay exact (see `block.rs`).
+        let term_config =
+            term::Config { scrolling_history: term_history_cap(cfg.scrollback), ..Default::default() };
         let dims = TermSize { cols: cols as usize, rows: rows as usize };
         let term = Arc::new(FairMutex::new(Term::new(term_config, &dims, listener.clone())));
 
@@ -240,6 +304,7 @@ impl Session {
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
         env.insert("TERM_PROGRAM".to_string(), "Selachi".to_string());
+        env.extend(extra_env);
 
         #[allow(clippy::needless_update)]
         let opts = tty::Options {
@@ -265,15 +330,10 @@ impl Session {
         #[cfg(not(windows))]
         let pid = None;
 
-        // Reads go through the OSC scanner (cwd / prompt marks) before reaching the terminal.
-        let osc_shared = shared.clone();
-        let pty = TappedPty::new(pty, Box::new(move |event| osc_shared.on_osc(event)));
-        let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)
-            .map_err(TermError::EventLoop)?;
-        let sender = event_loop.channel();
-        let _ = shared.pty.set(sender.clone());
-        // The thread is detached; it ends on Shutdown or child exit.
-        drop(event_loop.spawn());
+        let sender = pty_loop::spawn(term.clone(), listener, pty, |sender| {
+            let _ = shared.pty.set(sender.clone());
+        })
+        .map_err(TermError::EventLoop)?;
 
         Ok((Session { term, sender, shared, pid }, rx))
     }
@@ -297,7 +357,13 @@ impl Session {
         if self.shared.size.swap(packed, Ordering::AcqRel) == packed {
             return;
         }
-        self.term.lock().resize(TermSize { cols: cols as usize, rows: rows as usize });
+        {
+            let mut term = self.term.lock();
+            let cols_changed = term.columns() != cols as usize;
+            term.resize(TermSize { cols: cols as usize, rows: rows as usize });
+            // A width change reflows the text and invalidates the stored block lines.
+            self.shared.tracker().after_resize(term.grid().history_size(), cols_changed);
+        }
         let window = WindowSize { num_lines: rows, num_cols: cols, cell_width, cell_height };
         if let Err(e) = self.sender.send(Msg::Resize(window)) {
             log::debug!("session resize failed (event loop gone): {e}");
@@ -342,6 +408,82 @@ impl Session {
     /// Process id of the child, if known.
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// The command blocks of this session, oldest first (at most the last 500).
+    ///
+    /// Needs the shell integration (OSC 133). Cheap: clones a bounded list.
+    pub fn blocks(&self) -> Vec<Block> {
+        self.shared.tracker().blocks()
+    }
+
+    /// The block shown at viewport row `viewport_row` (0 = top row of what is on screen, so it
+    /// accounts for scrolling). `None` outside any block and while a full-screen app runs.
+    pub fn block_at_line(&self, viewport_row: usize) -> Option<BlockId> {
+        let term = self.term.lock();
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            return None;
+        }
+        let grid = term.grid();
+        let tracker = self.shared.tracker();
+        let abs = tracker.abs_of_viewport_row(grid.history_size(), grid.display_offset(), viewport_row);
+        tracker.block_at_abs(abs)
+    }
+
+    /// Plain text of the output of block `id`, trailing whitespace trimmed. When it is longer
+    /// than `max_bytes` the middle is replaced by a `… N líneas omitidas …` marker. `None` if the
+    /// block is unknown (or already trimmed away) or a full-screen app is showing.
+    pub fn block_output_text(&self, id: BlockId, max_bytes: usize) -> Option<String> {
+        let term = self.term.lock();
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            return None;
+        }
+        let tracker = self.shared.tracker();
+        let block = tracker.get(id)?;
+        let end = tracker.output_limit(&term, block);
+        let text = tracker.text_between(&term, block.output_start, end);
+        Some(truncate_middle(&text, max_bytes))
+    }
+
+    /// Scrolls the viewport so the prompt of block `id` is on the first row (as far as the
+    /// scrollback allows). Returns `false` if the block is unknown.
+    pub fn scroll_to_block(&self, id: BlockId) -> bool {
+        let mut term = self.term.lock();
+        let (hist, offset) = (term.grid().history_size(), term.grid().display_offset());
+        let wanted = {
+            let tracker = self.shared.tracker();
+            let Some(block) = tracker.get(id) else {
+                return false;
+            };
+            tracker.offset_for_top(hist, block.prompt_line)
+        };
+        let wanted = wanted.clamp(0, hist as i64);
+        let delta = wanted - offset as i64;
+        if delta != 0 {
+            term.scroll_display(Scroll::Delta(delta as i32));
+        }
+        true
+    }
+
+    /// The block before `from`; with `None`, the last block that starts above the viewport.
+    pub fn prev_block(&self, from: Option<BlockId>) -> Option<BlockId> {
+        let (tracker, top) = self.navigation_anchor();
+        tracker.prev(from, top)
+    }
+
+    /// The block after `from`; with `None`, the first block that starts below the viewport top.
+    pub fn next_block(&self, from: Option<BlockId>) -> Option<BlockId> {
+        let (tracker, top) = self.navigation_anchor();
+        tracker.next(from, top)
+    }
+
+    /// Tracker lock plus the absolute line at the top of the viewport.
+    fn navigation_anchor(&self) -> (std::sync::MutexGuard<'_, BlockTracker>, u64) {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let tracker = self.shared.tracker();
+        let top = tracker.abs_of_viewport_row(grid.history_size(), grid.display_offset(), 0);
+        (tracker, top)
     }
 }
 

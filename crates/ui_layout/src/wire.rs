@@ -1,8 +1,8 @@
 //! Converts `store::wireframe` (0..100 float zones) into ui_kit pixel-art blocks on a cell grid.
 
 use store::{ResolvedLayout, Splits, Zone};
-use ui_kit::{WireFill, WireRect, Wireframe};
 use theme::Theme;
+use ui_kit::{WireFill, WireRect, Wireframe};
 
 /// Grid of a preset card thumbnail.
 pub const THUMB: (u8, u8, f32) = (26, 20, 3.0);
@@ -47,10 +47,20 @@ pub fn blocks(layout: &ResolvedLayout, cols: u8, rows: u8) -> Vec<WireRect> {
             let (w, h) = (x1.saturating_sub(x0).max(1), y1.saturating_sub(y0).max(1));
             let x0 = x0.min(cols.saturating_sub(w));
             let y0 = y0.min(rows.saturating_sub(h));
-            Cells { zone: r.zone, x0, y0, x1: x0 + w, y1: y0 + h }
+            Cells {
+                zone: r.zone,
+                x0,
+                y0,
+                x1: x0 + w,
+                y1: y0 + h,
+            }
         })
         .collect();
-    let strips: Vec<u8> = zones.iter().filter(|z| z.is_tab_strip()).map(|z| z.y1).collect();
+    let strips: Vec<u8> = zones
+        .iter()
+        .filter(|z| z.is_tab_strip())
+        .map(|z| z.y1)
+        .collect();
     for z in &mut zones {
         let strip = z.is_tab_strip();
         // The pills of a tab strip keep their height; whatever sits under them moves down.
@@ -84,7 +94,13 @@ pub fn blocks(layout: &ResolvedLayout, cols: u8, rows: u8) -> Vec<WireRect> {
                 // Vertical tabs inside the sidebar: a stack of one-cell rows.
                 let mut y = y0 + 1;
                 while y < y0 + h {
-                    out.push(WireRect::new(x0 + 1, y, w.saturating_sub(2).max(1), 1, WireFill::Solid));
+                    out.push(WireRect::new(
+                        x0 + 1,
+                        y,
+                        w.saturating_sub(2).max(1),
+                        1,
+                        WireFill::Solid,
+                    ));
                     y += 2;
                 }
             }
@@ -102,7 +118,10 @@ pub fn blocks(layout: &ResolvedLayout, cols: u8, rows: u8) -> Vec<WireRect> {
 
 /// A thumbnail/preview `Wireframe` of a resolved layout.
 pub fn wireframe(theme: &Theme, layout: &ResolvedLayout, grid: (u8, u8, f32)) -> Wireframe {
-    Wireframe::new(theme).grid(grid.0, grid.1).cell(grid.2).rects(blocks(layout, grid.0, grid.1))
+    Wireframe::new(theme)
+        .grid(grid.0, grid.1)
+        .cell(grid.2)
+        .rects(blocks(layout, grid.0, grid.1))
 }
 
 /// The tiny split icons of the "Splits" row (grid 10 x 7).
@@ -119,7 +138,11 @@ pub fn split_blocks(s: Splits) -> Vec<WireRect> {
 }
 
 pub fn split_icon(theme: &Theme, s: Splits, selected: bool) -> Wireframe {
-    Wireframe::new(theme).grid(10, 7).cell(3.0).rects(split_blocks(s)).selected(selected)
+    Wireframe::new(theme)
+        .grid(10, 7)
+        .cell(3.0)
+        .rects(split_blocks(s))
+        .selected(selected)
 }
 
 #[cfg(test)]
@@ -139,8 +162,14 @@ mod tests {
                     "{b:?} has no main card"
                 );
                 for r in &rects {
-                    assert!(u16::from(r.x) + u16::from(r.w) <= u16::from(cols), "{b:?} {r:?}");
-                    assert!(u16::from(r.y) + u16::from(r.h) <= u16::from(rows), "{b:?} {r:?}");
+                    assert!(
+                        u16::from(r.x) + u16::from(r.w) <= u16::from(cols),
+                        "{b:?} {r:?}"
+                    );
+                    assert!(
+                        u16::from(r.y) + u16::from(r.h) <= u16::from(rows),
+                        "{b:?} {r:?}"
+                    );
                     assert!(r.w >= 1 && r.h >= 1);
                 }
             }
@@ -152,7 +181,10 @@ mod tests {
         let l = ResolvedLayout::builtin(BuiltinPreset::Zen);
         let rects = blocks(&l, THUMB.0, THUMB.1);
         assert_eq!(rects.len(), 1);
-        assert_eq!((rects[0].x, rects[0].y, rects[0].w, rects[0].h), (0, 0, THUMB.0, THUMB.1));
+        assert_eq!(
+            (rects[0].x, rects[0].y, rects[0].w, rects[0].h),
+            (0, 0, THUMB.0, THUMB.1)
+        );
     }
 
     #[test]

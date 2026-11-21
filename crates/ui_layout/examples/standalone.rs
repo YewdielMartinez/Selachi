@@ -1,7 +1,7 @@
 //! The layout panel in a window with a fake app behind it, for screenshots and manual testing.
 //!
 //! ```text
-//! cargo run -p ui_layout --example standalone --release -- [dark|light|oled] [--project] [--demo] [--closed] [--scroll-end] [--size WxH]
+//! cargo run -p ui_layout --example standalone --release -- [dark|light|oled] [--project] [--demo] [--warn] [--static] [--closed] [--scroll-end] [--size WxH]
 //! ```
 //!
 //! The panel starts open inside a titlebar `Popover`. Every change prints the resulting
@@ -18,8 +18,13 @@ use theme::{Mode, Theme};
 use ui_kit::{Assets, Card, CardTone, Icon, IconButton, Logo, Pill, Placement, Popover};
 use ui_layout::{LayoutPanel, PANEL_WIDTH, Scope, layout_panel};
 
+/// The fake working directory ("Este proyecto" scope).
+const PROJECT: &str = r"C:\Users\venta\Desktop\Terminal";
+
 struct Host {
     theme: Theme,
+    /// Screenshot mode: a transparent shield swallows every mouse event.
+    shield: bool,
     open: bool,
     panel: Entity<LayoutPanel>,
 }
@@ -49,9 +54,15 @@ impl Render for Host {
         };
 
         let terminal_lines = [
-            ("~/Desktop/Terminal", "cargo run -p ui_layout --example standalone"),
+            (
+                "~/Desktop/Terminal",
+                "cargo run -p ui_layout --example standalone",
+            ),
             ("", "   Compiling ui_layout v0.1.0"),
-            ("", "    Finished `release` profile [optimized] target(s) in 4.21s"),
+            (
+                "",
+                "    Finished `release` profile [optimized] target(s) in 4.21s",
+            ),
             ("", "     Running `target/release/examples/standalone`"),
         ];
 
@@ -64,9 +75,24 @@ impl Render for Host {
             .items_center()
             .gap(px(8.0))
             .child(Logo::new(t.mode).size(22.0))
-            .child(div().text_size(px(12.0)).text_color(c.muted).child("Selachi › Terminal › ~/Desktop/Terminal"))
-            .child(Pill::new("t0", &t).icon(Icon::Terminal).label("crates").active(true))
-            .child(Pill::new("t1", &t).icon(Icon::Agents).label("claude").on_click(|_, _, _| {}))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(c.muted)
+                    .child("Selachi › Terminal › ~/Desktop/Terminal"),
+            )
+            .child(
+                Pill::new("t0", &t)
+                    .icon(Icon::Terminal)
+                    .label("crates")
+                    .active(true),
+            )
+            .child(
+                Pill::new("t1", &t)
+                    .icon(Icon::Agents)
+                    .label("claude")
+                    .on_click(|_, _, _| {}),
+            )
             .child(div().flex_1())
             .child(
                 Popover::new("layout-pop", &t)
@@ -112,6 +138,17 @@ impl Render for Host {
             .flex_col()
             .child(titlebar)
             .child(div().flex_1().px(px(8.0)).pb(px(8.0)).flex().child(term))
+            .when(self.shield, |d| {
+                d.child(
+                    div()
+                        .id("shield")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .occlude(),
+                )
+            })
     }
 }
 
@@ -127,7 +164,17 @@ fn demo_config() -> LayoutConfig {
     let mut mine = ResolvedLayout::builtin(BuiltinPreset::Chat);
     mine.splits = store::Splits::TwoVertical;
     mine.right_panel = Some(store::PanelId::new("git"));
-    c.custom_presets.push(store::CustomPreset { name: "Mi flujo".into(), layout: mine });
+    c.set_project_overrides(
+        PROJECT,
+        LayoutOverrides {
+            density: Some(store::Density::Compact),
+            ..LayoutOverrides::default()
+        },
+    );
+    c.custom_presets.push(store::CustomPreset {
+        name: "Mi flujo".into(),
+        layout: mine,
+    });
     c
 }
 
@@ -143,6 +190,8 @@ fn main() {
     let open = !args.iter().any(|a| a == "--closed");
     let project = args.iter().any(|a| a == "--project");
     let demo = args.iter().any(|a| a == "--demo");
+    let warn = args.iter().any(|a| a == "--warn");
+    let shield = args.iter().any(|a| a == "--static");
     let scroll_end = args.iter().any(|a| a == "--scroll-end");
     let (w, h) = args
         .iter()
@@ -152,45 +201,66 @@ fn main() {
         .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
         .unwrap_or((1100.0, 1000.0));
 
-    Application::new().with_assets(Assets).run(move |cx: &mut App| {
-        if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
-            eprintln!("fonts: {e}");
-        }
-        ui_layout::init(cx);
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    Application::new()
+        .with_assets(Assets)
+        .run(move |cx: &mut App| {
+            if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
+                eprintln!("fonts: {e}");
             }
-        })
-        .detach();
-        let theme = Theme::for_mode(mode);
-        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-        let _ = cx.open_window(
-            WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
-            move |window, cx| {
-                let panel = layout_panel(
-                    if demo { demo_config() } else { LayoutConfig::default() },
-                    Some(PathBuf::from(r"C:\Users\venta\Desktop\Terminal")),
-                    theme,
-                    |config, _, _| match toml::to_string(&config) {
-                        Ok(text) => println!("--- [layout] changed ---\n{text}"),
-                        Err(e) => eprintln!("toml: {e}"),
-                    },
-                    cx,
-                );
-                if project {
-                    // The standalone has no config file: reach the scope switch through the view.
-                    panel.update(cx, |p, cx| p.set_scope(Scope::Project, cx));
+            ui_layout::init(cx);
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
                 }
-                if open {
-                    panel.read(cx).focus(window);
-                }
-                if scroll_end {
-                    panel.read(cx).scroll_to_end();
-                }
-                cx.new(|_| Host { theme, open, panel })
-            },
-        );
-        cx.activate(true);
-    });
+            })
+            .detach();
+            let theme = Theme::for_mode(mode);
+            let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+            let _ = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    let panel = layout_panel(
+                        if demo {
+                            demo_config()
+                        } else {
+                            LayoutConfig::default()
+                        },
+                        Some(PathBuf::from(PROJECT)),
+                        theme,
+                        |config, _, _| match toml::to_string(&config) {
+                            Ok(text) => println!("--- [layout] changed ---\n{text}"),
+                            Err(e) => eprintln!("toml: {e}"),
+                        },
+                        cx,
+                    );
+                    if project {
+                        // The standalone has no config file: reach the scope switch through the view.
+                        panel.update(cx, |p, cx| p.set_scope(Scope::Project, cx));
+                    }
+                    if warn {
+                        panel.update(cx, |p, cx| {
+                            p.edit_layout(window, cx, |l| {
+                                l.tabs_position = store::TabsPosition::Sidebar
+                            });
+                        });
+                    }
+                    if open {
+                        panel.read(cx).focus(window);
+                    }
+                    if scroll_end {
+                        panel.read(cx).scroll_to_end();
+                    }
+                    cx.new(|_| Host {
+                        theme,
+                        shield,
+                        open,
+                        panel,
+                    })
+                },
+            );
+            cx.activate(true);
+        });
 }

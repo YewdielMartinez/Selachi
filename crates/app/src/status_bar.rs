@@ -21,6 +21,18 @@ use crate::usage_monitor::{Official, UsageInfo, UsageMonitor, compact_tokens, no
 pub const STATUS_H: f32 = 28.0;
 /// Height of the full bar (per-agent meters).
 pub const STATUS_FULL_H: f32 = 52.0;
+/// Window widths (logical px) from which each piece of the bar is shown. When the bar does not
+/// fit, pieces disappear in this order: full meters, estimated usage, RAM; the branch (and the
+/// future orphan alert) go last. See docs/DESIGN.md, "Responsive".
+pub const FULL_FROM: f32 = 1024.0;
+pub const USAGE_FROM: f32 = 720.0;
+pub const RAM_FROM: f32 = 380.0;
+
+/// Which pieces fit in a bar of `width` px.
+pub fn visible_pieces(width: f32) -> (bool, bool, bool) {
+    (width >= FULL_FROM, width >= USAGE_FROM, width >= RAM_FROM)
+}
+
 /// How often the RAM reading is refreshed, only while the window is focused.
 const REFRESH: Duration = Duration::from_secs(2);
 
@@ -224,11 +236,14 @@ impl StatusBar {
 }
 
 impl Render for StatusBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ty = self.theme.typography;
+        let (full_fits, usage_fits, ram_fits) = visible_pieces(f32::from(window.viewport_size().width));
         let git = self.git.as_ref().and_then(|g| g.read(cx).info().cloned());
         let usage = self.usage.read(cx).info().cloned();
-        if self.mode == BottomBar::Full {
+        // The shell already asks for the compact bar when the window is narrow; this keeps the
+        // contents consistent if it did not.
+        if self.mode == BottomBar::Full && full_fits {
             return div()
                 .h(px(STATUS_FULL_H))
                 .flex_none()
@@ -263,9 +278,9 @@ impl Render for StatusBar {
             .font_family(ty.ui_family)
             .text_size(px(ty.ui_size_sm))
             .children(git.map(|g| self.git_pill(&g)))
-            .children(usage.map(|u| self.usage_pill(&u)))
+            .children(usage.filter(|_| usage_fits).map(|u| self.usage_pill(&u)))
             .child(div().flex_1())
-            .child(Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone()))
+            .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
             .into_any_element()
     }
 }
@@ -281,6 +296,14 @@ mod tests {
         assert_eq!(format_reset(now + 130 * 60_000, now), "2 h 10 min");
         assert_eq!(format_reset(now + (3 * 24 + 5) * 3_600_000, now), "3 d 5 h");
         assert_eq!(format_reset(now - 5, now), "0 min");
+    }
+
+    #[test]
+    fn pieces_hide_in_priority_order() {
+        assert_eq!(visible_pieces(1440.0), (true, true, true));
+        assert_eq!(visible_pieces(1000.0), (false, true, true));
+        assert_eq!(visible_pieces(600.0), (false, false, true));
+        assert_eq!(visible_pieces(320.0), (false, false, false));
     }
 
     #[test]

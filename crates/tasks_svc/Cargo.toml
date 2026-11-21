@@ -1,0 +1,19 @@
+[package]
+name = "tasks_svc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Selachi project task launcher backend (A6): detects npm/pnpm/yarn/bun scripts, .NET, Cargo, Make, Just, Python, Docker Compose and VS Code tasks. UI-agnostic"
+
+[lints]
+workspace = true
+
+[dependencies]
+store = { path = "../store" }
+log.workspace = true
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "0.8"
+quick-xml = "0.41"
+
+[dev-dependencies]
+tempfile = "3"

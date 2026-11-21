@@ -1,8 +1,8 @@
 //! Selachi UI kit: the reusable, theme-driven gpui components of the app.
 //!
 //! Design rules (docs/DESIGN.md): zones are separated by tone, never by lines; the only 1 px
-//! border is `outline_soft` on floating surfaces; the accent appears only for active/progress
-//! states; pixel art is an accent, not noise.
+//! border is `outline_soft` on floating surfaces; the accent (`#00AAFF`) is the signal color and
+//! `accent_strong` (`#005EEB`) the action color (one `ActionButton` per view); pixel art is an accent, not noise.
 //!
 //! Every component takes a `&Theme` and is stateless (the caller owns the value and re-renders
 //! from callbacks). Register the assets once:
@@ -13,7 +13,7 @@
 //!
 //! | Area | Components |
 //! |---|---|
-//! | Actions | [`Pill`], [`IconButton`], [`GhostButton`], [`Button`] |
+//! | Actions | [`Pill`], [`IconButton`], [`GhostButton`], [`Button`], [`ActionButton`] (`Button::action`) |
 //! | Assets | [`Assets`], [`Icon`], [`icon`], [`Logo`] |
 //! | Feedback | [`DitherMeter`], [`Spinner`], [`StatusGlyph`], [`Tooltip`] |
 //! | Settings | [`SegmentedControl`], [`Toggle`], [`Slider`], [`SwatchRow`] |
@@ -22,6 +22,7 @@
 //! | Layout | [`Wireframe`], [`SectionLabel`], [`Card`] |
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod action_button;
 mod assets;
 mod button;
 mod controls;
@@ -36,6 +37,7 @@ mod surface;
 mod tooltip;
 mod wireframe;
 
+pub use action_button::{ActionButton, ActionSize};
 pub use assets::Assets;
 pub use button::{Button, ButtonKind, GhostButton, IconButton};
 pub use controls::{Segment, SegmentedControl, Slider, SwatchRow, Toggle};
@@ -47,7 +49,7 @@ pub use logo::Logo;
 pub use meter::DitherMeter;
 pub use motion::{reduced_motion, set_reduced_motion};
 pub use pill::{Pill, PillSize};
-pub use popover::{Placement, Popover};
-pub use surface::{Card, CardTone, SectionLabel};
+pub use popover::{Placement, Popover, SHEET_BELOW_WIDTH};
+pub use surface::{Card, CardTone, SectionLabel, glass_hover, glass_selected, glass_tint};
 pub use tooltip::Tooltip;
 pub use wireframe::{WireFill, WirePreset, WireRect, Wireframe};

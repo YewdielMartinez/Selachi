@@ -69,6 +69,31 @@ CREATE TABLE session_layout(
     ts   INTEGER NOT NULL
 );
 "#,
+    // v2: snippets (A12). Six useful defaults are seeded here, i.e. once per database.
+    r#"
+CREATE TABLE snippets(
+    id          INTEGER PRIMARY KEY,
+    name        TEXT    NOT NULL,
+    template    TEXT    NOT NULL,
+    description TEXT    NOT NULL DEFAULT '',
+    tags        TEXT    NOT NULL DEFAULT '',      -- comma separated, lowercase
+    scope       TEXT    NOT NULL DEFAULT 'global',-- global|project
+    scope_path  TEXT    NOT NULL DEFAULT '',      -- project folder (display form)
+    scope_key   TEXT    NOT NULL DEFAULT '',      -- normalized scope_path
+    created     INTEGER NOT NULL,                 -- unix ms
+    last_used   INTEGER,                          -- unix ms
+    uses        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_snippets_scope ON snippets(scope, scope_key);
+
+INSERT INTO snippets(name, template, description, tags, created) VALUES
+ ('EF: nueva migración', 'dotnet ef migrations add {nombre}', 'Crea una migración de Entity Framework Core', 'dotnet,ef,migracion', CAST(strftime('%s','now') AS INTEGER) * 1000),
+ ('Git: nueva rama', 'git switch -c {rama}', 'Crea una rama y cambia a ella', 'git,rama', CAST(strftime('%s','now') AS INTEGER) * 1000),
+ ('npm: instalar paquete', 'npm i {paquete}', 'Instala un paquete en el proyecto', 'npm,node', CAST(strftime('%s','now') AS INTEGER) * 1000),
+ ('Docker: logs de un servicio', 'docker compose logs -f {servicio}', 'Sigue los logs de un servicio de compose', 'docker,compose,logs', CAST(strftime('%s','now') AS INTEGER) * 1000),
+ ('Cargo: test de un crate', 'cargo test -p {crate}', 'Ejecuta los tests de un crate del workspace', 'cargo,rust,test', CAST(strftime('%s','now') AS INTEGER) * 1000),
+ ('Git: log corto', 'git log --oneline -n {n:20}', 'Últimos commits en una línea', 'git,log', CAST(strftime('%s','now') AS INTEGER) * 1000);
+"#,
 ];
 
 /// Latest schema version this build knows.

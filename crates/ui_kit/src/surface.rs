@@ -112,3 +112,38 @@ impl RenderOnce for Card {
         self.base
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Glass (frosted sidebar / right panel / drawers)
+// ---------------------------------------------------------------------------------------------
+
+/// Tint painted over the blurred backdrop of a glass zone. Dark: neutral gray `#2A2A2E` (OLED: a
+/// deeper `#121214`), light: white. `translucency` is `0..=100` (percent); the alpha is
+/// `1 - translucency * 0.6`, so 35 % reads clearly see-through but calm and 0 % is opaque.
+pub fn glass_tint(theme: &Theme, translucency: u8) -> gpui::Hsla {
+    let t = f32::from(translucency.min(100)) / 100.0;
+    let alpha = 1.0 - t * 0.6;
+    let base: gpui::Hsla = match theme.mode {
+        theme::Mode::Dark => gpui::rgb(0x2A2A2E).into(),
+        theme::Mode::Oled => gpui::rgb(0x121214).into(),
+        theme::Mode::Light => gpui::rgb(0xFFFFFF).into(),
+    };
+    base.opacity(alpha)
+}
+
+/// Hover pill over glass: white at 8 % (black at 6 % in light mode, where white would vanish).
+pub fn glass_hover(theme: &Theme) -> gpui::Hsla {
+    glass_pill(theme, 0.08, 0.06)
+}
+
+/// Selected pill over glass: white at 12 % (black at 9 % in light mode).
+pub fn glass_selected(theme: &Theme) -> gpui::Hsla {
+    glass_pill(theme, 0.12, 0.09)
+}
+
+fn glass_pill(theme: &Theme, dark: f32, light: f32) -> gpui::Hsla {
+    match theme.mode {
+        theme::Mode::Light => gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: light },
+        _ => gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: dark },
+    }
+}

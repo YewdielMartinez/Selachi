@@ -1,4 +1,4 @@
-//! `agents_svc` - real, local, offline token-usage accounting for Claude Code and Codex.
+//! `agents_svc` - real, local, offline token-usage accounting for Claude Code, Codex and OpenCode.
 //!
 //! Nothing here is invented: every figure comes from the agents' own log files (or, for limits, from
 //! rate-limit numbers the providers themselves wrote into those logs / the statusLine payload), and each
@@ -19,6 +19,7 @@ pub mod codex;
 pub mod db;
 pub mod ingest;
 pub mod model;
+pub mod opencode;
 pub mod pricing;
 pub mod query;
 pub mod range;
@@ -26,9 +27,9 @@ pub mod statusline;
 
 pub use db::{Store, UpsertOutcome};
 pub use ingest::{IngestConfig, Ingestor, ScanReport};
-pub use model::{Agent, FileTouch, RateLimitSnapshot, TokenCounts, UsageEvent};
+pub use model::{Agent, FileTouch, RateLimitSnapshot, TokenCounts, UsageEvent, UsageExtras};
 pub use pricing::{ModelPrice, PricingTable, COST_LABEL};
-pub use query::{AgentUsage, BranchUsage, BurnRate, FileTouched, Forecast};
+pub use query::{AgentUsage, BranchUsage, BurnRate, FileTouched, Forecast, ReportedCost};
 pub use range::{Bounds, Range};
 pub use statusline::{
     parse_statusline_payload, record_statusline, StatuslineData, StatuslineLimit,

@@ -1,6 +1,6 @@
 //! SQLite storage: connection setup (WAL), versioned migrations, row writers.
 
-use crate::model::{normalize_path, FileTouch, RateLimitSnapshot, UsageEvent};
+use crate::model::{normalize_path, FileTouch, RateLimitSnapshot, UsageEvent, UsageExtras};
 use crate::pricing::PricingTable;
 use anyhow::{Context, Result};
 use chrono::Weekday;
@@ -76,6 +76,13 @@ CREATE TABLE statusline_snapshots(
     context_window_size INTEGER
 );
 CREATE INDEX idx_sl_session ON statusline_snapshots(session_id, ts);
+"#,
+    // v2: OpenCode support (additive columns, existing rows keep NULL/0)
+    r#"
+ALTER TABLE usage_events ADD COLUMN reasoning     INTEGER NOT NULL DEFAULT 0; -- subset of output
+ALTER TABLE usage_events ADD COLUMN reported_cost REAL;                       -- USD, as reported by the agent
+ALTER TABLE usage_events ADD COLUMN cost_source   TEXT;                       -- who reported it ('opencode')
+ALTER TABLE usage_events ADD COLUMN provider      TEXT;                       -- model provider id
 "#,
 ];
 
@@ -246,6 +253,66 @@ impl Store {
             }
             Some(_) => Ok(UpsertOutcome::Duplicate),
         }
+    }
+
+    /// Insert a usage event, or REPLACE the stored one with the same `msg_key` (last write wins).
+    ///
+    /// For sources whose message record is rewritten in place as it grows (OpenCode keeps one row
+    /// per assistant message and updates its token/cost totals after every step), unlike the
+    /// monotonic-chunk heuristic of [`Store::upsert_usage`].
+    pub fn upsert_usage_replace(&self, e: &UsageEvent, x: &UsageExtras) -> Result<UpsertOutcome> {
+        type Row = (i64, i64, i64, i64, i64, i64, Option<f64>, Option<String>, Option<String>);
+        let existing: Option<Row> = self
+            .conn
+            .prepare_cached(
+                "SELECT ts, input, output, cache_create, cache_read, reasoning, reported_cost,                         cost_source, model FROM usage_events WHERE msg_key = ?1",
+            )?
+            .query_row([&e.msg_key], |r| {
+                Ok((
+                    r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
+                    r.get(6)?, r.get(7)?, r.get(8)?,
+                ))
+            })
+            .optional()?;
+        let t = &e.tokens;
+        if let Some((ts, i, o, cc, cr, rs, cost, src, model)) = &existing {
+            let same = *ts == e.ts_ms
+                && *i == t.input as i64
+                && *o == t.output as i64
+                && *cc == t.cache_create as i64
+                && *cr == t.cache_read as i64
+                && *rs == x.reasoning as i64
+                && *cost == x.reported_cost_usd
+                && *src == x.cost_source
+                && model.as_deref() == Some(e.model.as_str());
+            if same {
+                return Ok(UpsertOutcome::Duplicate);
+            }
+        }
+        self.conn
+            .prepare_cached(
+                "INSERT INTO usage_events(agent, session_id, ts, model, input, output, cache_create,                  cache_create_1h, cache_read, cwd, cwd_norm, git_branch, msg_key, reasoning,                  reported_cost, cost_source, provider)                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)                  ON CONFLICT(msg_key) DO UPDATE SET ts=?3, model=?4, input=?5, output=?6,                  cache_create=?7, cache_create_1h=?8, cache_read=?9, cwd=?10, cwd_norm=?11,                  git_branch=?12, reasoning=?14, reported_cost=?15, cost_source=?16, provider=?17",
+            )?
+            .execute(params![
+                e.agent.as_str(),
+                e.session_id,
+                e.ts_ms,
+                e.model,
+                t.input as i64,
+                t.output as i64,
+                t.cache_create as i64,
+                t.cache_create_1h as i64,
+                t.cache_read as i64,
+                e.cwd,
+                e.cwd.as_deref().map(normalize_path),
+                e.git_branch,
+                e.msg_key,
+                x.reasoning as i64,
+                x.reported_cost_usd,
+                x.cost_source,
+                x.provider
+            ])?;
+        Ok(if existing.is_some() { UpsertOutcome::Updated } else { UpsertOutcome::Inserted })
     }
 
     /// Returns true if a new row was inserted.

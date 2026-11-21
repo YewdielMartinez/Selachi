@@ -37,7 +37,6 @@ pub struct LayoutPanelArgs {
     /// The `[layout]` section as it is now.
     pub layout: LayoutConfig,
     /// Working directory of the active tab (for per-project overrides).
-    #[allow(dead_code)]
     pub cwd: Option<PathBuf>,
     /// Emit a new layout: applied live and saved.
     pub on_change: OnLayoutChange,
@@ -63,9 +62,14 @@ struct HostGlobal(Option<Rc<dyn LayoutPanelHost>>);
 
 impl Global for HostGlobal {}
 
+/// The real panel: `ui_layout::layout_panel`. The shell keeps the returned view, downcasts it to
+/// `ui_layout::LayoutPanel` and calls `set_config` / `set_theme` / `set_cwd` on it while open.
+pub fn ui_layout_host(args: LayoutPanelArgs, _window: &mut Window, cx: &mut App) -> AnyView {
+    let on_change = args.on_change.clone();
+    ui_layout::layout_panel(args.layout, args.cwd, args.theme, move |layout, _, cx| on_change(layout, cx), cx).into()
+}
+
 /// Registers the popover content (call once at startup, before the window opens).
-// Wired up by the `ui_layout` integration; until then the fallback panel is used.
-#[allow(dead_code)]
 pub fn register_layout_panel_host(cx: &mut App, host: impl LayoutPanelHost) {
     cx.set_global(HostGlobal(Some(Rc::new(host))));
 }

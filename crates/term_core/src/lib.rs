@@ -12,16 +12,22 @@
 //! [`Session::write`].
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod agent;
+mod block;
 mod color;
 mod keys;
 mod osc;
+mod pty_loop;
+mod redact;
 mod session;
 mod shell;
 mod snapshot;
-mod tap;
 
+pub use agent::{AgentContext, LongCommandPolicy, agent_context, should_notify};
+pub use block::{AbsLine, Block, BlockId, BlockState, MAX_BLOCKS};
 pub use color::{Palette, Rgb8, indexed_color};
 pub use keys::{KeyInput, encode_key};
+pub use redact::{REDACTED, redact};
 pub use session::{Session, SessionConfig, SessionEvent, TermError};
 pub use shell::{PWSH_INTEGRATION, default_shell, install_pwsh_integration, pwsh_integration_args};
 pub use snapshot::{CellFlags, CellView, Snapshot};

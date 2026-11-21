@@ -28,6 +28,8 @@ pub struct SidebarProps<'a> {
     pub tabs: &'a [TabInfo],
     pub active: Option<TabId>,
     pub shell: &'a Entity<AppShell>,
+    /// The column is glass: rows use translucent pills so the backdrop shows through.
+    pub glass: bool,
 }
 
 fn section_title(section: SidebarSection, forced_tabs: bool) -> &'static str {
@@ -39,6 +41,40 @@ fn section_title(section: SidebarSection, forced_tabs: bool) -> &'static str {
         SidebarSection::Agents => "Agentes",
         SidebarSection::Threads => "Hilos",
     }
+}
+
+/// The icon-only sidebar of the S class: an expand button (opens the full sidebar as an overlay)
+/// and one icon per tab. Clicks select the tab; hovering shows its title.
+pub fn sidebar_collapsed(p: &SidebarProps) -> Stateful<Div> {
+    let theme = p.theme;
+    let shell = p.shell.clone();
+    let mut col = div()
+        .id("sidebar-collapsed")
+        .size_full()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(4.0))
+        .py(px(8.0))
+        .child(
+            IconButton::new("sb-expand", theme, Icon::ChevronRight)
+                .glass(p.glass)
+                .tooltip("Expandir la barra lateral")
+                .on_click(move |_, _, cx| shell.update(cx, |s, cx| s.toggle_sidebar_overlay(cx))),
+        );
+    for info in p.tabs {
+        let id = info.id;
+        let shell = p.shell.clone();
+        col = col.child(
+            IconButton::new(SharedString::from(format!("sb-tab-{}", id.as_u64())), theme, info.icon.icon())
+                .glass(p.glass)
+                .active(Some(id) == p.active)
+                .tooltip(info.title.clone())
+                .on_click(move |_, window, cx| shell.update(cx, |s, cx| s.select_tab(id, window, cx))),
+        );
+    }
+    col
 }
 
 /// The scrollable body of the sidebar card.
@@ -98,6 +134,7 @@ fn project_rows(p: &SidebarProps, rich: bool) -> Vec<impl IntoElement + use<>> {
             let first = &p.tabs[e.first_tab];
             let mut row = ListRow::new((if rich { "space" } else { "project" }, first.id), p.theme)
                 .icon(Icon::Folder)
+                .glass(p.glass)
                 .selected(contains_active)
                 .on_click(select(p.shell, first.id));
             if rich {
@@ -132,6 +169,7 @@ fn worktree_rows(p: &SidebarProps) -> Vec<impl IntoElement + use<>> {
         rows.push(
             ListRow::new(("worktree", t.id), p.theme)
                 .icon(Icon::GitBranch)
+                .glass(p.glass)
                 .title(branch)
                 .subtitle(grouping::project_name(&root))
                 .selected(selected)
@@ -180,6 +218,7 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     let group: SharedString = format!("srow-{}", id.as_u64()).into();
     let mut row = ListRow::new(("srow", id), theme)
         .icon(info.icon.icon())
+        .glass(p.glass)
         .title(info.title.clone())
         .selected(Some(id) == p.active)
         .on_click(select(p.shell, id));
@@ -207,6 +246,7 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
                 .group_hover(group, |s| s.opacity(1.0))
                 .child(
                     IconButton::new(close_id, theme, Icon::Close)
+                        .glass(p.glass)
                         .size(22.0)
                         .icon_size(10.0)
                         .tooltip("Cerrar (Ctrl+W)")

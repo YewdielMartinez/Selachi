@@ -106,15 +106,29 @@ pub struct TerminalView {
     line_has_text: bool,
     /// In-progress IME / dead-key composition (not rendered yet).
     marked: Option<String>,
+    /// A deferred session (restored tabs): spawned the first time the view is rendered, so tabs
+    /// that are never shown cost no shell process.
+    pending: Option<SessionConfig>,
     _pump: Option<Task<()>>,
 }
 
 impl TerminalView {
     /// `cwd` is the directory the shell starts in (`None` = the process directory).
     pub fn new(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(theme, cwd, false, window, cx)
+    }
+
+    /// Like [`TerminalView::new`] but the shell starts the first time the view is painted.
+    pub fn new_deferred(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(theme, cwd, true, window, cx)
+    }
+
+    fn build(theme: Theme, cwd: Option<PathBuf>, defer: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         log::info!("[startup] TerminalView::new at {} since process start", crate::mem::uptime_label());
         let focus_handle = cx.focus_handle();
-        focus_handle.focus(window);
+        if !defer {
+            focus_handle.focus(window);
+        }
 
         let metrics = measure_cell(window, &theme.typography);
         // Estimate the terminal grid from the window so the shell starts at the right size.
@@ -156,9 +170,34 @@ impl TerminalView {
             scroll_accum: 0.0,
             line_has_text: false,
             marked: None,
+            pending: None,
             _pump: None,
         };
 
+        if defer {
+            view.pending = Some(cfg);
+        } else {
+            view.start_session(cfg, cx);
+        }
+        view
+    }
+
+    /// Spawns the shell of a deferred view (no-op when it already runs).
+    fn spawn_pending(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(mut cfg) = self.pending.take() else { return };
+        // The real size is known now: the pane's card is laid out like the window, so estimate
+        // from the window again (the element resizes the PTY on its first paint anyway).
+        let metrics = self.metrics(window);
+        cfg.cell_width = f32::from(metrics.width) as u16;
+        cfg.cell_height = f32::from(metrics.height) as u16;
+        log::info!("[lazy] spawning deferred shell at {}", crate::mem::uptime_label());
+        self.start_session(cfg, cx);
+    }
+
+    fn start_session(&mut self, cfg: SessionConfig, cx: &mut Context<Self>) {
+        let view = self;
+        let program = cfg.program.clone();
+        let (cols, rows) = (cfg.cols, cfg.rows);
         match Session::spawn(cfg) {
             Ok((session, mut rx)) => {
                 log::info!(
@@ -181,7 +220,6 @@ impl TerminalView {
                 view.spawn_error = Some(format!("No se pudo iniciar {program}: {e}").into());
             }
         }
-        view
     }
 
     /// Shell display name (`pwsh`).
@@ -449,7 +487,8 @@ impl EntityInputHandler for TerminalView {
 }
 
 impl Render for TerminalView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.spawn_pending(window, cx);
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let notice: Option<SharedString> = if let Some(e) = &self.spawn_error {

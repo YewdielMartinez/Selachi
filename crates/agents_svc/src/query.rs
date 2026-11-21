@@ -100,6 +100,35 @@ fn u(v: i64) -> u64 {
     v.max(0) as u64
 }
 
+/// Cost of one aggregate: the agent-reported part (OpenCode) is taken as is, the rest (rows
+/// without a reported cost) is priced from the table. `None` when that rest cannot be priced.
+/// With no reported rows this is exactly `pricing.cost(agent, model, unreported)`.
+fn combine_cost(
+    pricing: &crate::pricing::PricingTable,
+    agent: Agent,
+    model: &str,
+    reported: Option<f64>,
+    unreported: &TokenCounts,
+) -> Option<f64> {
+    match reported {
+        None => pricing.cost(agent, model, unreported),
+        Some(r) if unreported.is_zero() => Some(r),
+        Some(r) => pricing.cost(agent, model, unreported).map(|e| e + r),
+    }
+}
+
+/// Cost reported by an agent itself (as opposed to estimated from the pricing table).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReportedCost {
+    pub agent: Agent,
+    pub model: String,
+    /// Who reported it (`opencode`).
+    pub source: String,
+    pub cost_usd: f64,
+    /// Events that carried a reported cost.
+    pub events: u64,
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -118,8 +147,14 @@ impl Store {
     ) -> Result<Vec<AgentUsage>> {
         let b = range.resolve(now, self.week_start);
         let mut stmt = self.conn.prepare_cached(
-            "SELECT agent, model, SUM(input), SUM(output), SUM(cache_create), SUM(cache_create_1h), \
-                    SUM(cache_read), COUNT(*) \
+            "SELECT agent, model, \
+                    SUM(CASE WHEN reported_cost IS NULL THEN input END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN output END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN cache_create END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN cache_create_1h END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN cache_read END), COUNT(*), \
+                    SUM(input), SUM(output), SUM(cache_create), SUM(cache_read), \
+                    SUM(reported_cost) \
              FROM usage_events \
              WHERE (?1 IS NULL OR ts >= ?1) AND (?2 IS NULL OR ts < ?2) AND (?3 IS NULL OR session_id = ?3) \
              GROUP BY agent, model ORDER BY agent, model",
@@ -128,30 +163,40 @@ impl Store {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
+                // tokens of the rows WITHOUT an agent-reported cost (priced from the table)
                 TokenCounts {
-                    input: u(r.get(2)?),
-                    output: u(r.get(3)?),
-                    cache_create: u(r.get(4)?),
-                    cache_create_1h: u(r.get(5)?),
-                    cache_read: u(r.get(6)?),
+                    input: u(r.get::<_, Option<i64>>(2)?.unwrap_or(0)),
+                    output: u(r.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+                    cache_create: u(r.get::<_, Option<i64>>(4)?.unwrap_or(0)),
+                    cache_create_1h: u(r.get::<_, Option<i64>>(5)?.unwrap_or(0)),
+                    cache_read: u(r.get::<_, Option<i64>>(6)?.unwrap_or(0)),
                 },
                 u(r.get(7)?),
+                // all tokens
+                TokenCounts {
+                    input: u(r.get(8)?),
+                    output: u(r.get(9)?),
+                    cache_create: u(r.get(10)?),
+                    cache_create_1h: 0,
+                    cache_read: u(r.get(11)?),
+                },
+                r.get::<_, Option<f64>>(12)?,
             ))
         })?;
         let mut out = vec![];
         for row in rows {
-            let (agent, model, t, events) = row?;
+            let (agent, model, unreported, events, all, reported) = row?;
             let Some(agent) = Agent::parse(&agent) else {
                 continue;
             };
             out.push(AgentUsage {
                 agent,
-                est_cost_usd: self.pricing.cost(agent, &model, &t),
+                est_cost_usd: combine_cost(&self.pricing, agent, &model, reported, &unreported),
                 model,
-                input: t.input,
-                output: t.output,
-                cache_create: t.cache_create,
-                cache_read: t.cache_read,
+                input: all.input,
+                output: all.output,
+                cache_create: all.cache_create,
+                cache_read: all.cache_read,
                 events,
             });
         }
@@ -181,8 +226,14 @@ impl Store {
                 .trim_end_matches('/')
         );
         let mut stmt = self.conn.prepare_cached(
-            "SELECT git_branch, agent, model, SUM(input), SUM(output), SUM(cache_create), \
-                    SUM(cache_create_1h), SUM(cache_read), COUNT(*), MIN(ts), MAX(ts) \
+            "SELECT git_branch, agent, model, \
+                    SUM(CASE WHEN reported_cost IS NULL THEN input END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN output END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN cache_create END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN cache_create_1h END), \
+                    SUM(CASE WHEN reported_cost IS NULL THEN cache_read END), \
+                    COUNT(*), MIN(ts), MAX(ts), \
+                    SUM(input), SUM(output), SUM(cache_create), SUM(cache_read), SUM(reported_cost) \
              FROM usage_events \
              WHERE (cwd_norm = ?1 OR cwd_norm LIKE ?2 ESCAPE '\\') \
                AND (?3 IS NULL OR ts >= ?3) AND (?4 IS NULL OR ts < ?4) AND (?5 IS NULL OR session_id = ?5) \
@@ -196,21 +247,29 @@ impl Store {
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
                     TokenCounts {
-                        input: u(r.get(3)?),
-                        output: u(r.get(4)?),
-                        cache_create: u(r.get(5)?),
-                        cache_create_1h: u(r.get(6)?),
-                        cache_read: u(r.get(7)?),
+                        input: u(r.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+                        output: u(r.get::<_, Option<i64>>(4)?.unwrap_or(0)),
+                        cache_create: u(r.get::<_, Option<i64>>(5)?.unwrap_or(0)),
+                        cache_create_1h: u(r.get::<_, Option<i64>>(6)?.unwrap_or(0)),
+                        cache_read: u(r.get::<_, Option<i64>>(7)?.unwrap_or(0)),
                     },
                     u(r.get(8)?),
                     r.get::<_, i64>(9)?,
                     r.get::<_, i64>(10)?,
+                    TokenCounts {
+                        input: u(r.get(11)?),
+                        output: u(r.get(12)?),
+                        cache_create: u(r.get(13)?),
+                        cache_create_1h: 0,
+                        cache_read: u(r.get(14)?),
+                    },
+                    r.get::<_, Option<f64>>(15)?,
                 ))
             },
         )?;
         let mut by: BTreeMap<Option<String>, BranchUsage> = BTreeMap::new();
         for row in rows {
-            let (branch, agent, model, t, events, first, last) = row?;
+            let (branch, agent, model, unreported, events, first, last, t, reported) = row?;
             let Some(agent) = Agent::parse(&agent) else {
                 continue;
             };
@@ -233,7 +292,7 @@ impl Store {
             e.events += events;
             e.first_ts_ms = e.first_ts_ms.min(first);
             e.last_ts_ms = e.last_ts_ms.max(last);
-            match self.pricing.cost(agent, &model, &t) {
+            match combine_cost(&self.pricing, agent, &model, reported, &unreported) {
                 Some(c) => e.est_cost_usd = Some(e.est_cost_usd.unwrap_or(0.0) + c),
                 None => e.cost_complete = false,
             }
@@ -241,6 +300,42 @@ impl Store {
         let mut v: Vec<_> = by.into_values().collect();
         v.sort_by_key(|b| std::cmp::Reverse(b.last_ts_ms));
         Ok(v)
+    }
+
+    /// Costs the agents reported themselves (OpenCode), per (agent, model, source), for `range`.
+    /// [`usage_summary`](Self::usage_summary) and [`usage_by_branch`](Self::usage_by_branch)
+    /// already prefer these over the pricing table; this tells the UI which part is reported
+    /// ("reported by opencode") rather than "estimated".
+    pub fn reported_costs(&self, range: &Range) -> Result<Vec<ReportedCost>> {
+        let b = range.resolve(&Local::now(), self.week_start);
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT agent, model, cost_source, SUM(reported_cost), COUNT(*) FROM usage_events \
+             WHERE reported_cost IS NOT NULL \
+               AND (?1 IS NULL OR ts >= ?1) AND (?2 IS NULL OR ts < ?2) AND (?3 IS NULL OR session_id = ?3) \
+             GROUP BY agent, model, cost_source ORDER BY agent, model",
+        )?;
+        let rows = stmt.query_map(params![b.start_ms, b.end_ms, b.session], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })?;
+        let mut out = vec![];
+        for row in rows {
+            let (agent, model, source, cost_usd, events) = row?;
+            let Some(agent) = Agent::parse(&agent) else { continue };
+            out.push(ReportedCost {
+                source: source.unwrap_or_else(|| agent.as_str().to_string()),
+                agent,
+                model,
+                cost_usd,
+                events: u(events),
+            });
+        }
+        Ok(out)
     }
 
     /// Tokens per hour over the trailing `window` (one agent or all).

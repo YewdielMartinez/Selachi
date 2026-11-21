@@ -51,6 +51,7 @@ fn ing(dir: &Path) -> Ingestor {
         IngestConfig {
             claude_projects: Some(dir.join("claude")),
             codex_sessions: Some(dir.join("codex")),
+            ..Default::default()
         },
     )
     .unwrap()
@@ -222,6 +223,7 @@ fn incremental_offsets_read_only_new_bytes() {
         IngestConfig {
             claude_projects: Some(tmp.path().join("claude")),
             codex_sessions: None,
+            ..Default::default()
         },
     )
     .unwrap();

@@ -33,6 +33,22 @@ copy_on_select = false
 # Ctrl+V pastes instead of sending ^V to the running program.
 paste_ctrl_v = true
 
+[terminal.completion]
+# Autocompletado de PowerShell (PSReadLine). Selachi lo aplica al abrir el shell sin tocar tu perfil.
+# Tecla Tab:
+#   "smart"    acepta la sugerencia gris si la hay; si no, abre el menu de completado (por defecto)
+#   "complete" recorre las opciones una a una (TabCompleteNext)
+#   "menu"     siempre abre el menu de completado (MenuComplete)
+#   "native"   no toca tu configuracion de Tab
+tab = "smart"
+# Origen de las sugerencias grises:
+# "history" (por defecto) | "history_and_plugin" | "off" | "native" (no tocar)
+prediction = "history"
+# Como se dibujan: "inline" (texto gris tras el cursor) | "list" (lista bajo el prompt) | "native"
+prediction_view = "inline"
+# Tecla que acepta la siguiente palabra de la sugerencia ("native" = no tocar la tecla).
+accept_word_key = "Ctrl+RightArrow"
+
 [agents]
 # Day the weekly usage window starts: "monday" .. "sunday"
 usage_week_start = "monday"

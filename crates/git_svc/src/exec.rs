@@ -42,8 +42,27 @@ fn display_args<S: AsRef<OsStr>>(args: &[S]) -> String {
         .join(" ")
 }
 
+/// Extra knobs for [`run_git_with`].
+#[derive(Default)]
+pub(crate) struct Opts<'a> {
+    /// Extra environment variables for the child.
+    pub envs: Vec<(&'a str, std::ffi::OsString)>,
+    /// Bytes piped to the child's stdin (`None` = closed stdin).
+    pub stdin: Option<&'a [u8]>,
+}
+
 /// Run `git <args>` in `cwd` and capture its output. A non-zero exit is NOT an error here.
 pub(crate) fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration) -> Result<Raw> {
+    run_git_with(cwd, args, &Opts::default(), timeout)
+}
+
+/// [`run_git`] with environment overrides and optional stdin.
+pub(crate) fn run_git_with<S: AsRef<OsStr>>(
+    cwd: &Path,
+    args: &[S],
+    opts: &Opts<'_>,
+    timeout: Duration,
+) -> Result<Raw> {
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("core.quotepath=false")
@@ -51,9 +70,12 @@ pub(crate) fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
+        .stdin(if opts.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (k, v) in &opts.envs {
+        cmd.env(k, v);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -68,6 +90,15 @@ pub(crate) fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration
         }
     })?;
 
+    let in_t = opts.stdin.and_then(|data| {
+        let data = data.to_vec();
+        child.stdin.take().map(|mut si| {
+            thread::spawn(move || {
+                use std::io::Write;
+                let _ = si.write_all(&data);
+            })
+        })
+    });
     let mut out = child.stdout.take();
     let mut err = child.stderr.take();
     let out_t = thread::spawn(move || {
@@ -102,6 +133,9 @@ pub(crate) fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration
         }
     };
 
+    if let Some(t) = in_t {
+        let _ = t.join();
+    }
     let stdout = out_t.join().unwrap_or_default();
     let stderr = err_t.join().unwrap_or_default();
     match status {
@@ -120,6 +154,25 @@ pub(crate) fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration
 /// Like [`run_git`] but a non-zero exit becomes [`Error::Git`].
 pub(crate) fn run_git_ok<S: AsRef<OsStr>>(cwd: &Path, args: &[S]) -> Result<Raw> {
     let raw = run_git(cwd, args, LOCAL_TIMEOUT)?;
+    if raw.success() {
+        Ok(raw)
+    } else {
+        Err(Error::Git {
+            args: display_args(args),
+            code: raw.code,
+            stderr: raw.stderr_string(),
+        })
+    }
+}
+
+/// Like [`run_git_with`] but a non-zero exit becomes [`Error::Git`].
+pub(crate) fn run_git_ok_with<S: AsRef<OsStr>>(
+    cwd: &Path,
+    args: &[S],
+    opts: &Opts<'_>,
+    timeout: Duration,
+) -> Result<Raw> {
+    let raw = run_git_with(cwd, args, opts, timeout)?;
     if raw.success() {
         Ok(raw)
     } else {

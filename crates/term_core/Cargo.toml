@@ -3,6 +3,11 @@ name = "term_core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Adds `SessionEvent::BlockStarted` / `BlockFinished`. Off by default: enabling it adds enum
+# variants, so crates matching `SessionEvent` exhaustively must add the arms first.
+block-events = []
+
 [lints]
 workspace = true
 

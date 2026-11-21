@@ -31,6 +31,7 @@ pub struct IconButton {
     icon_size: f32,
     active: bool,
     emphasize_on_hover: bool,
+    glass: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
 }
@@ -45,9 +46,17 @@ impl IconButton {
             icon_size: 16.0,
             active: false,
             emphasize_on_hover: false,
+            glass: false,
             tooltip: None,
             on_click: None,
         }
+    }
+
+    /// The button sits on a glass surface: its pills are translucent white (8 % hover, 12 %
+    /// active) instead of opaque surfaces.
+    pub fn glass(mut self, glass: bool) -> Self {
+        self.glass = glass;
+        self
     }
 
     /// Edge of the square hit area (default 36, radius 10).
@@ -99,6 +108,12 @@ impl RenderOnce for IconButton {
         } else {
             glyph
         };
+        let theme = self.theme;
+        let (bg_active, bg_hover, bg_press): (gpui::Hsla, gpui::Hsla, gpui::Hsla) = if self.glass {
+            (crate::glass_selected(&theme), crate::glass_hover(&theme), crate::glass_selected(&theme))
+        } else {
+            (c.surface_3.into(), c.surface_2.into(), c.surface_3.into())
+        };
         let mut el = div()
             .id(self.id)
             .group(group)
@@ -110,12 +125,12 @@ impl RenderOnce for IconButton {
             .justify_center()
             .rounded(px(10.0))
             .cursor_pointer()
-            .when(self.active, |d| d.bg(c.surface_3))
+            .when(self.active, |d| d.bg(bg_active))
             .when(!self.active && !emphasize, |d| {
-                d.hover(move |s| s.bg(c.surface_2)).active(move |s| s.bg(c.surface_2))
+                d.hover(move |s| s.bg(bg_hover)).active(move |s| s.bg(bg_hover))
             })
             .when(!self.active && emphasize, |d| {
-                d.hover(move |s| s.bg(c.surface_2)).active(move |s| s.bg(c.surface_3))
+                d.hover(move |s| s.bg(bg_hover)).active(move |s| s.bg(bg_press))
             })
             .child(glyph);
         if let Some(f) = self.on_click {

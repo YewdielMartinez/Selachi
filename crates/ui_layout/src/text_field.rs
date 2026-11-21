@@ -72,15 +72,25 @@ pub struct TextBuf {
 
 impl TextBuf {
     pub fn cursor(&self) -> usize {
-        if self.reversed { self.sel.start } else { self.sel.end }
+        if self.reversed {
+            self.sel.start
+        } else {
+            self.sel.end
+        }
     }
 
     pub fn prev_boundary(&self, offset: usize) -> usize {
-        self.text[..offset].char_indices().next_back().map_or(0, |(i, _)| i)
+        self.text[..offset]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i)
     }
 
     pub fn next_boundary(&self, offset: usize) -> usize {
-        self.text[offset..].chars().next().map_or(self.text.len(), |c| offset + c.len_utf8())
+        self.text[offset..]
+            .chars()
+            .next()
+            .map_or(self.text.len(), |c| offset + c.len_utf8())
     }
 
     pub fn move_to(&mut self, offset: usize) {
@@ -123,7 +133,9 @@ impl TextBuf {
 
     /// Replace `range` (default: the marked text, else the selection) with `new`.
     pub fn replace(&mut self, range: Option<Range<usize>>, new: &str) {
-        let range = range.or_else(|| self.marked.clone()).unwrap_or_else(|| self.sel.clone());
+        let range = range
+            .or_else(|| self.marked.clone())
+            .unwrap_or_else(|| self.sel.clone());
         self.text.replace_range(range.clone(), new);
         let caret = range.start + new.len();
         self.sel = caret..caret;
@@ -248,11 +260,13 @@ impl TextField {
         cx.notify();
     }
     fn on_select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.buf.select_to(self.buf.prev_boundary(self.buf.cursor()));
+        self.buf
+            .select_to(self.buf.prev_boundary(self.buf.cursor()));
         cx.notify();
     }
     fn on_select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.buf.select_to(self.buf.next_boundary(self.buf.cursor()));
+        self.buf
+            .select_to(self.buf.next_boundary(self.buf.cursor()));
         cx.notify();
     }
     fn on_select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -283,12 +297,16 @@ impl TextField {
     }
     fn on_copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if !self.buf.sel.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.selected_text().to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.buf.selected_text().to_string(),
+            ));
         }
     }
     fn on_cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
         if !self.buf.sel.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.selected_text().to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.buf.selected_text().to_string(),
+            ));
             self.buf.replace(None, "");
             cx.notify();
         }
@@ -469,8 +487,11 @@ impl Element for TextElement {
         let c = input.theme.colors;
         let style = window.text_style();
         let empty = input.buf.text.is_empty();
-        let shown: SharedString =
-            if empty { input.placeholder.clone() } else { input.buf.text.clone().into() };
+        let shown: SharedString = if empty {
+            input.placeholder.clone()
+        } else {
+            input.buf.text.clone().into()
+        };
         let color = if empty { c.outline } else { c.text };
         let run = TextRun {
             len: shown.len(),
@@ -482,7 +503,10 @@ impl Element for TextElement {
         };
         let runs = match (&input.buf.marked, empty) {
             (Some(m), false) => [
-                TextRun { len: m.start, ..run.clone() },
+                TextRun {
+                    len: m.start,
+                    ..run.clone()
+                },
                 TextRun {
                     len: m.end - m.start,
                     underline: Some(UnderlineStyle {
@@ -492,7 +516,10 @@ impl Element for TextElement {
                     }),
                     ..run.clone()
                 },
-                TextRun { len: shown.len() - m.end, ..run },
+                TextRun {
+                    len: shown.len() - m.end,
+                    ..run
+                },
             ]
             .into_iter()
             .filter(|r| r.len > 0)
@@ -500,12 +527,21 @@ impl Element for TextElement {
             _ => vec![run],
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window.text_system().shape_line(shown, font_size, &runs, None);
+        let line = window
+            .text_system()
+            .shape_line(shown, font_size, &runs, None);
         let (sel, cursor) = (input.buf.sel.clone(), input.buf.cursor());
         let (selection, cursor) = if sel.is_empty() {
-            let x = if empty { px(0.0) } else { line.x_for_index(cursor) };
+            let x = if empty {
+                px(0.0)
+            } else {
+                line.x_for_index(cursor)
+            };
             let quad = fill(
-                Bounds::new(point(bounds.left() + x, bounds.top()), size(px(1.5), bounds.size.height)),
+                Bounds::new(
+                    point(bounds.left() + x, bounds.top()),
+                    size(px(1.5), bounds.size.height),
+                ),
                 c.accent,
             );
             (None, Some(quad))
@@ -521,7 +557,11 @@ impl Element for TextElement {
             );
             (Some(quad), None)
         };
-        Prepaint { line, cursor, selection }
+        Prepaint {
+            line,
+            cursor,
+            selection,
+        }
     }
 
     fn paint(
@@ -535,11 +575,17 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus = self.input.read(cx).focus.clone();
-        window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
+        window.handle_input(
+            &focus,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
         if let Some(sel) = pre.selection.take() {
             window.paint_quad(sel);
         }
-        let _ = pre.line.paint(bounds.origin, window.line_height(), window, cx);
+        let _ = pre
+            .line
+            .paint(bounds.origin, window.line_height(), window, cx);
         if focus.is_focused(window)
             && let Some(cursor) = pre.cursor.take()
         {
@@ -602,7 +648,10 @@ mod tests {
     use super::*;
 
     fn buf(text: &str) -> TextBuf {
-        let mut b = TextBuf { text: text.into(), ..TextBuf::default() };
+        let mut b = TextBuf {
+            text: text.into(),
+            ..TextBuf::default()
+        };
         b.move_to(text.len());
         b
     }

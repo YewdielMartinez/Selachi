@@ -18,14 +18,16 @@ mod layout;
 mod projects;
 mod retention;
 mod schema;
+mod snippets;
 
 pub use favorites::Favorite;
 pub use frecency::PathEntry;
-pub use history::{HistoryEntry, NewCommand};
+pub use history::{looks_sensitive, HistoryEntry, NewCommand};
 pub use layout::SessionLayout;
 pub use projects::{detect_project, discover_projects, DiscoveredProject, Project, ProjectKind};
 pub use retention::PruneStats;
 pub use schema::{latest_version, migrate};
+pub use snippets::{NewSnippet, Snippet, SnippetScope};
 
 use crate::error::{Result, StoreError};
 use rusqlite::Connection;

@@ -132,6 +132,8 @@ pub struct Terminal {
     pub copy_on_select: bool,
     /// Ctrl+V pastes (instead of sending ^V to the program).
     pub paste_ctrl_v: bool,
+    /// Tab completion and inline predictions of the shell (PSReadLine).
+    pub completion: Completion,
 }
 
 impl Default for Terminal {
@@ -142,7 +144,125 @@ impl Default for Terminal {
             cursor_style: CursorStyle::Block,
             copy_on_select: false,
             paste_ctrl_v: true,
+            completion: Completion::default(),
         }
+    }
+}
+
+/// What the Tab key does in the shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabMode {
+    /// Accept the inline suggestion if there is one, otherwise open the completion menu.
+    #[default]
+    Smart,
+    /// `TabCompleteNext`: cycle through the completions.
+    Complete,
+    /// `MenuComplete`: always open the completion menu.
+    Menu,
+    /// Leave the shell's own binding alone.
+    Native,
+}
+
+impl TabMode {
+    fn env_value(self) -> &'static str {
+        match self {
+            Self::Smart => "smart",
+            Self::Complete => "complete",
+            Self::Menu => "menu",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// Where inline predictions come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PredictionSource {
+    /// Command history only.
+    #[default]
+    History,
+    /// History plus prediction plugins (PSReadLine 2.2+; falls back to history).
+    HistoryAndPlugin,
+    /// No predictions.
+    Off,
+    /// Leave the shell's own setting alone.
+    Native,
+}
+
+impl PredictionSource {
+    fn env_value(self) -> &'static str {
+        match self {
+            Self::History => "history",
+            Self::HistoryAndPlugin => "history_and_plugin",
+            Self::Off => "off",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// How predictions are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PredictionView {
+    /// Gray text after the cursor.
+    #[default]
+    Inline,
+    /// A list under the prompt.
+    List,
+    /// Leave the shell's own setting alone.
+    Native,
+}
+
+impl PredictionView {
+    fn env_value(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::List => "list",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// `[terminal.completion]`: applied by the shell integration through environment variables
+/// (see [`Config::completion_env`]); never touches the user's profile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Completion {
+    pub tab: TabMode,
+    pub prediction: PredictionSource,
+    pub prediction_view: PredictionView,
+    /// Key that accepts the next word of the suggestion (`"Ctrl+RightArrow"`).
+    /// `"native"` leaves the key alone; empty = the default.
+    pub accept_word_key: String,
+}
+
+impl Default for Completion {
+    fn default() -> Self {
+        Self {
+            tab: TabMode::Smart,
+            prediction: PredictionSource::History,
+            prediction_view: PredictionView::Inline,
+            accept_word_key: "Ctrl+RightArrow".to_string(),
+        }
+    }
+}
+
+impl Completion {
+    /// The environment variables `integration.ps1` reads. All four are always present, so the
+    /// settings count as explicit (they override a custom binding from the user's profile
+    /// except in `native` mode).
+    pub fn env(&self) -> Vec<(String, String)> {
+        let key = self.accept_word_key.trim();
+        vec![
+            ("SELACHI_TAB_MODE".to_string(), self.tab.env_value().to_string()),
+            ("SELACHI_PREDICTION".to_string(), self.prediction.env_value().to_string()),
+            ("SELACHI_PREDICTION_VIEW".to_string(), self.prediction_view.env_value().to_string()),
+            (
+                "SELACHI_ACCEPT_WORD_KEY".to_string(),
+                if key.is_empty() { "Ctrl+RightArrow" } else { key }.to_string(),
+            ),
+        ]
     }
 }
 
@@ -254,6 +374,13 @@ impl Default for RetentionConfig {
 }
 
 impl Config {
+    /// Environment variables for the shell integration (Tab mode, predictions, accept-word key).
+    ///
+    /// Pass them to `term_core::Session::spawn_with_env`.
+    pub fn completion_env(&self) -> Vec<(String, String)> {
+        self.terminal.completion.env()
+    }
+
     /// Semantic problems that serde cannot catch. A non-empty result makes the
     /// config invalid (the previous good one is kept on hot reload).
     pub fn validate(&self) -> Vec<String> {
@@ -289,6 +416,12 @@ impl Config {
             problems.push(format!(
                 "terminal.scrollback = {} exceeds the 1000000 line limit",
                 self.terminal.scrollback
+            ));
+        }
+        let key = &self.terminal.completion.accept_word_key;
+        if key.len() > 64 || key.chars().any(|c| c.is_control() || c == '\'' || c == '"') {
+            problems.push(format!(
+                "terminal.completion.accept_word_key = {key:?} is not a key chord (e.g. \"Ctrl+RightArrow\")"
             ));
         }
         for (i, p) in self.profiles.iter().enumerate() {

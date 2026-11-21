@@ -38,6 +38,17 @@ pub struct Colors {
     pub outline_soft: Rgba,
     pub accent: Rgba,
     pub on_accent: Rgba,
+    /// Action blue (`#005EEB`): fill of the one call-to-action button, active toggles and
+    /// strong selection. Never a text color on dark surfaces (see docs/DESIGN.md).
+    pub accent_strong: Rgba,
+    /// Hover fill of the action button (`#1A72FF`).
+    pub accent_strong_hover: Rgba,
+    /// Press fill of the action button (`#0052CC`).
+    pub accent_strong_press: Rgba,
+    /// Top stop of the action button's vertical gradient (`#1A72FF`).
+    pub accent_strong_gradient_top: Rgba,
+    /// Label/icon color on `accent_strong` (`#FFFFFF`).
+    pub on_accent_strong: Rgba,
     pub error: Rgba,
 }
 
@@ -120,6 +131,11 @@ pub struct Theme {
 
 const ACCENT: u32 = 0x00AAFF;
 const ON_ACCENT: u32 = 0x001E2E;
+const ACCENT_STRONG: u32 = 0x005EEB;
+const ACCENT_STRONG_HOVER: u32 = 0x1A72FF;
+const ACCENT_STRONG_PRESS: u32 = 0x0052CC;
+const ACCENT_STRONG_GRADIENT_TOP: u32 = 0x1A72FF;
+const ON_ACCENT_STRONG: u32 = 0xFFFFFF;
 
 /// Dark ANSI palette, shared by the dark and OLED themes. Restrained,
 /// slightly desaturated hues tuned for the cool neutral surfaces; blue is
@@ -181,6 +197,11 @@ impl Theme {
                 outline_soft: rgb(0x44474E),
                 accent: rgb(ACCENT),
                 on_accent: rgb(ON_ACCENT),
+                accent_strong: rgb(ACCENT_STRONG),
+                accent_strong_hover: rgb(ACCENT_STRONG_HOVER),
+                accent_strong_press: rgb(ACCENT_STRONG_PRESS),
+                accent_strong_gradient_top: rgb(ACCENT_STRONG_GRADIENT_TOP),
+                on_accent_strong: rgb(ON_ACCENT_STRONG),
                 error: rgb(0xFFB4AB),
             },
             terminal: TerminalColors {
@@ -210,6 +231,11 @@ impl Theme {
                 outline_soft: rgb(0xC5C6CE),
                 accent: rgb(ACCENT),
                 on_accent: rgb(ON_ACCENT),
+                accent_strong: rgb(ACCENT_STRONG),
+                accent_strong_hover: rgb(ACCENT_STRONG_HOVER),
+                accent_strong_press: rgb(ACCENT_STRONG_PRESS),
+                accent_strong_gradient_top: rgb(ACCENT_STRONG_GRADIENT_TOP),
+                on_accent_strong: rgb(ON_ACCENT_STRONG),
                 error: rgb(0xBA1A1A),
             },
             terminal: TerminalColors {
@@ -239,6 +265,11 @@ impl Theme {
                 outline_soft: rgb(0x242424),
                 accent: rgb(ACCENT),
                 on_accent: rgb(ON_ACCENT),
+                accent_strong: rgb(ACCENT_STRONG),
+                accent_strong_hover: rgb(ACCENT_STRONG_HOVER),
+                accent_strong_press: rgb(ACCENT_STRONG_PRESS),
+                accent_strong_gradient_top: rgb(ACCENT_STRONG_GRADIENT_TOP),
+                on_accent_strong: rgb(ON_ACCENT_STRONG),
                 error: rgb(0xFFB4AB),
             },
             terminal: TerminalColors {
@@ -343,6 +374,43 @@ mod tests {
                 "{:?} on_accent",
                 t.mode
             );
+        }
+    }
+
+    #[test]
+    fn accent_strong_tokens() {
+        for t in all() {
+            let c = t.colors;
+            assert_eq!(hex_of(c.accent), 0x00AAFF, "{:?} accent unchanged", t.mode);
+            assert_eq!(hex_of(c.accent_strong), 0x005EEB, "{:?}", t.mode);
+            assert_eq!(hex_of(c.accent_strong_hover), 0x1A72FF, "{:?}", t.mode);
+            assert_eq!(hex_of(c.accent_strong_press), 0x0052CC, "{:?}", t.mode);
+            assert_eq!(hex_of(c.accent_strong_gradient_top), 0x1A72FF, "{:?}", t.mode);
+            assert_eq!(hex_of(c.on_accent_strong), 0xFFFFFF, "{:?}", t.mode);
+        }
+    }
+
+    #[test]
+    fn on_accent_strong_contrast() {
+        // White label on every state of the action button (gradient top, rest, hover, press).
+        for t in all() {
+            let c = t.colors;
+            let fg = hex_of(c.on_accent_strong);
+            for (name, bg) in [
+                ("rest", c.accent_strong),
+                ("hover", c.accent_strong_hover),
+                ("press", c.accent_strong_press),
+                ("gradient_top", c.accent_strong_gradient_top),
+            ] {
+                let r = contrast(fg, hex_of(bg));
+                let floor = if name == "rest" || name == "press" { 4.5 } else { 3.9 };
+                assert!(r >= floor, "{:?} on_accent_strong over {name}: {r:.2}", t.mode);
+            }
+            // The strong blue is a fill only: as text on a dark surface it must stay
+            // below AA, which is why `accent` is the text/link color.
+            if t.mode != Mode::Light {
+                assert!(contrast(hex_of(c.accent_strong), hex_of(c.bg)) < 4.5, "{:?}", t.mode);
+            }
         }
     }
 

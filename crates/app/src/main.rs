@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod adapt;
 mod app_shell;
 mod git_monitor;
 mod git_panel;
@@ -11,6 +12,7 @@ mod layout_host;
 mod mem;
 mod paths;
 mod rail;
+mod session;
 mod sidebar;
 mod splits;
 mod status_bar;
@@ -28,11 +30,11 @@ use gpui::{
     size,
 };
 use panel_api::PanelRegistry;
-use store::{Config, ConfigWatcher};
+use store::{Config, ConfigWatcher, StateDb};
 use theme::Theme;
 
 use crate::app_shell::{
-    AppShell, CancelClose, CloseTab, ConfigBoot, ConfirmClose, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7,
+    AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, SessionBoot, ToggleFullscreen, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7,
     Jump8, Jump9, NewTab, NextTab, PrevTab, ToggleLayoutPanel, ToggleTheme,
 };
 use crate::git_panel::{GitPanelProvider, Variant};
@@ -50,6 +52,7 @@ fn boot_config() -> ConfigBoot {
     for w in &load.warnings {
         log::warn!("config.toml: {w}");
     }
+    let load_path = load.path.clone();
     let config = Arc::new(load.config);
     let watcher = if load.path.as_os_str().is_empty() {
         None
@@ -62,7 +65,28 @@ fn boot_config() -> ConfigBoot {
             },
         }
     };
-    ConfigBoot { config, watcher }
+    ConfigBoot { config, watcher, session: boot_session(&load_path) }
+}
+
+/// Opens the state database and, if `[session] restore` is not false, loads the saved session.
+/// Any failure just means "start fresh": a session is a convenience, never a reason not to start.
+fn boot_session(config_path: &std::path::Path) -> SessionBoot {
+    let db = match StateDb::open_default() {
+        Ok(db) => Some(db),
+        Err(e) => {
+            log::warn!("state database unavailable, the session will not be saved: {e}");
+            None
+        },
+    };
+    let text = std::fs::read_to_string(config_path).unwrap_or_default();
+    let restore = if session::restore_enabled(&text) {
+        db.as_ref()
+            .and_then(|d| d.load_session_layout().ok().flatten())
+            .and_then(|s| session::SessionState::from_json(&s.json))
+    } else {
+        None
+    };
+    SessionBoot { db, restore }
 }
 
 /// The panels that ship with the app. Panel crates (`ui_git`, `ui_viewer`...) register theirs
@@ -82,6 +106,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PrevTab, None),
         KeyBinding::new("ctrl-shift-l", ToggleLayoutPanel, None),
+        KeyBinding::new("f11", ToggleFullscreen, None),
         KeyBinding::new("ctrl-1", Jump1, None),
         KeyBinding::new("ctrl-2", Jump2, None),
         KeyBinding::new("ctrl-3", Jump3, None),
@@ -94,6 +119,8 @@ fn bind_keys(cx: &mut App) {
         // The close prompt: Enter confirms, Esc cancels.
         KeyBinding::new("enter", ConfirmClose, Some("CloseConfirm")),
         KeyBinding::new("escape", CancelClose, Some("CloseConfirm")),
+        // Drawers / overlays of the narrow layouts close with Esc.
+        KeyBinding::new("escape", CancelOverlay, Some("Drawer")),
     ]);
 }
 
@@ -106,10 +133,9 @@ fn main() {
 
         bind_keys(cx);
         register_panels(cx);
-        // INTEGRATION POINT (ui_layout): once the `ui_layout` crate exposes its popover content,
-        // register it here and the shell will mount it in the layout popover instead of the
-        // built-in preset switcher:
-        //     layout_host::register_layout_panel_host(cx, |args, window, cx| ui_layout::layout_panel(args, window, cx));
+        // The layout popover's content: the real `ui_layout` panel.
+        ui_layout::init(cx);
+        layout_host::register_layout_panel_host(cx, layout_host::ui_layout_host);
 
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {

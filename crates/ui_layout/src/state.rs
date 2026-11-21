@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use store::paths::normalize_key;
 use store::{
     BuiltinPreset, CustomPreset, LayoutConfig, LayoutOverrides, PresetId, RailVisibility,
-    ResolvedLayout, SidebarSide, SidebarSection, TabsPosition,
+    ResolvedLayout, SidebarSection, SidebarSide, TabsPosition,
 };
 
 /// Which layer the panel edits.
@@ -110,7 +110,12 @@ pub struct LayoutState {
 
 impl LayoutState {
     pub fn new(config: LayoutConfig, cwd: Option<PathBuf>) -> Self {
-        Self { config, cwd, scope: Scope::Global, warnings: Vec::new() }
+        Self {
+            config,
+            cwd,
+            scope: Scope::Global,
+            warnings: Vec::new(),
+        }
     }
 
     pub fn config(&self) -> &LayoutConfig {
@@ -143,7 +148,11 @@ impl LayoutState {
     }
 
     pub fn set_scope(&mut self, scope: Scope) {
-        self.scope = if scope == Scope::Project && self.cwd.is_none() { Scope::Global } else { scope };
+        self.scope = if scope == Scope::Project && self.cwd.is_none() {
+            Scope::Global
+        } else {
+            scope
+        };
         self.warnings.clear();
     }
 
@@ -189,9 +198,10 @@ impl LayoutState {
     /// What the edits of the current scope are stored against (used for "default" marks).
     pub fn base_layout(&self) -> ResolvedLayout {
         match self.scope {
-            Scope::Global => {
-                self.config.preset_layout(&self.config.preset).unwrap_or_default()
-            }
+            Scope::Global => self
+                .config
+                .preset_layout(&self.config.preset)
+                .unwrap_or_default(),
             Scope::Project => self.project_base(),
         }
     }
@@ -200,7 +210,10 @@ impl LayoutState {
     fn raw_layout(&self) -> ResolvedLayout {
         match self.scope {
             Scope::Global => {
-                let mut l = self.config.preset_layout(&self.config.preset).unwrap_or_default();
+                let mut l = self
+                    .config
+                    .preset_layout(&self.config.preset)
+                    .unwrap_or_default();
                 self.config.overrides.apply(&mut l);
                 l
             }
@@ -221,7 +234,8 @@ impl LayoutState {
         l
     }
 
-    /// The preset to highlight: the selected one (global) or the one the layout equals (project).
+    /// The preset to highlight: the selected one (global) or, in a project, the one the layout
+    /// equals (else the global preset it derives from).
     pub fn active_preset(&self) -> Option<PresetId> {
         match self.scope {
             Scope::Global => Some(self.config.preset.clone()),
@@ -234,8 +248,15 @@ impl LayoutState {
                 BuiltinPreset::ALL
                     .iter()
                     .map(|b| PresetId::Builtin(*b))
-                    .chain(self.config.custom_presets.iter().map(|p| PresetId::parse(&p.name)))
+                    .chain(
+                        self.config
+                            .custom_presets
+                            .iter()
+                            .map(|p| PresetId::parse(&p.name)),
+                    )
                     .find(|id| self.config.preset_layout(id).map(norm).as_ref() == Some(&now))
+                    // A tweaked layout still derives from the global preset.
+                    .or_else(|| Some(self.config.preset.clone()))
             }
         }
     }
@@ -309,7 +330,9 @@ impl LayoutState {
                 self.warnings.clear();
             }
             Scope::Project => {
-                let Some(target) = self.config.preset_layout(&id) else { return false };
+                let Some(target) = self.config.preset_layout(&id) else {
+                    return false;
+                };
                 let before = self.raw_layout();
                 self.commit(&before, target);
             }
@@ -324,7 +347,8 @@ impl LayoutState {
             Scope::Global => self.config.select_preset(self.config.preset.clone()),
             Scope::Project => {
                 if let Some(key) = self.project_key() {
-                    self.config.set_project_overrides(&key, LayoutOverrides::default());
+                    self.config
+                        .set_project_overrides(&key, LayoutOverrides::default());
                 }
             }
         }
@@ -336,7 +360,8 @@ impl LayoutState {
     pub fn remove_project_override(&mut self) -> bool {
         let old = self.config.clone();
         if let Some(key) = self.project_key() {
-            self.config.set_project_overrides(&key, LayoutOverrides::default());
+            self.config
+                .set_project_overrides(&key, LayoutOverrides::default());
         }
         self.warnings.clear();
         self.config != old
@@ -389,7 +414,11 @@ impl LayoutState {
             Some(PresetId::Custom(n)) => n,
             _ => "Mi preset".to_string(),
         };
-        CustomPreset { name, layout: self.layout() }.export_toml()
+        CustomPreset {
+            name,
+            layout: self.layout(),
+        }
+        .export_toml()
     }
 
     /// Add a preset exported with [`export_toml`](Self::export_toml). Returns its name.
@@ -419,7 +448,10 @@ mod tests {
     use store::{BottomBar, Density, Splits};
 
     fn state() -> LayoutState {
-        LayoutState::new(LayoutConfig::default(), Some(PathBuf::from(r"C:\Users\me\code\selachi")))
+        LayoutState::new(
+            LayoutConfig::default(),
+            Some(PathBuf::from(r"C:\Users\me\code\selachi")),
+        )
     }
 
     #[test]
@@ -439,8 +471,10 @@ mod tests {
         s.apply(|l| l.density = Density::Compact);
         let o = &s.config().overrides;
         assert_eq!(o.density, Some(Density::Compact));
-        let expected =
-            LayoutOverrides { density: Some(Density::Compact), ..LayoutOverrides::default() };
+        let expected = LayoutOverrides {
+            density: Some(Density::Compact),
+            ..LayoutOverrides::default()
+        };
         assert_eq!(*o, expected);
         // Changing it back leaves no override at all.
         s.apply(|l| l.density = Density::Comfortable);
@@ -448,8 +482,10 @@ mod tests {
         // A change on top of a non-default preset is stored relative to that preset.
         s.select_preset(BuiltinPreset::Orquestador.into());
         s.apply(|l| l.splits = Splits::Grid2x2);
-        let expected =
-            LayoutOverrides { splits: Some(Splits::Grid2x2), ..LayoutOverrides::default() };
+        let expected = LayoutOverrides {
+            splits: Some(Splits::Grid2x2),
+            ..LayoutOverrides::default()
+        };
         assert_eq!(s.config().overrides, expected);
     }
 
@@ -457,7 +493,10 @@ mod tests {
     fn normalization_warnings_are_surfaced_in_spanish() {
         let mut s = state();
         s.apply(|l| l.tabs_position = TabsPosition::Sidebar);
-        assert_eq!(s.warnings(), ["La sidebar se mostró porque las pestañas están en ella"]);
+        assert_eq!(
+            s.warnings(),
+            ["La sidebar se mostró porque las pestañas están en ella"]
+        );
         let l = s.layout();
         assert_eq!(l.sidebar.side, SidebarSide::Left);
         assert!(!l.sidebar.sections.is_empty());
@@ -472,7 +511,10 @@ mod tests {
     fn hiding_the_rail_without_a_sidebar_is_corrected() {
         let mut s = state();
         s.apply(|l| l.rail = RailVisibility::Hidden);
-        assert_eq!(s.warnings(), ["El rail se mostró porque la sidebar está oculta"]);
+        assert_eq!(
+            s.warnings(),
+            ["El rail se mostró porque la sidebar está oculta"]
+        );
         assert_eq!(s.layout().rail, RailVisibility::Visible);
     }
 
@@ -519,9 +561,19 @@ mod tests {
         s.set_scope(Scope::Project);
         s.select_preset(BuiltinPreset::Chat.into());
         let cwd = PathBuf::from(r"C:\Users\me\code\selachi");
-        assert_eq!(s.config().resolve_for(&cwd), ResolvedLayout::builtin(BuiltinPreset::Chat));
-        assert_eq!(s.config().preset, PresetId::default(), "the global preset is untouched");
-        assert_eq!(s.active_preset(), Some(PresetId::Builtin(BuiltinPreset::Chat)));
+        assert_eq!(
+            s.config().resolve_for(&cwd),
+            ResolvedLayout::builtin(BuiltinPreset::Chat)
+        );
+        assert_eq!(
+            s.config().preset,
+            PresetId::default(),
+            "the global preset is untouched"
+        );
+        assert_eq!(
+            s.active_preset(),
+            Some(PresetId::Builtin(BuiltinPreset::Chat))
+        );
         assert!(s.remove_project_override());
         assert_eq!(s.config().resolve_for(&cwd), s.config().resolve());
         assert!(!s.remove_project_override(), "nothing left to remove");
@@ -542,7 +594,10 @@ mod tests {
         assert!(s.is_modified());
         assert!(s.reset());
         assert!(!s.is_modified());
-        assert_eq!(s.config().preset, PresetId::Builtin(BuiltinPreset::Espacios));
+        assert_eq!(
+            s.config().preset,
+            PresetId::Builtin(BuiltinPreset::Espacios)
+        );
         assert!(!s.reset());
     }
 
