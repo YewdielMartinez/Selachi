@@ -28,6 +28,8 @@ ui_layout = { version = "0.1.0", path = "../ui_layout" }
 ui_palette = { version = "0.1.0", path = "../ui_palette" }
 ui_procs = { path = "../ui_procs" }
 ui_kit = { version = "0.1.0", path = "../ui_kit" }
+ui_review = { path = "../ui_review" }
+ui_usage = { path = "../ui_usage" }
 ui_viewer = { path = "../ui_viewer" }
 viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
 

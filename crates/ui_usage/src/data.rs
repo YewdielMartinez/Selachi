@@ -3,7 +3,7 @@
 //! gpui, so all of it is unit-tested.
 
 use agents_svc::{
-    Agent, AgentUsage, BranchUsage, COST_LABEL, Forecast, RateLimitSnapshot, ReportedCost,
+    Agent, AgentUsage, BranchUsage, Forecast, RateLimitSnapshot, ReportedCost,
 };
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Weekday};
 
@@ -14,6 +14,9 @@ pub const CHART_DAYS: usize = 14;
 
 /// A rate-limit snapshot with an unknown reset time is only trusted for this long.
 pub const UNKNOWN_RESET_MAX_AGE_MS: i64 = 30 * 60_000;
+
+/// Spanish for `agents_svc::COST_LABEL` ("estimated"), shown next to every extrapolated figure.
+pub const ESTIMATED: &str = "estimado";
 
 /// The agents that report official limits, in display order.
 pub const LIMIT_AGENTS: [Agent; 2] = [Agent::Claude, Agent::Codex];
@@ -280,7 +283,7 @@ pub fn breakdown_tooltip(t: &AgentTotals) -> String {
         out = full_tokens(t.output),
         cc = full_tokens(t.cache_create),
         cr = full_tokens(t.cache_read),
-        events = full_tokens(t.events),
+        events = crate::fmt::events_label(t.events),
         cost = cost_label(&t.cost),
     )
 }
@@ -429,7 +432,7 @@ pub fn forecast_line<Tz: TimeZone>(f: &Forecast, now: &DateTime<Tz>) -> Forecast
         window,
         text,
         rate: format!("ritmo {} tokens/h", compact_tokens(f.recent_billable_tokens_per_hour.round() as u64)),
-        label: if f.label.is_empty() { COST_LABEL } else { f.label },
+        label: ESTIMATED,
         reaches_limit: f.reaches_limit_before_reset,
     }
 }

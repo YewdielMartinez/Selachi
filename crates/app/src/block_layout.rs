@@ -100,8 +100,7 @@ pub fn layout_rows(
     let n = row_block.len();
     let mut rows: Vec<VisRow> = Vec::with_capacity(n);
     let mut summarized: Option<BlockId> = None;
-    for r in 0..n {
-        let block = row_block[r];
+    for (r, &block) in row_block.iter().enumerate() {
         let line = abs.get(r).copied().flatten();
         let hide = match (block, line) {
             (Some(id), Some(a)) if folded.contains(&id) => find_block(blocks, id).filter(|b| in_output(b, a)),
@@ -283,15 +282,11 @@ mod tests {
     #[test]
     fn the_bar_hangs_from_the_prompt_row_or_the_gutter() {
         let blocks = [block(1, 10, 12, Some(15), BlockState::Failed)];
-        let rb = ids(&[Some(1), Some(1), Some(1), Some(1), Some(1)]);
-        let mut abs = vec![None; 5];
-        // Pretend the run starts inside the screen: use a leading blank row.
-        let rb2 = ids(&[None, Some(1), Some(1), Some(1), Some(1), Some(1)]);
-        abs.insert(0, None);
-        let abs2 = viewport_abs(&rb2, &blocks);
-        let rows = layout_rows(&rb2, &abs2, &blocks, &HashSet::new(), true);
-        let _ = rb;
-        // Rows 1 and 2 are the prompt + command (abs 10, 11), 3.. output.
+        // A leading blank row makes the run start inside the screen, so its rows are exact.
+        let rb = ids(&[None, Some(1), Some(1), Some(1), Some(1), Some(1)]);
+        let abs = viewport_abs(&rb, &blocks);
+        let rows = layout_rows(&rb, &abs, &blocks, &HashSet::new(), true);
+        // Rows 1 and 2 are the prompt + command (abs 10, 11), 3.. the output.
         assert_eq!(hover_target(&rows, &blocks, 1, false), Some(BlockId(1)));
         assert_eq!(hover_target(&rows, &blocks, 2, false), Some(BlockId(1)));
         assert_eq!(hover_target(&rows, &blocks, 4, false), None);

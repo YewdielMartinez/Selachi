@@ -117,7 +117,7 @@ pub fn usage_tooltip(info: &UsageInfo, now: i64) -> String {
     lines.join("\n")
 }
 
-fn db_path() -> Option<PathBuf> {
+pub(crate) fn db_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Selachi").join("selachi.db"))
 }
 
@@ -202,6 +202,8 @@ pub struct UsageMonitor {
     in_flight: bool,
     active: bool,
     last_scan: Option<Instant>,
+    /// The usage panel's model: told after every successful scan (it re-reads only if visible).
+    model: Option<gpui::Entity<ui_usage::UsageModel>>,
     _timer: Task<()>,
 }
 
@@ -221,6 +223,7 @@ impl UsageMonitor {
             in_flight: false,
             active: false,
             last_scan: None,
+            model: cx.try_global::<crate::services::Services>().map(|s| s.usage.clone()),
             _timer: timer,
         };
         monitor.scan(cx); // startup scan, focused or not
@@ -256,7 +259,11 @@ impl UsageMonitor {
             let _ = this.update(cx, |m, cx| {
                 m.in_flight = false;
                 m.last_scan = Some(Instant::now());
+                let scanned = out.ingestor.is_some();
                 m.ingestor = out.ingestor;
+                if scanned && let Some(model) = &m.model {
+                    model.update(cx, |u, cx| u.notify_scanned(cx));
+                }
                 if m.info != out.info {
                     m.info = out.info;
                     cx.notify();

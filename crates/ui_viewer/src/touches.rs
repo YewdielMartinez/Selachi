@@ -333,7 +333,7 @@ impl AgentTouchesView {
             .rounded(px(10.0))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
-            .child(icon(g.icon(), 16.0, g.tint(&theme)))
+            .child(ui_kit::file_icon(ui_kit::FileIcon::for_name(&e.name), 16.0, g.tint(&theme)))
             .child(
                 div()
                     .flex_1()

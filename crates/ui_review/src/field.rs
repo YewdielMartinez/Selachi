@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn backspace_joins_lines_and_respects_chars() {
-        let mut b = buf("a\nñ", 3);
+        let mut b = buf("a\nñ", 4);
         b.backspace();
         assert_eq!(b.text, "a\n");
         b.backspace();

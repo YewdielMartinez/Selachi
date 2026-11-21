@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
+use ui_git::{GitPanelEvent, OpFinished};
+use ui_review::{AttentionEvent, AttentionItem, FocusTarget, ReviewEvent, ReviewSource, ReviewTab};
+use ui_viewer::{GitMark, ViewerConfig, ViewerEvent, ViewerTab};
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Bounds, Context, Div, ElementId, Entity, Hsla,
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollHandle,
@@ -40,7 +43,8 @@ use crate::adapt::{
     AdaptedLayout, Breakpoint, COLLAPSED_SIDEBAR_W, RIGHT_MAX_W, RIGHT_MIN_W, SidebarMode, adapt_layout,
     right_panel_width,
 };
-use crate::git_monitor::GitMonitor;
+use crate::git_monitor::{GitInfo, GitMonitor};
+use crate::hint::{Hint, HintAction, hint_card};
 use crate::layout_host::{LayoutPanelArgs, build_layout_panel};
 use crate::notify;
 use crate::palette::{self, id as action_id};
@@ -50,11 +54,12 @@ use crate::session::{SavedTab, SessionState, TabKind};
 use crate::sidebar::{SidebarProps, sidebar_collapsed, sidebar_content};
 use crate::splits::{PaneSet, clamp_ratio, pane_count, ratio_at};
 use crate::status_bar::{StatusBar, bar_height};
-use crate::terminal_tab::TerminalTab;
+use crate::terminal_tab::{TermRequest, TerminalTab};
 use crate::services::Services;
 use crate::terminal_view::TermEnv;
 use crate::titlebar::{TITLEBAR_H, breadcrumb, new_tab_button, tab_pill, title_row, window_controls};
 use crate::usage_monitor::UsageMonitor;
+use crate::viewer_host;
 
 pub use crate::rail::RAIL_W;
 /// Height of the titlebar (named `TAB_H` for the initial terminal size estimate).
@@ -74,6 +79,8 @@ const TRANSITION_KEEP: Duration = Duration::from_millis(260);
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 /// The session is written at most this often, and only when it changed.
 const SESSION_DEBOUNCE: Duration = Duration::from_secs(2);
+/// How long an inline hint stays.
+const HINT_FOR: Duration = Duration::from_secs(8);
 /// Narrowest a tab pill gets: the strip scrolls instead of squeezing tabs.
 const TAB_MIN_W: f32 = 96.0;
 /// Width of the sidebar drawer / overlay and of the right panel overlay.
@@ -95,6 +102,7 @@ actions!(
         CancelClose,
         CancelOverlay,
         ToggleFullscreen,
+        NextAttention,
         Jump1,
         Jump2,
         Jump3,
@@ -153,7 +161,7 @@ impl Metrics {
 
 struct TabSlot {
     handle: TabHandle,
-    _sub: Subscription,
+    _subs: Vec<Subscription>,
 }
 
 /// A layout change in flight: the zones animate from `from` to the current layout.
@@ -227,6 +235,15 @@ pub struct AppShell {
     status: Entity<StatusBar>,
     usage: Entity<UsageMonitor>,
     right: Option<RightPanel>,
+    /// Inline hint above the status bar, and the one-shot timer that dismisses it.
+    hint: Option<Hint>,
+    hint_task: Option<Task<()>>,
+    /// Grammar plugins found at startup (for the doctor).
+    grammars: Vec<String>,
+    /// Keeps the file tree's git markers in sync with the active tab's repository.
+    marks_sub: Option<Subscription>,
+    _viewer_task: Option<Task<()>>,
+    _grammar_task: Option<Task<()>>,
     layout_open: bool,
     layout_panel: Option<AnyView>,
     confirm_close: Option<(TabId, SharedString)>,
@@ -291,6 +308,15 @@ impl AppShell {
                     services.procs.clone(),
                     move |_, cx| {
                         weak.update(cx, |shell, cx| shell.toggle_right_panel(PanelId::new(ui_procs::PANEL_ID), cx)).ok();
+                    },
+                    cx,
+                );
+            });
+            let weak = cx.weak_entity();
+            status.update(cx, |s, cx| {
+                s.set_on_usage(
+                    move |_, cx| {
+                        weak.update(cx, |shell, cx| shell.toggle_right_panel(PanelId::new(ui_usage::PANEL_ID), cx)).ok();
                     },
                     cx,
                 );
@@ -400,6 +426,12 @@ impl AppShell {
             status,
             usage,
             right: None,
+            hint: None,
+            hint_task: None,
+            grammars: Vec::new(),
+            marks_sub: None,
+            _viewer_task: None,
+            _grammar_task: None,
             layout_open: false,
             layout_panel: None,
             confirm_close: None,
@@ -415,7 +447,60 @@ impl AppShell {
             Some(state) => shell.restore_session(state, window, cx),
             None => shell.open_tab(Some(cwd0), window, cx),
         }
+        shell.mount_panels(window, cx);
         shell
+    }
+
+    /// Wires the git panel, the file tree and the grammar plugins to the shell. Nothing here reads
+    /// a repository or a folder: the panels do that when they are first shown.
+    fn mount_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        // Git panel: its events and the end of its operations.
+        self._subs.push(cx.subscribe_in(&services.git, window, |this, _, ev: &GitPanelEvent, window, cx| {
+            this.on_git_event(ev.clone(), window, cx);
+        }));
+        self._subs.push(cx.subscribe_in(&services.git, window, |this, _, _: &OpFinished, _, cx| {
+            this.after_git_operation(cx);
+        }));
+        // Attention queue: a click on an item brings its tab forward.
+        self._subs.push(cx.subscribe_in(&services.attention, window, |this, _, ev: &AttentionEvent, window, cx| match ev {
+            AttentionEvent::Jump(target) => this.focus_attention_target(target, window, cx),
+            AttentionEvent::Dismiss(_) | AttentionEvent::Changed { .. } => cx.notify(),
+        }));
+        // Status bar badge: shows the count, opens the attention panel.
+        let weak = cx.weak_entity();
+        self.status.update(cx, |s, cx| {
+            s.set_attention(
+                services.attention.clone(),
+                move |_, cx| {
+                    weak.update(cx, |shell, cx| {
+                        shell.toggle_right_panel(PanelId::new(ui_review::ATTENTION_PANEL_ID), cx);
+                    })
+                    .ok();
+                },
+                cx,
+            );
+        });
+        // File tree: events come through a channel because the provider is built before the shell.
+        if let Some(mut rx) = services.viewer_events.borrow_mut().take() {
+            self._viewer_task = Some(cx.spawn_in(window, async move |this, cx| {
+                while let Some(ev) = rx.next().await {
+                    if this.update_in(cx, |shell, window, cx| shell.on_viewer_event(ev, window, cx)).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        // Grammar plugins: scanned off the UI thread; documents opened before it ends are plain.
+        self._grammar_task = Some(cx.spawn(async move |this, cx| {
+            let ids = cx.background_executor().spawn(async { viewer_host::init_grammars() }).await;
+            this.update(cx, |shell, cx| {
+                shell.grammars = ids;
+                shell.update_doctor_stats(cx);
+            })
+            .ok();
+        }));
+        self.sync_git_marks(cx);
     }
 
     // ------------------------------------------------------------------------------------
@@ -450,11 +535,12 @@ impl AppShell {
 
     /// The window's shape as a session.
     fn capture_session(&self, cx: &App) -> SessionState {
-        let ids = self.tab_ids();
+        // Only terminals are restored: a viewer tab is a file the user can reopen in a click.
+        let terminals: Vec<&TabSlot> = self.tabs.iter().filter(|t| t.handle.downcast::<TerminalTab>().is_some()).collect();
+        let ids: Vec<TabId> = terminals.iter().map(|t| t.handle.id()).collect();
         SessionState {
             v: crate::session::VERSION,
-            tabs: self
-                .tabs
+            tabs: terminals
                 .iter()
                 .map(|t| SavedTab { kind: TabKind::Terminal, cwd: t.handle.info(cx).cwd, title: None })
                 .collect(),
@@ -485,7 +571,7 @@ impl AppShell {
     /// Writes the session if it differs from the last one written; `flush` waits for the writer.
     fn save_session_now(&mut self, flush: bool, cx: &mut Context<Self>) {
         let Some(db) = &self.session_db else { return };
-        if self.tabs.is_empty() {
+        if self.terminal_count() == 0 {
             return;
         }
         let json = self.capture_session(cx).to_json();
@@ -538,38 +624,31 @@ impl AppShell {
                 TerminalTab::new(theme, cwd, window, cx)
             }
         });
-        let handle = TabHandle::new(entity);
+        let handle = TabHandle::new(entity.clone());
+        let id = handle.id();
         let shell = cx.weak_entity();
         let sub = handle.subscribe(cx, move |_, cx| {
             shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
         });
-        let id = handle.id();
-        self.register_owner(&handle, cx);
-        self.tabs.push(TabSlot { handle, _sub: sub });
-        self.update_doctor_stats(1, cx);
+        // Ctrl+click on a path and "Arreglar con agente" come as requests of the terminal.
+        let requests = cx.subscribe_in(&entity, window, move |this, _, req: &TermRequest, window, cx| {
+            this.on_term_request(id, req.clone(), window, cx);
+        });
+        self.tabs.push(TabSlot { handle, _subs: vec![sub, requests] });
+        self.update_doctor_stats(cx);
         id
     }
 
-    /// Gives the tab a job in the shared process tracker (the `procs` panel groups by it).
-    /// TODO(term_core): the PTY shell is not inside the job yet. term_core has to pass
-    /// `PROC_THREAD_ATTRIBUTE_JOB_LIST` (with `job.job_handle`) next to `PSEUDOCONSOLE` in the
-    /// `CreateProcessW` attribute list; until then the panel only sees the processes it can
-    /// attribute heuristically.
-    fn register_owner(&mut self, handle: &TabHandle, cx: &mut Context<Self>) {
-        let Some(services) = cx.try_global::<Services>().cloned() else { return };
-        let info = handle.info(cx);
-        let meta = proc_svc::OwnerMeta { agent: None, label: info.title.to_string(), cwd: info.cwd };
-        match ui_procs::open_owner(&services.tracker, handle.id().as_u64(), meta, proc_svc::JobOptions::default()) {
-            Ok(job) => services.procs.update(cx, |m, cx| m.watch_job_events(job.events, cx)),
-            Err(e) => log::warn!("could not create the process job of a tab: {e}"),
-        }
+    /// Terminals among the tabs (viewer tabs do not run a shell).
+    fn terminal_count(&self) -> usize {
+        self.tabs.iter().filter(|t| t.handle.downcast::<TerminalTab>().is_some()).count()
     }
 
-    /// Tells the doctor panel how many shells run (`delta` is the change not yet in `self.tabs`).
-    fn update_doctor_stats(&mut self, delta: isize, cx: &mut Context<Self>) {
+    /// Tells the doctor panel how many shells run and which grammars are available.
+    fn update_doctor_stats(&mut self, cx: &mut Context<Self>) {
         let Some(services) = cx.try_global::<Services>().cloned() else { return };
-        let shells = (self.tabs.len() as isize + delta).max(0) as usize;
-        let stats = ui_doctor::AppStats { shells: Some(shells), agents: None, grammars: Vec::new() };
+        let shells = self.terminal_count();
+        let stats = ui_doctor::AppStats { shells: Some(shells), agents: None, grammars: self.grammars.clone() };
         services.doctor.update(cx, |d, cx| d.set_app_stats(stats, cx));
     }
 
@@ -629,6 +708,8 @@ impl AppShell {
             .and_then(|s| s.handle.downcast::<TerminalTab>())
             .map(|t| t.read(cx).git().clone());
         self.status.update(cx, |s, cx| s.set_git(git, cx));
+        self.sync_git_marks(cx);
+        self.clear_attention_of_active(cx);
         self.recompute_layout(true, cx);
         self.mark_session_dirty(cx);
         self.sync_layout_panel_cwd(cx);
@@ -662,7 +743,7 @@ impl AppShell {
             let job = services.tracker.lock().unwrap_or_else(|p| p.into_inner()).remove_owner(id.as_u64());
             drop(job);
         }
-        self.update_doctor_stats(0, cx);
+        self.update_doctor_stats(cx);
         slot.handle.close(cx);
         drop(slot);
         self.confirm_close = None;
@@ -980,6 +1061,17 @@ impl AppShell {
             active: true,
             on_click: None,
         }];
+        // "Revisión": opens a review tab (main zone), not a right panel.
+        let review_shell = shell.clone();
+        items.push(RailItem {
+            id: "rail-review".into(),
+            icon: Icon::Review,
+            title: "Revisar cambios".into(),
+            active: self.active_id().and_then(|id| self.slot(id)).is_some_and(|s| s.handle.downcast::<ReviewTab>().is_some()),
+            on_click: Some(Rc::new(move |window, cx| {
+                review_shell.update(cx, |s, cx| s.open_review(window, cx));
+            })),
+        });
         if let Some(reg) = cx.try_global::<PanelRegistry>() {
             for p in reg.for_zone(PanelZone::Right) {
                 let id = p.id();
@@ -1868,6 +1960,23 @@ impl AppShell {
 }
 
 /// Callback of the layout popover: hands the new layout to the shell.
+/// The file tree's markers for the changed files of a repository (absolute paths).
+fn git_marks(info: &GitInfo) -> std::collections::HashMap<PathBuf, GitMark> {
+    let mut out = std::collections::HashMap::new();
+    for f in &info.marks {
+        let mark = match f.code {
+            'A' | 'C' => GitMark::Added,
+            'D' => GitMark::Deleted,
+            '?' => GitMark::Untracked,
+            '!' => GitMark::Conflict,
+            _ => GitMark::Modified,
+        };
+        // Conflicts come first in the list and must not be overwritten by a later entry.
+        out.entry(info.root.join(&f.path)).or_insert(mark);
+    }
+    out
+}
+
 fn apply_from_panel(shell: &WeakEntity<AppShell>, layout: LayoutConfig, cx: &mut App) {
     shell.update(cx, |s, cx| s.set_layout_config(layout, true, cx)).ok();
 }
@@ -2029,6 +2138,16 @@ impl Render for AppShell {
             key_context.push_str(" Drawer");
         }
         let confirm = self.confirm_close.as_ref().map(|(_, why)| why.clone());
+        let hint_el = self.hint.clone().map(|h| {
+            let (a, b) = (shell.clone(), shell.clone());
+            hint_card(
+                &theme,
+                &h,
+                bar_height(l.bottom_bar) + m.margin + 8.0,
+                move |action, _, cx| a.update(cx, |s, cx| s.run_hint_action(action, cx)),
+                move |_, cx| b.update(cx, |s, cx| s.dismiss_hint(cx)),
+            )
+        });
         let frame_stats = cx.try_global::<Services>().map(|s| s.doctor.read(cx).frame_stats());
         div()
             .id("app-shell")
@@ -2051,6 +2170,7 @@ impl Render for AppShell {
             .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.cycle_tab(-1, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleLayoutPanel, window, cx| this.toggle_layout_panel(window, cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
+            .on_action(cx.listener(|this, _: &NextAttention, _, cx| this.next_attention(cx)))
             .on_action(cx.listener(|this, _: &ui_palette::TogglePalette, window, cx| this.toggle_palette(window, cx)))
             .on_action(cx.listener(|this, _: &CancelOverlay, _, cx| this.close_overlay(cx)))
             .on_action(cx.listener(|this, _: &ConfirmClose, window, cx| {
@@ -2084,6 +2204,7 @@ impl Render for AppShell {
             .child(body)
             .children(status_el.map(|s| div().w_full().bg(c.bg).child(s)))
             .children(zen_overlays)
+            .children(hint_el)
             .children(confirm.map(|why| self.confirm_overlay(&why, cx)))
             // The palette is the last child: an absolute full-window overlay (nothing while closed).
             .child(self.palette.clone())
@@ -2267,6 +2388,300 @@ impl AppShell {
     }
 
     // ------------------------------------------------------------------------------------
+    // Git panel, file viewer, terminal requests
+    // ------------------------------------------------------------------------------------
+
+    /// The user is looking at the active tab: whatever it had in the attention queue is seen.
+    fn clear_attention_of_active(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        if let Some(services) = cx.try_global::<Services>().cloned() {
+            let target = FocusTarget::new(id.as_u64().to_string());
+            services.attention.update(cx, |m, cx| m.remove_target(&target, cx));
+        }
+    }
+
+    fn focus_attention_target(&mut self, target: &FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        if let Some(id) = self.tab_ids().into_iter().find(|id| id.as_u64().to_string() == target.0.as_ref()) {
+            self.select_tab(id, window, cx);
+        }
+    }
+
+    /// Ctrl+Shift+A: jump to the next thing that needs attention.
+    fn next_attention(&mut self, cx: &mut Context<Self>) {
+        if let Some(services) = cx.try_global::<Services>().cloned() {
+            services.attention.update(cx, |m, cx| {
+                m.jump_next(cx);
+            });
+        }
+    }
+
+    /// Opens a review tab (diff with line notes) of the active tab's project, or brings the one
+    /// that already shows it forward.
+    fn open_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let info = self.active_info(cx);
+        let Some(root) = info.as_ref().and_then(|i| i.project_root.clone().or_else(|| i.cwd.clone())) else {
+            self.show_hint(Hint::text("No hay un proyecto abierto que revisar"), cx);
+            return;
+        };
+        let existing = self.tabs.iter().find_map(|t| {
+            let tab = t.handle.downcast::<ReviewTab>()?;
+            matches!(tab.read(cx).source(), ReviewSource::Worktree { root: r } if *r == root).then(|| t.handle.id())
+        });
+        if let Some(id) = existing {
+            self.select_tab(id, window, cx);
+            return;
+        }
+        let theme = self.theme;
+        let entity = cx.new(|cx| ReviewTab::new(ReviewSource::Worktree { root }, theme, cx));
+        let handle = TabHandle::new(entity.clone());
+        let shell = cx.weak_entity();
+        let sub = handle.subscribe(cx, move |_, cx| {
+            shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
+        });
+        let tab_id = handle.id();
+        let events = cx.subscribe_in(&entity, window, move |this, tab, ev: &ReviewEvent, window, cx| match ev {
+            ReviewEvent::SendToAgent { markdown, notes } => {
+                // The notes go through the redactor like any other context sent to an agent.
+                let (clean, hidden) = term_core::redact(markdown);
+                let cwd = tab.read(cx).source().root().to_path_buf();
+                let ids: Vec<_> = notes.iter().map(|n| n.id).collect();
+                this.send_to_agent(clean, hidden, Some(cwd), window, cx);
+                let view = tab.read(cx).view().clone();
+                view.update(cx, |v, cx| v.mark_sent(&ids, cx));
+            },
+            ReviewEvent::NotesChanged { .. } => {},
+        });
+        self.tabs.push(TabSlot { handle, _subs: vec![sub, events] });
+        self.panes.open(tab_id);
+        self.scroll_active = true;
+        self.after_active_changed(window, cx);
+    }
+
+    /// Points the file tree's `M` / `A` / `?` markers at the active terminal's repository, and
+    /// keeps them current while that repository's monitor reports changes.
+    fn sync_git_marks(&mut self, cx: &mut Context<Self>) {
+        let git: Option<Entity<GitMonitor>> = self
+            .active_id()
+            .and_then(|id| self.slot(id))
+            .and_then(|s| s.handle.downcast::<TerminalTab>())
+            .map(|t| t.read(cx).git().clone());
+        // A viewer tab in front keeps the last markers (the tree still shows that project).
+        let Some(git) = git else { return };
+        self.marks_sub = Some(cx.observe(&git, |this, git, cx| this.feed_git_marks(&git, cx)));
+        self.feed_git_marks(&git, cx);
+    }
+
+    fn feed_git_marks(&mut self, git: &Entity<GitMonitor>, cx: &mut Context<Self>) {
+        let Some(info) = git.read(cx).info().cloned() else { return };
+        let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        services.files.set_git_status(git_marks(&info), cx);
+    }
+
+    /// A git operation of the panel ended: the status bar and the tree re-read the repository.
+    fn after_git_operation(&mut self, cx: &mut Context<Self>) {
+        let git: Option<Entity<GitMonitor>> = self
+            .active_id()
+            .and_then(|id| self.slot(id))
+            .and_then(|s| s.handle.downcast::<TerminalTab>())
+            .map(|t| t.read(cx).git().clone());
+        if let Some(git) = git {
+            git.update(cx, |g, cx| g.refresh(cx));
+        }
+        if let Some(services) = cx.try_global::<Services>().cloned() {
+            services.files.refresh(cx);
+        }
+    }
+
+    fn on_git_event(&mut self, event: GitPanelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            GitPanelEvent::RunInTerminal { argv, cwd } => self.run_in_terminal(&argv, &cwd, window, cx),
+            GitPanelEvent::OpenFile { path, line } => self.open_viewer(path, line, false, None, window, cx),
+            GitPanelEvent::OpenDiff { path } => self.open_viewer(path, None, true, None, window, cx),
+            GitPanelEvent::AskAgent { context_markdown } => {
+                // Backlog A13: nothing leaves the machine without going through the redactor.
+                let (clean, hidden) = term_core::redact(&context_markdown);
+                let cwd = cx.try_global::<Services>().and_then(|s| s.git.read(cx).root().map(PathBuf::from));
+                self.send_to_agent(clean, hidden, cwd, window, cx);
+            },
+            GitPanelEvent::WorktreeSelected { path } => {
+                let text = format!("Worktree {}", paths::tab_label(&path));
+                self.show_hint(Hint::text(text).with_action("cd aquí", HintAction::Cd(path)), cx);
+            },
+        }
+    }
+
+    /// Types a confirmed git command in the active terminal (or a new one when the active tab is
+    /// not a terminal). `-C` targets the panel's worktree without changing the shell's directory.
+    fn run_in_terminal(&mut self, argv: &[String], cwd: &std::path::Path, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.active_cwd(cx);
+        let line = palette::shell_line(&palette::with_dash_c(argv, cwd, active.as_deref()));
+        if self.active_terminal().is_none() {
+            self.open_tab(Some(cwd.to_path_buf()), window, cx);
+        }
+        self.type_in_active(&line, true, cx);
+    }
+
+    fn active_terminal(&self) -> Option<gpui::Entity<TerminalTab>> {
+        self.active_id().and_then(|id| self.slot(id)).and_then(|s| s.handle.downcast::<TerminalTab>())
+    }
+
+    /// Opens a new terminal running `claude`, with the (already redacted) context copied to the
+    /// clipboard: until the chat exists, the user pastes it in.
+    fn send_to_agent(
+        &mut self,
+        markdown: String,
+        redactions: usize,
+        cwd: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(markdown));
+        let cwd = cwd.or_else(|| self.active_cwd(cx));
+        self.open_tab(cwd, window, cx);
+        self.type_in_active("claude", true, cx);
+        let secrets = if redactions > 0 { format!(" ({})", crate::block_ui::secrets_hint(redactions)) } else { String::new() };
+        self.show_hint(Hint::text(format!("Contexto copiado{secrets} · pégalo en el agente con Ctrl+V")), cx);
+    }
+
+    fn on_term_request(&mut self, tab: TabId, req: TermRequest, window: &mut Window, cx: &mut Context<Self>) {
+        match req {
+            TermRequest::OpenPath { path, line, is_dir, .. } => {
+                if is_dir {
+                    if let Some(t) = self.slot(tab).and_then(|s| s.handle.downcast::<TerminalTab>()) {
+                        let line = palette::cd_line(&path);
+                        t.update(cx, |t, cx| t.input(&line, true, cx));
+                    }
+                } else {
+                    self.open_viewer(path, line.map(|l| l as usize), false, None, window, cx);
+                }
+            },
+            TermRequest::Attention { id, label, kind } => {
+                // Nothing to flag when the user is looking at that tab right now.
+                if self.active_id() == Some(tab) && notify::window_active() {
+                    return;
+                }
+                let Some(services) = cx.try_global::<Services>().cloned() else { return };
+                let item = AttentionItem {
+                    id: id.into(),
+                    owner_label: label.into(),
+                    agent: None,
+                    kind,
+                    since: Instant::now(),
+                    focus_target: FocusTarget::new(tab.as_u64().to_string()),
+                };
+                services.attention.update(cx, |m, cx| m.upsert(item, cx));
+            },
+            TermRequest::AskAgent { markdown, redactions } => {
+                let cwd = self.slot(tab).and_then(|s| s.handle.info(cx).cwd);
+                self.send_to_agent(markdown, redactions, cwd, window, cx);
+            },
+        }
+    }
+
+    fn on_viewer_event(&mut self, event: ViewerEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            ViewerEvent::OpenFile { path } => self.open_viewer(path, None, false, None, window, cx),
+            ViewerEvent::OpenDiff { path, base } => self.open_viewer(path, None, true, base, window, cx),
+            ViewerEvent::OpenInEditor { path, line } => {
+                cx.spawn(async move |this, cx| {
+                    let res = cx.background_executor().spawn(async move { viewer_host::spawn_editor(&path, line) }).await;
+                    if let Err(e) = res {
+                        this.update(cx, |shell, cx| shell.show_hint(Hint::text(e), cx)).ok();
+                    }
+                })
+                .detach();
+            },
+            // Settings (and the plugin installer) arrive in 5.7.
+            ViewerEvent::InstallGrammar { id } => {
+                log::info!("grammar plugin {id} requested");
+                self.show_hint(Hint::text("Instalación de plugins: próximamente en Ajustes"), cx);
+            },
+        }
+    }
+
+    /// Opens `path` in a viewer tab of the main zone (or brings the one that shows it forward).
+    /// `base`: a checkpoint commit for diffs (HEAD when `None`).
+    fn open_viewer(
+        &mut self,
+        path: PathBuf,
+        line: Option<usize>,
+        diff: bool,
+        base: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let existing = self.tabs.iter().find_map(|t| {
+            let tab = t.handle.downcast::<ViewerTab>()?;
+            let same = tab.read(cx).path() == path.as_path()
+                && (tab.read(cx).viewer().read(cx).body() == ui_viewer::Body::Diff) == diff;
+            same.then(|| (t.handle.id(), tab))
+        });
+        if let Some((id, tab)) = existing {
+            if let Some(line) = line {
+                tab.read(cx).viewer().clone().update(cx, |v, cx| v.goto_line(line, cx));
+            }
+            self.select_tab(id, window, cx);
+            return;
+        }
+        let root = ui_viewer::find_repo_root(&path).or_else(|| self.active_info(cx).and_then(|i| i.project_root));
+        let mut cfg = ViewerConfig { project_root: root, line, open_in_diff: diff, ..ViewerConfig::default() };
+        if let Some(sha) = base {
+            cfg.base_label = Some(format!("checkpoint {}", sha.chars().take(7).collect::<String>()).into());
+            cfg.diff_base = viewer_svc::GitBase::Commit(sha);
+        }
+        let theme = self.theme;
+        let entity = cx.new(|cx| ViewerTab::new(path, cfg, theme, cx));
+        let handle = TabHandle::new(entity.clone());
+        let shell = cx.weak_entity();
+        let sub = handle.subscribe(cx, move |_, cx| {
+            shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
+        });
+        let events = cx.subscribe_in(&entity, window, |this, _, ev: &ViewerEvent, window, cx| {
+            this.on_viewer_event(ev.clone(), window, cx);
+        });
+        let id = handle.id();
+        self.tabs.push(TabSlot { handle, _subs: vec![sub, events] });
+        self.panes.open(id);
+        self.scroll_active = true;
+        self.after_active_changed(window, cx);
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Inline hint
+    // ------------------------------------------------------------------------------------
+
+    /// Shows `hint` above the status bar for a few seconds (replacing the previous one).
+    fn show_hint(&mut self, hint: Hint, cx: &mut Context<Self>) {
+        self.hint = Some(hint);
+        // Replacing the task restarts the one-shot timer.
+        self.hint_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(HINT_FOR).await;
+            this.update(cx, |shell, cx| {
+                shell.hint = None;
+                shell.hint_task = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn dismiss_hint(&mut self, cx: &mut Context<Self>) {
+        if self.hint.take().is_some() {
+            self.hint_task = None;
+            cx.notify();
+        }
+    }
+
+    fn run_hint_action(&mut self, action: HintAction, cx: &mut Context<Self>) {
+        match action {
+            HintAction::Cd(dir) => self.type_in_active(&palette::cd_line(&dir), true, cx),
+        }
+        self.dismiss_hint(cx);
+    }
+
+    // ------------------------------------------------------------------------------------
     // Command palette
     // ------------------------------------------------------------------------------------
 
@@ -2347,6 +2762,8 @@ impl AppShell {
             action_id::LAYOUT_TOGGLE => self.toggle_layout_panel(window, cx),
             action_id::THEME_TOGGLE => self.toggle_theme(&ToggleTheme, window, cx),
             action_id::FULLSCREEN => window.toggle_fullscreen(),
+            action_id::REVIEW_OPEN => self.open_review(window, cx),
+            action_id::ATTENTION_NEXT => self.next_attention(cx),
             other => {
                 if let Some(panel) = other.strip_prefix(action_id::PANEL_PREFIX) {
                     self.toggle_right_panel(PanelId::new(panel), cx);

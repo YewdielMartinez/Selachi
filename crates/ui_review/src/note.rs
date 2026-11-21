@@ -141,6 +141,7 @@ pub struct Note {
 
 impl Note {
     /// A new draft anchored to `start..=end` of `lines`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(id: NoteId, path: &str, side: Side, start: usize, end: usize, text: &str, lines: &SideLines, created: u64) -> Self {
         let (start, end) = if end < start { (end, start) } else { (start, end) };
         Self {

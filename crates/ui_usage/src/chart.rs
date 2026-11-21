@@ -47,7 +47,7 @@ pub fn bar_chart(
         .into_iter()
         .map(|t| [slot_tone(theme, 0, t), slot_tone(theme, 1, t), slot_tone(theme, 2, t)])
         .collect();
-    let baseline = c.surface_3;
+    let baseline = c.surface_4;
 
     let columns = days.iter().enumerate().map(|(i, day)| {
         let is_today = day.date == today;

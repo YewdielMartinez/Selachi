@@ -371,12 +371,25 @@ impl ReviewView {
                 self.notes.set_text(id, &text);
             }
             None => {
-                let lines = self.files.iter().find(|f| f.path == ed.path).map(|f| f.side_lines(ed.side)).unwrap_or_default();
-                let id = self.notes.next_id();
-                self.notes.push(Note::new(id, &ed.path, ed.side, ed.start, ed.end, &text, &lines, now_secs()));
+                self.add_note(&ed.path, ed.side, ed.start, ed.end, &text, cx);
+                return;
             }
         }
         self.notes_changed(cx);
+    }
+
+    /// Adds a draft note on `start..=end` of `side` of `path` (what saving the editor does; also
+    /// for hosts that create notes themselves). The excerpt comes from the loaded diff; `None`
+    /// when `text` is empty.
+    pub fn add_note(&mut self, path: &str, side: Side, start: usize, end: usize, text: &str, cx: &mut Context<Self>) -> Option<NoteId> {
+        if text.trim().is_empty() {
+            return None;
+        }
+        let lines = self.files.iter().find(|f| f.path == path).map(|f| f.side_lines(side)).unwrap_or_default();
+        let id = self.notes.next_id();
+        self.notes.push(Note::new(id, path, side, start, end, text, &lines, now_secs()));
+        self.notes_changed(cx);
+        Some(id)
     }
 
     pub fn cancel_editor(&mut self, cx: &mut Context<Self>) {
@@ -402,7 +415,7 @@ impl ReviewView {
         }
     }
 
-    fn edit_note(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn edit_note(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(n) = self.notes.get(id) else { return };
         let (path, side, start, end, text) = (n.path.clone(), n.side, n.start, n.end, n.text.clone());
         if let Some(i) = self.files.iter().position(|f| f.path == path) {
@@ -411,7 +424,7 @@ impl ReviewView {
         self.open_editor(path, side, start, end, Some(id), &text, window, cx);
     }
 
-    fn delete_note(&mut self, id: NoteId, cx: &mut Context<Self>) {
+    pub(crate) fn delete_note(&mut self, id: NoteId, cx: &mut Context<Self>) {
         if self.editor.as_ref().is_some_and(|e| e.editing == Some(id)) {
             self.editor = None;
         }
@@ -468,32 +481,32 @@ impl ReviewView {
         let (added, removed) = self.files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
         let files_open = self.files_open.unwrap_or(!compact);
 
-        let mut chips = div().flex().flex_row().flex_wrap().items_center().gap(px(6.0));
-        if !self.files.is_empty() {
-            chips = chips
-                .child(self.chip(plural(self.files.len(), "archivo", "archivos")))
-                .child(self.chip(format!("+{added} \u{2212}{removed}")));
-        }
-        chips = chips.child(self.chip(plural(total, "nota", "notas")));
-        if total > 0 && drafts != total {
-            chips = chips.child(self.chip(plural(drafts, "borrador", "borradores")));
-        }
+        let make_chips = || {
+            let mut chips = div().flex().flex_row().flex_wrap().items_center().gap(px(6.0));
+            if !self.files.is_empty() {
+                chips = chips
+                    .child(self.chip(plural(self.files.len(), "archivo", "archivos")))
+                    .child(self.chip(format!("+{added} \u{2212}{removed}")));
+            }
+            chips = chips.child(self.chip(plural(total, "nota", "notas")));
+            if total > 0 && drafts != total {
+                chips = chips.child(self.chip(plural(drafts, "borrador", "borradores")));
+            }
+            chips
+        };
 
         let send_hint = if drafts == 0 {
             "Haz clic en el número de una línea para escribir una nota".to_string()
         } else {
             format!("Envía {} al agente", plural(drafts, "nota", "notas"))
         };
-        div()
-            .flex_none()
+        let row = div()
+            .w_full()
             .min_h(px(52.0))
-            .px(px(16.0))
-            .py(px(8.0))
             .flex()
             .flex_row()
             .items_center()
             .gap(px(10.0))
-            .font_family(ty.ui_family)
             .child(
                 IconButton::new("review-files-toggle", &theme, Icon::Files)
                     .active(files_open)
@@ -520,7 +533,7 @@ impl ReviewView {
                             .text_color(c.text)
                             .child(SharedString::from(self.source.title())),
                     )
-                    .child(chips),
+                    .when(!compact, |d| d.child(make_chips())),
             )
             .child({
                 let mut refresh = GhostButton::new("review-refresh", &theme, if self.loading { "Leyendo..." } else { "Actualizar" })
@@ -532,13 +545,23 @@ impl ReviewView {
             })
             .child(
                 ActionButton::new("review-send", &theme, "Enviar al agente")
-                    .no_icon()
+                    .icon(Icon::Send)
                     .disabled(drafts == 0)
                     .tooltip(send_hint)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.send(cx);
                     })),
-            )
+            );
+        div()
+            .flex_none()
+            .px(px(16.0))
+            .py(px(8.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .font_family(ty.ui_family)
+            .child(row)
+            .when(compact, |d| d.child(make_chips()))
             .into_any_element()
     }
 
@@ -574,7 +597,7 @@ impl ReviewView {
                     .id(("review-file", i))
                     .occlude()
                     .w_full()
-                    .min_h(px(44.0))
+                    .h(px(48.0))
                     .px(px(10.0))
                     .flex()
                     .flex_row()
@@ -724,6 +747,8 @@ impl ReviewView {
             .items_center()
             .text_color(if noted { ink(&theme, 11, 3) } else { c.outline.into() })
             .when_some(gutter_bg, |d, b| d.bg(b))
+            // The 10 px note marker (a fixed slot, so numbers do not shift when a note appears).
+            .child(div().flex_none().w(px(16.0)).pl(px(4.0)).when(noted, |d| d.child(icon(Icon::Note, 10.0, ink(&theme, 11, 3)))))
             .child(self.number_cell(line.old_line, digits))
             .child(self.number_cell(line.new_line, digits));
         if let Some((side, n)) = anchor {
@@ -803,8 +828,18 @@ impl ReviewView {
             }
         }
         actions = actions
-            .child(GhostButton::new(format!("review-edit-{ix}"), &theme, "Editar").on_click(cx.listener(move |this, _, window, cx| this.edit_note(id, window, cx))))
-            .child(GhostButton::new(format!("review-del-{ix}"), &theme, "Eliminar").on_click(cx.listener(move |this, _, _, cx| this.delete_note(id, cx))));
+            .child(
+                IconButton::new(format!("review-edit-{ix}"), &theme, Icon::Edit)
+                    .size(28.0)
+                    .tooltip("Editar nota")
+                    .on_click(cx.listener(move |this, _, window, cx| this.edit_note(id, window, cx))),
+            )
+            .child(
+                IconButton::new(format!("review-del-{ix}"), &theme, Icon::Trash)
+                    .size(28.0)
+                    .tooltip("Eliminar nota")
+                    .on_click(cx.listener(move |this, _, _, cx| this.delete_note(id, cx))),
+            );
         div()
             .w_full()
             .rounded(px(12.0))
@@ -886,7 +921,7 @@ impl ReviewView {
                     .px(px(12.0))
                     .py(px(8.0))
                     .border_1()
-                    .border_color(if focused { c.accent } else { gpui::transparent_black() })
+                    .border_color(if focused { c.accent.into() } else { gpui::transparent_black() })
                     .child(ed.field.clone()),
             )
             .child(
@@ -1016,7 +1051,7 @@ impl ReviewView {
                     .gap(px(8.0))
                     .text_size(px(theme.typography.ui_size_md))
                     .text_color(c.muted)
-                    .child(icon(Icon::Files, 16.0, c.muted))
+                    .child(ui_kit::file_icon(ui_kit::FileIcon::for_path(std::path::Path::new(&file.path)), 16.0, c.muted))
                     .child(div().text_color(c.text).font_weight(FontWeight::MEDIUM).child(SharedString::from(file.path.clone())))
                     .child(SharedString::from(format!("+{} \u{2212}{}", file.added, file.removed))),
             )

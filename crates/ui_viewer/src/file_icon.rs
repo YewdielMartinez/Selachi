@@ -1,15 +1,8 @@
-//! File-type glyphs for the tree.
-//!
-//! The user designs the real per-type pixel icons (PLAN section 13: 16x16, the logo's bars and four
-//! greys). Until they exist every file uses the generic `Icon::Files` tinted by its category, and
-//! every directory `Icon::Folder`. `FileGlyph::svg_name` is the name each category's SVG must have
-//! when it lands (`assets/icons/file-<name>.svg`); the list is `FileGlyph::ALL`.
-//!
-//! TODO-SVG: file-rust, file-script, file-python, file-config, file-markdown, file-image,
-//! file-shell, file-web, file-lock, file-binary, file-text, file-generic, folder-open.
+//! File-type glyphs for the tree: the category (for the tint) of a file name. The icon itself is
+//! `ui_kit::FileIcon::for_name` (the `assets/icons/file-*.svg` set); directories use
+//! `Icon::Folder` / `Icon::FolderOpen`.
 
 use theme::{Mode, Rgba, Theme, rgb};
-use ui_kit::Icon;
 
 /// Category of a file for its tree glyph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -85,30 +78,6 @@ impl FileGlyph {
         }
     }
 
-    /// File stem of the future dedicated SVG (`assets/icons/file-<name>.svg`).
-    pub fn svg_name(self) -> &'static str {
-        match self {
-            FileGlyph::Rust => "file-rust",
-            FileGlyph::Script => "file-script",
-            FileGlyph::Python => "file-python",
-            FileGlyph::Config => "file-config",
-            FileGlyph::Markdown => "file-markdown",
-            FileGlyph::Image => "file-image",
-            FileGlyph::Shell => "file-shell",
-            FileGlyph::Web => "file-web",
-            FileGlyph::Lock => "file-lock",
-            FileGlyph::Binary => "file-binary",
-            FileGlyph::Text => "file-text",
-            FileGlyph::Generic => "file-generic",
-        }
-    }
-
-    /// The generic icon used until the dedicated one exists.
-    pub fn icon(self) -> Icon {
-        // TODO-SVG: replace with the per-type icon named by `svg_name`.
-        Icon::Files
-    }
-
     /// Tint: restrained ANSI hues for code, `muted` for the rest.
     pub fn tint(self, theme: &Theme) -> Rgba {
         let a = |i: usize| rgb(theme.terminal.ansi[i]);
@@ -128,11 +97,10 @@ impl FileGlyph {
     }
 }
 
-/// The per-type SVGs the host should ask the designer for.
+/// SVGs still missing: none (the designed set is `ui_kit::FileIcon::ALL` plus `folder-open`).
+/// `file-binary` and `file-text` map to `file-generic`.
 pub fn needed_svgs() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = FileGlyph::ALL.iter().map(|g| g.svg_name()).collect();
-    names.push("folder-open");
-    names
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -157,15 +125,5 @@ mod tests {
         assert_eq!(FileGlyph::of(".gitignore"), FileGlyph::Config);
         // a leading dot alone is not an extension
         assert_eq!(FileGlyph::of(".hidden"), FileGlyph::Generic);
-    }
-
-    #[test]
-    fn every_category_has_a_unique_svg_name() {
-        let names = needed_svgs();
-        let mut sorted = names.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), names.len());
-        assert!(names.iter().all(|n| n.starts_with("file-") || *n == "folder-open"));
     }
 }

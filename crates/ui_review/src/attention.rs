@@ -206,7 +206,7 @@ impl AttentionModel {
     /// The items in queue order.
     pub fn items(&self) -> Vec<&AttentionItem> {
         let mut v: Vec<&AttentionItem> = self.items.iter().collect();
-        v.sort_by(|a, b| (a.kind.rank(), a.since).cmp(&(b.kind.rank(), b.since)));
+        v.sort_by_key(|i| (i.kind.rank(), i.since));
         v
     }
 

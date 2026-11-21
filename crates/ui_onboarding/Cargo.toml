@@ -1,0 +1,22 @@
+[package]
+name = "ui_onboarding"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi first-run wizard (wave 5.9): welcome, agents, projects, appearance, terminal and summary steps that write config.toml through `store`"
+
+[lints]
+workspace = true
+
+[dependencies]
+agents_driver = { version = "0.1.0", path = "../agents_driver" }
+futures.workspace = true
+gpui.workspace = true
+image = { version = "0.25", default-features = false, features = ["gif"] }
+log.workspace = true
+store = { version = "0.0.1", path = "../store" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"

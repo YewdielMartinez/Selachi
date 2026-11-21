@@ -166,7 +166,7 @@ fn seed(path: &Path) -> anyhow::Result<()> {
         }
     }
     // Recent Claude activity (calibration before the snapshot, then a high current pace).
-    for (i, (ago, big)) in [(165 * MIN, 12u64), (130 * MIN, 14), (95 * MIN, 12), (50 * MIN, 16), (30 * MIN, 18), (12 * MIN, 14), (5 * MIN, 10)].into_iter().enumerate() {
+    for (i, (ago, big)) in [(165 * MIN, 4u64), (130 * MIN, 5), (95 * MIN, 4), (50 * MIN, 5), (30 * MIN, 5), (12 * MIN, 3), (5 * MIN, 2)].into_iter().enumerate() {
         put(
             &store,
             Agent::Claude,
@@ -178,6 +178,12 @@ fn seed(path: &Path) -> anyhow::Result<()> {
             DEMO_ROOT,
         );
     }
+
+    // Codex and OpenCode were used today as well.
+    for (i, ago) in [100 * MIN, 35 * MIN].into_iter().enumerate() {
+        put(&store, Agent::Codex, "gpt-6.1-sol", format!("xr-{i}"), now - ago, TokenCounts { input: 160_000, output: 70_000, cache_create: 0, cache_create_1h: 0, cache_read: 700_000 }, None, DEMO_ROOT);
+    }
+    put(&store, Agent::OpenCode, "deepseek-v4", "or-0".into(), now - 70 * MIN, TokenCounts { input: 250_000, output: 90_000, cache_create: 0, cache_create_1h: 0, cache_read: 0 }, Some("main"), DEMO_ROOT);
 
     let snap = |agent, window: &str, ago: i64, pct: f64, resets: i64, source: &str| RateLimitSnapshot {
         agent,

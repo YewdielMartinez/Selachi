@@ -55,9 +55,9 @@ mod tests {
 
     #[test]
     fn editor_goes_to_the_line() {
-        let a = editor_argv(Path::new("C:\p\a.rs"), Some(12));
-        assert_eq!(&a[1..], ["-g", "C:\p\a.rs:12"]);
-        let b = editor_argv(Path::new("C:\p\a.rs"), None);
-        assert_eq!(b[2], "C:\p\a.rs");
+        let a = editor_argv(Path::new(r"C:\p\a.rs"), Some(12));
+        assert_eq!(&a[1..], ["-g", r"C:\p\a.rs:12"]);
+        let b = editor_argv(Path::new(r"C:\p\a.rs"), None);
+        assert_eq!(b[2], r"C:\p\a.rs");
     }
 }

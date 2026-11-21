@@ -29,6 +29,11 @@ pub fn full_tokens(n: u64) -> String {
     out
 }
 
+/// `1 evento`, `28 eventos` (with the Spanish thousands separator).
+pub fn events_label(n: u64) -> String {
+    if n == 1 { "1 evento".to_string() } else { format!("{} eventos", full_tokens(n)) }
+}
+
 /// `4.1` -> `$4.10`, `0.004` -> `<$0.01`, `142.3` -> `$142`.
 pub fn format_cost(usd: f64) -> String {
     if !usd.is_finite() || usd < 0.0 {
@@ -144,6 +149,13 @@ mod tests {
         assert_eq!(full_tokens(999), "999");
         assert_eq!(full_tokens(1_234_567), "1.234.567");
         assert_eq!(full_tokens(12_345), "12.345");
+    }
+
+    #[test]
+    fn events_are_pluralised() {
+        assert_eq!(events_label(1), "1 evento");
+        assert_eq!(events_label(0), "0 eventos");
+        assert_eq!(events_label(1_234), "1.234 eventos");
     }
 
     #[test]

@@ -404,10 +404,10 @@ impl FileTreePanel {
             div().w(px(12.0)).flex_none().into_any_element()
         };
         let glyph: AnyElement = if node.is_dir {
-            icon(Icon::Folder, 16.0, c.muted).into_any_element()
+            icon(if node.expanded { Icon::FolderOpen } else { Icon::Folder }, 16.0, c.muted).into_any_element()
         } else {
             let g = FileGlyph::of(&node.name);
-            icon(g.icon(), 16.0, g.tint(&theme)).into_any_element()
+            ui_kit::file_icon(ui_kit::FileIcon::for_name(&node.name), 16.0, g.tint(&theme)).into_any_element()
         };
         let name_color = match mark {
             Some(GitMark::Deleted) => c.muted,
@@ -488,7 +488,7 @@ impl FileTreePanel {
             .cursor_pointer()
             .when(selected, |d| d.bg(c.surface_3))
             .when(!selected, |d| d.hover(move |s| s.bg(c.surface_2)))
-            .child(icon(g.icon(), 16.0, g.tint(&theme)))
+            .child(ui_kit::file_icon(ui_kit::FileIcon::for_name(&hit.name), 16.0, g.tint(&theme)))
             .child(
                 div()
                     .flex_none()

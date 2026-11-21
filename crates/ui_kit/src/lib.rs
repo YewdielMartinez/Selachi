@@ -27,6 +27,7 @@ mod agent_mark;
 mod assets;
 mod button;
 mod controls;
+mod file_icon;
 mod icon;
 mod list;
 mod logo;
@@ -43,6 +44,7 @@ pub use agent_mark::{AgentMark, agent_icon};
 pub use assets::Assets;
 pub use button::{Button, ButtonKind, GhostButton, IconButton};
 pub use controls::{Segment, SegmentedControl, Slider, SwatchRow, Toggle};
+pub use file_icon::{FileIcon, file_icon};
 pub use icon::{Icon, icon};
 pub use list::{
     ListRow, RowStatus, Spinner, StatusGlyph, UniformListScrollHandle, VirtualList,

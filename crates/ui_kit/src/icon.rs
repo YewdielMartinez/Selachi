@@ -28,11 +28,20 @@ pub enum Icon {
     Task,
     Procs,
     Doctor,
+    FolderOpen,
+    Usage,
+    Review,
+    Attention,
+    Send,
+    Trash,
+    Edit,
+    /// 10 px gutter marker of a review note (the other icons are 16 px).
+    Note,
 }
 
 impl Icon {
     /// Every icon, for galleries and tests.
-    pub const ALL: [Icon; 23] = [
+    pub const ALL: [Icon; 31] = [
         Icon::Terminal,
         Icon::Files,
         Icon::GitBranch,
@@ -56,6 +65,14 @@ impl Icon {
         Icon::Task,
         Icon::Procs,
         Icon::Doctor,
+        Icon::FolderOpen,
+        Icon::Usage,
+        Icon::Review,
+        Icon::Attention,
+        Icon::Send,
+        Icon::Trash,
+        Icon::Edit,
+        Icon::Note,
     ];
 
     /// File stem of the svg (`"git-branch"`).
@@ -84,6 +101,14 @@ impl Icon {
             Icon::Task => "task",
             Icon::Procs => "procs",
             Icon::Doctor => "doctor",
+            Icon::FolderOpen => "folder-open",
+            Icon::Usage => "usage",
+            Icon::Review => "review",
+            Icon::Attention => "attention",
+            Icon::Send => "send",
+            Icon::Trash => "trash",
+            Icon::Edit => "edit",
+            Icon::Note => "note",
         }
     }
 

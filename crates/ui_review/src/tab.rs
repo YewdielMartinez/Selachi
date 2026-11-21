@@ -79,8 +79,7 @@ impl TabModel for ReviewTab {
     }
 
     fn icon(&self, _cx: &App) -> TabIcon {
-        // TODO-SVG: review.svg (a diff with a speech mark), 16x16.
-        TabIcon::Kind(Icon::GitBranch)
+        TabIcon::Kind(Icon::Review)
     }
 
     fn subtitle(&self, cx: &App) -> Option<SharedString> {

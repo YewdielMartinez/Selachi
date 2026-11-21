@@ -68,7 +68,6 @@ impl TabModel for ViewerTab {
     }
 
     fn icon(&self, _cx: &App) -> TabIcon {
-        // TODO-SVG: per-file-type icon (see `file_icon::needed_svgs`).
         TabIcon::Kind(Icon::Files)
     }
 

@@ -155,7 +155,7 @@ mod tests {
         assert!(md.starts_with("He revisado los cambios del worktree y tengo 3 notas."), "{md}");
         let (ia, ib) = (md.find("## `src/a.rs`").unwrap(), md.find("## `src/b.rs`").unwrap());
         assert!(ia < ib, "files in path order");
-        assert_eq!(md.matches("## `src/").count(), 2, "one header per file");
+        assert_eq!(md.matches("\n## `src/").count(), 2, "one header per file");
         let (i3, i20) = (md.find("### `src/b.rs:3`").unwrap(), md.find("### `src/b.rs:20`").unwrap());
         assert!(i3 < i20, "notes in line order");
         assert!(md.contains("> primera") && md.contains("> segunda") && md.contains("> tercera"));

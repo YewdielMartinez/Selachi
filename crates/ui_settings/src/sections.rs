@@ -1,0 +1,424 @@
+//! The simple sections: General, Appearance, Git, Processes and About.
+
+use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
+use store::config::{AutoStop, ThemeMode};
+use store::Density;
+use theme::{Rgba, rgb};
+use ui_kit::{Button, GhostButton, Slider, SwatchRow};
+
+use crate::extras::LANGUAGES;
+use crate::keys;
+use crate::ui::{self, PillTone, decimal, note, row, status_pill, value_label};
+use crate::view::{Section, SettingsEvent, SettingsView};
+
+/// Accent choices (the first is Selachi's brand accent, the default).
+pub const ACCENTS: [u32; 8] = [0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2];
+
+impl SettingsView {
+    pub(crate) fn general(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let t = self.theme;
+        let languages: Vec<(String, String)> =
+            LANGUAGES.iter().map(|(id, name)| ((*id).to_string(), (*name).to_string())).collect();
+        let lang = self.select(cx, "general-lang", languages, &self.extras.language.clone(), |s, v, cx| {
+            let v = v.to_string();
+            s.edit_extras("general.language", cx, |e| e.language = v);
+        });
+        let restore = self.toggle(cx, "restore-session", self.cfg.session.restore, |s, on, cx| {
+            s.edit_cfg(cx, |c| c.session.restore = on);
+        });
+        let confirm = self.toggle(cx, "confirm-close", self.extras.confirm_close_running, |s, on, cx| {
+            s.edit_extras("general.confirm_close_running", cx, |e| e.confirm_close_running = on);
+        });
+        let chord = keys::effective(&self.catalog, &self.cfg.keybindings, "window.fullscreen");
+        let f11 = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .child(status_pill(&t, keys::display_chord(&chord), PillTone::Neutral))
+            .child(GhostButton::new("fullscreen-change", &t, "Cambiar").on_click(cx.listener(|s, _, _, cx| {
+                s.set_section(Section::Keyboard, cx);
+                s.start_capture("window.fullscreen", cx);
+            })));
+        vec![
+            ui::group(
+                &t,
+                None,
+                vec![
+                    row(
+                        &t,
+                        narrow,
+                        "Idioma",
+                        Some("Solo español por ahora; el resto de idiomas llegará más adelante.".into()),
+                        lang,
+                        self.error_for("general.language"),
+                    )
+                    .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Restaurar la sesión al abrir",
+                        Some("Reabre las pestañas, los paneles y sus carpetas. Nunca se guarda el contenido de la terminal.".into()),
+                        restore,
+                        None,
+                    )
+                    .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Confirmar al cerrar con comandos en curso",
+                        Some("Avisa antes de cerrar una pestaña o la ventana si algo se sigue ejecutando.".into()),
+                        confirm,
+                        None,
+                    )
+                    .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Pantalla completa",
+                        Some("Oculta la barra del sistema; la de Selachi se mantiene.".into()),
+                        f11,
+                        None,
+                    )
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        ]
+    }
+
+    pub(crate) fn appearance(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let t = self.theme;
+        let a = self.cfg.appearance.clone();
+        let layout = self.cfg.layout.resolve();
+
+        let mode_ix = match a.mode {
+            ThemeMode::System => 0,
+            ThemeMode::Dark => 1,
+            ThemeMode::Light => 2,
+            ThemeMode::Oled => 3,
+        };
+        let mode = self.segmented(cx, "theme-mode", ["Sistema", "Oscuro", "Claro", "OLED"], mode_ix, |s, ix, cx| {
+            let m = [ThemeMode::System, ThemeMode::Dark, ThemeMode::Light, ThemeMode::Oled][ix.min(3)];
+            s.edit_cfg(cx, |c| c.appearance.mode = m);
+        });
+
+        let colors: Vec<Rgba> = ACCENTS.iter().map(|h| rgb(*h)).collect();
+        let selected = ACCENTS.iter().position(|h| {
+            store::config::parse_hex_color(&a.accent).is_some_and(|(r, g, b)| (u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) == *h)
+        });
+        let this = cx.entity();
+        let swatches = SwatchRow::new("accent", &t, colors).selected(selected).on_select(move |ix, _, cx| {
+            this.update(cx, |s, cx| {
+                let hex = format!("#{:06X}", ACCENTS[ix.min(ACCENTS.len() - 1)]);
+                s.errors.remove("accent_hex");
+                s.edit_cfg(cx, |c| c.appearance.accent = hex.clone());
+                // Keep the hex field in step with the swatch.
+                if let Some(f) = s.fields.get("accent_hex") {
+                    f.update(cx, |f, cx| f.set_text(&hex, cx));
+                }
+                s.sync_invalid(cx);
+            });
+        });
+        let accent_control = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(14.0))
+            .flex_wrap()
+            .child(swatches)
+            .child(self.input(cx, "accent_hex", "#00AAFF", 104.0, true));
+
+        let ui_font = self.input(cx, "ui_font", "DM Sans", 200.0, false);
+        let mono_font = self.input(cx, "mono_font", "Geist Mono", 200.0, false);
+
+        let size = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                Slider::new("mono-size", &t)
+                    .range(8.0, 24.0)
+                    .step(0.5)
+                    .default_value(13.0)
+                    .value(a.mono_size as f32)
+                    .width(if narrow { 200.0 } else { 220.0 })
+                    .on_change({
+                        let this = cx.entity();
+                        move |v, _, cx| {
+                            this.update(cx, |s, cx| s.edit_cfg(cx, |c| c.appearance.mono_size = f64::from(v)));
+                        }
+                    }),
+            )
+            .child(value_label(&t, format!("{} pt", decimal(a.mono_size, 1).trim_end_matches(",0"))));
+        let leading = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                Slider::new("line-height", &t)
+                    .range(1.0, 2.0)
+                    .step(0.05)
+                    .default_value(1.3)
+                    .value(a.line_height as f32)
+                    .width(if narrow { 200.0 } else { 220.0 })
+                    .on_change({
+                        let this = cx.entity();
+                        move |v, _, cx| {
+                            let v = (f64::from(v) * 100.0).round() / 100.0;
+                            this.update(cx, |s, cx| s.edit_cfg(cx, |c| c.appearance.line_height = v));
+                        }
+                    }),
+            )
+            .child(value_label(&t, decimal(a.line_height, 2)));
+
+        let density = self.segmented(
+            cx,
+            "density",
+            ["Compacta", "Cómoda"],
+            usize::from(layout.density == Density::Comfortable),
+            |s, ix, cx| {
+                s.edit_cfg(cx, |c| {
+                    let mut r = c.layout.resolve();
+                    r.density = if ix == 0 { Density::Compact } else { Density::Comfortable };
+                    c.layout.set_resolved(&r);
+                });
+            },
+        );
+        let glass = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                Slider::new("translucency", &t)
+                    .range(0.0, 100.0)
+                    .step(5.0)
+                    .default_value(0.0)
+                    .value(f32::from(layout.sidebar_translucency))
+                    .width(if narrow { 200.0 } else { 220.0 })
+                    .on_change({
+                        let this = cx.entity();
+                        move |v, _, cx| {
+                            let pct = v.round().clamp(0.0, 100.0) as u8;
+                            this.update(cx, |s, cx| {
+                                s.edit_cfg(cx, |c| {
+                                    let mut r = c.layout.resolve();
+                                    r.sidebar_translucency = pct;
+                                    c.layout.set_resolved(&r);
+                                });
+                            });
+                        }
+                    }),
+            )
+            .child(value_label(&t, format!("{} %", layout.sidebar_translucency)));
+
+        let layout_note = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .child(note(
+                &t,
+                "El preset, las pestañas, el panel derecho y las divisiones se ajustan en el panel de layout.",
+            ))
+            .child(Button::tonal("open-layout", &t, "Más opciones de layout").on_click(cx.listener(|_, _, _, cx| {
+                cx.emit(SettingsEvent::OpenLayoutPanel);
+            })));
+
+        vec![
+            ui::group(
+                &t,
+                Some("Tema"),
+                vec![
+                    row(&t, narrow, "Modo", Some("«Sistema» sigue el modo claro u oscuro de Windows.".into()), mode, None)
+                        .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Color de acento",
+                        Some("Cursor, foco, progreso y medidores. El azul de las acciones no cambia.".into()),
+                        accent_control,
+                        self.error_for("accent_hex"),
+                    )
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+            ui::group(
+                &t,
+                Some("Tipografía"),
+                vec![
+                    row(&t, narrow, "Fuente de la interfaz", None, ui_font, self.error_for("ui_font")).into_any_element(),
+                    row(&t, narrow, "Fuente de la terminal", None, mono_font, self.error_for("mono_font"))
+                        .into_any_element(),
+                    row(&t, narrow, "Tamaño de la terminal", None, size, self.error_for("appearance.mono_size"))
+                        .into_any_element(),
+                    row(&t, narrow, "Interlineado", None, leading, self.error_for("appearance.line_height"))
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+            ui::group(
+                &t,
+                Some("Superficies"),
+                vec![
+                    row(&t, narrow, "Densidad", Some("Espaciado de listas y barras.".into()), density, None)
+                        .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Translucidez de la barra lateral",
+                        Some("Mica/Acrylic de Windows. 0 % = opaca.".into()),
+                        glass,
+                        None,
+                    )
+                    .into_any_element(),
+                    ui::plain_row(layout_note).into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        ]
+    }
+
+    pub(crate) fn git(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let t = self.theme;
+        let confirm = self.toggle(cx, "git-confirm", self.cfg.git.confirm_sensitive, |s, on, cx| {
+            s.edit_cfg(cx, |c| c.git.confirm_sensitive = on);
+        });
+        let editor = self.input(cx, "external_editor", "code, cursor, notepad…", 240.0, true);
+        vec![
+            ui::group(
+                &t,
+                None,
+                vec![
+                    row(
+                        &t,
+                        narrow,
+                        "Confirmar operaciones sensibles",
+                        Some("Pregunta antes de un force-push, un reset --hard, borrar una rama y similares.".into()),
+                        confirm,
+                        None,
+                    )
+                    .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Editor externo",
+                        Some("Comando para «Abrir en el editor». Vacío = la aplicación predeterminada de Windows.".into()),
+                        editor,
+                        self.error_for("external_editor"),
+                    )
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        ]
+    }
+
+    pub(crate) fn processes(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let t = self.theme;
+        let ix = match self.cfg.processes.auto_stop_on_thread_close {
+            AutoStop::Ask => 0,
+            AutoStop::Always => 1,
+            AutoStop::Never => 2,
+        };
+        let control = self.segmented(cx, "autostop", ["Preguntar", "Detener siempre", "No detener"], ix, |s, ix, cx| {
+            let v = [AutoStop::Ask, AutoStop::Always, AutoStop::Never][ix.min(2)];
+            s.edit_cfg(cx, |c| c.processes.auto_stop_on_thread_close = v);
+        });
+        vec![
+            ui::group(
+                &t,
+                None,
+                vec![
+                    row(
+                        &t,
+                        narrow,
+                        "Al cerrar un hilo con procesos en marcha",
+                        Some(
+                            "Servidores de desarrollo, watchers y otros procesos que lanzó el agente. «No detener» los deja huérfanos y te avisa."
+                                .into(),
+                        ),
+                        control,
+                        None,
+                    )
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        ]
+    }
+
+    pub(crate) fn about(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let t = self.theme;
+        let c = t.colors;
+        let dir = self.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let db = store::paths::state_db_path_in(&dir);
+        let path_text = |p: &std::path::Path| {
+            div()
+                .max_w(px(460.0))
+                .text_size(px(12.0))
+                .font_family(t.typography.mono_family)
+                .text_color(c.muted)
+                .child(SharedString::from(p.display().to_string()))
+        };
+        let open_dir = dir.clone();
+        let open = Button::tonal("open-config-dir", &t, "Abrir carpeta de configuración").on_click(
+            cx.listener(move |_, _, _, _| open_folder(&open_dir)),
+        );
+        let rerun = Button::tonal("rerun-onboarding", &t, "Volver a configurar").on_click(cx.listener(|_, _, _, cx| {
+            cx.emit(SettingsEvent::RerunOnboarding);
+        }));
+        vec![
+            ui::group(
+                &t,
+                None,
+                vec![
+                    row(&t, narrow, "Selachi", Some("Terminal para agentes de IA.".into()), status_pill(&t, format!("v{}", self.version), PillTone::Neutral), None)
+                        .into_any_element(),
+                    row(&t, narrow, "Configuración", Some("config.toml; se recarga en caliente.".into()), path_text(&self.path), None)
+                        .into_any_element(),
+                    row(&t, narrow, "Datos", Some("Historial, proyectos y sesión (state.db).".into()), path_text(&db), None)
+                        .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+            ui::group(
+                &t,
+                Some("Acciones"),
+                vec![
+                    row(&t, narrow, "Carpeta de configuración", Some("Se abre en el Explorador de archivos.".into()), open, None)
+                        .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Primer arranque",
+                        Some("Repite el asistente: agentes, proyectos, apariencia y terminal. No borra nada.".into()),
+                        rerun,
+                        None,
+                    )
+                    .into_any_element(),
+                ],
+            )
+            .into_any_element(),
+        ]
+    }
+}
+
+/// Open a folder in the platform file manager.
+fn open_folder(dir: &std::path::Path) {
+    #[cfg(windows)]
+    let program = "explorer";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let program = "xdg-open";
+    if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
+        eprintln!("ui_settings: could not open {}: {e}", dir.display());
+    }
+}

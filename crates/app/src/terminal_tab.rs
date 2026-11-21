@@ -26,6 +26,9 @@ pub enum TermRequest {
     OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32>, is_dir: bool },
     /// "Arreglar con agente": a prompt already redacted, plus how many secrets were hidden.
     AskAgent { markdown: String, redactions: usize },
+    /// A command ended in a way that deserves the user's attention (failed, long). The shell
+    /// decides whether to queue it (not when the user is looking at the tab).
+    Attention { id: String, label: String, kind: ui_review::AttentionKind },
 }
 
 pub struct TerminalTab {
@@ -39,12 +42,15 @@ pub struct TerminalTab {
 impl TerminalTab {
     /// Starts a shell in `cwd` (`None` = the process directory).
     pub fn new(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_view(cx.new(|cx| TerminalView::new(theme, cwd, window, cx)), cx)
+        // The job must exist before the shell is spawned: the shell is born inside it.
+        let job = crate::services::open_tab_job(cx.entity_id().as_u64(), cwd.as_deref(), cx);
+        Self::with_view(cx.new(|cx| TerminalView::new_in_job(theme, cwd, job, window, cx)), cx)
     }
 
     /// A restored tab: the shell starts the first time the tab is painted.
     pub fn new_deferred(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_view(cx.new(|cx| TerminalView::new_deferred(theme, cwd, window, cx)), cx)
+        let job = crate::services::open_tab_job(cx.entity_id().as_u64(), cwd.as_deref(), cx);
+        Self::with_view(cx.new(|cx| TerminalView::new_deferred_in_job(theme, cwd, job, window, cx)), cx)
     }
 
     fn with_view(view: Entity<TerminalView>, cx: &mut Context<Self>) -> Self {
@@ -91,6 +97,15 @@ impl TerminalTab {
             },
             TerminalEvent::CommandStarted => self.set_status(Some(RowStatus::Working), cx),
             TerminalEvent::BlockFinished(block) => {
+                if let Some(kind) = attention_kind(block) {
+                    let id = format!("block-{}-{}", cx.entity_id().as_u64(), block.id.0);
+                    let mut label = self.title(cx).to_string();
+                    if let Some(cmd) = block.command.as_deref() {
+                        let (clean, _) = term_core::redact(cmd);
+                        label = format!("{label} · {}", clean.chars().take(48).collect::<String>());
+                    }
+                    cx.emit(TermRequest::Attention { id, label, kind });
+                }
                 let policy = term_core::LongCommandPolicy::default();
                 if term_core::should_notify(block, crate::notify::window_active(), &policy) {
                     crate::notify::long_command_toast(cx.entity_id().as_u64(), block);
@@ -116,6 +131,21 @@ impl TerminalTab {
                 self.set_status(Some(status), cx);
             },
         }
+    }
+}
+
+/// What a finished block means for the attention queue: a failure, or a long success.
+fn attention_kind(block: &term_core::Block) -> Option<ui_review::AttentionKind> {
+    match block.state {
+        term_core::BlockState::Failed => {
+            Some(ui_review::AttentionKind::Failed { exit_code: block.exit_code.unwrap_or(-1) })
+        },
+        term_core::BlockState::Succeeded
+            if block.duration.is_some_and(|d| d >= term_core::LongCommandPolicy::default().min_duration) =>
+        {
+            Some(ui_review::AttentionKind::LongCommandDone)
+        },
+        _ => None,
     }
 }
 

@@ -6,9 +6,8 @@
 //! scrollback, environment variables or anything the shells printed. The module is pure (no gpui)
 //! so the JSON round trip and the validation are unit tested.
 //!
-//! `[session] restore = true|false` in `config.toml` turns the restore off. `store::Config` has no
-//! such field yet, so [`restore_enabled`] reads the key from the raw file text and treats a
-//! missing key (or file) as `true`.
+//! `[session] restore = true|false` in `config.toml` (`store::Config::session`) turns the restore
+//! off. Only terminals are saved: viewer tabs are files that reopen in one click.
 
 use std::path::PathBuf;
 
@@ -94,15 +93,6 @@ impl SessionState {
     }
 }
 
-/// `[session] restore` from the raw text of `config.toml`; `true` when absent or unreadable.
-pub fn restore_enabled(config_text: &str) -> bool {
-    config_text
-        .parse::<toml::Table>()
-        .ok()
-        .and_then(|t| t.get("session")?.get("restore")?.as_bool())
-        .unwrap_or(true)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,14 +159,5 @@ mod tests {
         let back = SessionState::from_json(&s.to_json()).unwrap();
         assert_eq!(back.tabs.len(), MAX_TABS);
         assert_eq!(back.panes, vec![Some(0), None]);
-    }
-
-    #[test]
-    fn restore_flag_defaults_to_true() {
-        assert!(restore_enabled(""));
-        assert!(restore_enabled("[layout]\npreset = \"zen\""));
-        assert!(restore_enabled("[session]\nrestore = true"));
-        assert!(!restore_enabled("[session]\nrestore = false"));
-        assert!(restore_enabled("this is not toml ["));
     }
 }

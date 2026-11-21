@@ -6,10 +6,14 @@
 mod adapt;
 mod agents;
 mod app_shell;
+mod block_layout;
+mod block_ui;
 mod git_monitor;
 mod git_panel;
 mod grouping;
+mod hint;
 mod layout_host;
+mod links;
 mod mem;
 mod notify;
 mod palette;
@@ -25,6 +29,7 @@ mod terminal_tab;
 mod terminal_view;
 mod titlebar;
 mod usage_monitor;
+mod viewer_host;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,9 +45,9 @@ use theme::Theme;
 
 use crate::app_shell::{
     AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, SessionBoot, ToggleFullscreen, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7,
-    Jump8, Jump9, NewTab, NextTab, PrevTab, ToggleLayoutPanel, ToggleTheme,
+    Jump8, Jump9, NewTab, NextAttention, NextTab, PrevTab, ToggleLayoutPanel, ToggleTheme,
 };
-use crate::git_panel::{GitPanelProvider, Variant};
+use crate::git_panel::ContextPanelProvider;
 use crate::services::Services;
 
 /// Debounce of the `config.toml` watcher: editors write in bursts.
@@ -57,7 +62,6 @@ fn boot_config() -> ConfigBoot {
     for w in &load.warnings {
         log::warn!("config.toml: {w}");
     }
-    let load_path = load.path.clone();
     let config = Arc::new(load.config);
     let watcher = if load.path.as_os_str().is_empty() {
         None
@@ -70,12 +74,13 @@ fn boot_config() -> ConfigBoot {
             },
         }
     };
-    ConfigBoot { config, watcher, session: boot_session(&load_path) }
+    let restore = config.session.restore;
+    ConfigBoot { config, watcher, session: boot_session(restore) }
 }
 
 /// Opens the state database and, if `[session] restore` is not false, loads the saved session.
 /// Any failure just means "start fresh": a session is a convenience, never a reason not to start.
-fn boot_session(config_path: &std::path::Path) -> SessionBoot {
+fn boot_session(restore_enabled: bool) -> SessionBoot {
     let db = match StateDb::open_default() {
         Ok(db) => Some(db),
         Err(e) => {
@@ -83,8 +88,7 @@ fn boot_session(config_path: &std::path::Path) -> SessionBoot {
             None
         },
     };
-    let text = std::fs::read_to_string(config_path).unwrap_or_default();
-    let restore = if session::restore_enabled(&text) {
+    let restore = if restore_enabled {
         db.as_ref()
             .and_then(|d| d.load_session_layout().ok().flatten())
             .and_then(|s| session::SessionState::from_json(&s.json))
@@ -98,9 +102,13 @@ fn boot_session(config_path: &std::path::Path) -> SessionBoot {
 /// here too; an id that is registered twice is replaced by the last registration.
 fn register_panels(cx: &mut App) {
     let mut registry = PanelRegistry::default();
-    registry.register(GitPanelProvider(Variant::Git));
-    registry.register(GitPanelProvider(Variant::Context));
     let services = Services::new(cx);
+    // Rail order: files, git, context, processes, doctor.
+    registry.register(services.files.clone());
+    registry.register(ui_git::GitPanelProvider::new(services.git.clone()));
+    registry.register(ContextPanelProvider);
+    registry.register(ui_usage::UsagePanelProvider::new(services.usage.clone()));
+    registry.register(ui_review::AttentionPanelProvider::new(services.attention.clone()));
     registry.register(ui_procs::ProcsPanelProvider::new(services.procs.clone()));
     registry.register(ui_doctor::DoctorPanelProvider::new(services.doctor.clone(), env!("CARGO_PKG_VERSION")));
     cx.set_global(services);
@@ -116,6 +124,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PrevTab, None),
         KeyBinding::new("ctrl-shift-l", ToggleLayoutPanel, None),
         KeyBinding::new("f11", ToggleFullscreen, None),
+        KeyBinding::new("ctrl-shift-a", NextAttention, None),
         KeyBinding::new("ctrl-1", Jump1, None),
         KeyBinding::new("ctrl-2", Jump2, None),
         KeyBinding::new("ctrl-3", Jump3, None),
@@ -142,6 +151,9 @@ fn main() {
         }
 
         bind_keys(cx);
+        ui_git::init(cx);
+        ui_viewer::bind_keys(cx);
+        ui_review::init(cx);
         register_panels(cx);
         // The layout popover's content: the real `ui_layout` panel.
         ui_layout::init(cx);

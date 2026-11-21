@@ -22,7 +22,7 @@ use crate::data::{
     agent_name, breakdown_tooltip, cost_label, cost_short, forecast_lines, freshness_label,
     limit_agents, limit_state, local_now, now_ms, reset_label,
 };
-use crate::fmt::{compact_tokens, full_tokens};
+use crate::fmt::{compact_tokens, events_label};
 use crate::model::UsageModel;
 
 /// Panel id for the registry.
@@ -54,9 +54,7 @@ impl PanelProvider for UsagePanelProvider {
     }
 
     fn icon(&self) -> Icon {
-        // TODO-SVG: assets/icons/usage.svg (16x16, white fill) once the user draws it; until then
-        // the clock reads as "consumption over time".
-        Icon::History
+        Icon::Usage
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {
@@ -208,12 +206,20 @@ fn agent_card(theme: &Theme, i: usize, t: &AgentTotals) -> AnyElement {
                                 .child(compact_tokens(t.billable())),
                         ),
                 )
-                .child(muted_text(
-                    theme,
-                    ty.ui_size_sm,
-                    format!("tokens facturables · {} eventos", full_tokens(t.events)),
-                ))
-                .child(muted_text(theme, ty.ui_size_sm, cost_label(&t.cost))),
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_x(px(12.0))
+                        .gap_y(px(2.0))
+                        .child(muted_text(
+                            theme,
+                            ty.ui_size_sm,
+                            format!("tokens facturables · {}", events_label(t.events)),
+                        ))
+                        .child(muted_text(theme, ty.ui_size_sm, cost_label(&t.cost))),
+                ),
         )
         .into_any_element()
 }
@@ -377,7 +383,7 @@ fn branches_block(
             ListRow::new(("usage-branch-row", i), theme)
                 .icon(Icon::GitBranch)
                 .title(name)
-                .subtitle(format!("{} tokens · {} eventos", compact_tokens(billable), full_tokens(b.events)))
+                .subtitle(format!("{} tokens · {}", compact_tokens(billable), events_label(b.events)))
                 .meta(cost_short(b.est_cost_usd, b.cost_complete)),
         );
         if partial {
@@ -513,36 +519,41 @@ impl Render for UsagePanel {
 
         let column = || div().flex().flex_col().gap(px(12.0));
         let body = if wide {
-            // Main / bottom: two columns, capped like the other reading panels.
-            div().w_full().max_w(px(860.0)).flex().flex_row().items_start().gap(px(16.0)).child(
-                column().flex_1().min_w_0().children(left),
-            ).child(column().flex_1().min_w_0().children(right))
+            // Main / bottom: two columns.
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap(px(16.0))
+                .child(column().flex_1().min_w_0().children(left))
+                .child(column().flex_1().min_w_0().children(right))
         } else {
             column().w_full().children(left).children(right)
         };
+
+        // Reading panels are capped at 860 px and centered (DESIGN.md, responsive).
+        let inner = div()
+            .w_full()
+            .when(wide, |d| d.max_w(px(860.0)))
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(header)
+            .child(div().id("usage-scroll").flex_1().min_h_0().overflow_y_scroll().pb(px(pad)).child(body));
 
         div()
             .size_full()
             .flex()
             .flex_col()
-            .gap(px(12.0))
+            .items_center()
             .pt(px(pad))
             .px(px(pad))
             .font_family(ty.ui_family)
             .text_size(px(ty.ui_size_md))
             .text_color(c.text)
-            .child(header)
-            .child(
-                div()
-                    .id("usage-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .pb(px(pad))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(body),
-            )
+            .child(inner)
     }
 }

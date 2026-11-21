@@ -15,7 +15,11 @@ use proc_svc::Tracker;
 use ui_doctor::DoctorModel;
 use ui_git::{ExecMode, GitModel};
 use ui_procs::{ProcsModel, SharedTracker};
+use ui_review::AttentionModel;
+use ui_usage::UsageModel;
 use ui_viewer::{FileTreeProvider, ViewerEvent};
+
+use crate::terminal_view::JobCtx;
 
 /// One shared [`Tracker`]: every tab registers its job here (`ui_procs::open_owner`).
 #[derive(Clone)]
@@ -25,6 +29,10 @@ pub struct Services {
     pub doctor: Entity<DoctorModel>,
     /// The git panel's model (one for the app; it follows the project root the shell passes).
     pub git: Entity<GitModel>,
+    /// The usage panel's model; the status-bar monitor tells it when a scan ended.
+    pub usage: Entity<UsageModel>,
+    /// The attention queue (failed / long commands now; agents and chat later).
+    pub attention: Entity<AttentionModel>,
     /// The "files" panel provider (shared: the shell feeds it git markers).
     pub files: FileTreeProvider,
     /// Events of the file tree, taken once by the shell.
@@ -44,10 +52,35 @@ impl Services {
             m.set_exec_mode(ExecMode::Terminal);
             m
         });
+        let usage = cx.new(|_| UsageModel::new());
+        if let Some(path) = crate::usage_monitor::db_path() {
+            usage.update(cx, |m, cx| m.set_db_path(path, cx));
+        }
+        let attention = cx.new(|_| AttentionModel::new());
         let (tx, rx) = unbounded();
         let files = FileTreeProvider::new().on_event(move |ev, _| {
             let _ = tx.unbounded_send(ev.clone());
         });
-        Self { tracker, procs, doctor, git, files, viewer_events: Rc::new(RefCell::new(Some(rx))) }
+        Self { tracker, procs, doctor, git, usage, attention, files, viewer_events: Rc::new(RefCell::new(Some(rx))) }
+    }
+}
+
+/// Gives a new tab its process job (the `procs` panel groups by it) **before** its shell is
+/// spawned, so the shell is born inside it. `None` when the tracker is unavailable: the tab then
+/// runs untracked, as before.
+pub fn open_tab_job(owner: u64, cwd: Option<&std::path::Path>, cx: &mut App) -> Option<JobCtx> {
+    let services = cx.try_global::<Services>().cloned()?;
+    let label = cwd.map_or_else(|| "Terminal".to_string(), crate::paths::tab_label);
+    let meta = proc_svc::OwnerMeta { agent: None, label, cwd: cwd.map(std::path::Path::to_path_buf) };
+    match ui_procs::open_owner(&services.tracker, owner, meta, proc_svc::JobOptions::default()) {
+        Ok(job) => {
+            let handle = job.job_handle as isize;
+            services.procs.update(cx, |m, cx| m.watch_job_events(job.events, cx));
+            Some(JobCtx { tracker: services.tracker.clone(), owner, handle })
+        },
+        Err(e) => {
+            log::warn!("could not create the process job of a tab: {e}");
+            None
+        },
     }
 }

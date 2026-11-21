@@ -12,7 +12,7 @@ use gpui::{
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
     UTF16Selection, Window, div, font, prelude::*, px,
 };
-use term_core::{Block, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, encode_key};
+use term_core::{Block, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, SpawnOptions, encode_key};
 use theme::{Radius, TerminalColors, Theme, Typography};
 
 use crate::app_shell::{RAIL_W, TAB_H, TERM_PAD};
@@ -35,6 +35,17 @@ pub enum TerminalEvent {
     OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32>, is_dir: bool },
     /// "Arreglar con agente" on a failed block: the block and its output (not redacted yet).
     FixWithAgent { block: Block, output: String },
+}
+
+/// The process job a terminal's shell is born in (`proc_svc` owner of its tab): the shell and every
+/// process it starts are tracked, and what outlives the tab is reported as an orphan.
+#[derive(Clone)]
+pub struct JobCtx {
+    pub tracker: ui_procs::SharedTracker,
+    /// Owner id in the tracker (the tab's entity id).
+    pub owner: u64,
+    /// Raw handle of the owner's job (owned by the tracker; valid until the owner is removed).
+    pub handle: isize,
 }
 
 /// Environment the shell integration reads (`[terminal.completion]` of `config.toml`). The shell
@@ -123,22 +134,55 @@ pub struct TerminalView {
     /// Text sent to a deferred tab before its shell exists; written as soon as it starts.
     queued: Vec<u8>,
     _pump: Option<Task<()>>,
+    /// The job the shell is born in, if the app tracks processes.
+    job: Option<JobCtx>,
     /// Command blocks: gutter, folding, the hover bar and Ctrl+click paths.
     pub(crate) block_ui: BlockUi,
 }
 
 impl TerminalView {
     /// `cwd` is the directory the shell starts in (`None` = the process directory).
+    #[allow(dead_code)] // the `empty_window` example has no job tracker
     pub fn new(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::build(theme, cwd, false, window, cx)
+        Self::build(theme, cwd, false, None, window, cx)
+    }
+
+    /// Like [`TerminalView::new`], with the shell born in `job`.
+    pub fn new_in_job(
+        theme: Theme,
+        cwd: Option<PathBuf>,
+        job: Option<JobCtx>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(theme, cwd, false, job, window, cx)
     }
 
     /// Like [`TerminalView::new`] but the shell starts the first time the view is painted.
+    #[allow(dead_code)] // the `empty_window` example has no job tracker
     pub fn new_deferred(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::build(theme, cwd, true, window, cx)
+        Self::build(theme, cwd, true, None, window, cx)
     }
 
-    fn build(theme: Theme, cwd: Option<PathBuf>, defer: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Deferred, with the shell born in `job` when it starts.
+    pub fn new_deferred_in_job(
+        theme: Theme,
+        cwd: Option<PathBuf>,
+        job: Option<JobCtx>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(theme, cwd, true, job, window, cx)
+    }
+
+    fn build(
+        theme: Theme,
+        cwd: Option<PathBuf>,
+        defer: bool,
+        job: Option<JobCtx>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         log::info!("[startup] TerminalView::new at {} since process start", crate::mem::uptime_label());
         let focus_handle = cx.focus_handle();
         if !defer {
@@ -157,7 +201,7 @@ impl TerminalView {
         let shell_name: SharedString =
             program.strip_suffix(".exe").unwrap_or(&program).to_string().into();
         let cfg = SessionConfig {
-            program: program.clone(),
+            program,
             args,
             cwd: cwd.clone(),
             cols,
@@ -187,6 +231,7 @@ impl TerminalView {
             pending: None,
             queued: Vec::new(),
             _pump: None,
+            job,
             block_ui: BlockUi::default(),
         };
 
@@ -217,8 +262,17 @@ impl TerminalView {
         let program = cfg.program.clone();
         let (cols, rows) = (cfg.cols, cfg.rows);
         let env = cx.try_global::<TermEnv>().map(|e| e.0.clone()).unwrap_or_default();
-        match Session::spawn_with_env(cfg, env) {
+        let options = SpawnOptions { env, job: view.job.as_ref().map(|j| j.handle) };
+        match Session::spawn_with_options(cfg, options) {
             Ok((session, mut rx)) => {
+                // The shell is in the job already: record it as the owner's root process.
+                if let (Some(job), Some(pid)) = (&view.job, session.pid()) {
+                    let mut tracker = job.tracker.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Err(e) = tracker.register_root(job.owner, pid) {
+                        log::warn!("could not register the shell (pid {pid}) as a root: {e}");
+                    }
+                }
+                log::info!("shell job attachment: {:?}", session.job_attachment());
                 log::info!(
                     "[startup] spawned {program} (pid {:?}) at {cols}x{rows}, {} since process start",
                     session.pid(),

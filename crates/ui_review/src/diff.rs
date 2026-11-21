@@ -339,7 +339,7 @@ pub fn load_source(source: &ReviewSource) -> Result<Vec<FileDiff>, String> {
     };
     // Drop files whose diff is empty (touched and reverted) unless they are binary / huge.
     files.retain(|f| f.body != FileBody::Text || !f.rows.is_empty());
-    files.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+    files.sort_by_cached_key(|f| f.path.to_lowercase());
     Ok(files)
 }
 
@@ -467,7 +467,7 @@ mod tests {
         std::fs::write(root.join("a.txt"), "uno\ndos\n").unwrap();
         std::fs::write(root.join("c.txt"), "nuevo\n").unwrap();
 
-        let files = load_source(&ReviewSource::SinceCheckpoint { root: root.to_path_buf(), id: cp.id.clone() }).unwrap();
+        let files = load_source(&ReviewSource::SinceCheckpoint { root: root.to_path_buf(), id: cp.id }).unwrap();
         let names: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(names, vec!["a.txt", "c.txt"], "{files:?}");
         assert_eq!(files[0].added, 1);

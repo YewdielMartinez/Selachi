@@ -18,6 +18,8 @@ pub mod id {
     pub const LAYOUT_TOGGLE: &str = "layout.toggle";
     pub const THEME_TOGGLE: &str = "theme.toggle";
     pub const FULLSCREEN: &str = "window.fullscreen";
+    pub const REVIEW_OPEN: &str = "review.open";
+    pub const ATTENTION_NEXT: &str = "attention.next";
     pub const PANEL_PREFIX: &str = "panel.";
 }
 
@@ -30,6 +32,8 @@ pub fn base_actions() -> Vec<ActionEntry> {
         ActionEntry::new(id::TAB_PREV, "Pestaña anterior").shortcut("Ctrl+Shift+Tab").icon(Icon::ChevronRight),
         ActionEntry::new(id::LAYOUT_TOGGLE, "Panel de layout").shortcut("Ctrl+Shift+L").icon(Icon::Layout).keywords("diseño preset"),
         ActionEntry::new(id::THEME_TOGGLE, "Cambiar tema").shortcut("Ctrl+Shift+T").icon(Icon::Settings).keywords("claro oscuro oled"),
+        ActionEntry::new(id::REVIEW_OPEN, "Revisar cambios").icon(Icon::Review).keywords("diff notas agente review"),
+        ActionEntry::new(id::ATTENTION_NEXT, "Siguiente en atención").shortcut("Ctrl+Shift+A").icon(Icon::Attention).keywords("cola espera aprobación"),
         ActionEntry::new(id::FULLSCREEN, "Pantalla completa").shortcut("F11").icon(Icon::Maximize),
     ]
 }
@@ -42,6 +46,20 @@ pub fn ps_quote(s: &str) -> String {
 /// `Set-Location -LiteralPath '<dir>'`, the line that changes directory in PowerShell.
 pub fn cd_line(dir: &Path) -> String {
     format!("Set-Location -LiteralPath {}", ps_quote(&dir.to_string_lossy()))
+}
+
+/// `git -C <cwd> ...` when `cwd` is not where the terminal already is: runs the panel's command in
+/// its worktree without changing the shell's directory. Anything but `git` is left alone.
+pub fn with_dash_c(argv: &[String], cwd: &Path, terminal_cwd: Option<&Path>) -> Vec<String> {
+    let same = terminal_cwd.is_some_and(|t| crate::paths::is_within(t, cwd) && crate::paths::is_within(cwd, t));
+    match argv.split_first() {
+        Some((git, rest)) if git == "git" && !same => {
+            let mut out = vec![git.clone(), "-C".to_string(), cwd.to_string_lossy().into_owned()];
+            out.extend_from_slice(rest);
+            out
+        },
+        _ => argv.to_vec(),
+    }
 }
 
 /// A shell line for an argv: arguments that need it are quoted.
@@ -70,6 +88,18 @@ mod tests {
         assert_eq!(shell_line(&argv), "git commit -m 'fix: a b'");
         let argv = ["git", "switch", "feature/x"].map(str::to_string);
         assert_eq!(shell_line(&argv), "git switch feature/x");
+    }
+
+    #[test]
+    fn git_commands_target_their_worktree() {
+        let argv = ["git", "commit", "-m", "x"].map(str::to_string);
+        let there = with_dash_c(&argv, Path::new(r"C:\repo"), Some(Path::new(r"C:\other")));
+        assert_eq!(&there[..3], ["git", "-C", r"C:\repo"]);
+        assert_eq!(there.len(), 6);
+        let here = with_dash_c(&argv, Path::new(r"C:\repo"), Some(Path::new(r"C:\repo")));
+        assert_eq!(here, argv);
+        let not_git = ["dotnet", "build"].map(str::to_string);
+        assert_eq!(with_dash_c(&not_git, Path::new(r"C:\repo"), None), not_git);
     }
 
     #[test]

@@ -203,7 +203,7 @@ fn forecast_only_with_a_real_unexpired_snapshot() {
     assert_eq!(lines.len(), 1);
     assert!(lines[0].text.starts_with("Al ritmo actual"), "{}", lines[0].text);
     assert!(lines[0].rate.starts_with("ritmo ") && lines[0].rate.ends_with("tokens/h"));
-    assert_eq!(lines[0].label, "estimated");
+    assert_eq!(lines[0].label, "estimado");
 }
 
 #[test]

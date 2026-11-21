@@ -27,6 +27,15 @@ mod app_shell {
     pub const TAB_H: f32 = 0.0;
     pub const TERM_PAD: f32 = 8.0;
 }
+#[path = "../src/block_layout.rs"]
+#[allow(dead_code)]
+mod block_layout;
+#[path = "../src/block_ui.rs"]
+#[allow(dead_code)]
+mod block_ui;
+#[path = "../src/links.rs"]
+#[allow(dead_code)]
+mod links;
 #[path = "../src/mem.rs"]
 #[allow(dead_code)]
 mod mem;

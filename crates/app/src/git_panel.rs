@@ -15,7 +15,7 @@ use gpui::{
 };
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
 use theme::{Radius, Theme, rgb};
-use ui_kit::{SectionLabel, icon};
+use ui_kit::SectionLabel;
 
 use crate::git_monitor::{ChangedFile, GitInfo, GitMonitor};
 use crate::paths;

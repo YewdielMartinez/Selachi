@@ -104,7 +104,7 @@ struct CacheEntry {
 /// Per-view paint state that survives between frames: the snapshot buffer and the row cache.
 #[derive(Default)]
 pub struct PaintState {
-    snap: Snapshot,
+    pub(crate) snap: Snapshot,
     rows: HashMap<u64, CacheEntry>,
     epoch: Option<Epoch>,
     fonts: Option<Fonts>,

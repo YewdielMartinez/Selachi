@@ -56,6 +56,9 @@ pub fn format_reset(resets_at_ms: i64, now: i64) -> String {
     }
 }
 
+/// Click handler of the orphan pill.
+type OrphanClick = Rc<dyn Fn(&mut Window, &mut App)>;
+
 pub struct StatusBar {
     theme: Theme,
     mem_label: SharedString,
@@ -63,7 +66,12 @@ pub struct StatusBar {
     /// Process model: its orphan summary feeds the orphan pill (hidden when there are none).
     procs: Option<Entity<ui_procs::ProcsModel>>,
     procs_sub: Option<Subscription>,
-    on_orphans: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_orphans: Option<OrphanClick>,
+    on_usage: Option<OrphanClick>,
+    /// Attention queue: its count feeds the badge; `on_attention` opens the panel.
+    attention: Option<Entity<ui_review::AttentionModel>>,
+    attention_sub: Option<Subscription>,
+    on_attention: Option<OrphanClick>,
     /// Git monitor of the active tab.
     git: Option<Entity<GitMonitor>>,
     git_sub: Option<Subscription>,
@@ -85,6 +93,10 @@ impl StatusBar {
             procs: None,
             procs_sub: None,
             on_orphans: None,
+            on_usage: None,
+            attention: None,
+            attention_sub: None,
+            on_attention: None,
             git: None,
             git_sub: None,
             usage,
@@ -104,6 +116,41 @@ impl StatusBar {
         self.procs = Some(procs);
         self.on_orphans = Some(Rc::new(on_click));
         cx.notify();
+    }
+
+    /// Clicking the usage pill (or the full bar's usage block) calls `on_click`: opens the usage panel.
+    pub fn set_on_usage(&mut self, on_click: impl Fn(&mut Window, &mut App) + 'static, cx: &mut Context<Self>) {
+        self.on_usage = Some(Rc::new(on_click));
+        cx.notify();
+    }
+
+    /// Follows the attention queue for the badge; `on_click` opens its panel.
+    pub fn set_attention(
+        &mut self,
+        model: Entity<ui_review::AttentionModel>,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.attention_sub = Some(cx.observe(&model, |_, _, cx| cx.notify()));
+        self.attention = Some(model);
+        self.on_attention = Some(Rc::new(on_click));
+        cx.notify();
+    }
+
+    /// The attention badge: shown only while something waits for the user.
+    fn attention_pill(&self, cx: &Context<Self>) -> Option<Pill> {
+        let n = self.attention.as_ref().map(|m| m.read(cx).count())?;
+        if n == 0 {
+            return None;
+        }
+        let mut pill = Pill::compact("attention-pill", &self.theme)
+            .icon(Icon::Attention)
+            .label(n.to_string())
+            .tooltip("Algo espera tu atención (Ctrl+Shift+A salta al siguiente). Clic para ver la cola.");
+        if let Some(f) = self.on_attention.clone() {
+            pill = pill.on_click(move |_, window, cx| f(window, cx));
+        }
+        Some(pill)
     }
 
     /// The orphan alert: shown only while there are orphans; the last thing to hide.
@@ -202,6 +249,10 @@ impl StatusBar {
             // The headline is what is billed: input + output + cache creation (not cache reads).
             .label(format!("Claude {} · sem", compact_tokens(info.week.billable())))
             .tooltip(usage_tooltip(info, now_ms()));
+        let pill = match self.on_usage.clone() {
+            Some(f) => pill.on_click(move |_, window, cx| f(window, cx)),
+            None => pill,
+        };
         match official {
             Some(o) => pill.child(DitherMeter::new(&self.theme).value(Some((o.percent / 100.0) as f32))),
             None => pill,
@@ -267,6 +318,9 @@ impl StatusBar {
                     .child(self.meter_cell("sem", info.fresh_official())),
             )
             .children(week.map(|w| div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(w)))
+            .cursor_pointer()
+            .hover(move |s| s.bg(c.surface_2))
+            .when_some(self.on_usage.clone(), |d, f| d.on_click(move |_, window, cx| f(window, cx)))
     }
 
     fn read_label() -> SharedString {
@@ -285,6 +339,8 @@ impl Render for StatusBar {
         let usage = self.usage.read(cx).info().cloned();
         let orphans = self.orphan_pill(cx);
         let orphans_compact = self.orphan_pill(cx);
+        let attention = self.attention_pill(cx);
+        let attention_compact = self.attention_pill(cx);
         // The shell already asks for the compact bar when the window is narrow; this keeps the
         // contents consistent if it did not.
         if self.mode == BottomBar::Full && full_fits {
@@ -307,6 +363,7 @@ impl Render for StatusBar {
                 )
                 .children(git.map(|g| self.git_pill(&g)))
                 .children(orphans)
+                .children(attention)
                 .child(div().flex_1())
                 .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
                 .into_any_element();
@@ -324,6 +381,7 @@ impl Render for StatusBar {
             .text_size(px(ty.ui_size_sm))
             .children(git.map(|g| self.git_pill(&g)))
             .children(orphans_compact)
+            .children(attention_compact)
             .children(usage.filter(|_| usage_fits).map(|u| self.usage_pill(&u)))
             .child(div().flex_1())
             .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
