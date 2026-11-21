@@ -12,7 +12,7 @@ use gpui::{
     MouseButton, MouseDownEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
     UTF16Selection, Window, div, font, prelude::*, px,
 };
-use term_core::{KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, encode_key};
+use term_core::{Block, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, encode_key};
 use theme::{Radius, TerminalColors, Theme, Typography};
 
 use crate::app_shell::{RAIL_W, TAB_H, TERM_PAD};
@@ -24,12 +24,20 @@ use crate::terminal_element::{PaintState, TerminalElement};
 pub enum TerminalEvent {
     /// The shell's working directory changed (OSC 7).
     CwdChanged(PathBuf),
-    /// A command was submitted: Enter pressed on a non-empty command line (see
-    /// [`TerminalView::note_input`]; term_core does not surface OSC 133 `C` yet).
+    /// A command block started (OSC 133 `C`): the tab is `Working`.
     CommandStarted,
-    /// A command finished (OSC 133 `D`), with its exit code when the shell reported one.
+    /// A command block finished, with its exit code when the shell reported one.
     CommandFinished(Option<i32>),
+    /// The finished block itself (command, duration, exit code), for notifications.
+    BlockFinished(Block),
 }
+
+/// Environment the shell integration reads (`[terminal.completion]` of `config.toml`). The shell
+/// installs it as a global and refreshes it on every config reload, so new tabs pick up changes.
+#[derive(Default)]
+pub struct TermEnv(pub Vec<(String, String)>);
+
+impl gpui::Global for TermEnv {}
 
 /// Scrollback lines kept per session.
 const SCROLLBACK: usize = 10_000;
@@ -102,8 +110,6 @@ pub struct TerminalView {
     got_output: bool,
     spawn_error: Option<SharedString>,
     scroll_accum: f32,
-    /// The command line holds something that Enter would run (typed, pasted or recalled text).
-    line_has_text: bool,
     /// In-progress IME / dead-key composition (not rendered yet).
     marked: Option<String>,
     /// A deferred session (restored tabs): spawned the first time the view is rendered, so tabs
@@ -168,7 +174,6 @@ impl TerminalView {
             got_output: false,
             spawn_error: None,
             scroll_accum: 0.0,
-            line_has_text: false,
             marked: None,
             pending: None,
             _pump: None,
@@ -198,7 +203,8 @@ impl TerminalView {
         let view = self;
         let program = cfg.program.clone();
         let (cols, rows) = (cfg.cols, cfg.rows);
-        match Session::spawn(cfg) {
+        let env = cx.try_global::<TermEnv>().map(|e| e.0.clone()).unwrap_or_default();
+        match Session::spawn_with_env(cfg, env) {
             Ok((session, mut rx)) => {
                 log::info!(
                     "[startup] spawned {program} (pid {:?}) at {cols}x{rows}, {} since process start",
@@ -281,10 +287,18 @@ impl TerminalView {
                     cx.notify();
                 }
             }
+            // The block events below carry the same information (and also cover commands that
+            // never reported `D`), so the tab's status is driven by them.
             SessionEvent::CommandFinished { exit_code } => {
                 log::debug!("command finished (exit code {exit_code:?})");
-                self.line_has_text = false;
+            }
+            SessionEvent::BlockStarted(_) => cx.emit(TerminalEvent::CommandStarted),
+            SessionEvent::BlockFinished { id, exit_code, .. } => {
                 cx.emit(TerminalEvent::CommandFinished(exit_code));
+                let block = self.session.as_ref().and_then(|s| s.blocks().into_iter().find(|b| b.id == id));
+                if let Some(block) = block {
+                    cx.emit(TerminalEvent::BlockFinished(block));
+                }
             }
             SessionEvent::Exit => {
                 log::info!("shell exited");
@@ -299,7 +313,6 @@ impl TerminalView {
         if bytes.is_empty() {
             return;
         }
-        self.note_input(&bytes, cx);
         if let Some(session) = &self.session {
             session.scroll_to_bottom();
             session.write(bytes);
@@ -307,26 +320,6 @@ impl TerminalView {
         if self.display_offset.get() > 0 {
             self.display_offset.set(0);
             cx.notify();
-        }
-    }
-
-    /// Tracks whether the command line has text so that Enter can be told apart from an empty
-    /// Enter: only a submitted, non-empty line starts a command (the status "Working" of the tab).
-    /// History recall (Up/Down) counts as text; Ctrl+C clears the line.
-    fn note_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        match bytes {
-            b"\r" => {
-                if std::mem::take(&mut self.line_has_text) {
-                    cx.emit(TerminalEvent::CommandStarted);
-                }
-            },
-            [0x03] => self.line_has_text = false,
-            [0x1b, b'[' | b'O', b'A' | b'B'] => self.line_has_text = true,
-            _ => {
-                if bytes.iter().any(|b| !b.is_ascii_whitespace() && *b >= 0x20 && *b != 0x1b) {
-                    self.line_has_text = true;
-                }
-            },
         }
     }
 

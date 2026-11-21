@@ -10,6 +10,7 @@ mod git_panel;
 mod grouping;
 mod layout_host;
 mod mem;
+mod notify;
 mod paths;
 mod rail;
 mod session;

@@ -42,6 +42,7 @@ use crate::adapt::{
 };
 use crate::git_monitor::GitMonitor;
 use crate::layout_host::{LayoutPanelArgs, build_layout_panel};
+use crate::notify;
 use crate::paths;
 use crate::rail::{RailItem, rail};
 use crate::session::{SavedTab, SessionState, TabKind};
@@ -49,6 +50,7 @@ use crate::sidebar::{SidebarProps, sidebar_collapsed, sidebar_content};
 use crate::splits::{PaneSet, clamp_ratio, pane_count, ratio_at};
 use crate::status_bar::{StatusBar, bar_height};
 use crate::terminal_tab::TerminalTab;
+use crate::terminal_view::TermEnv;
 use crate::titlebar::{TITLEBAR_H, breadcrumb, new_tab_button, tab_pill, title_row, window_controls};
 use crate::usage_monitor::UsageMonitor;
 
@@ -201,6 +203,7 @@ pub struct AppShell {
     scroll_active: bool,
     /// Right panel width the user dragged to (`None` = the default share of the window).
     right_w: Option<f32>,
+    _toast_task: Option<Task<()>>,
     session_db: Option<store::StateDb>,
     session_last: String,
     session_task: Option<Task<()>>,
@@ -294,10 +297,24 @@ impl AppShell {
             // Usage is rescanned every 60 s only while the window is focused.
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
+                notify::set_window_active(active);
                 this.usage.update(cx, |u, cx| u.set_active(active, cx));
                 this.status.update(cx, |s, cx| s.set_active(active, cx));
             }),
         ];
+        notify::set_window_active(window.is_window_active());
+        // New tabs read the completion settings from `[terminal.completion]`.
+        cx.set_global(TermEnv(config.completion_env()));
+        // A click on a long-command toast brings the window and its tab forward.
+        let mut clicks = notify::click_receiver();
+        let toast_task = cx.spawn_in(window, async move |this, cx| {
+            while let Some(tab) = clicks.next().await {
+                let done = this.update_in(cx, |shell, window, cx| shell.focus_tab_from_toast(tab, window, cx));
+                if done.is_err() {
+                    break;
+                }
+            }
+        });
         // Closing the window: write the session now (and wait for the writer thread).
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -321,6 +338,7 @@ impl AppShell {
             tab_scroll: ScrollHandle::new(),
             scroll_active: false,
             right_w: None,
+            _toast_task: Some(toast_task),
             session_db,
             session_last: String::new(),
             session_task: None,
@@ -493,6 +511,14 @@ impl AppShell {
         self.after_active_changed(window, cx);
     }
 
+    /// A long-command toast was clicked: show the window and the tab that ran the command.
+    fn focus_tab_from_toast(&mut self, tab: u64, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        if let Some(id) = self.tab_ids().into_iter().find(|id| id.as_u64() == tab) {
+            self.select_tab(id, window, cx);
+        }
+    }
+
     /// "+": a new terminal in the active tab's directory.
     pub fn new_tab_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cwd = self.active_cwd(cx);
@@ -657,6 +683,7 @@ impl AppShell {
                     return;
                 }
                 let changed = layout_changed(&self.config, &config);
+                cx.set_global(TermEnv(config.completion_env()));
                 self.config = config;
                 if changed {
                     self.recompute_layout(true, cx);

@@ -76,6 +76,12 @@ impl TerminalTab {
                 cx.notify();
             },
             TerminalEvent::CommandStarted => self.set_status(Some(RowStatus::Working), cx),
+            TerminalEvent::BlockFinished(block) => {
+                let policy = term_core::LongCommandPolicy::default();
+                if term_core::should_notify(block, crate::notify::window_active(), &policy) {
+                    crate::notify::long_command_toast(cx.entity_id().as_u64(), block);
+                }
+            },
             TerminalEvent::CommandFinished(code) => {
                 self.git.update(cx, |g, cx| g.refresh(cx));
                 let status = match code {
