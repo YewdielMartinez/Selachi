@@ -19,6 +19,15 @@ use crate::git_monitor::GitMonitor;
 use crate::paths;
 use crate::terminal_view::{TerminalEvent, TerminalView};
 
+/// What a terminal asks of the shell beyond `TabEvent`s (the shell subscribes to the tab entity).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TermRequest {
+    /// Ctrl+click on a path that exists.
+    OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32>, is_dir: bool },
+    /// "Arreglar con agente": a prompt already redacted, plus how many secrets were hidden.
+    AskAgent { markdown: String, redactions: usize },
+}
+
 pub struct TerminalTab {
     view: Entity<TerminalView>,
     git: Entity<GitMonitor>,
@@ -54,6 +63,11 @@ impl TerminalTab {
         Self { view, git, status: None, last_activity: Instant::now(), _subs: subs }
     }
 
+    /// Types `text` at this terminal's prompt (see `TerminalView::send_text`).
+    pub fn input(&self, text: &str, enter: bool, cx: &mut Context<Self>) {
+        self.view.update(cx, |v, cx| v.send_text(text, enter, cx));
+    }
+
     /// The tab's git monitor (shared with the status bar while the tab is active).
     pub fn git(&self) -> &Entity<GitMonitor> {
         &self.git
@@ -82,6 +96,17 @@ impl TerminalTab {
                     crate::notify::long_command_toast(cx.entity_id().as_u64(), block);
                 }
             },
+            TerminalEvent::OpenPath { path, line, col, is_dir } => cx.emit(TermRequest::OpenPath {
+                path: path.clone(),
+                line: *line,
+                col: *col,
+                is_dir: *is_dir,
+            }),
+            TerminalEvent::FixWithAgent { block, output } => {
+                let branch = self.git.read(cx).info().map(|i| i.branch.clone());
+                let ctx = term_core::agent_context(block, output, branch.as_deref());
+                cx.emit(TermRequest::AskAgent { markdown: ctx.to_prompt_markdown(), redactions: ctx.redactions });
+            },
             TerminalEvent::CommandFinished(code) => {
                 self.git.update(cx, |g, cx| g.refresh(cx));
                 let status = match code {
@@ -95,6 +120,7 @@ impl TerminalTab {
 }
 
 impl EventEmitter<TabEvent> for TerminalTab {}
+impl EventEmitter<TermRequest> for TerminalTab {}
 
 impl TabModel for TerminalTab {
     fn title(&self, cx: &App) -> SharedString {

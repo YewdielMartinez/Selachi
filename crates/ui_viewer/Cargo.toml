@@ -1,0 +1,23 @@
+[package]
+name = "ui_viewer"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi file viewer panels (PLAN section 13): lazy file tree, read-only file viewer tab (code, diff, markdown, trees, images, hex) with a pixel-bar minimap, and the 'what did the agent touch' view"
+
+[lints]
+workspace = true
+
+[dependencies]
+agents_svc = { version = "0.0.1", path = "../agents_svc" }
+gpui.workspace = true
+ignore = "0.4"
+panel_api = { version = "0.1.0", path = "../panel_api" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
+
+[dev-dependencies]
+# Rust colors in the demo (the vanilla build ships JSON / TOML / CSS / HTML / Markdown only).
+viewer_svc = { version = "0.1.0", path = "../viewer_svc", features = ["lang-rust"] }
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"

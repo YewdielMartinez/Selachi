@@ -24,11 +24,15 @@ pub enum Icon {
     Layout,
     Search,
     Folder,
+    Snippet,
+    Task,
+    Procs,
+    Doctor,
 }
 
 impl Icon {
     /// Every icon, for galleries and tests.
-    pub const ALL: [Icon; 19] = [
+    pub const ALL: [Icon; 23] = [
         Icon::Terminal,
         Icon::Files,
         Icon::GitBranch,
@@ -48,6 +52,10 @@ impl Icon {
         Icon::Layout,
         Icon::Search,
         Icon::Folder,
+        Icon::Snippet,
+        Icon::Task,
+        Icon::Procs,
+        Icon::Doctor,
     ];
 
     /// File stem of the svg (`"git-branch"`).
@@ -72,6 +80,10 @@ impl Icon {
             Icon::Layout => "layout",
             Icon::Search => "search",
             Icon::Folder => "folder",
+            Icon::Snippet => "snippet",
+            Icon::Task => "task",
+            Icon::Procs => "procs",
+            Icon::Doctor => "doctor",
         }
     }
 

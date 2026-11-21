@@ -114,6 +114,28 @@ pub(crate) fn highlight_bytes(id: &str, bytes: &[u8], cancel: Option<&AtomicUsiz
     imp::highlight(id, bytes, cancel)
 }
 
+/// Highlight a snippet of text with the grammar `lang_id` (a [`Lang::id`] or a plugin id):
+/// one entry per line of `text` (`str::lines` semantics), each a list of line-relative byte
+/// ranges. Lines without highlighted spans, and every line when the grammar is missing or the
+/// text is empty, come back as empty lists. For small in-memory text (fenced code blocks);
+/// files go through [`crate::Document`].
+pub fn highlight_text(lang_id: &str, text: &str) -> Vec<Vec<(Range<usize>, HighlightKind)>> {
+    let mut lines: Vec<Range<usize>> = Vec::new();
+    let mut start = 0;
+    for piece in text.split_inclusive('\n') {
+        let end = start + piece.len();
+        let body = piece.strip_suffix('\n').unwrap_or(piece);
+        let body = body.strip_suffix('\r').unwrap_or(body);
+        lines.push(start..start + body.len());
+        start = end;
+    }
+    let spans = highlight_bytes(lang_id, text.as_bytes(), None);
+    if spans.is_empty() {
+        return vec![Vec::new(); lines.len()];
+    }
+    slice_spans(&spans, 0, &lines)
+}
+
 /// Cut `spans` (offsets relative to a buffer that starts at `base` within the text)
 /// into per-line lists of line-relative ranges. `lines` are byte ranges in text coordinates.
 pub(crate) fn slice_spans(
@@ -598,5 +620,22 @@ mod imp {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod highlight_text_tests {
+    use super::*;
+
+    #[test]
+    fn one_entry_per_line() {
+        let spans = highlight_text("json", "{\r\n  \"a\": 1\r\n}\n");
+        assert_eq!(spans.len(), 3);
+        assert!(spans.iter().any(|l| !l.is_empty()));
+        assert!(spans.iter().flatten().all(|(r, _)| r.end <= 12));
+        let none = highlight_text("nonsense", "a\nb");
+        assert_eq!(none.len(), 2);
+        assert!(none.iter().all(Vec::is_empty));
+        assert!(highlight_text("json", "").is_empty());
     }
 }

@@ -1,0 +1,24 @@
+[package]
+name = "ui_review"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi diff review (A9) and attention queue (A11): per-line notes on a multi-file diff that go to the agent as Markdown, and the list of agents waiting for you. Emits ReviewEvent / AttentionEvent; the host routes"
+
+[lints]
+workspace = true
+
+[dependencies]
+agents_driver = { version = "0.1.0", path = "../agents_driver" }
+git_svc = { version = "0.1.0", path = "../git_svc" }
+gpui.workspace = true
+panel_api = { version = "0.1.0", path = "../panel_api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+term_core = { version = "0.1.0", path = "../term_core" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"

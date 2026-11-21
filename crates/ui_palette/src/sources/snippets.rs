@@ -56,7 +56,7 @@ fn snippet_item(s: &Snippet, cwd: Option<&std::path::Path>, score: f32) -> Palet
             format!("{n} {}", if n == 1 { "parámetro" } else { "parámetros" }),
         )
     };
-    let mut item = PaletteItem::new(key, s.name.clone(), primary).subtitle(subtitle).icon(Icon::Files).score(score);
+    let mut item = PaletteItem::new(key, s.name.clone(), primary).subtitle(subtitle).icon(Icon::Snippet).score(score);
     item.alt = alt;
     if !meta.is_empty() {
         item.meta = Some(meta.into());

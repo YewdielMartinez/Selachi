@@ -47,8 +47,7 @@ impl PanelProvider for ProcsPanelProvider {
     }
 
     fn icon(&self) -> Icon {
-        // TODO(ui_kit): a dedicated `procs` pixel icon; `Agents` is the closest in the shared set.
-        Icon::Agents
+        Icon::Procs
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {
@@ -443,7 +442,7 @@ impl ProcsPanel {
             .hover(move |s| s.bg(c.surface_2))
             .on_click(move |_, _, cx| view.update(cx, |p, cx| p.toggle(k.clone(), cx)))
             .child(chevron(&theme, folded))
-            .child(icon(Icon::Agents, 16.0, c.muted))
+            .child(ui_kit::agent_icon(ui_kit::AgentMark::from_name(&agent.id), 16.0, c.muted))
             .child(
                 text_ellipsis_box()
                     .text_size(px(theme.typography.ui_size_md))

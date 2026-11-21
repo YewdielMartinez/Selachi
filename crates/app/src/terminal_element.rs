@@ -23,9 +23,10 @@ use gpui::{
     ShapedLine, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, fill, font, outline,
     point, px, relative, size,
 };
-use term_core::{CellView, Rgb8, Snapshot};
+use term_core::{BlockState, CellFlags, CellView, Rgb8, Snapshot};
 use theme::TerminalColors;
 
+use crate::block_layout;
 use crate::terminal_view::{TerminalView, hsla};
 
 pub struct TerminalElement {
@@ -36,6 +37,24 @@ impl TerminalElement {
     pub fn new(view: Entity<TerminalView>) -> Self {
         Self { view }
     }
+}
+
+/// Distance from the grid's left edge to the gutter marker, and its width.
+const GUTTER_X: f32 = 6.0;
+const GUTTER_W: f32 = 2.0;
+/// Cache key space of fold-summary rows (cannot collide with a content hash in practice).
+const SUMMARY_KEY: u64 = 0xF01D_5EED_0000_0001;
+
+/// The cells of a fold summary row: `+ 42 líneas plegadas`, in the muted color.
+fn summary_cells(hidden: u64, fg: theme::Rgba, bg: Rgb8, cols: usize) -> Vec<CellView> {
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let fg = Rgb8::new(to8(fg.r), to8(fg.g), to8(fg.b));
+    let plural = if hidden == 1 { "" } else { "s" };
+    let text = format!("+ {hidden} línea{plural} plegada{plural} · clic para desplegar");
+    let blank = CellView { ch: ' ', fg, bg, flags: CellFlags::default() };
+    let mut cells: Vec<CellView> = text.chars().take(cols).map(|ch| CellView { ch, ..blank }).collect();
+    cells.resize(cols, blank);
+    cells
 }
 
 /// Number of prepaints since startup (debug counter: must not grow while the terminal is idle).
@@ -50,6 +69,10 @@ pub struct Frame {
     cell_width: Pixels,
     cell_height: Pixels,
     cursor: Option<PaintQuad>,
+    /// Gutter markers of the command blocks (one thin bar per run of rows).
+    gutter: Vec<PaintQuad>,
+    /// Underline of the Ctrl-hovered path.
+    underline: Option<PaintQuad>,
 }
 
 /// The paintable form of one row: independent of its y position.
@@ -266,10 +289,34 @@ impl gpui::Element for TerminalElement {
         state.generation += 1;
         let generation = state.generation;
 
+        // Which rows to paint: the viewport as is, or (with command blocks) with folded output
+        // collapsed into a summary row.
+        let ui = &view.block_ui;
+        ui.cell.set((f32::from(cw), f32::from(ch)));
+        ui.origin.set(origin);
+        view.compute_vis_rows(session, snap.rows, snap.display_offset == 0);
+        let vis = ui.rows.borrow();
+
         let mut shaped = 0usize;
-        frame.rows.reserve(snap.rows);
-        for (r, row) in snap.lines.iter().enumerate() {
-            let y = origin.y + ch * r as f32;
+        frame.rows.reserve(vis.len());
+        for (vi, v) in vis.iter().enumerate() {
+            let y = origin.y + ch * vi as f32;
+            if let Some(hidden) = v.summary {
+                let key = SUMMARY_KEY ^ hidden.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let entry = state.rows.entry(key).or_insert_with(|| {
+                    shaped += 1;
+                    let cells = summary_cells(hidden, theme.colors.muted, default_bg, snap.cols);
+                    CacheEntry {
+                        last_used: 0,
+                        row: Rc::new(build_row(&cells, None, default_bg, fonts, font_size, cw, window)),
+                    }
+                });
+                entry.last_used = generation;
+                frame.rows.push((y, entry.row.clone()));
+                continue;
+            }
+            let Some(r) = v.term_row else { continue };
+            let Some(row) = snap.lines.get(r) else { continue };
             // Only the cursor row depends on something besides its cells (the glyph under a block
             // cursor is drawn in the background color).
             let block_col = snap.cursor.filter(|&(cr, _)| block_cursor && cr == r).map(|(_, c)| c);
@@ -289,6 +336,45 @@ impl gpui::Element for TerminalElement {
         }
         state.rows.retain(|_, e| e.last_used == generation);
 
+        // Gutter: a thin marker per block, colored by its state.
+        if !ui.blocks.is_empty() {
+            let c = theme.colors;
+            for (a, b, id) in block_layout::gutter_runs(&vis) {
+                let (color, dashed) = match block_layout::find_block(&ui.blocks, id).map(|bl| bl.state) {
+                    Some(BlockState::Failed) => (gpui::Hsla::from(c.error), false),
+                    Some(BlockState::Running) => (gpui::Hsla::from(c.accent), true),
+                    Some(BlockState::Succeeded) | None => (gpui::Hsla::from(c.muted).opacity(0.35), false),
+                    Some(BlockState::Unknown) => (gpui::Hsla::from(c.muted).opacity(0.5), false),
+                };
+                let x = origin.x - px(GUTTER_X);
+                let top = origin.y + ch * a as f32 + px(2.0);
+                let bottom = origin.y + ch * (b + 1) as f32 - px(2.0);
+                if bottom <= top {
+                    continue;
+                }
+                if dashed {
+                    // Running: bars (a static "spinner", no timer) instead of a solid line.
+                    let (on, off) = (px(4.0), px(3.0));
+                    let mut y = top;
+                    while y < bottom {
+                        let h = on.min(bottom - y);
+                        frame.gutter.push(fill(Bounds::new(point(x, y), size(px(GUTTER_W), h)), color));
+                        y += on + off;
+                    }
+                } else {
+                    frame.gutter.push(fill(Bounds::new(point(x, top), size(px(GUTTER_W), bottom - top)), color));
+                }
+            }
+        }
+        // Ctrl-hovered path.
+        if let Some((vi, hit)) = &ui.link {
+            let x = origin.x + cw * hit.cols.start as f32;
+            let w = cw * (hit.cols.end - hit.cols.start) as f32;
+            let y = origin.y + ch * (*vi + 1) as f32 - px(2.0);
+            frame.underline =
+                Some(fill(Bounds::new(point(x, y), size(w, px(1.0))), gpui::Hsla::from(theme.colors.accent)));
+        }
+
         let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
         if n == 1 {
             log::info!(
@@ -304,11 +390,14 @@ impl gpui::Element for TerminalElement {
 
         // Cursor.
         view.cursor_bounds.set(None);
-        if let Some((cr, cc)) = snap.cursor {
+        let cursor_vis = snap
+            .cursor
+            .and_then(|(cr, cc)| vis.iter().position(|v| v.term_row == Some(cr)).map(|vi| (cr, vi, cc)));
+        if let Some((cr, cvi, cc)) = cursor_vis {
             let wide = snap.lines.get(cr).and_then(|l| l.get(cc)).is_some_and(|c| c.flags.wide);
             let width = if wide { cw * 2.0 } else { cw };
             let cb = Bounds::new(
-                point(origin.x + cw * cc as f32, origin.y + ch * cr as f32),
+                point(origin.x + cw * cc as f32, origin.y + ch * cvi as f32),
                 size(width, ch),
             );
             view.cursor_bounds.set(Some(cb));
@@ -343,6 +432,9 @@ impl gpui::Element for TerminalElement {
         if let Some(cursor) = frame.cursor.take() {
             window.paint_quad(cursor);
         }
+        for q in frame.gutter.drain(..) {
+            window.paint_quad(q);
+        }
         for (y, row) in &frame.rows {
             for (col, line) in &row.lines {
                 let origin = point(x0 + cw * *col as f32, *y);
@@ -350,6 +442,9 @@ impl gpui::Element for TerminalElement {
                     log::warn!("failed to paint terminal line: {e}");
                 }
             }
+        }
+        if let Some(u) = frame.underline.take() {
+            window.paint_quad(u);
         }
     }
 }

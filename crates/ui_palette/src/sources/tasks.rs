@@ -128,7 +128,7 @@ impl PaletteSource for TasksSource {
                     format!("{}  ·  {}", t.command, display_path(&t.cwd.to_string_lossy()))
                 })
                 .meta(meta)
-                .icon(Icon::Terminal)
+                .icon(Icon::Task)
                 .score(score),
             );
         }

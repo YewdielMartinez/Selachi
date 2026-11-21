@@ -7,6 +7,7 @@ use gpui::{
 use theme::Theme;
 
 use crate::button::ClickFn;
+use crate::agent_mark::{AgentMark, agent_icon};
 use crate::icon::{Icon, icon};
 use crate::tooltip::Tooltip;
 
@@ -35,6 +36,7 @@ pub struct Pill {
     theme: Theme,
     size: PillSize,
     icon: Option<Icon>,
+    agent: Option<AgentMark>,
     label: Option<SharedString>,
     active: bool,
     tooltip: Option<SharedString>,
@@ -49,6 +51,7 @@ impl Pill {
             theme: *theme,
             size: PillSize::Tab,
             icon: None,
+            agent: None,
             label: None,
             active: false,
             tooltip: None,
@@ -64,6 +67,12 @@ impl Pill {
 
     pub fn size(mut self, size: PillSize) -> Self {
         self.size = size;
+        self
+    }
+
+    /// Leading agent mark (replaces [`Pill::icon`]).
+    pub fn agent(mut self, mark: AgentMark) -> Self {
+        self.agent = Some(mark);
         self
     }
 
@@ -138,7 +147,8 @@ impl RenderOnce for Pill {
             .when_some(rest_bg, |d, bg| d.bg(bg))
             .when(clickable && !self.active, |d| d.hover(move |s| s.bg(hover_bg)).cursor_pointer())
             .when(clickable && self.active, |d| d.cursor_pointer())
-            .when_some(self.icon, |d, i| d.child(icon(i, 16.0, fg)))
+            .when_some(self.agent, |d, m| d.child(agent_icon(m, 16.0, fg)))
+            .when(self.agent.is_none(), |d| d.when_some(self.icon, |d, i| d.child(icon(i, 16.0, fg))))
             .when_some(self.label, |d, l| d.child(l))
             .children(self.children);
         if let Some(f) = self.on_click {

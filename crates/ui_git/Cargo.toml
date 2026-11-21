@@ -1,0 +1,21 @@
+[package]
+name = "ui_git"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi git panel (PLAN section 7, backlog A8/A10): branch, changes with inline diff, commit box with preflight confirmation, history, worktrees and checkpoints. Emits GitPanelEvent; the host routes"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+gpui.workspace = true
+git_svc = { version = "0.1.0", path = "../git_svc" }
+panel_api = { version = "0.1.0", path = "../panel_api" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"

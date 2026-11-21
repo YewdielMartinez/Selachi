@@ -907,7 +907,8 @@ impl LayoutPanel {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(8.0))
+                .gap(px(14.0))
+                .pb(px(12.0))
                 .child(field)
                 .child(
                     Button::action("preset-save", &t, "Guardar")
@@ -923,11 +924,14 @@ impl LayoutPanel {
                 ));
         }
         let (a, b, c) = (this.clone(), this.clone(), this);
+        // The action button's shadow reaches ~16 px below it: room on the sides and under the
+        // row so it never touches the ghost buttons or the next label.
         div()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(14.0))
+            .pb(px(12.0))
             .child(
                 Button::action("preset-new", &t, "Guardar como preset…").on_click(
                     move |_, window, cx| a.update(cx, |p, cx| p.start_naming(window, cx)),

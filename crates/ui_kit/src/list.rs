@@ -261,6 +261,7 @@ pub struct ListRow {
     id: ElementId,
     theme: Theme,
     icon: Option<Icon>,
+    agent: Option<crate::AgentMark>,
     title: SharedString,
     subtitle: Option<SharedString>,
     meta: Option<SharedString>,
@@ -279,6 +280,7 @@ impl ListRow {
             id: id.into(),
             theme: *theme,
             icon: None,
+            agent: None,
             title: SharedString::default(),
             subtitle: None,
             meta: None,
@@ -293,6 +295,12 @@ impl ListRow {
     /// so the blurred backdrop shows through.
     pub fn glass(mut self, glass: bool) -> Self {
         self.glass = glass;
+        self
+    }
+
+    /// Leading agent mark (replaces [`ListRow::icon`]).
+    pub fn agent(mut self, mark: crate::AgentMark) -> Self {
+        self.agent = Some(mark);
         self
     }
 
@@ -339,10 +347,11 @@ impl RenderOnce for ListRow {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let theme = self.theme;
-        let lead: Option<AnyElement> = match (self.status, self.icon) {
-            (Some(s), _) => Some(StatusGlyph::new(&theme, s).into_any_element()),
-            (None, Some(i)) => Some(icon(i, 16.0, c.muted).into_any_element()),
-            (None, None) => None,
+        let lead: Option<AnyElement> = match (self.status, self.agent, self.icon) {
+            (Some(s), _, _) => Some(StatusGlyph::new(&theme, s).into_any_element()),
+            (None, Some(m), _) => Some(crate::agent_icon(m, 16.0, c.muted).into_any_element()),
+            (None, None, Some(i)) => Some(icon(i, 16.0, c.muted).into_any_element()),
+            (None, None, None) => None,
         };
         let mut el = div()
             .id(self.id)

@@ -36,6 +36,17 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("icons/layout.svg", "icons/layout.svg"),
     asset!("icons/search.svg", "icons/search.svg"),
     asset!("icons/folder.svg", "icons/folder.svg"),
+    asset!("icons/snippet.svg", "icons/snippet.svg"),
+    asset!("icons/task.svg", "icons/task.svg"),
+    asset!("icons/procs.svg", "icons/procs.svg"),
+    asset!("icons/doctor.svg", "icons/doctor.svg"),
+    asset!("icons/agents/claude.svg", "icons/agents/claude.svg"),
+    asset!("icons/agents/codex.svg", "icons/agents/codex.svg"),
+    asset!("icons/agents/gemini.svg", "icons/agents/gemini.svg"),
+    asset!("icons/agents/opencode.svg", "icons/agents/opencode.svg"),
+    asset!("icons/agents/cursor.svg", "icons/agents/cursor.svg"),
+    asset!("icons/agents/copilot.svg", "icons/agents/copilot.svg"),
+    asset!("icons/agents/windsurf.svg", "icons/agents/windsurf.svg"),
     // The logo is multi-tone, so it is drawn as an image (an svg would be flattened to a mask).
     // One file per mode (DESIGN.md "Logo por modo"): light art for dark/OLED, dark art for light.
     asset!("logo-dark-mode.png", "transparent-for-dark-mode/png/128x128@2x.png"),
@@ -67,6 +78,10 @@ mod tests {
     fn every_icon_and_logo_is_embedded() {
         for icon in crate::Icon::ALL {
             let path = icon.path();
+            assert!(Assets.load(&path).unwrap().is_some(), "{path} missing");
+        }
+        for mark in crate::AgentMark::ALL {
+            let path = mark.path();
             assert!(Assets.load(&path).unwrap().is_some(), "{path} missing");
         }
         for mode in [theme::Mode::Dark, theme::Mode::Light, theme::Mode::Oled] {

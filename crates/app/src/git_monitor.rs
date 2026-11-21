@@ -38,12 +38,16 @@ pub struct GitInfo {
     pub conflicted: u32,
     /// The first [`MAX_FILES`] changed files, conflicts first, for the compact list.
     pub files: Vec<ChangedFile>,
+    /// Every changed file (up to [`MAX_MARKS`]), for the file tree's `M` / `A` / `?` markers.
+    pub marks: Vec<ChangedFile>,
     /// Working tree root.
     pub root: PathBuf,
 }
 
 /// Files kept in [`GitInfo::files`].
 pub const MAX_FILES: usize = 40;
+/// Files kept in [`GitInfo::marks`].
+pub const MAX_MARKS: usize = 5000;
 
 /// One row of the changed-files list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,15 +75,16 @@ fn info_from(st: &RepoStatus, root: &Path) -> GitInfo {
         st.head_oid.as_deref().map_or_else(|| "HEAD".to_string(), |oid| oid.chars().take(7).collect())
     });
     let shown = |p: &Path| p.to_string_lossy().replace('\\', "/");
-    let files = st
+    let marks: Vec<ChangedFile> = st
         .conflicted
         .iter()
         .map(|p| ChangedFile { code: '!', staged: false, path: shown(p) })
         .chain(st.staged.iter().map(|c| ChangedFile { code: code_of(c.kind), staged: true, path: shown(&c.path) }))
         .chain(st.unstaged.iter().map(|c| ChangedFile { code: code_of(c.kind), staged: false, path: shown(&c.path) }))
         .chain(st.untracked.iter().map(|p| ChangedFile { code: '?', staged: false, path: shown(p) }))
-        .take(MAX_FILES)
+        .take(MAX_MARKS)
         .collect();
+    let files = marks.iter().take(MAX_FILES).cloned().collect();
     GitInfo {
         branch,
         dirty: st.is_dirty() || !st.untracked.is_empty(),
@@ -91,6 +96,7 @@ fn info_from(st: &RepoStatus, root: &Path) -> GitInfo {
         untracked: st.untracked.len() as u32,
         conflicted: st.conflicted.len() as u32,
         files,
+        marks,
         root: root.to_path_buf(),
     }
 }

@@ -43,6 +43,7 @@ use crate::adapt::{
 use crate::git_monitor::GitMonitor;
 use crate::layout_host::{LayoutPanelArgs, build_layout_panel};
 use crate::notify;
+use crate::palette::{self, id as action_id};
 use crate::paths;
 use crate::rail::{RailItem, rail};
 use crate::session::{SavedTab, SessionState, TabKind};
@@ -50,6 +51,7 @@ use crate::sidebar::{SidebarProps, sidebar_collapsed, sidebar_content};
 use crate::splits::{PaneSet, clamp_ratio, pane_count, ratio_at};
 use crate::status_bar::{StatusBar, bar_height};
 use crate::terminal_tab::TerminalTab;
+use crate::services::Services;
 use crate::terminal_view::TermEnv;
 use crate::titlebar::{TITLEBAR_H, breadcrumb, new_tab_button, tab_pill, title_row, window_controls};
 use crate::usage_monitor::UsageMonitor;
@@ -203,6 +205,8 @@ pub struct AppShell {
     scroll_active: bool,
     /// Right panel width the user dragged to (`None` = the default share of the window).
     right_w: Option<f32>,
+    palette: Entity<ui_palette::CommandPalette>,
+    _palette_sub: Subscription,
     _toast_task: Option<Task<()>>,
     /// Wakes the shell once after a transition so the animated zones settle into plain boxes.
     transition_task: Option<Task<()>>,
@@ -280,6 +284,23 @@ impl AppShell {
         let status = cx.new(|cx| StatusBar::new(theme, eff.layout.bottom_bar, usage.clone(), cx));
         let focused = window.is_window_active();
         status.update(cx, |s, cx| s.set_active(focused, cx));
+        if let Some(services) = cx.try_global::<Services>().cloned() {
+            let weak = cx.weak_entity();
+            status.update(cx, |s, cx| {
+                s.set_procs(
+                    services.procs.clone(),
+                    move |_, cx| {
+                        weak.update(cx, |shell, cx| shell.toggle_right_panel(PanelId::new(ui_procs::PANEL_ID), cx)).ok();
+                    },
+                    cx,
+                );
+            });
+            let mut paths = vec![];
+            if let Ok(p) = store::paths::state_db_path() {
+                paths.push(("state.db".to_string(), p));
+            }
+            services.doctor.update(cx, |d, _| d.set_db_paths(paths));
+        }
 
         let (watcher, rx) = match watcher {
             Some((w, rx)) => (Some(w), Some(rx)),
@@ -324,8 +345,28 @@ impl AppShell {
             true
         });
         let SessionBoot { db: session_db, restore } = session;
+        // The command palette (Ctrl+K): host actions plus one per panel that can live on the right.
+        let mut actions = palette::base_actions();
+        if let Some(reg) = cx.try_global::<PanelRegistry>() {
+            for p in reg.for_zone(PanelZone::Right) {
+                actions.push(
+                    ui_palette::ActionEntry::new(
+                        format!("{}{}", action_id::PANEL_PREFIX, p.id().as_str()),
+                        format!("Panel: {}", p.title()),
+                    )
+                    .icon(p.icon()),
+                );
+            }
+        }
+        let custom: Vec<String> = config.layout.custom_presets.iter().map(|c| c.name.clone()).collect();
+        let sources = ui_palette::standard_sources(session_db.clone(), actions, custom);
+        let palette = ui_palette::command_palette(theme, session_db.clone(), sources, cx);
+        let palette_sub = cx.subscribe_in(&palette, window, |this, _, ev: &ui_palette::PaletteEvent, window, cx| {
+            this.on_palette(ev.clone(), window, cx);
+        });
 
         let mut shell = Self {
+            _palette_sub: palette_sub,
             theme,
             config,
             panes: PaneSet::new(pane_count(layout.splits)),
@@ -340,6 +381,7 @@ impl AppShell {
             tab_scroll: ScrollHandle::new(),
             scroll_active: false,
             right_w: None,
+            palette,
             _toast_task: Some(toast_task),
             transition_task: None,
             session_db,
@@ -502,8 +544,33 @@ impl AppShell {
             shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
         });
         let id = handle.id();
+        self.register_owner(&handle, cx);
         self.tabs.push(TabSlot { handle, _sub: sub });
+        self.update_doctor_stats(1, cx);
         id
+    }
+
+    /// Gives the tab a job in the shared process tracker (the `procs` panel groups by it).
+    /// TODO(term_core): the PTY shell is not inside the job yet. term_core has to pass
+    /// `PROC_THREAD_ATTRIBUTE_JOB_LIST` (with `job.job_handle`) next to `PSEUDOCONSOLE` in the
+    /// `CreateProcessW` attribute list; until then the panel only sees the processes it can
+    /// attribute heuristically.
+    fn register_owner(&mut self, handle: &TabHandle, cx: &mut Context<Self>) {
+        let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        let info = handle.info(cx);
+        let meta = proc_svc::OwnerMeta { agent: None, label: info.title.to_string(), cwd: info.cwd };
+        match ui_procs::open_owner(&services.tracker, handle.id().as_u64(), meta, proc_svc::JobOptions::default()) {
+            Ok(job) => services.procs.update(cx, |m, cx| m.watch_job_events(job.events, cx)),
+            Err(e) => log::warn!("could not create the process job of a tab: {e}"),
+        }
+    }
+
+    /// Tells the doctor panel how many shells run (`delta` is the change not yet in `self.tabs`).
+    fn update_doctor_stats(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        let shells = (self.tabs.len() as isize + delta).max(0) as usize;
+        let stats = ui_doctor::AppStats { shells: Some(shells), agents: None, grammars: Vec::new() };
+        services.doctor.update(cx, |d, cx| d.set_app_stats(stats, cx));
     }
 
     /// Starts a terminal in `cwd` and shows it (first empty pane, else the focused pane).
@@ -589,6 +656,13 @@ impl AppShell {
     fn close_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.tabs.iter().position(|t| t.handle.id() == id) else { return };
         let slot = self.tabs.remove(ix);
+        if let Some(services) = cx.try_global::<Services>().cloned() {
+            // Dropping the job does not kill its members (no `kill_on_close`): leftovers show up
+            // as orphans.
+            let job = services.tracker.lock().unwrap_or_else(|p| p.into_inner()).remove_owner(id.as_u64());
+            drop(job);
+        }
+        self.update_doctor_stats(0, cx);
         slot.handle.close(cx);
         drop(slot);
         self.confirm_close = None;
@@ -815,6 +889,7 @@ impl AppShell {
             slot.handle.theme_changed(theme, cx);
         }
         self.sync_layout_panel(cx, |p, _, theme, cx| p.set_theme(theme, cx));
+        self.palette.update(cx, |p, cx| p.set_theme(theme, cx));
         cx.notify();
     }
 
@@ -1252,6 +1327,7 @@ impl AppShell {
             let s = shell.clone();
             let mut row = ListRow::new(("alltab", id), &self.theme)
                 .icon(info.icon.icon())
+                .when_some(crate::agents::agent_of(&info.icon), |r, m| r.agent(m))
                 .title(info.title.clone())
                 .selected(Some(id) == active)
                 .on_click(move |_, window, cx| s.update(cx, |s, cx| s.select_tab(id, window, cx)));
@@ -1427,7 +1503,7 @@ impl AppShell {
             .px(px(4.0))
             .text_size(px(ty.ui_size_sm))
             .text_color(c.muted)
-            .child(icon(info.icon.icon(), 14.0, c.muted))
+            .child(crate::agents::lead_icon(&info.icon, 14.0, c.muted))
             .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(info.title.clone()))
             .children(info.subtitle.clone().map(|s| div().text_color(c.outline).child(s)))
             .child(div().flex_1())
@@ -1953,6 +2029,7 @@ impl Render for AppShell {
             key_context.push_str(" Drawer");
         }
         let confirm = self.confirm_close.as_ref().map(|(_, why)| why.clone());
+        let frame_stats = cx.try_global::<Services>().map(|s| s.doctor.read(cx).frame_stats());
         div()
             .id("app-shell")
             .size_full()
@@ -1974,6 +2051,7 @@ impl Render for AppShell {
             .on_action(cx.listener(|this, _: &PrevTab, window, cx| this.cycle_tab(-1, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleLayoutPanel, window, cx| this.toggle_layout_panel(window, cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
+            .on_action(cx.listener(|this, _: &ui_palette::TogglePalette, window, cx| this.toggle_palette(window, cx)))
             .on_action(cx.listener(|this, _: &CancelOverlay, _, cx| this.close_overlay(cx)))
             .on_action(cx.listener(|this, _: &ConfirmClose, window, cx| {
                 if let Some((id, _)) = this.confirm_close.clone() {
@@ -2002,10 +2080,14 @@ impl Render for AppShell {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_drag(cx)),
             )
+            .child(ui_doctor::frame_begin())
             .child(body)
             .children(status_el.map(|s| div().w_full().bg(c.bg).child(s)))
             .children(zen_overlays)
             .children(confirm.map(|why| self.confirm_overlay(&why, cx)))
+            // The palette is the last child: an absolute full-window overlay (nothing while closed).
+            .child(self.palette.clone())
+            .children(frame_stats.map(ui_doctor::frame_end))
     }
 }
 
@@ -2182,6 +2264,97 @@ impl AppShell {
         };
 
         div().absolute().size_full().child(left_panel).child(top_bar)
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Command palette
+    // ------------------------------------------------------------------------------------
+
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let info = self.active_info(cx);
+        let ctx = ui_palette::OpenContext {
+            cwd: info.as_ref().and_then(|i| i.cwd.clone()),
+            project_root: info.and_then(|i| i.project_root),
+            tabs: self.infos(cx),
+            active_tab: self.active_id(),
+            initial: String::new(),
+        };
+        self.palette.update(cx, |p, cx| p.toggle(ctx, window, cx));
+    }
+
+    /// Types `text` in the active terminal.
+    fn type_in_active(&mut self, text: &str, enter: bool, cx: &mut Context<Self>) {
+        let tab = self.active_id().and_then(|id| self.slot(id)).and_then(|s| s.handle.downcast::<TerminalTab>());
+        if let Some(tab) = tab {
+            tab.update(cx, |t, cx| t.input(text, enter, cx));
+        }
+    }
+
+    /// Handles what the palette picked (it emits and closes; focus is already back on the terminal).
+    fn on_palette(&mut self, event: ui_palette::PaletteEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use ui_palette::PaletteEvent as E;
+        match event {
+            E::RunCommand { line, cwd, new_tab } => {
+                if new_tab {
+                    self.open_tab(cwd, window, cx);
+                } else if let Some(dir) = cwd.filter(|d| Some(d) != self.active_cwd(cx).as_ref()) {
+                    self.type_in_active(&palette::cd_line(&dir), true, cx);
+                }
+                self.type_in_active(&line, true, cx);
+            },
+            E::InsertText(text) => self.type_in_active(&text, false, cx),
+            E::OpenPath { path, new_tab } => {
+                if new_tab {
+                    self.open_tab(Some(path), window, cx);
+                } else {
+                    self.type_in_active(&palette::cd_line(&path), true, cx);
+                }
+            },
+            E::FocusTab(id) => self.select_tab(id, window, cx),
+            E::ApplyPreset(preset) => {
+                let mut layout = self.config.layout.clone();
+                layout.select_preset(preset);
+                self.set_layout_config(layout, true, cx);
+            },
+            E::GitAction(action) => {
+                // The command is typed where the user can see it. Sensitive ones (commit, push,
+                // pull, switch...) are left at the prompt without Enter: pressing it is the
+                // confirmation.
+                let line = palette::shell_line(&action.argv());
+                let sensitive = action.is_sensitive();
+                self.type_in_active(&line, !sensitive, cx);
+            },
+            E::Action(id) => self.run_action(id.as_ref(), window, cx),
+            E::Closed => {
+                // Focus went back to what had it; make sure that is the terminal.
+                if let Some(slot) = self.active_id().and_then(|id| self.slot(id)) {
+                    slot.handle.focus(window, cx);
+                }
+            },
+        }
+    }
+
+    fn run_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match id {
+            action_id::TAB_NEW => self.new_tab_here(window, cx),
+            action_id::TAB_CLOSE => {
+                if let Some(t) = self.active_id() {
+                    self.request_close(t, window, cx);
+                }
+            },
+            action_id::TAB_NEXT => self.cycle_tab(1, window, cx),
+            action_id::TAB_PREV => self.cycle_tab(-1, window, cx),
+            action_id::LAYOUT_TOGGLE => self.toggle_layout_panel(window, cx),
+            action_id::THEME_TOGGLE => self.toggle_theme(&ToggleTheme, window, cx),
+            action_id::FULLSCREEN => window.toggle_fullscreen(),
+            other => {
+                if let Some(panel) = other.strip_prefix(action_id::PANEL_PREFIX) {
+                    self.toggle_right_panel(PanelId::new(panel), cx);
+                } else {
+                    log::warn!("unknown palette action {other}");
+                }
+            },
+        }
     }
 
     /// Sidebar overlay: the collapsed (S) column's "expand" button.

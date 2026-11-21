@@ -218,6 +218,7 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     let group: SharedString = format!("srow-{}", id.as_u64()).into();
     let mut row = ListRow::new(("srow", id), theme)
         .icon(info.icon.icon())
+        .when_some(crate::agents::agent_of(&info.icon), |r, m| r.agent(m))
         .glass(p.glass)
         .title(info.title.clone())
         .selected(Some(id) == p.active)

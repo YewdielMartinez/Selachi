@@ -41,8 +41,7 @@ impl PanelProvider for DoctorPanelProvider {
     }
 
     fn icon(&self) -> Icon {
-        // TODO(ui_kit): a dedicated `doctor` pixel icon.
-        Icon::Check
+        Icon::Doctor
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {

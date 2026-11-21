@@ -2827,7 +2827,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -2941,6 +2941,22 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "ignore"
+version = "0.4.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "484be5657551d7868d67587df967fb4fcbe9d266a761cc855aaa148fda0b3cc7"
+dependencies = [
+ "crossbeam-deque",
+ "globset",
+ "log",
+ "memchr",
+ "regex-automata",
+ "same-file",
+ "walkdir",
+ "winapi-util",
 ]
 
 [[package]]
@@ -5197,6 +5213,7 @@ dependencies = [
  "gpui",
  "log",
  "panel_api",
+ "proc_svc",
  "serde",
  "serde_json",
  "store",
@@ -5204,8 +5221,14 @@ dependencies = [
  "term_core",
  "theme",
  "toml 0.8.23",
+ "ui_doctor",
+ "ui_git",
  "ui_kit",
  "ui_layout",
+ "ui_palette",
+ "ui_procs",
+ "ui_viewer",
+ "viewer_svc",
  "windows-sys 0.59.0",
 ]
 
@@ -5944,8 +5967,11 @@ dependencies = [
  "alacritty_terminal",
  "futures",
  "log",
+ "piper",
  "polling",
+ "proc_svc",
  "thiserror 2.0.21",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6497,6 +6523,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_git"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "git_svc",
+ "gpui",
+ "panel_api",
+ "tempfile",
+ "theme",
+ "ui_kit",
+ "viewer_svc",
+]
+
+[[package]]
 name = "ui_kit"
 version = "0.1.0"
 dependencies = [
@@ -6541,6 +6581,52 @@ dependencies = [
  "proc_svc",
  "theme",
  "ui_kit",
+]
+
+[[package]]
+name = "ui_review"
+version = "0.1.0"
+dependencies = [
+ "agents_driver",
+ "git_svc",
+ "gpui",
+ "panel_api",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "term_core",
+ "theme",
+ "ui_kit",
+ "viewer_svc",
+]
+
+[[package]]
+name = "ui_usage"
+version = "0.1.0"
+dependencies = [
+ "agents_svc",
+ "anyhow",
+ "chrono",
+ "gpui",
+ "log",
+ "panel_api",
+ "tempfile",
+ "theme",
+ "ui_kit",
+]
+
+[[package]]
+name = "ui_viewer"
+version = "0.1.0"
+dependencies = [
+ "agents_svc",
+ "gpui",
+ "ignore",
+ "panel_api",
+ "tempfile",
+ "theme",
+ "ui_kit",
+ "viewer_svc",
 ]
 
 [[package]]

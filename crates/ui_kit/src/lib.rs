@@ -23,6 +23,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod action_button;
+mod agent_mark;
 mod assets;
 mod button;
 mod controls;
@@ -38,6 +39,7 @@ mod tooltip;
 mod wireframe;
 
 pub use action_button::{ActionButton, ActionSize};
+pub use agent_mark::{AgentMark, agent_icon};
 pub use assets::Assets;
 pub use button::{Button, ButtonKind, GhostButton, IconButton};
 pub use controls::{Segment, SegmentedControl, Slider, SwatchRow, Toggle};

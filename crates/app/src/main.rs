@@ -4,6 +4,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod adapt;
+mod agents;
 mod app_shell;
 mod git_monitor;
 mod git_panel;
@@ -11,8 +12,10 @@ mod grouping;
 mod layout_host;
 mod mem;
 mod notify;
+mod palette;
 mod paths;
 mod rail;
+mod services;
 mod session;
 mod sidebar;
 mod splits;
@@ -40,7 +43,7 @@ use crate::app_shell::{
     Jump8, Jump9, NewTab, NextTab, PrevTab, ToggleLayoutPanel, ToggleTheme,
 };
 use crate::git_panel::{GitPanelProvider, Variant};
-use ui_kit::Assets;
+use crate::services::Services;
 
 /// Debounce of the `config.toml` watcher: editors write in bursts.
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -97,6 +100,10 @@ fn register_panels(cx: &mut App) {
     let mut registry = PanelRegistry::default();
     registry.register(GitPanelProvider(Variant::Git));
     registry.register(GitPanelProvider(Variant::Context));
+    let services = Services::new(cx);
+    registry.register(ui_procs::ProcsPanelProvider::new(services.procs.clone()));
+    registry.register(ui_doctor::DoctorPanelProvider::new(services.doctor.clone(), env!("CARGO_PKG_VERSION")));
+    cx.set_global(services);
     cx.set_global(registry);
 }
 
@@ -128,7 +135,8 @@ fn bind_keys(cx: &mut App) {
 
 fn main() {
     env_logger::init();
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
+    // `ui_procs::Assets` forwards to `ui_kit::Assets` and adds the runtime icons of the panels.
+    Application::new().with_assets(ui_procs::Assets).run(|cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
             log::error!("failed to register embedded fonts: {e}");
         }
@@ -137,6 +145,8 @@ fn main() {
         register_panels(cx);
         // The layout popover's content: the real `ui_layout` panel.
         ui_layout::init(cx);
+        ui_palette::init(cx);
+        ui_palette::bind_toggle_key(cx);
         layout_host::register_layout_panel_host(cx, layout_host::ui_layout_host);
 
         cx.on_window_closed(|cx| {

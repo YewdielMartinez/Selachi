@@ -109,6 +109,7 @@ pub fn tab_pill(
     let id = info.id.as_u64();
     let mut pill = Pill::new(format!("tab-{id}"), theme)
         .icon(info.icon.icon())
+        .when_some(crate::agents::agent_of(&info.icon), |p, m| p.agent(m))
         .label(paths::middle_truncate(&info.title, 24))
         .active(active)
         .on_click(on_select);

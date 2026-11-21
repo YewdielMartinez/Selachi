@@ -20,6 +20,8 @@ pub struct Config {
     pub git: GitConfig,
     pub processes: Processes,
     pub retention: RetentionConfig,
+    /// Restauración de la sesión al arrancar (`[session]`).
+    pub session: SessionConfig,
     /// Shell layout: preset, overrides, custom presets, per-project overrides
     /// (see `config/layout.rs`).
     pub layout: super::LayoutConfig,
@@ -333,6 +335,21 @@ impl Default for GitConfig {
         Self {
             confirm_sensitive: true,
         }
+    }
+}
+
+/// `[session]`: qué se restaura al abrir la aplicación.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionConfig {
+    /// Reabre las pestañas, los paneles divididos y sus carpetas de la última vez.
+    /// Nunca se guarda el contenido de la terminal (ni el scrollback ni el entorno).
+    pub restore: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self { restore: true }
     }
 }
 

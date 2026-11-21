@@ -10,6 +10,7 @@ use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term, TermMode};
+#[cfg(not(windows))]
 use alacritty_terminal::tty;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
@@ -57,6 +58,48 @@ pub struct SessionConfig {
     pub palette: Palette,
     /// Maximum scrollback lines.
     pub scrollback: usize,
+}
+
+/// Extra parameters for [`Session::spawn_with_options`].
+#[derive(Clone, Debug, Default)]
+pub struct SpawnOptions {
+    /// Extra environment variables for the child (they win over the built-in `TERM`,
+    /// `COLORTERM` and `TERM_PROGRAM` and over the inherited environment).
+    pub env: Vec<(String, String)>,
+    /// Raw handle of a Windows Job Object (for example `proc_svc::JobGroup::raw_handle()` or
+    /// `ui_procs::OwnerJob::job_handle`, cast with `as isize`) the shell must be born in.
+    ///
+    /// The shell is created with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, so it and everything it starts
+    /// later belong to the job from its first instruction. The handle is only used during the
+    /// call (the kernel keeps its own reference), but it must be a valid job handle at that
+    /// moment. If the job cannot be joined at birth the shell is started suspended, assigned and
+    /// resumed instead (see [`JobAttachment`]); spawning never fails because of the job.
+    /// Ignored on other platforms.
+    pub job: Option<isize>,
+}
+
+impl SpawnOptions {
+    /// Sets [`SpawnOptions::job`] from a raw Windows handle.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn with_job_handle(mut self, handle: std::os::windows::io::RawHandle) -> Self {
+        self.job = Some(handle as isize);
+        self
+    }
+}
+
+/// How the shell of a [`Session`] relates to the Job Object passed in [`SpawnOptions::job`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobAttachment {
+    /// No job was requested (or the platform has none).
+    None,
+    /// Created inside the job through `PROC_THREAD_ATTRIBUTE_JOB_LIST`.
+    AtBirth,
+    /// The job list was rejected; the shell was created suspended, assigned to the job and then
+    /// resumed. Still no escapes possible.
+    AssignedAfterSpawn,
+    /// The job could not be joined at all: the shell runs outside it.
+    AssignFailed,
 }
 
 /// Notifications emitted by a [`Session`].
@@ -260,6 +303,7 @@ pub struct Session {
     sender: PtySender,
     shared: Arc<Shared>,
     pid: Option<u32>,
+    attachment: JobAttachment,
 }
 
 impl Session {
@@ -279,6 +323,18 @@ impl Session {
         cfg: SessionConfig,
         extra_env: Vec<(String, String)>,
     ) -> Result<(Session, UnboundedReceiver<SessionEvent>), TermError> {
+        Self::spawn_with_options(cfg, SpawnOptions { env: extra_env, job: None })
+    }
+
+    /// Like [`Session::spawn_with_env`], and can start the shell inside a Windows Job Object so
+    /// that every process it launches is tracked (see [`SpawnOptions::job`]).
+    ///
+    /// [`Session::pid`] is the real shell pid, ready for `proc_svc::Tracker::register_root`.
+    pub fn spawn_with_options(
+        cfg: SessionConfig,
+        options: SpawnOptions,
+    ) -> Result<(Session, UnboundedReceiver<SessionEvent>), TermError> {
+        let SpawnOptions { env: extra_env, job } = options;
         let cols = cfg.cols.max(1);
         let rows = cfg.rows.max(1);
         let (tx, rx) = unbounded();
@@ -306,36 +362,51 @@ impl Session {
         env.insert("TERM_PROGRAM".to_string(), "Selachi".to_string());
         env.extend(extra_env);
 
-        #[allow(clippy::needless_update)]
-        let opts = tty::Options {
-            shell: Some(tty::Shell::new(cfg.program.clone(), cfg.args.clone())),
-            working_directory: cfg.cwd.clone(),
-            drain_on_exit: true,
-            env,
-            #[cfg(windows)]
-            escape_args: true,
-            ..Default::default()
-        };
         let window = WindowSize {
             num_lines: rows,
             num_cols: cols,
             cell_width: cfg.cell_width,
             cell_height: cfg.cell_height,
         };
-        let pty = tty::new(&opts, window, 0)
-            .map_err(|source| TermError::Pty { program: cfg.program.clone(), source })?;
+        let pty_err = |source| TermError::Pty { program: cfg.program.clone(), source };
 
         #[cfg(windows)]
-        let pid = pty.child_watcher().pid().map(|p| p.get());
+        let (pty, pid, attachment) = {
+            let env: Vec<(String, String)> = env.into_iter().collect();
+            let pty = crate::conpty::spawn(&crate::conpty::SpawnSpec {
+                program: &cfg.program,
+                args: &cfg.args,
+                cwd: cfg.cwd.as_deref(),
+                env: &env,
+                job,
+                size: window,
+                force_job_fallback: false,
+            })
+            .map_err(pty_err)?;
+            let (pid, attachment) = (Some(pty.pid()), pty.attachment());
+            (pty, pid, attachment)
+        };
         #[cfg(not(windows))]
-        let pid = None;
+        let (pty, pid, attachment) = {
+            let _ = job;
+            #[allow(clippy::needless_update)]
+            let opts = tty::Options {
+                shell: Some(tty::Shell::new(cfg.program.clone(), cfg.args.clone())),
+                working_directory: cfg.cwd.clone(),
+                drain_on_exit: true,
+                env,
+                ..Default::default()
+            };
+            let pty = tty::new(&opts, window, 0).map_err(pty_err)?;
+            (pty, None, JobAttachment::None)
+        };
 
         let sender = pty_loop::spawn(term.clone(), listener, pty, |sender| {
             let _ = shared.pty.set(sender.clone());
         })
         .map_err(TermError::EventLoop)?;
 
-        Ok((Session { term, sender, shared, pid }, rx))
+        Ok((Session { term, sender, shared, pid, attachment }, rx))
     }
 
     /// Sends raw bytes (already encoded input, pasted text, ...) to the child's stdin.
@@ -405,9 +476,16 @@ impl Session {
         self.term.lock().scroll_display(Scroll::Bottom);
     }
 
-    /// Process id of the child, if known.
+    /// Process id of the shell, if known (on Windows always set after a successful spawn).
+    ///
+    /// This is the pid to hand to `proc_svc::Tracker::register_root`.
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// How the shell joined the job given in [`SpawnOptions::job`].
+    pub fn job_attachment(&self) -> JobAttachment {
+        self.attachment
     }
 
     /// The command blocks of this session, oldest first (at most the last 500).

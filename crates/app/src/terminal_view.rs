@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 use futures::StreamExt;
 use gpui::{
     App, Bounds, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Hsla, KeyDownEvent,
-    MouseButton, MouseDownEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
     UTF16Selection, Window, div, font, prelude::*, px,
 };
 use term_core::{Block, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, encode_key};
 use theme::{Radius, TerminalColors, Theme, Typography};
 
 use crate::app_shell::{RAIL_W, TAB_H, TERM_PAD};
+use crate::block_ui::BlockUi;
 use crate::status_bar::STATUS_H;
 use crate::terminal_element::{PaintState, TerminalElement};
 
@@ -30,6 +31,10 @@ pub enum TerminalEvent {
     CommandFinished(Option<i32>),
     /// The finished block itself (command, duration, exit code), for notifications.
     BlockFinished(Block),
+    /// Ctrl+click on a path of the output that exists on disk.
+    OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32>, is_dir: bool },
+    /// "Arreglar con agente" on a failed block: the block and its output (not redacted yet).
+    FixWithAgent { block: Block, output: String },
 }
 
 /// Environment the shell integration reads (`[terminal.completion]` of `config.toml`). The shell
@@ -115,7 +120,11 @@ pub struct TerminalView {
     /// A deferred session (restored tabs): spawned the first time the view is rendered, so tabs
     /// that are never shown cost no shell process.
     pending: Option<SessionConfig>,
+    /// Text sent to a deferred tab before its shell exists; written as soon as it starts.
+    queued: Vec<u8>,
     _pump: Option<Task<()>>,
+    /// Command blocks: gutter, folding, the hover bar and Ctrl+click paths.
+    pub(crate) block_ui: BlockUi,
 }
 
 impl TerminalView {
@@ -176,7 +185,9 @@ impl TerminalView {
             scroll_accum: 0.0,
             marked: None,
             pending: None,
+            queued: Vec::new(),
             _pump: None,
+            block_ui: BlockUi::default(),
         };
 
         if defer {
@@ -197,6 +208,8 @@ impl TerminalView {
         cfg.cell_height = f32::from(metrics.height) as u16;
         log::info!("[lazy] spawning deferred shell at {}", crate::mem::uptime_label());
         self.start_session(cfg, cx);
+        let queued = std::mem::take(&mut self.queued);
+        self.send(queued, cx);
     }
 
     fn start_session(&mut self, cfg: SessionConfig, cx: &mut Context<Self>) {
@@ -292,8 +305,14 @@ impl TerminalView {
             SessionEvent::CommandFinished { exit_code } => {
                 log::debug!("command finished (exit code {exit_code:?})");
             }
-            SessionEvent::BlockStarted(_) => cx.emit(TerminalEvent::CommandStarted),
+            SessionEvent::BlockStarted(_) => {
+                self.refresh_blocks();
+                cx.emit(TerminalEvent::CommandStarted);
+                cx.notify();
+            }
             SessionEvent::BlockFinished { id, exit_code, .. } => {
+                self.refresh_blocks();
+                cx.notify();
                 cx.emit(TerminalEvent::CommandFinished(exit_code));
                 let block = self.session.as_ref().and_then(|s| s.blocks().into_iter().find(|b| b.id == id));
                 if let Some(block) = block {
@@ -306,6 +325,20 @@ impl TerminalView {
                 cx.notify();
             }
         }
+    }
+
+    /// Types `text` at the prompt (newlines become Enter); `enter` presses Enter at the end. Used
+    /// by the command palette: run a command, insert a snippet, `cd` into a project.
+    pub fn send_text(&mut self, text: &str, enter: bool, cx: &mut Context<Self>) {
+        let mut bytes = text.replace("\r\n", "\r").replace('\n', "\r").into_bytes();
+        if enter {
+            bytes.push(b'\r');
+        }
+        if self.session.is_none() && self.pending.is_some() {
+            self.queued.extend(bytes);
+            return;
+        }
+        self.send(bytes, cx);
     }
 
     /// Writes bytes to the shell and snaps the viewport back to the live bottom.
@@ -341,6 +374,19 @@ impl TerminalView {
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
         let m = ks.modifiers;
+
+        // Ctrl+Up / Ctrl+Down: previous / next command block (the shell gets them without blocks).
+        if m.control && !m.alt && !m.shift && !m.platform {
+            let dir = match ks.key.as_str() {
+                "up" => -1,
+                "down" => 1,
+                _ => 0,
+            };
+            if dir != 0 && self.jump_block(dir, cx) {
+                cx.stop_propagation();
+                return;
+            }
+        }
 
         // Clipboard shortcuts. Ctrl+V pastes too, like Windows Terminal; Ctrl+Shift+C copies.
         if m.control && !m.alt && !m.platform {
@@ -503,13 +549,23 @@ impl Render for TerminalView {
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .when(self.block_ui.link.is_some(), |d| d.cursor_pointer())
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.on_pointer_move(e, cx)))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    this.on_pointer_leave(cx);
+                }
+            }))
+            .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| this.on_modifiers(e, cx)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, _cx| {
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus_handle);
+                    this.click_special(e, cx);
                 }),
             )
             .child(div().size_full().p(px(TERM_PAD)).child(TerminalElement::new(cx.entity())))
+            .children(self.block_bar(cx))
             .children(notice.map(|text| {
                 div()
                     .absolute()

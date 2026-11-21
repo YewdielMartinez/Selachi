@@ -1,8 +1,9 @@
-//! Built-in right-panel providers backed by the git monitor: `git` (branch, ahead / behind,
-//! changed files) and `context` (the same data as a thread context card: worktree, branch,
-//! upstream, changes). They prove the [`PanelProvider`] contract end to end: the views adapt to
-//! [`WidthClass`], never look at their zone, and are re-targeted in place when the active tab
-//! changes directory ([`PanelProvider::context_changed`]).
+//! The built-in `context` right-panel provider: the active session's worktree, branch, upstream and
+//! changes as a thread context card. The `git` panel itself lives in the `ui_git` crate; this one
+//! stays because the context card is a different view of the same data. It proves the
+//! [`PanelProvider`] contract end to end: the view adapts to [`WidthClass`], never looks at its
+//! zone, and is re-targeted in place when the active tab changes directory
+//! ([`PanelProvider::context_changed`]).
 //!
 //! Everything shown is read from `git status` (through [`GitMonitor`]); nothing is invented.
 
@@ -19,39 +20,21 @@ use ui_kit::{SectionLabel, icon};
 use crate::git_monitor::{ChangedFile, GitInfo, GitMonitor};
 use crate::paths;
 
-/// Which flavour of the panel to show.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Variant {
-    /// `git`: status of the repository.
-    Git,
-    /// `context`: the active session's worktree and changes.
-    Context,
-}
+/// Registers as `context`.
+pub struct ContextPanelProvider;
 
-/// Registers as `git` or `context`.
-pub struct GitPanelProvider(pub Variant);
-
-impl PanelProvider for GitPanelProvider {
+impl PanelProvider for ContextPanelProvider {
     fn id(&self) -> PanelId {
-        match self.0 {
-            Variant::Git => PanelId::new(store::config::panel_ids::GIT),
-            Variant::Context => PanelId::new(store::config::panel_ids::CONTEXT),
-        }
+        PanelId::new(store::config::panel_ids::CONTEXT)
     }
 
     fn title(&self) -> SharedString {
-        match self.0 {
-            Variant::Git => "Git".into(),
-            Variant::Context => "Contexto".into(),
-        }
+        "Contexto".into()
     }
 
     fn icon(&self) -> Icon {
-        match self.0 {
-            Variant::Git => Icon::GitBranch,
-            // The session's context: its own rail button, not a second git icon.
-            Variant::Context => Icon::Agents,
-        }
+        // The session's context: its own rail button, not a second git icon.
+        Icon::Agents
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {
@@ -59,30 +42,28 @@ impl PanelProvider for GitPanelProvider {
     }
 
     fn build(&self, ctx: PanelCtx, _window: &mut Window, cx: &mut App) -> AnyView {
-        let variant = self.0;
-        cx.new(|cx| GitPanel::new(ctx, variant, cx)).into()
+        cx.new(|cx| ContextPanel::new(ctx, cx)).into()
     }
 
     fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
-        let Ok(panel) = view.clone().downcast::<GitPanel>() else { return false };
+        let Ok(panel) = view.clone().downcast::<ContextPanel>() else { return false };
         panel.update(cx, |p, cx| p.retarget(ctx.clone(), cx));
         true
     }
 }
 
-pub struct GitPanel {
+pub struct ContextPanel {
     ctx: PanelCtx,
-    variant: Variant,
     git: Entity<GitMonitor>,
     _sub: Subscription,
 }
 
-impl GitPanel {
-    fn new(ctx: PanelCtx, variant: Variant, cx: &mut Context<Self>) -> Self {
+impl ContextPanel {
+    fn new(ctx: PanelCtx, cx: &mut Context<Self>) -> Self {
         let git = cx.new(|_| GitMonitor::new());
         // The monitor notifies when its data changes: repaint with it.
         let sub = cx.observe(&git, |_, _, cx| cx.notify());
-        let mut panel = Self { ctx: ctx.clone(), variant, git, _sub: sub };
+        let mut panel = Self { ctx: ctx.clone(), git, _sub: sub };
         panel.retarget(ctx, cx);
         panel
     }
@@ -179,33 +160,12 @@ fn kv(theme: &Theme, key: &'static str, value: impl Into<SharedString>) -> impl 
         )
 }
 
-impl GitPanel {
+impl ContextPanel {
     fn render_info(&self, info: &GitInfo) -> impl IntoElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let ty = theme.typography;
         let compact = self.ctx.width_class == WidthClass::Compact;
-
-        let mut head = div().flex().flex_row().items_center().gap(px(8.0));
-        head = head
-            .child(icon(Icon::GitBranch, 16.0, c.muted))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_size(px(ty.ui_size_lg))
-                    .text_color(c.text)
-                    .child(info.branch.clone()),
-            );
-        if info.ahead > 0 {
-            head = head.child(div().text_color(c.muted).text_size(px(ty.ui_size_sm)).child(format!("↑{}", info.ahead)));
-        }
-        if info.behind > 0 {
-            head = head.child(div().text_color(c.muted).text_size(px(ty.ui_size_sm)).child(format!("↓{}", info.behind)));
-        }
 
         let stats = div()
             .flex()
@@ -243,31 +203,24 @@ impl GitPanel {
                     .child("Árbol de trabajo limpio")
             }));
 
-        let mut col = div().size_full().flex().flex_col().gap(px(12.0)).p(px(if compact { 12.0 } else { 16.0 }));
-        if self.variant == Variant::Context {
-            let worktree: SharedString = info.root.display().to_string().into();
-            col = col
-                .child(SectionLabel::new(&theme, "Sesión").uppercase(true))
-                .child(kv(&theme, "Worktree", worktree))
-                .child(kv(&theme, "Rama", info.branch.clone()))
-                .children(info.upstream.clone().map(|u| kv(&theme, "Upstream", u)))
-                .child(SectionLabel::new(&theme, "Cambios").uppercase(true))
-                .child(stats)
-                .child(list);
-        } else {
-            col = col
-                .child(head)
-                .children(info.upstream.clone().map(|u| {
-                    div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(format!("sigue a {u}"))
-                }))
-                .child(stats)
-                .child(list);
-        }
-        col
+        let worktree: SharedString = info.root.display().to_string().into();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .p(px(if compact { 12.0 } else { 16.0 }))
+            .child(SectionLabel::new(&theme, "Sesión").uppercase(true))
+            .child(kv(&theme, "Worktree", worktree))
+            .child(kv(&theme, "Rama", info.branch.clone()))
+            .children(info.upstream.clone().map(|u| kv(&theme, "Upstream", u)))
+            .child(SectionLabel::new(&theme, "Cambios").uppercase(true))
+            .child(stats)
+            .child(list)
     }
 }
 
-impl Render for GitPanel {
+impl Render for ContextPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.ctx.theme;
         let c = theme.colors;

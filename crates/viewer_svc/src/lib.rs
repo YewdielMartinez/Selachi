@@ -27,7 +27,7 @@ pub use detect::{
 pub use diff::{diff_against_git, diff_text, DiffLine, GitBase, Hunk, LineKind, CONTEXT_LINES};
 pub use document::{minimap_from_lengths, Document, HexLine, IndexProgress, Limits, HEX_ROW};
 pub use error::{Error, Result};
-pub use highlight::{available_languages, grammar_available, HighlightKind};
+pub use highlight::{available_languages, grammar_available, highlight_text, HighlightKind};
 pub use markdown::{markdown_blocks, plain_text, MdAlign, MdBlock, MdInline, MdListItem, MdTable};
 pub use paths::{find_paths, resolve, PathMatch, Resolved};
 pub use structured::{

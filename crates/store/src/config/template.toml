@@ -64,6 +64,12 @@ claude_statusline_hook = false
 # Ask before force-push, hard reset, branch delete and similar actions.
 confirm_sensitive = true
 
+[session]
+# Restaurar la sesión al abrir Selachi: pestañas, paneles divididos y la carpeta de cada
+# terminal. Los shells arrancan al mostrar cada pestaña. Nunca se guarda lo que imprimió la
+# terminal (ni el scrollback ni las variables de entorno).
+restore = true
+
 [processes]
 # What to do with processes started by a thread when the thread is closed:
 # "ask" | "always" | "never"

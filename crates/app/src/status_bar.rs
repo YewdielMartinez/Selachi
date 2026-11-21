@@ -4,14 +4,15 @@
 //! Meters show official percentages only; without an official snapshot they stay empty and the
 //! block says so (nothing is estimated into a percentage).
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div, prelude::*, px,
+    App, Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div, prelude::*, px,
 };
 use store::BottomBar;
 use theme::{Radius, Theme, rgb};
-use ui_kit::{DitherMeter, Icon, Pill};
+use ui_kit::{AgentMark, DitherMeter, Icon, Pill, agent_icon};
 
 use crate::git_monitor::{GitInfo, GitMonitor};
 use crate::mem;
@@ -59,6 +60,10 @@ pub struct StatusBar {
     theme: Theme,
     mem_label: SharedString,
     mode: BottomBar,
+    /// Process model: its orphan summary feeds the orphan pill (hidden when there are none).
+    procs: Option<Entity<ui_procs::ProcsModel>>,
+    procs_sub: Option<Subscription>,
+    on_orphans: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     /// Git monitor of the active tab.
     git: Option<Entity<GitMonitor>>,
     git_sub: Option<Subscription>,
@@ -77,12 +82,41 @@ impl StatusBar {
             theme,
             mem_label: Self::read_label(),
             mode,
+            procs: None,
+            procs_sub: None,
+            on_orphans: None,
             git: None,
             git_sub: None,
             usage,
             ram_timer: None,
             _usage_sub: usage_sub,
         }
+    }
+
+    /// Follows the process model for the orphan pill; `on_click` opens the processes panel.
+    pub fn set_procs(
+        &mut self,
+        procs: Entity<ui_procs::ProcsModel>,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.procs_sub = Some(cx.observe(&procs, |_, _, cx| cx.notify()));
+        self.procs = Some(procs);
+        self.on_orphans = Some(Rc::new(on_click));
+        cx.notify();
+    }
+
+    /// The orphan alert: shown only while there are orphans; the last thing to hide.
+    fn orphan_pill(&self, cx: &Context<Self>) -> Option<Pill> {
+        let label = self.procs.as_ref().and_then(|p| p.read(cx).orphan_summary().label())?;
+        let mut pill = Pill::compact("orphan-pill", &self.theme)
+            .icon(Icon::Alert)
+            .label(label)
+            .tooltip("Procesos que sobrevivieron a su pestaña. Clic para verlos.");
+        if let Some(f) = self.on_orphans.clone() {
+            pill = pill.on_click(move |_, window, cx| f(window, cx));
+        }
+        Some(pill)
     }
 
     /// The active tab changed: follow its git monitor.
@@ -215,7 +249,15 @@ impl StatusBar {
             .rounded(px(Radius::XS))
             .bg(c.surface_1)
             .font_family(ty.ui_family)
-            .child(div().text_size(px(ty.ui_size_md)).text_color(c.text).child(name))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(agent_icon(AgentMark::from_name(name), 16.0, c.text))
+                    .child(div().text_size(px(ty.ui_size_md)).text_color(c.text).child(name)),
+            )
             .child(
                 div()
                     .flex()
@@ -241,6 +283,8 @@ impl Render for StatusBar {
         let (full_fits, usage_fits, ram_fits) = visible_pieces(f32::from(window.viewport_size().width));
         let git = self.git.as_ref().and_then(|g| g.read(cx).info().cloned());
         let usage = self.usage.read(cx).info().cloned();
+        let orphans = self.orphan_pill(cx);
+        let orphans_compact = self.orphan_pill(cx);
         // The shell already asks for the compact bar when the window is narrow; this keeps the
         // contents consistent if it did not.
         if self.mode == BottomBar::Full && full_fits {
@@ -262,8 +306,9 @@ impl Render for StatusBar {
                         .then(|| div().text_color(self.theme.colors.muted).child("Sin datos de uso todavía")),
                 )
                 .children(git.map(|g| self.git_pill(&g)))
+                .children(orphans)
                 .child(div().flex_1())
-                .child(Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone()))
+                .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
                 .into_any_element();
         }
         div()
@@ -278,6 +323,7 @@ impl Render for StatusBar {
             .font_family(ty.ui_family)
             .text_size(px(ty.ui_size_sm))
             .children(git.map(|g| self.git_pill(&g)))
+            .children(orphans_compact)
             .children(usage.filter(|_| usage_fits).map(|u| self.usage_pill(&u)))
             .child(div().flex_1())
             .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
