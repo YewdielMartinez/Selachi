@@ -1,12 +1,14 @@
 //! `ui_settings`: Selachi's settings screen and the grammar plugin manager.
 //!
 //! * [`SettingsView`]: a full Main-zone view. A section list on the left (General, Apariencia,
-//!   Terminal, Agentes, Git, Procesos, Plugins, Teclado, Acerca de) and a content column of at most
+//!   Diseño, Terminal, Agentes, Git, Procesos, Plugins, Teclado, Acerca de) and a content column of at most
 //!   860 px; below 720 px the list folds into a menu at the top. Every control edits the working
 //!   `store::Config`, is validated with `Config::validate()` (inline errors, invalid values are
 //!   never applied), applied live ([`SettingsEvent::ConfigChanged`]) and saved to `config.toml`
 //!   with `toml_edit` (comments and unknown keys preserved) after 400 ms of quiet, one write in
 //!   flight at a time. Hot reloads are merged three-way ([`SettingsView::set_config`]).
+//! * Diseño embeds the `ui_layout` panel (presets, tabs, sidebar, zones, density, translucency) and
+//!   the unified-sidebar options; Apariencia has the theme cards, accent and typography.
 //! * [`PluginsModel`]: language grammars. The index (`grammars.toml`) is downloaded over HTTPS
 //!   only when Plugins is opened (cached for one hour), 1 MB cap; archives are capped at 20 MB and
 //!   installed with `GrammarRegistry::install_from_archive` (sha256 pinned in the index) only
@@ -35,6 +37,7 @@
 
 mod agents;
 mod agents_ui;
+mod design_ui;
 mod extras;
 mod fields;
 mod fmt;
@@ -54,7 +57,7 @@ mod validate;
 mod view;
 
 pub use agents::{AgentRow, AgentStatus, AgentsState};
-pub use extras::{DEFAULT_INDEX_URL, Extras, LANGUAGES};
+pub use extras::{DEFAULT_INDEX_URL, Extras, LANGUAGES, SidebarPrefs, TITLEBAR_PANELS};
 pub use keys::{
     ChordError, KeyAction, chord_from_keystroke, default_catalog, display_chord, effective, find_conflict, normalize_chord,
     set_binding, swap_bindings,

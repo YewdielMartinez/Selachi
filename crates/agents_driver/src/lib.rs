@@ -25,6 +25,8 @@ pub mod claude;
 pub mod codex;
 pub mod coalesce;
 pub mod detect;
+#[cfg(windows)]
+mod job;
 pub mod opencode;
 pub mod proc;
 mod types;
@@ -41,12 +43,23 @@ pub fn spawn(
     kind: AgentKind,
     cfg: &ThreadConfig,
 ) -> Result<(Box<dyn AgentDriver>, UnboundedReceiver<AgentEvent>)> {
+    spawn_with(kind, cfg, SpawnOpts::default())
+}
+
+/// [`spawn`] with [`SpawnOpts`]: e.g. create the agent inside the host's Job Object.
+pub fn spawn_with(
+    kind: AgentKind,
+    cfg: &ThreadConfig,
+    opts: SpawnOpts,
+) -> Result<(Box<dyn AgentDriver>, UnboundedReceiver<AgentEvent>)> {
     let (tx, rx) = unbounded();
     let driver: Box<dyn AgentDriver> = match kind {
-        AgentKind::ClaudeCode => Box::new(claude::ClaudeDriver::spawn(cfg, tx)?),
-        AgentKind::Codex => Box::new(codex::CodexDriver::spawn(cfg, tx)?),
-        AgentKind::OpenCode => Box::new(acp::AcpDriver::spawn_opencode(cfg, tx)?),
-        AgentKind::Acp { command } => Box::new(acp::AcpDriver::spawn_command_line(&command, cfg, tx)?),
+        AgentKind::ClaudeCode => Box::new(claude::ClaudeDriver::spawn_with(cfg, tx, &opts)?),
+        AgentKind::Codex => Box::new(codex::CodexDriver::spawn_with(cfg, tx, &opts)?),
+        AgentKind::OpenCode => Box::new(acp::AcpDriver::spawn_opencode_with(cfg, tx, &opts)?),
+        AgentKind::Acp { command } => {
+            Box::new(acp::AcpDriver::spawn_command_line_with(&command, cfg, tx, &opts)?)
+        }
     };
     Ok((driver, rx))
 }

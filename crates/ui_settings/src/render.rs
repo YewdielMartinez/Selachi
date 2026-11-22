@@ -170,6 +170,7 @@ impl SettingsView {
         match self.section {
             Section::General => self.general(narrow, cx),
             Section::Appearance => self.appearance(narrow, cx),
+            Section::Design => self.design(narrow, cx),
             Section::Terminal => self.terminal(narrow, cx),
             Section::Agents => self.agents_section(narrow, cx),
             Section::Git => self.git(narrow, cx),

@@ -21,6 +21,11 @@
 //!   "response":{"behavior":"allow","updatedInput":{..}}}}` (or `behavior":"deny"` +
 //!   `message`). The flag/subtype exist in the shipped binary; the JSON shapes come
 //!   from the Agent SDK protocol (not live-tested here to avoid spending quota).
+//! * "Always allow" is native: `approve_with(.., Always)` adds `updatedPermissions:
+//!   [{"type":"addRules","rules":[{"toolName":..}],"behavior":"allow","destination":"session"}]`
+//!   to the allow response (SDK `PermissionResult` / `PermissionUpdate`, docs:
+//!   <https://code.claude.com/docs/en/agent-sdk/typescript>; the shipped binary validates the
+//!   field). Whole-tool rule, this session only, nothing written to settings files.
 //!
 //! # Interrupt
 //!
@@ -57,7 +62,14 @@ use crate::coalesce::{self, Coalescer};
 use crate::proc::{self, truncate};
 use crate::types::*;
 
-type Pending = Arc<Mutex<HashMap<String, Value>>>;
+/// An open `can_use_tool` request: what we need to answer it later.
+#[derive(Debug, Clone)]
+struct PendingRequest {
+    tool: String,
+    input: Value,
+}
+
+type Pending = Arc<Mutex<HashMap<String, PendingRequest>>>;
 
 // ---------------------------------------------------------------------------
 // Tool mapping
@@ -381,7 +393,9 @@ impl ClaudeParser {
         };
         let input = req.get("input").cloned().unwrap_or_else(|| json!({}));
         let detail = approval_detail(tool, &input);
-        self.pending.lock().insert(rid.to_string(), input);
+        self.pending
+            .lock()
+            .insert(rid.to_string(), PendingRequest { tool: tool.to_string(), input });
         out.push(AgentEvent::ApprovalRequest {
             id: rid.to_string(),
             tool: tool.to_string(),
@@ -444,6 +458,11 @@ pub struct ClaudeDriver {
 
 impl ClaudeDriver {
     pub fn spawn(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
+        Self::spawn_with(cfg, tx, &SpawnOpts::default())
+    }
+
+    /// [`spawn`](Self::spawn) with [`SpawnOpts`] (Job Object membership).
+    pub fn spawn_with(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>, opts: &SpawnOpts) -> Result<Self> {
         let exe = proc::resolve_executable("claude").ok_or_else(|| DriverError::NotFound("claude".into()))?;
         let mut cmd = proc::command_for(&exe);
         cmd.args(build_args(cfg))
@@ -451,7 +470,7 @@ impl ClaudeDriver {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = cmd.spawn()?;
+        let mut child = proc::spawn_in_job(&mut cmd, opts.job)?;
         let pid = child.id();
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or(DriverError::Closed)?;
@@ -511,6 +530,35 @@ impl ClaudeDriver {
     }
 }
 
+/// The `control_response` line answering a `can_use_tool` request.
+///
+/// `Always` adds `updatedPermissions`, the Agent SDK's native "always allow": a
+/// `PermissionUpdate` `{type:"addRules", rules:[{toolName}], behavior:"allow",
+/// destination:"session"}` (types: <https://code.claude.com/docs/en/agent-sdk/typescript>,
+/// `PermissionResult` / `PermissionUpdate`; the shipped binary validates this field too). The
+/// rule covers the whole tool for the rest of the Claude session (`session` destination: nothing
+/// is written to the user's settings files), so Claude stops sending `can_use_tool` for it.
+fn permission_response(id: &str, req: &PendingRequest, decision: ApprovalDecision) -> Value {
+    let body = match decision {
+        ApprovalDecision::Deny => json!({ "behavior": "deny", "message": "Denied by the user" }),
+        ApprovalDecision::Allow => json!({ "behavior": "allow", "updatedInput": req.input }),
+        ApprovalDecision::Always => json!({
+            "behavior": "allow",
+            "updatedInput": req.input,
+            "updatedPermissions": [{
+                "type": "addRules",
+                "rules": [{ "toolName": req.tool }],
+                "behavior": "allow",
+                "destination": "session",
+            }],
+        }),
+    };
+    json!({
+        "type": "control_response",
+        "response": { "subtype": "success", "request_id": id, "response": body }
+    })
+}
+
 fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
     let deadline = Instant::now() + grace;
     loop {
@@ -550,22 +598,22 @@ impl AgentDriver for ClaudeDriver {
     }
 
     fn approve(&mut self, id: &str, allow: bool) -> Result<()> {
-        let input = self
+        self.approve_with(id, if allow { ApprovalDecision::Allow } else { ApprovalDecision::Deny })
+    }
+
+    fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<()> {
+        let req = self
             .pending
             .lock()
             .remove(id)
             .ok_or_else(|| DriverError::Protocol(format!("unknown approval id {id}")))?;
-        let body = if allow {
-            json!({ "behavior": "allow", "updatedInput": input })
-        } else {
-            json!({ "behavior": "deny", "message": "Denied by the user" })
-        };
-        self.write_json(&json!({
-            "type": "control_response",
-            "response": { "subtype": "success", "request_id": id, "response": body }
-        }))?;
+        self.write_json(&permission_response(id, &req, decision))?;
         self.emit(AgentEvent::Status(AgentStatus::Working));
         Ok(())
+    }
+
+    fn pid(&self) -> Option<u32> {
+        Some(self.pid)
     }
 
     fn shutdown(&mut self) {
@@ -678,9 +726,34 @@ mod tests {
         let pending = Pending::default();
         let mut p = ClaudeParser::new(pending.clone(), Arc::default());
         p.parse_line(r#"{"type":"control_request","request_id":"r9","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"a.txt","content":"x"}}}"#);
-        assert_eq!(pending.lock()["r9"]["file_path"], "a.txt");
+        assert_eq!(pending.lock()["r9"].input["file_path"], "a.txt");
+        assert_eq!(pending.lock()["r9"].tool, "Write");
         p.parse_line(r#"{"type":"control_cancel_request","request_id":"r9"}"#);
         assert!(pending.lock().is_empty());
+    }
+
+    #[test]
+    fn approve_with_encodes_each_decision() {
+        let req = PendingRequest { tool: "Bash".into(), input: json!({"command":"cargo test"}) };
+        let r = |d| permission_response("r1", &req, d);
+        assert_eq!(
+            r(ApprovalDecision::Allow),
+            json!({"type":"control_response","response":{"subtype":"success","request_id":"r1",
+                "response":{"behavior":"allow","updatedInput":{"command":"cargo test"}}}})
+        );
+        assert_eq!(
+            r(ApprovalDecision::Deny)["response"]["response"],
+            json!({"behavior":"deny","message":"Denied by the user"})
+        );
+        assert_eq!(
+            r(ApprovalDecision::Always)["response"]["response"],
+            json!({
+                "behavior":"allow",
+                "updatedInput":{"command":"cargo test"},
+                "updatedPermissions":[{"type":"addRules","rules":[{"toolName":"Bash"}],
+                    "behavior":"allow","destination":"session"}]
+            })
+        );
     }
 
     #[test]

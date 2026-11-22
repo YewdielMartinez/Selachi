@@ -1,7 +1,7 @@
 //! The simple sections: General, Appearance, Git, Processes and About.
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
-use store::config::{AutoStop, ThemeMode};
+use store::config::AutoStop;
 use store::Density;
 use theme::{Rgba, rgb};
 use ui_kit::{Button, GhostButton, Slider, SwatchRow};
@@ -92,16 +92,8 @@ impl SettingsView {
         let a = self.cfg.appearance.clone();
         let layout = self.cfg.layout.resolve();
 
-        let mode_ix = match a.mode {
-            ThemeMode::System => 0,
-            ThemeMode::Dark => 1,
-            ThemeMode::Light => 2,
-            ThemeMode::Oled => 3,
-        };
-        let mode = self.segmented(cx, "theme-mode", ["Sistema", "Oscuro", "Claro", "OLED"], mode_ix, |s, ix, cx| {
-            let m = [ThemeMode::System, ThemeMode::Dark, ThemeMode::Light, ThemeMode::Oled][ix.min(3)];
-            s.edit_cfg(cx, |c| c.appearance.mode = m);
-        });
+        let theme_cards = self.theme_cards(cx);
+        let palettes = self.palettes_group(narrow);
 
         let colors: Vec<Rgba> = ACCENTS.iter().map(|h| rgb(*h)).collect();
         let selected = ACCENTS.iter().position(|h| {
@@ -224,19 +216,36 @@ impl SettingsView {
             .gap(px(12.0))
             .child(note(
                 &t,
-                "El preset, las pestañas, el panel derecho y las divisiones se ajustan en el panel de layout.",
+                "El preset, las pestañas, la barra lateral, el panel derecho y las divisiones están en Diseño.",
             ))
-            .child(Button::tonal("open-layout", &t, "Más opciones de layout").on_click(cx.listener(|_, _, _, cx| {
-                cx.emit(SettingsEvent::OpenLayoutPanel);
-            })));
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.0))
+                    .child(Button::tonal("open-design", &t, "Más opciones de layout").on_click(cx.listener(
+                        |s, _, _, cx| s.set_section(Section::Design, cx),
+                    )))
+                    .child(GhostButton::new("open-layout-popover", &t, "Panel rápido").on_click(cx.listener(
+                        |_, _, _, cx| cx.emit(SettingsEvent::OpenLayoutPanel),
+                    ))),
+            );
 
         vec![
             ui::group(
                 &t,
-                Some("Tema"),
+                Some("Temas"),
                 vec![
-                    row(&t, narrow, "Modo", Some("«Sistema» sigue el modo claro u oscuro de Windows.".into()), mode, None)
-                        .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Modo",
+                        Some("«Sistema» sigue el modo claro u oscuro de Windows. Cada vista previa usa los colores de su tema.".into()),
+                        div(),
+                        None,
+                    )
+                    .into_any_element(),
+                    ui::plain_row(theme_cards).into_any_element(),
                     row(
                         &t,
                         narrow,
@@ -249,6 +258,7 @@ impl SettingsView {
                 ],
             )
             .into_any_element(),
+            palettes,
             ui::group(
                 &t,
                 Some("Tipografía"),
@@ -367,7 +377,7 @@ impl SettingsView {
                 .text_color(c.muted)
                 .child(SharedString::from(p.display().to_string()))
         };
-        let open_dir = dir.clone();
+        let open_dir = dir;
         let open = Button::tonal("open-config-dir", &t, "Abrir carpeta de configuración").on_click(
             cx.listener(move |_, _, _, _| open_folder(&open_dir)),
         );

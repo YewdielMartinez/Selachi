@@ -1088,17 +1088,42 @@ fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
 impl AcpDriver {
     /// Start `AgentKind::Acp { command }`.
     pub fn spawn_command_line(command: &str, cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
-        Self::spawn(&AcpCommand::from_command_line(command, cfg)?, cfg, tx)
+        Self::spawn_command_line_with(command, cfg, tx, &SpawnOpts::default())
+    }
+
+    /// [`spawn_command_line`](Self::spawn_command_line) with [`SpawnOpts`].
+    pub fn spawn_command_line_with(
+        command: &str,
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        Self::spawn_with(&AcpCommand::from_command_line(command, cfg)?, cfg, tx, opts)
     }
 
     /// Start `opencode acp`.
     pub fn spawn_opencode(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
-        Self::spawn(&AcpCommand::opencode(cfg)?, cfg, tx)
+        Self::spawn_opencode_with(cfg, tx, &SpawnOpts::default())
+    }
+
+    /// [`spawn_opencode`](Self::spawn_opencode) with [`SpawnOpts`].
+    pub fn spawn_opencode_with(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>, opts: &SpawnOpts) -> Result<Self> {
+        Self::spawn_with(&AcpCommand::opencode(cfg)?, cfg, tx, opts)
     }
 
     /// Start any ACP agent process and perform the handshake in the background; events
     /// (`SessionStarted`, ...) arrive on the receiver paired with `tx`.
     pub fn spawn(cmd: &AcpCommand, cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
+        Self::spawn_with(cmd, cfg, tx, &SpawnOpts::default())
+    }
+
+    /// [`spawn`](Self::spawn) with [`SpawnOpts`] (Job Object membership).
+    pub fn spawn_with(
+        cmd: &AcpCommand,
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
         let mut c = proc::command_for(&cmd.program);
         c.args(&cmd.args)
             .envs(cmd.env.iter().map(|(k, v)| (k, v)))
@@ -1106,7 +1131,7 @@ impl AcpDriver {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = c.spawn()?;
+        let mut child = proc::spawn_in_job(&mut c, opts.job)?;
         let pid = child.id();
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().ok_or(DriverError::Closed)?;
@@ -1189,6 +1214,18 @@ impl AgentDriver for AcpDriver {
     fn approve(&mut self, id: &str, allow: bool) -> Result<()> {
         let step = self.session.lock().approve(id, allow)?;
         self.apply(step)
+    }
+
+    fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<()> {
+        let step = self
+            .session
+            .lock()
+            .approve_with(id, decision.allows(), decision == ApprovalDecision::Always)?;
+        self.apply(step)
+    }
+
+    fn pid(&self) -> Option<u32> {
+        Some(self.pid)
     }
 
     fn shutdown(&mut self) {

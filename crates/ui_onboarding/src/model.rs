@@ -9,6 +9,7 @@ use store::{BuiltinPreset, Config, Density, DiscoveredProject, PresetId, StateDb
 
 use crate::agents::{AgentRow, AgentStatus};
 use crate::flow::Step;
+use crate::layouts::{self, LayoutCard};
 
 /// Theme choices of step 4.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +114,9 @@ pub struct Extras {
     pub worktrees: WorktreeLocation,
     /// Claude OAuth usage endpoint (experimental, off by default).
     pub oauth_endpoint: bool,
+    /// "Espacios unificados" was chosen but `store` has no such preset yet, so `espacios` was
+    /// written: the host must apply the unified layout itself (see `layouts`).
+    pub unified_layout: bool,
 }
 
 /// Everything the wizard can change, as plain values.
@@ -124,8 +128,9 @@ pub struct Draft {
     pub theme: ThemeChoice,
     /// `#RRGGBB`.
     pub accent: String,
-    /// `None`: the config uses a custom preset, no card is selected and it is left alone.
-    pub preset: Option<BuiltinPreset>,
+    /// The selected layout card; `None`: the config uses a custom preset, nothing is selected
+    /// and it is left alone.
+    pub layout: Option<LayoutCard>,
     /// Sidebar translucency, 0..=100.
     pub translucency: u8,
     pub mono_size: f32,
@@ -147,8 +152,13 @@ impl Draft {
             worktrees: WorktreeLocation::default(),
             theme: ThemeChoice::from_config(config.appearance.mode),
             accent: config.appearance.accent.clone(),
-            preset: match &config.layout.preset {
-                PresetId::Builtin(b) => Some(*b),
+            layout: match &config.layout.preset {
+                // Untouched layout (the stock default): recommend the new default.
+                PresetId::Builtin(BuiltinPreset::Terminal) if config.layout.overrides.is_empty() => {
+                    Some(LayoutCard::Unified)
+                }
+                PresetId::Builtin(b) if Some(*b) == layouts::store_unified() => Some(LayoutCard::Unified),
+                PresetId::Builtin(b) => Some(LayoutCard::Builtin(*b)),
                 PresetId::Custom(_) => None,
             },
             translucency: layout.sidebar_translucency,
@@ -172,10 +182,11 @@ impl Draft {
             cfg.appearance.mode = self.theme.to_config();
             cfg.appearance.accent = self.accent.clone();
             cfg.appearance.mono_size = f64::from(self.mono_size);
-            if let Some(p) = self.preset
-                && cfg.layout.preset != PresetId::Builtin(p)
-            {
-                cfg.layout.select_preset(PresetId::Builtin(p));
+            if let Some(card) = self.layout {
+                let (id, _) = layouts::resolve(card);
+                if cfg.layout.preset != id {
+                    cfg.layout.select_preset(id);
+                }
             }
             let mut target = cfg.layout.resolve();
             target.density = self.density;
@@ -207,6 +218,7 @@ impl Draft {
         Extras {
             worktrees: if skipped.contains(&Step::Projects) { WorktreeLocation::default() } else { self.worktrees.clone() },
             oauth_endpoint: !skipped.contains(&Step::Agents) && self.oauth_endpoint,
+            unified_layout: !skipped.contains(&Step::Appearance) && self.layout.is_some_and(|c| layouts::resolve(c).1),
         }
     }
 }
@@ -305,7 +317,7 @@ pub fn summary_lines(
         plural(projects.favorites, "favorito", "favoritos"),
         draft.worktrees.describe(),
     );
-    let preset = draft.preset.map_or("personalizado", |p| p.id());
+    let preset = draft.layout.map_or("personalizado", LayoutCard::label);
     let appearance_value = format!(
         "{} · acento {} · layout {} · letra {} pt · densidad {}",
         draft.theme.label(),
@@ -359,7 +371,15 @@ mod tests {
     fn untouched_draft_changes_nothing() {
         let base = Config::default();
         let draft = Draft::from_config(&base);
-        assert_eq!(draft.build_config(&base, &BTreeSet::new()), base);
+        let mut expected = base.clone();
+        // Only the recommended layout is applied on an untouched stock config.
+        expected.layout.select_preset(layouts::resolve(LayoutCard::Unified).0);
+        assert_eq!(draft.layout, Some(LayoutCard::Unified), "recommended by default");
+        assert_eq!(draft.build_config(&base, &BTreeSet::new()), expected);
+        let mut skipped = BTreeSet::new();
+        skipped.insert(Step::Appearance);
+        assert_eq!(draft.build_config(&base, &skipped), base);
+        assert!(draft.extras(&BTreeSet::new()).unified_layout == layouts::resolve(LayoutCard::Unified).1);
     }
 
     #[test]
@@ -369,7 +389,7 @@ mod tests {
         d.claude_statusline_hook = true;
         d.theme = ThemeChoice::Light;
         d.accent = "#BC8CE8".into();
-        d.preset = Some(BuiltinPreset::Espacios);
+        d.layout = Some(LayoutCard::Builtin(BuiltinPreset::Espacios));
         d.translucency = 35;
         d.mono_size = 15.0;
         d.density = Density::Compact;
@@ -429,7 +449,7 @@ mod tests {
         let mut base = Config::default();
         base.layout.select_preset(PresetId::Custom("Mi layout".into()));
         let d = Draft::from_config(&base);
-        assert_eq!(d.preset, None);
+        assert_eq!(d.layout, None);
         let cfg = d.build_config(&base, &BTreeSet::new());
         assert_eq!(cfg.layout.preset, base.layout.preset);
     }
@@ -443,7 +463,7 @@ mod tests {
         let base = Config::load_from(&path).unwrap().config;
         let mut d = Draft::from_config(&base);
         d.theme = ThemeChoice::Light;
-        d.preset = Some(BuiltinPreset::Chat);
+        d.layout = Some(LayoutCard::Builtin(BuiltinPreset::Chat));
         d.density = Density::Compact;
         d.mono_size = 14.0;
         d.shell = Some(cmd_shell());
@@ -538,7 +558,7 @@ mod tests {
         let e = d.extras(&BTreeSet::new());
         assert!(e.oauth_endpoint);
         assert_eq!(e.worktrees, WorktreeLocation::Inside);
-        let e = d.extras(&skipped(&[Step::Agents, Step::Projects]));
+        let e = d.extras(&skipped(&[Step::Agents, Step::Projects, Step::Appearance]));
         assert_eq!(e, Extras::default());
     }
 
@@ -553,7 +573,7 @@ mod tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0].value, "Claude Code listos · 1 por configurar");
         assert!(lines[1].value.starts_with("5 proyectos · 1 favorito"));
-        assert!(lines[2].value.contains("Oscuro") && lines[2].value.contains("#00AAFF") && lines[2].value.contains("terminal"));
+        assert!(lines[2].value.contains("Oscuro") && lines[2].value.contains("#00AAFF") && lines[2].value.contains("Espacios unificados"));
         assert!(lines[3].skipped && lines[3].value.starts_with("Omitido"));
         let none = summary_lines(&d, &BTreeSet::new(), &[], ProjectCounts::default(), "auto");
         assert_eq!(none[0].value, "Sin agentes detectados");

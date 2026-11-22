@@ -131,15 +131,6 @@ impl TerminalView {
                 (hover, link.and_then(|r| self.link_at(r, col)).map(|h| (vis, h)))
             },
         };
-        if std::env::var_os("SELACHI_DBG_BLOCKS").is_some() {
-            use std::io::Write;
-            let ui = &self.block_ui;
-            let rows = ui.rows.borrow();
-            let msg = format!("cell={cell:?} hover={hover:?} rows={:?}
-blocks={:?}
-", rows.iter().take(10).collect::<Vec<_>>(), ui.blocks.iter().map(|b| (b.id.0, b.prompt_line, b.command_line, b.output_start, b.output_end, b.state)).collect::<Vec<_>>());
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("C:/tmp/blocks-dbg.log") { let _ = f.write_all(msg.as_bytes()); }
-        }
         let mut changed = false;
         if self.block_ui.hover != hover {
             self.block_ui.hover = hover;

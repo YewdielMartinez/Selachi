@@ -37,6 +37,7 @@ pub(crate) const CONTEXT: &str = "SettingsView";
 pub enum Section {
     General,
     Appearance,
+    Design,
     Terminal,
     Agents,
     Git,
@@ -47,9 +48,10 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 9] = [
+    pub const ALL: [Section; 10] = [
         Section::General,
         Section::Appearance,
+        Section::Design,
         Section::Terminal,
         Section::Agents,
         Section::Git,
@@ -63,6 +65,7 @@ impl Section {
         match self {
             Section::General => "General",
             Section::Appearance => "Apariencia",
+            Section::Design => "Diseño",
             Section::Terminal => "Terminal",
             Section::Agents => "Agentes",
             Section::Git => "Git",
@@ -76,7 +79,8 @@ impl Section {
     pub fn subtitle(self) -> &'static str {
         match self {
             Section::General => "Idioma, sesión y cierre.",
-            Section::Appearance => "Tema, acento, tipografía y densidad.",
+            Section::Appearance => "Temas, acento, tipografía y densidad.",
+            Section::Design => "Presets, pestañas, barra lateral, paneles y zonas.",
             Section::Terminal => "Shell, perfiles, cursor y completado.",
             Section::Agents => "CLI detectados, permisos y uso.",
             Section::Git => "Confirmaciones y editor externo.",
@@ -92,7 +96,8 @@ impl Section {
     pub fn icon(self) -> Icon {
         match self {
             Section::General => Icon::Settings,
-            Section::Appearance => Icon::Layout, // TODO-SVG appearance.svg
+            Section::Appearance => Icon::Files, // TODO-SVG appearance.svg
+            Section::Design => Icon::Layout,
             Section::Terminal => Icon::Terminal,
             Section::Agents => Icon::Agents,
             Section::Git => Icon::GitBranch,
@@ -203,6 +208,9 @@ pub struct SettingsView {
     nav_open: bool,
     pub(crate) profile_editor: Option<ProfileEditor>,
     pub(crate) plugins: Entity<PluginsModel>,
+    /// The embedded layout panel (created the first time Diseño is shown).
+    pub(crate) layout_panel: Option<Entity<ui_layout::LayoutPanel>>,
+    pub(crate) cwd: Option<PathBuf>,
     pub(crate) plugin_focus: Option<String>,
     pub(crate) confirm: Option<(String, ConfirmKind)>,
     pub(crate) agents: AgentsState,
@@ -231,6 +239,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-tab", FocusPrevField, Some(CONTEXT)),
     ]);
     crate::text_field::bind_keys(cx);
+    ui_layout::init(cx);
 }
 
 /// Create the view as an entity.
@@ -285,6 +294,8 @@ impl SettingsView {
             nav_open: false,
             profile_editor: None,
             plugins,
+            layout_panel: None,
+            cwd: None,
             plugin_focus: None,
             confirm: None,
             agents: AgentsState::Unknown,
@@ -331,7 +342,29 @@ impl SettingsView {
                     cx.notify();
                 });
             }
+            if let Some(p) = &self.layout_panel {
+                p.update(cx, |p, cx| p.set_theme(theme, cx));
+            }
             cx.notify();
+        }
+    }
+
+    /// Working directory of the active terminal: enables the "Este proyecto" scope of the embedded
+    /// layout panel.
+    pub fn set_cwd(&mut self, cwd: Option<PathBuf>, cx: &mut Context<Self>) {
+        if self.cwd != cwd {
+            self.cwd = cwd.clone();
+            if let Some(p) = &self.layout_panel {
+                p.update(cx, |p, cx| p.set_cwd(cwd, cx));
+            }
+        }
+    }
+
+    /// Keep the embedded layout panel in step with `cfg.layout` (a no-op when equal).
+    pub(crate) fn sync_layout_panel(&self, cx: &mut Context<Self>) {
+        if let Some(p) = &self.layout_panel {
+            let layout = self.cfg.layout.clone();
+            p.update(cx, |p, cx| p.set_config(layout, cx));
         }
     }
 
@@ -367,6 +400,11 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// Scroll the content column to its end (screenshots, deep links to the last blocks).
+    pub fn scroll_to_end(&self) {
+        self.scroll.scroll_to_bottom();
+    }
+
     /// Deep link: show Plugins with `id` highlighted and its confirmation open.
     pub fn open_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.set_section(Section::Plugins, cx);
@@ -398,6 +436,7 @@ impl SettingsView {
         }
         if self.cfg != before {
             self.sync_fields(&before, cx);
+            self.sync_layout_panel(cx);
             self.errors.clear();
             cx.notify();
         }
@@ -433,6 +472,7 @@ impl SettingsView {
             return Err(e);
         }
         self.cfg = candidate;
+        self.sync_layout_panel(cx);
         cx.emit(SettingsEvent::ConfigChanged(Arc::new(self.cfg.clone())));
         self.touch_save(cx);
         cx.notify();
@@ -566,6 +606,7 @@ impl SettingsView {
             },
             external_editor: pick(o.external_editor == b.external_editor, o.external_editor.clone(), t.external_editor.clone()),
             index_url: pick(o.index_url == b.index_url, o.index_url.clone(), t.index_url.clone()),
+            sidebar: merge_sidebar(&b.sidebar, &o.sidebar, &t.sidebar),
         };
         self.base_extras = fresh;
         if merged != self.extras {
@@ -712,4 +753,26 @@ pub(crate) fn config_field_value(cfg: &Config, extras: &Extras, key: &str) -> Op
 fn write_all(cfg: &Config, extras: &Extras, path: &std::path::Path) -> Result<(), String> {
     cfg.save_to(path).map_err(|e| e.to_string())?;
     extras.write(path)
+}
+
+/// Per-field three-way merge of the sidebar options (ours wins where we changed it).
+fn merge_sidebar(
+    b: &crate::extras::SidebarPrefs,
+    o: &crate::extras::SidebarPrefs,
+    t: &crate::extras::SidebarPrefs,
+) -> crate::extras::SidebarPrefs {
+    let pick = |base: bool, ours: bool, theirs: bool| if ours == base { theirs } else { ours };
+    crate::extras::SidebarPrefs {
+        show_actions: pick(b.show_actions, o.show_actions, t.show_actions),
+        panel_icons: pick(b.panel_icons, o.panel_icons, t.panel_icons),
+        nested_tabs: pick(b.nested_tabs, o.nested_tabs, t.nested_tabs),
+        footer_usage: pick(b.footer_usage, o.footer_usage, t.footer_usage),
+        row_model: pick(b.row_model, o.row_model, t.row_model),
+        row_time: pick(b.row_time, o.row_time, t.row_time),
+        titlebar_panels: if o.titlebar_panels == b.titlebar_panels {
+            t.titlebar_panels.clone()
+        } else {
+            o.titlebar_panels.clone()
+        },
+    }
 }

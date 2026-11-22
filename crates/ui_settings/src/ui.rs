@@ -139,7 +139,6 @@ pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone)
         PillTone::Neutral => (c.surface_3, c.muted),
         PillTone::Ok => (c.surface_3, c.text),
         PillTone::Warn => (c.surface_3, c.text),
-        PillTone::Error => (c.surface_3, c.error),
     };
     let mut d = div()
         .flex()
@@ -164,7 +163,6 @@ pub enum PillTone {
     Neutral,
     Ok,
     Warn,
-    Error,
 }
 
 /// A tonal info banner with an icon ("Reinicia Selachi para completar").

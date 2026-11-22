@@ -1,1 +1,337 @@
-//! gpui-level tests.
+//! gpui-level tests: edits persist (debounced, comments kept), validation, hot-reload merge,
+//! plugin install end to end against the built zips, deep link, sidebar options.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use gpui::{AppContext as _, Entity, TestAppContext};
+use store::Config;
+use store::config::TEMPLATE;
+use theme::Theme;
+use viewer_svc::grammars::GrammarRegistry;
+
+use crate::net::LocalFetcher;
+use crate::plugins::IndexState;
+use crate::save::SAVE_DEBOUNCE;
+use crate::view::{Section, SettingsEvent, SettingsOptions, SettingsView};
+
+fn dist() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/grammars/dist")
+}
+
+struct Fixture {
+    _dir: tempfile::TempDir,
+    path: PathBuf,
+    view: Entity<SettingsView>,
+}
+
+fn fixture(cx: &mut TestAppContext, text: &str) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, text).unwrap();
+    let config = Config::load_from(&path).unwrap().config;
+    let registry = Arc::new(GrammarRegistry::new(dir.path().join("plugins")));
+    let options = SettingsOptions {
+        registry: Some(registry),
+        fetcher: Some(Arc::new(LocalFetcher { archives_dir: dist() })),
+        ..SettingsOptions::new(path.clone(), "0.0.1")
+    };
+    let view = cx.new(|cx| SettingsView::new(config, Theme::dark(), options, cx));
+    Fixture { _dir: dir, path, view }
+}
+
+fn settle(cx: &mut TestAppContext) {
+    cx.executor().advance_clock(SAVE_DEBOUNCE + Duration::from_millis(50));
+    cx.run_until_parked();
+}
+
+fn disk(f: &Fixture) -> String {
+    std::fs::read_to_string(&f.path).unwrap()
+}
+
+#[gpui::test]
+fn edits_are_saved_after_the_debounce_and_keep_comments(cx: &mut TestAppContext) {
+    let text = format!("# my header\n{}", TEMPLATE.replace("scrollback = 10000", "scrollback = 10000 # lines"));
+    let f = fixture(cx, &text);
+    f.view.update(cx, |v, cx| {
+        v.edit_cfg(cx, |c| c.terminal.scrollback = 20_000);
+        v.edit_cfg(cx, |c| c.terminal.copy_on_select = true);
+    });
+    // Nothing is written before the quiet period ends.
+    cx.run_until_parked();
+    assert!(!disk(&f).contains("scrollback = 20000"));
+    assert!(f.view.read_with(cx, |v, _| v.has_pending_save()));
+    settle(cx);
+    let saved = disk(&f);
+    assert!(saved.contains("# my header"), "{saved}");
+    assert!(saved.contains("scrollback = 20000 # lines"), "{saved}");
+    assert!(saved.contains("copy_on_select = true"), "{saved}");
+    assert!(!f.view.read_with(cx, |v, _| v.has_pending_save()));
+    assert_eq!(Config::parse(&saved).unwrap().config.terminal.scrollback, 20_000);
+}
+
+#[gpui::test]
+fn a_burst_of_edits_is_one_write(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    let saved = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = saved.clone();
+    cx.update(|cx| {
+        cx.subscribe(&f.view, move |_, ev: &SettingsEvent, _| {
+            if matches!(ev, SettingsEvent::Saved) {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        })
+        .detach();
+    });
+    for n in 1..=5u32 {
+        f.view.update(cx, |v, cx| v.edit_cfg(cx, |c| c.terminal.scrollback = 1000 * n));
+        cx.executor().advance_clock(Duration::from_millis(100));
+    }
+    settle(cx);
+    assert_eq!(saved.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(disk(&f).contains("scrollback = 5000"));
+}
+
+#[gpui::test]
+fn invalid_values_are_rejected_and_never_written(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    let before = disk(&f);
+    f.view.update(cx, |v, cx| {
+        let e = v.edit(cx, |c| c.appearance.mono_size = 2.0).unwrap_err();
+        assert_eq!(e.field, "appearance.mono_size");
+        assert!(e.message.contains("4 y 96"));
+        v.edit_field("accent_hex", cx, |c| c.appearance.accent = "azul".into());
+        assert!(v.errors.contains_key("accent_hex"));
+        assert_eq!(v.config().appearance.accent, "#00AAFF", "the bad value is not applied");
+        // A valid value clears the error.
+        v.edit_field("accent_hex", cx, |c| c.appearance.accent = "#112233".into());
+        assert!(!v.errors.contains_key("accent_hex"));
+        assert_eq!(v.config().appearance.accent, "#112233");
+    });
+    settle(cx);
+    let saved = disk(&f);
+    assert_ne!(saved, before);
+    assert!(saved.contains("#112233") && !saved.contains("azul"));
+}
+
+#[gpui::test]
+fn text_fields_apply_through_fields_apply(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| {
+        crate::fields::apply(v, "scrollback", "12 000", cx);
+        assert_eq!(v.config().terminal.scrollback, 12_000);
+        crate::fields::apply(v, "scrollback", "muchas", cx);
+        assert!(v.errors.contains_key("scrollback"));
+        assert_eq!(v.config().terminal.scrollback, 12_000);
+        crate::fields::apply(v, "scrollback", "5000000", cx);
+        assert!(v.errors.contains_key("scrollback"), "over the 1 000 000 limit");
+        crate::fields::apply(v, "accent_hex", "0af", cx);
+        assert_eq!(v.config().appearance.accent, "#00AAFF");
+    });
+}
+
+#[gpui::test]
+fn profiles_can_be_added_edited_and_removed(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| {
+        v.edit_profile(0, cx); // nothing to edit yet: no-op on an empty list
+    });
+    f.view.update(cx, |v, cx| {
+        v.edit_cfg(cx, |c| {
+            c.profiles.push(store::config::Profile { name: "Dev".into(), program: "pwsh.exe".into(), ..Default::default() })
+        });
+        crate::fields::apply(v, "profile.0.args", "-NoLogo -Command \"echo hi\"", cx);
+        crate::fields::apply(v, "profile.0.cwd", r"C:\code", cx);
+        crate::fields::apply(v, "profile.0.program", "  ", cx);
+        assert!(v.errors.contains_key("profile.0.program"));
+        let p = &v.config().profiles[0];
+        assert_eq!(p.args, ["-NoLogo", "-Command", "echo hi"]);
+        assert_eq!(p.cwd.as_deref(), Some(r"C:\code"));
+        assert_eq!(p.program, "pwsh.exe");
+    });
+    settle(cx);
+    let saved = Config::parse(&disk(&f)).unwrap().config;
+    assert_eq!(saved.profiles.len(), 1);
+    assert_eq!(saved.profiles[0].args.len(), 3);
+}
+
+#[gpui::test]
+fn hot_reload_does_not_clobber_an_edit_in_progress(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| v.edit_cfg(cx, |c| c.terminal.scrollback = 7_000));
+    // The file changed elsewhere (another key) before our debounce fired.
+    let mut theirs = Config::default();
+    theirs.appearance.mono_size = 15.0;
+    f.view.update(cx, |v, cx| v.set_config(theirs, cx));
+    f.view.read_with(cx, |v, _| {
+        assert_eq!(v.config().terminal.scrollback, 7_000, "our edit survives");
+        assert_eq!(v.config().appearance.mono_size, 15.0, "their change is adopted");
+    });
+    settle(cx);
+    let saved = Config::parse(&disk(&f)).unwrap().config;
+    assert_eq!(saved.terminal.scrollback, 7_000);
+}
+
+#[gpui::test]
+fn extras_persist_and_the_https_only_rule_applies_to_the_index_url(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| {
+        v.edit_extras("general.confirm_close_running", cx, |e| e.confirm_close_running = false);
+        v.edit_extras("index_url", cx, |e| e.index_url = "http://evil.example/g.toml".into());
+        assert!(v.errors.contains_key("index_url"));
+        assert!(v.extras().index_url.is_empty(), "http:// is never adopted");
+        v.edit_extras("index_url", cx, |e| e.index_url = "https://example.com/g.toml".into());
+        assert!(!v.errors.contains_key("index_url"));
+    });
+    settle(cx);
+    let saved = disk(&f);
+    assert!(saved.contains("confirm_close_running = false"), "{saved}");
+    assert!(saved.contains("https://example.com/g.toml"));
+    assert!(!saved.contains("evil.example"));
+    // The store config in the same file is untouched and still parses.
+    assert!(Config::parse(&saved).is_ok());
+}
+
+#[gpui::test]
+fn sidebar_options_and_group_by_persist(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| {
+        v.edit_extras("sidebar", cx, |e| e.sidebar.row_time = false);
+        v.edit_extras("sidebar", cx, |e| e.sidebar.set_titlebar("usage", false));
+        v.edit_cfg(cx, |c| {
+            let mut r = c.layout.resolve();
+            r.sidebar.group_by = store::GroupBy::Status;
+            c.layout.set_resolved(&r);
+        });
+    });
+    settle(cx);
+    let saved = disk(&f);
+    assert!(saved.contains("row_time = false"), "{saved}");
+    let extras = crate::extras::Extras::parse(&saved);
+    assert!(!extras.sidebar.row_time && !extras.sidebar.titlebar_has("usage") && extras.sidebar.show_actions);
+    assert_eq!(Config::parse(&saved).unwrap().config.layout.resolve().sidebar.group_by, store::GroupBy::Status);
+}
+
+#[gpui::test]
+fn the_embedded_layout_panel_follows_config_edits_and_feeds_them_back(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let dir = f._dir.path().to_path_buf();
+        let cfg = Config::load_from(&dir.join("config.toml")).unwrap().config;
+        let options = SettingsOptions {
+            registry: Some(Arc::new(GrammarRegistry::new(dir.join("plugins2")))),
+            fetcher: Some(Arc::new(LocalFetcher { archives_dir: dist() })),
+            ..SettingsOptions::new(dir.join("config.toml"), "0.0.1")
+        };
+        SettingsView::new(cfg, Theme::dark(), options, cx)
+    });
+    view.update(cx, |v, cx| v.set_section(Section::Design, cx));
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let panel = view.read_with(cx, |v, _| v.layout_panel.clone()).expect("Diseño builds the panel");
+    // Settings -> panel.
+    view.update(cx, |v, cx| {
+        v.edit_cfg(cx, |c| {
+            let mut r = c.layout.resolve();
+            r.density = store::Density::Compact;
+            c.layout.set_resolved(&r);
+        })
+    });
+    let shown = panel.read_with(cx, |p, _| p.layout().density);
+    assert_eq!(shown, store::Density::Compact);
+    // Panel -> settings.
+    let mut changed = view.read_with(cx, |v, _| v.config().layout.clone());
+    changed.select_preset(store::BuiltinPreset::Chat.into());
+    panel.update_in(cx, |p, window, cx| {
+        p.edit_layout(window, cx, |l| l.splits = store::Splits::TwoVertical);
+    });
+    cx.run_until_parked();
+    let splits = view.read_with(cx, |v, _| v.config().layout.resolve().splits);
+    assert_eq!(splits, store::Splits::TwoVertical);
+}
+
+#[gpui::test]
+fn deep_link_opens_plugins_with_the_confirmation(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| v.handle(&SettingsEvent::InstallGrammar { id: "csharp".into() }, cx));
+    f.view.read_with(cx, |v, _| {
+        assert_eq!(v.section(), Section::Plugins);
+        assert_eq!(v.plugin_focus.as_deref(), Some("csharp"));
+        assert_eq!(v.confirm.as_ref().map(|(id, _)| id.as_str()), Some("csharp"));
+    });
+}
+
+#[gpui::test]
+fn plugin_index_is_fetched_lazily_cached_and_a_plugin_installs(cx: &mut TestAppContext) {
+    let dist = dist();
+    if !dist.join("grammars.toml").exists() {
+        eprintln!("skipped: packaging/grammars/dist is not built");
+        return;
+    }
+    let f = fixture(cx, TEMPLATE);
+    // Point the model at the local index (file:// only works through LocalFetcher).
+    let url = format!("file:///{}", dist.join("grammars.toml").canonicalize().unwrap().display().to_string().trim_start_matches(r"\\?\").replace('\\', "/"));
+    let plugins = f.view.read_with(cx, |v, _| v.plugins().clone());
+    plugins.read_with(cx, |m, _| assert_eq!(*m.index_state(), IndexState::Idle, "no fetch before Plugins opens"));
+    plugins.update(cx, |m, cx| m.set_index_url(url, cx));
+    f.view.update(cx, |v, cx| v.set_section(Section::Plugins, cx));
+    cx.run_until_parked();
+    plugins.read_with(cx, |m, _| {
+        assert_eq!(*m.index_state(), IndexState::Ready, "{:?}", m.index_state());
+        assert!(m.rows().iter().any(|r| r.id == "csharp" && r.can_install()));
+    });
+    // Re-entering Plugins within the hour does not refetch (state stays Ready, no Loading flash).
+    f.view.update(cx, |v, cx| v.set_section(Section::About, cx));
+    f.view.update(cx, |v, cx| v.set_section(Section::Plugins, cx));
+    plugins.read_with(cx, |m, _| assert_eq!(*m.index_state(), IndexState::Ready));
+
+    let installed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = installed.clone();
+    cx.update(|cx| {
+        cx.subscribe(&f.view, move |_, ev: &SettingsEvent, _| {
+            if let SettingsEvent::PluginInstalled { id, restart } = ev {
+                sink.lock().unwrap().push((id.clone(), *restart));
+            }
+        })
+        .detach();
+    });
+    plugins.update(cx, |m, cx| m.install("csharp", cx));
+    cx.run_until_parked();
+    assert_eq!(*installed.lock().unwrap(), vec![("csharp".to_string(), false)]);
+    plugins.read_with(cx, |m, _| {
+        let row = m.rows().into_iter().find(|r| r.id == "csharp").unwrap();
+        assert_eq!(row.label(), "Instalado");
+        assert!(row.can_remove());
+    });
+    // And it can be removed again.
+    plugins.update(cx, |m, cx| m.uninstall("csharp", cx));
+    cx.run_until_parked();
+    plugins.read_with(cx, |m, _| assert!(m.rows().iter().find(|r| r.id == "csharp").unwrap().can_install()));
+}
+
+#[gpui::test]
+fn a_failed_index_shows_an_error_and_retry_works(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    let plugins = f.view.read_with(cx, |v, _| v.plugins().clone());
+    plugins.update(cx, |m, cx| m.set_index_url("https://example.invalid/missing/nothing-here.toml", cx));
+    f.view.update(cx, |v, cx| v.set_section(Section::Plugins, cx));
+    cx.run_until_parked();
+    plugins.read_with(cx, |m, _| assert!(matches!(m.index_state(), IndexState::Failed(e) if !e.is_empty())));
+    // Retry hits the network layer again (still failing here, but it ran).
+    plugins.update(cx, |m, cx| m.refresh(cx));
+    plugins.read_with(cx, |m, _| assert_eq!(*m.index_state(), IndexState::Loading));
+    cx.run_until_parked();
+    plugins.read_with(cx, |m, _| assert!(matches!(m.index_state(), IndexState::Failed(_))));
+}
+
+#[gpui::test]
+fn flush_writes_immediately(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| {
+        v.edit_cfg(cx, |c| c.git.confirm_sensitive = false);
+        v.flush();
+    });
+    assert!(disk(&f).contains("confirm_sensitive = false"));
+}

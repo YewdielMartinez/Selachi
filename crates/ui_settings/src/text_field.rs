@@ -256,10 +256,6 @@ impl TextField {
         self
     }
 
-    pub fn is_focused(&self, window: &Window) -> bool {
-        self.focus.is_focused(window)
-    }
-
     /// Replace the text from outside (hot reload). Does not emit `Change`.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.buf.text != text {

@@ -182,7 +182,7 @@ impl OnboardingView {
             .map(|path| Root { path, checked: true })
             .collect();
         let reduced_motion = ui_kit::reduced_motion() || config.layout.resolve().reduced_motion;
-        let mut view = Self {
+        Self {
             theme,
             system_dark: theme.mode != Mode::Light,
             base: config,
@@ -219,9 +219,7 @@ impl OnboardingView {
             shells_task: None,
             finish_task: None,
             _appearance_sub: None,
-        };
-        view.theme = view.preview_theme();
-        view
+        }
     }
 
     // ---- public accessors --------------------------------------------------------------------
@@ -322,7 +320,9 @@ impl OnboardingView {
             window.appearance(),
             gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
         );
-        self.theme = self.preview_theme();
+        if self.draft.theme == ThemeChoice::System {
+            self.theme = self.preview_theme();
+        }
         self._appearance_sub = Some(cx.observe_window_appearance(window, |this, window, cx| {
             this.system_dark = !matches!(
                 window.appearance(),

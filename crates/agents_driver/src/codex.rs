@@ -247,11 +247,21 @@ impl CodexSession {
     }
 
     pub fn approve(&mut self, id: &str, allow: bool) -> Result<Step> {
+        self.approve_with(id, if allow { ApprovalDecision::Allow } else { ApprovalDecision::Deny })
+    }
+
+    /// `Always` answers `acceptForSession`: the server stops asking for the same kind of
+    /// command / file change for the rest of the thread.
+    pub fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<Step> {
         let (rpc_id, _kind) = self
             .approvals
             .remove(id)
             .ok_or_else(|| DriverError::Protocol(format!("unknown approval id {id}")))?;
-        let decision = if allow { "accept" } else { "decline" };
+        let decision = match decision {
+            ApprovalDecision::Allow => "accept",
+            ApprovalDecision::Always => "acceptForSession",
+            ApprovalDecision::Deny => "decline",
+        };
         let mut step = Step::default();
         step.outgoing
             .push(json!({ "id": rpc_id, "result": { "decision": decision } }));
@@ -623,6 +633,11 @@ fn write_all(stdin: &Mutex<Option<ChildStdin>>, msgs: &[Value]) -> Result<()> {
 
 impl CodexDriver {
     pub fn spawn(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
+        Self::spawn_with(cfg, tx, &SpawnOpts::default())
+    }
+
+    /// [`spawn`](Self::spawn) with [`SpawnOpts`] (Job Object membership).
+    pub fn spawn_with(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>, opts: &SpawnOpts) -> Result<Self> {
         let exe = proc::resolve_executable("codex").ok_or_else(|| DriverError::NotFound("codex".into()))?;
         let mut cmd = proc::command_for(&exe);
         cmd.arg("app-server")
@@ -631,7 +646,7 @@ impl CodexDriver {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = cmd.spawn()?;
+        let mut child = proc::spawn_in_job(&mut cmd, opts.job)?;
         let pid = child.id();
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().ok_or(DriverError::Closed)?;
@@ -716,6 +731,15 @@ impl AgentDriver for CodexDriver {
     fn approve(&mut self, id: &str, allow: bool) -> Result<()> {
         let step = self.session.lock().approve(id, allow)?;
         self.apply(step)
+    }
+
+    fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<()> {
+        let step = self.session.lock().approve_with(id, decision)?;
+        self.apply(step)
+    }
+
+    fn pid(&self) -> Option<u32> {
+        Some(self.pid)
     }
 
     fn shutdown(&mut self) {
@@ -851,6 +875,21 @@ mod tests {
         s.on_message(&json!({"method":"item/fileChange/requestApproval","id":8,"params":{"itemId":"i2","reason":"write file"}}));
         let step = s.approve("8", false).unwrap();
         assert_eq!(step.outgoing[0]["result"]["decision"], "decline");
+    }
+
+    #[test]
+    fn approve_with_maps_each_decision() {
+        for (d, want) in [
+            (ApprovalDecision::Allow, "accept"),
+            (ApprovalDecision::Always, "acceptForSession"),
+            (ApprovalDecision::Deny, "decline"),
+        ] {
+            let mut s = CodexSession::new(&ThreadConfig::new("."));
+            s.on_message(&json!({"method":"item/commandExecution/requestApproval","id":3,
+                "params":{"itemId":"i","command":"ls"}}));
+            let step = s.approve_with("3", d).unwrap();
+            assert_eq!(step.outgoing[0], json!({"id":3,"result":{"decision":want}}));
+        }
     }
 
     #[test]

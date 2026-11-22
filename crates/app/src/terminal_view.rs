@@ -197,7 +197,13 @@ impl TerminalView {
         let cols = (avail_w / f32::from(metrics.width)).floor().clamp(10.0, 500.0) as u16;
         let rows = (avail_h / f32::from(metrics.height)).floor().clamp(3.0, 300.0) as u16;
 
-        let (program, args) = term_core::default_shell();
+        let (mut program, args) = term_core::default_shell();
+        // `SELACHI_SHELL=powershell.exe` picks another PowerShell (same shell integration). Useful
+        // because the Microsoft Store `pwsh.exe` (an app execution alias) runs in the package's own
+        // job and cannot be put into a process job: its children are then not tracked.
+        if let Some(p) = std::env::var_os("SELACHI_SHELL").and_then(|p| p.into_string().ok()) {
+            program = p;
+        }
         let shell_name: SharedString =
             program.strip_suffix(".exe").unwrap_or(&program).to_string().into();
         let cfg = SessionConfig {
@@ -262,6 +268,7 @@ impl TerminalView {
         let program = cfg.program.clone();
         let (cols, rows) = (cfg.cols, cfg.rows);
         let env = cx.try_global::<TermEnv>().map(|e| e.0.clone()).unwrap_or_default();
+        log::debug!("spawning with job {:?}", view.job.as_ref().map(|j| (j.owner, j.handle)));
         let options = SpawnOptions { env, job: view.job.as_ref().map(|j| j.handle) };
         match Session::spawn_with_options(cfg, options) {
             Ok((session, mut rx)) => {

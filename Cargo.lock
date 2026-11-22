@@ -36,9 +36,11 @@ dependencies = [
  "futures",
  "log",
  "parking_lot",
+ "proc_svc",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -981,6 +983,7 @@ dependencies = [
  "git_svc",
  "log",
  "parking_lot",
+ "proc_svc",
  "rusqlite",
  "serde",
  "serde_json",
@@ -6539,6 +6542,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_chat"
+version = "0.1.0"
+dependencies = [
+ "agents_driver",
+ "agents_svc",
+ "chat_core",
+ "futures",
+ "gpui",
+ "ignore",
+ "log",
+ "panel_api",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "theme",
+ "ui_kit",
+ "viewer_svc",
+]
+
+[[package]]
 name = "ui_doctor"
 version = "0.1.0"
 dependencies = [
@@ -6656,6 +6679,7 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.22.27",
  "ui_kit",
+ "ui_layout",
  "ureq",
  "viewer_svc",
 ]

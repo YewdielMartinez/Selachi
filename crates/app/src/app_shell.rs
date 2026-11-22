@@ -243,6 +243,8 @@ pub struct AppShell {
     /// Keeps the file tree's git markers in sync with the active tab's repository.
     marks_sub: Option<Subscription>,
     _viewer_task: Option<Task<()>>,
+    /// Owners (process jobs) of tabs that were closed and still have processes.
+    closed_owners: Vec<u64>,
     _grammar_task: Option<Task<()>>,
     layout_open: bool,
     layout_panel: Option<AnyView>,
@@ -431,6 +433,7 @@ impl AppShell {
             grammars: Vec::new(),
             marks_sub: None,
             _viewer_task: None,
+            closed_owners: Vec::new(),
             _grammar_task: None,
             layout_open: false,
             layout_panel: None,
@@ -455,6 +458,9 @@ impl AppShell {
     /// a repository or a folder: the panels do that when they are first shown.
     fn mount_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        // Closed tabs keep their job until it is empty (orphans); the process model notifies on job
+        // events, which is when to check.
+        self._subs.push(cx.observe(&services.procs, |this, _, cx| this.prune_closed_owners(cx)));
         // Git panel: its events and the end of its operations.
         self._subs.push(cx.subscribe_in(&services.git, window, |this, _, ev: &GitPanelEvent, window, cx| {
             this.on_git_event(ev.clone(), window, cx);
@@ -639,6 +645,24 @@ impl AppShell {
         id
     }
 
+    /// Drops the tracker owner of every closed tab whose job has no processes left.
+    fn prune_closed_owners(&mut self, cx: &mut Context<Self>) {
+        if self.closed_owners.is_empty() {
+            return;
+        }
+        let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        let mut tracker = services.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        self.closed_owners.retain(|owner| {
+            let members = tracker.job(*owner).map(|j| j.members());
+            log::debug!("closed owner {owner}: members {members:?}");
+            let empty = members.is_none_or(|m| m.is_empty());
+            if empty {
+                drop(tracker.remove_owner(*owner));
+            }
+            !empty
+        });
+    }
+
     /// Terminals among the tabs (viewer tabs do not run a shell).
     fn terminal_count(&self) -> usize {
         self.tabs.iter().filter(|t| t.handle.downcast::<TerminalTab>().is_some()).count()
@@ -737,12 +761,11 @@ impl AppShell {
     fn close_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.tabs.iter().position(|t| t.handle.id() == id) else { return };
         let slot = self.tabs.remove(ix);
-        if let Some(services) = cx.try_global::<Services>().cloned() {
-            // Dropping the job does not kill its members (no `kill_on_close`): leftovers show up
-            // as orphans.
-            let job = services.tracker.lock().unwrap_or_else(|p| p.into_inner()).remove_owner(id.as_u64());
-            drop(job);
-        }
+        // The owner stays in the tracker: closing the tab ends the shell (its root), so whatever
+        // the shell started and left running becomes an orphan of that owner and shows up in the
+        // procs panel and the status bar. It is dropped once the job is empty.
+        self.closed_owners.push(id.as_u64());
+        self.prune_closed_owners(cx);
         self.update_doctor_stats(cx);
         slot.handle.close(cx);
         drop(slot);

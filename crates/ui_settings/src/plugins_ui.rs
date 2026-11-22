@@ -243,12 +243,11 @@ impl SettingsView {
         let trigger = {
             let (this, id) = (this.clone(), id.clone());
             let button = Button::tonal(SharedString::from(format!("plugin-{kind:?}-{id}")), &t, label);
-            let id2 = id.clone();
             button.on_click(move |_, _, cx| {
-                let (this, id) = (this.clone(), id2.clone());
+                let (this, id) = (this.clone(), id.clone());
                 this.update(cx, |s, cx| {
                     let same = s.confirm.as_ref().is_some_and(|(cid, k)| *cid == id && *k == kind);
-                    s.confirm = (!same).then(|| (id, kind));
+                    s.confirm = (!same).then_some((id, kind));
                     cx.notify();
                 });
             })
@@ -284,7 +283,7 @@ impl SettingsView {
             })
         };
         let go: AnyElement = {
-            let (this, id) = (this.clone(), id.clone());
+            let this = this.clone();
             let on_click = move |_: &gpui::ClickEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
                 let id = id.clone();
                 this.update(cx, |s, cx| {
@@ -312,7 +311,6 @@ impl SettingsView {
         };
 
         let dismiss = {
-            let this = this.clone();
             move |_: &mut gpui::Window, cx: &mut gpui::App| {
                 this.update(cx, |s, cx| {
                     if s.confirm.is_some() {

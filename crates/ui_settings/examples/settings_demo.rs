@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p ui_settings --example settings_demo --features dev-file-urls -- \
-//!     [dark|light|oled] [--section general|appearance|terminal|agents|git|processes|plugins|keyboard|about] \
+//!     [dark|light|oled] [--section general|appearance|design|terminal|agents|git|processes|plugins|keyboard|about] \
 //!     [--size WxH] [--static] [--edit-profile] [--confirm <plugin id>] [--capture <action>] [--keep]
 //! ```
 //!
@@ -13,6 +13,8 @@
 //!   the Rust grammar's version bumped, so an update shows up) served through `LocalFetcher`
 //!   (`file://` index; archives are the built zips in `packaging/grammars/dist`). `csharp` and `rust`
 //!   start installed. `file://` is only possible because of the `dev-file-urls` feature.
+
+#![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -86,6 +88,7 @@ fn main() {
         .unwrap_or((1180.0, 900.0));
     let section = match arg_value(&args, "--section").as_deref() {
         Some("appearance") => Section::Appearance,
+        Some("design") => Section::Design,
         Some("terminal") => Section::Terminal,
         Some("agents") => Section::Agents,
         Some("git") => Section::Git,
@@ -98,6 +101,7 @@ fn main() {
     let edit_profile = args.iter().any(|a| a == "--edit-profile");
     let confirm = arg_value(&args, "--confirm");
     let capture = arg_value(&args, "--capture");
+    let scroll_end = args.iter().any(|a| a == "--scroll-end");
     let shield = args.iter().any(|a| a == "--static");
 
     // ---- temp config dir, seeded ----
@@ -161,7 +165,7 @@ fn main() {
     let options = SettingsOptions {
         registry: Some(registry),
         fetcher: Some(Arc::new(LocalFetcher { archives_dir: dist })),
-        ..SettingsOptions::new(config_path.clone(), "0.0.1")
+        ..SettingsOptions::new(config_path, "0.0.1")
     };
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
@@ -194,8 +198,12 @@ fn main() {
                     .detach();
                     Host { theme, shield, view: view.clone() }
                 });
-                host.read(cx).view.update(cx, |v, cx| {
+                let shown = host.read(cx).view.clone();
+                shown.update(cx, |v, cx| {
                     v.set_section(section, cx);
+                    if scroll_end {
+                        v.scroll_to_end();
+                    }
                     if edit_profile {
                         v.edit_profile(0, cx);
                     }

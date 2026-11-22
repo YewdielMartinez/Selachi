@@ -240,7 +240,7 @@ mod tests {
         let base = Config::default();
         let ours = cfg(|c| c.terminal.scrollback = 5_000);
         // The watcher reports what we saved, but we already moved on.
-        let saved = ours.clone();
+        let saved = ours;
         let ours_now = cfg(|c| {
             c.terminal.scrollback = 5_000;
             c.git.confirm_sensitive = false;

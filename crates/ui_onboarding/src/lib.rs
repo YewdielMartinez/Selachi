@@ -27,6 +27,7 @@ pub mod agents;
 pub mod flag;
 pub mod flow;
 pub mod gif;
+pub mod layouts;
 pub mod model;
 pub mod projects;
 pub mod shells;

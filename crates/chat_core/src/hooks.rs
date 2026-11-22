@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use agents_driver::acp::AcpDriver;
 use agents_driver::claude::ClaudeDriver;
 use agents_driver::codex::CodexDriver;
-use agents_driver::{AgentDriver, AgentEvent, AgentKind, DriverError, ThreadConfig};
+use agents_driver::{AgentDriver, AgentEvent, AgentKind, DriverError, SpawnOpts, ThreadConfig};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 
 use crate::model::{ApprovalDecision, ThreadId};
@@ -57,15 +57,16 @@ pub trait AgentControl: Send {
 pub struct SpawnedAgent {
     pub control: Box<dyn AgentControl>,
     pub events: UnboundedReceiver<AgentEvent>,
-    /// Pid of the agent process when the spawner knows it (`agents_driver` does not expose it
-    /// yet, so [`DefaultDriverFactory`] reports `None`).
+    /// Pid of the agent process when the spawner knows it ([`DefaultDriverFactory`] reports the
+    /// real one, so the runtime calls [`ProcessHooks::register_root`]).
     pub pid: Option<u32>,
 }
 
 /// Starts agent processes. The default talks to `agents_driver`; tests inject a fake.
 pub trait DriverFactory: Send + Sync {
     /// `job`: the handle returned by [`ProcessHooks::open_owner`], for spawners able to create
-    /// the process inside that Job Object. [`DefaultDriverFactory`] ignores it.
+    /// the process inside that Job Object ([`DefaultDriverFactory`] passes it to
+    /// `agents_driver::spawn_with`: suspended spawn, assign, resume).
     fn spawn(
         &self,
         kind: &AgentKind,
@@ -78,9 +79,13 @@ pub trait DriverFactory: Send + Sync {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultDriverFactory;
 
-struct Generic(Box<dyn AgentDriver>);
+/// Adapter over any [`AgentDriver`]: "always" goes through the driver's native
+/// [`AgentDriver::approve_with`] (ACP `allow_always`, Codex `acceptForSession`, Claude
+/// `updatedPermissions`). A driver without a native grant falls back to a plain allow and
+/// `ThreadRuntime` remembers the grant per tool.
+struct Driver(Box<dyn AgentDriver>);
 
-impl AgentControl for Generic {
+impl AgentControl for Driver {
     fn send(&mut self, text: &str) -> agents_driver::Result<()> {
         self.0.send(text)
     }
@@ -88,32 +93,18 @@ impl AgentControl for Generic {
         self.0.interrupt()
     }
     fn approve(&mut self, id: &str, decision: ApprovalDecision) -> agents_driver::Result<()> {
-        // Claude / Codex have no native "always"; chat_core remembers the grant per tool.
-        self.0.approve(id, decision != ApprovalDecision::Deny)
+        self.0.approve_with(id, native_decision(decision))
     }
     fn shutdown(&mut self) {
         self.0.shutdown()
     }
 }
 
-struct Acp(AcpDriver);
-
-impl AgentControl for Acp {
-    fn send(&mut self, text: &str) -> agents_driver::Result<()> {
-        self.0.send(text)
-    }
-    fn interrupt(&mut self) -> agents_driver::Result<()> {
-        self.0.interrupt()
-    }
-    fn approve(&mut self, id: &str, decision: ApprovalDecision) -> agents_driver::Result<()> {
-        match decision {
-            ApprovalDecision::Always => self.0.approve_always(id),
-            ApprovalDecision::Allow => self.0.approve(id, true),
-            ApprovalDecision::Deny => self.0.approve(id, false),
-        }
-    }
-    fn shutdown(&mut self) {
-        self.0.shutdown()
+fn native_decision(d: ApprovalDecision) -> agents_driver::ApprovalDecision {
+    match d {
+        ApprovalDecision::Allow => agents_driver::ApprovalDecision::Allow,
+        ApprovalDecision::Deny => agents_driver::ApprovalDecision::Deny,
+        ApprovalDecision::Always => agents_driver::ApprovalDecision::Always,
     }
 }
 
@@ -122,16 +113,18 @@ impl DriverFactory for DefaultDriverFactory {
         &self,
         kind: &AgentKind,
         cfg: &ThreadConfig,
-        _job: Option<JobHandle>,
+        job: Option<JobHandle>,
     ) -> agents_driver::Result<SpawnedAgent> {
         let (tx, events) = unbounded();
-        let control: Box<dyn AgentControl> = match kind {
-            AgentKind::ClaudeCode => Box::new(Generic(Box::new(ClaudeDriver::spawn(cfg, tx)?))),
-            AgentKind::Codex => Box::new(Generic(Box::new(CodexDriver::spawn(cfg, tx)?))),
-            AgentKind::OpenCode => Box::new(Acp(AcpDriver::spawn_opencode(cfg, tx)?)),
-            AgentKind::Acp { command } => Box::new(Acp(AcpDriver::spawn_command_line(command, cfg, tx)?)),
+        let opts = SpawnOpts { job };
+        let driver: Box<dyn AgentDriver> = match kind {
+            AgentKind::ClaudeCode => Box::new(ClaudeDriver::spawn_with(cfg, tx, &opts)?),
+            AgentKind::Codex => Box::new(CodexDriver::spawn_with(cfg, tx, &opts)?),
+            AgentKind::OpenCode => Box::new(AcpDriver::spawn_opencode_with(cfg, tx, &opts)?),
+            AgentKind::Acp { command } => Box::new(AcpDriver::spawn_command_line_with(command, cfg, tx, &opts)?),
         };
-        Ok(SpawnedAgent { control, events, pid: None })
+        let pid = driver.pid();
+        Ok(SpawnedAgent { control: Box::new(Driver(driver)), events, pid })
     }
 }
 
@@ -152,5 +145,57 @@ pub(crate) fn driver_err_text(e: &DriverError) -> String {
     match e {
         DriverError::NotFound(what) => format!("No se encontró el ejecutable del agente ({what}). ¿Está instalado y en el PATH?"),
         other => format!("No se pudo iniciar el agente: {other}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decisions_map_one_to_one() {
+        use agents_driver::ApprovalDecision as D;
+        assert_eq!(native_decision(ApprovalDecision::Allow), D::Allow);
+        assert_eq!(native_decision(ApprovalDecision::Deny), D::Deny);
+        assert_eq!(native_decision(ApprovalDecision::Always), D::Always);
+    }
+
+    /// A driver with no native "always" (trait defaults) degrades to a plain allow.
+    #[test]
+    fn default_driver_degrades_always_to_allow() {
+        struct Fake(Vec<(String, bool)>);
+        impl AgentDriver for Fake {
+            fn send(&mut self, _: &str) -> agents_driver::Result<()> {
+                Ok(())
+            }
+            fn interrupt(&mut self) -> agents_driver::Result<()> {
+                Ok(())
+            }
+            fn approve(&mut self, id: &str, allow: bool) -> agents_driver::Result<()> {
+                self.0.push((id.into(), allow));
+                Ok(())
+            }
+            fn shutdown(&mut self) {}
+        }
+        let mut d = Fake(Vec::new());
+        assert_eq!(d.pid(), None);
+        d.approve_with("a", agents_driver::ApprovalDecision::Always).unwrap();
+        d.approve_with("b", agents_driver::ApprovalDecision::Deny).unwrap();
+        assert_eq!(d.0, vec![("a".to_string(), true), ("b".to_string(), false)]);
+    }
+
+    /// Real factory, harmless stand-in agent: the pid is reported and, given a job, the agent
+    /// process is a member of it.
+    #[cfg(windows)]
+    #[test]
+    fn default_factory_reports_pid_and_joins_the_job() {
+        let job = proc_svc::JobGroup::new("chat_core_factory_test").unwrap();
+        let kind = AgentKind::Acp { command: "cmd.exe /c ping -n 8 127.0.0.1".into() };
+        let mut a = DefaultDriverFactory
+            .spawn(&kind, &ThreadConfig::new("."), Some(job.raw_handle() as usize))
+            .unwrap();
+        let pid = a.pid.expect("real pid");
+        assert!(job.contains(pid), "pid {pid} not in job {:?}", job.members());
+        a.control.shutdown();
     }
 }

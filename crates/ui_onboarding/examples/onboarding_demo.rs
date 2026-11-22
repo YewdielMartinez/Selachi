@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agents_driver::{AgentKind, DetectedAgent};
-use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+use gpui::{App, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use store::{Config, StateDb};
 use theme::{Mode, Theme};
 use ui_onboarding::shells::{ShellInfo, ShellKind};
@@ -103,7 +103,12 @@ fn main() {
         })
         .detach();
         let db = StateDb::open_default().ok();
-        let config = Config::load_or_default().config;
+        let mut config = Config::load_or_default().config;
+        config.appearance.mode = match mode {
+            Mode::Dark => store::config::ThemeMode::Dark,
+            Mode::Light => store::config::ThemeMode::Light,
+            Mode::Oled => store::config::ThemeMode::Oled,
+        };
         let services = if fake || slow { fake_services(slow) } else { Services::default() };
         let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
         let _ = cx.open_window(

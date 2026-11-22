@@ -861,6 +861,8 @@ impl ThreadState {
                 self.stream = if delta { Some(Stream::Thinking) } else { None };
                 fx.changed.messages = true;
             }
+            // The checklist is shown as the plan (`AgentEvent::Plan`), not as a tool row.
+            AgentEvent::ToolCall { kind: ToolKind::Other(ref n), .. } if n == "TodoWrite" => {}
             AgentEvent::ToolCall { id, kind, title, input_json } => {
                 self.on_tool_call(id, kind, title, input_json, now_ms);
                 fx.changed.messages = true;
@@ -1325,11 +1327,18 @@ pub fn truncate_input(v: &Value) -> Value {
         }
     }
     let raw = v.to_string();
-    let mut end = MAX_TOOL_INPUT_BYTES - 128;
-    while !raw.is_char_boundary(end) {
-        end -= 1;
+    let mut end = (MAX_TOOL_INPUT_BYTES - 128).min(raw.len());
+    loop {
+        while end > 0 && !raw.is_char_boundary(end) {
+            end -= 1;
+        }
+        // JSON escaping (quotes) can grow the preview: shrink until the whole value fits.
+        let out = json!({ "_truncated": true, "bytes": raw.len(), "preview": &raw[..end] });
+        if end == 0 || out.to_string().len() <= MAX_TOOL_INPUT_BYTES {
+            return out;
+        }
+        end = end * 3 / 4;
     }
-    json!({ "_truncated": true, "bytes": raw.len(), "preview": &raw[..end] })
 }
 
 /// Title from the first user message: first non-empty line, 60 chars.
@@ -1507,8 +1516,8 @@ mod tests {
         s.apply(AgentEvent::ApprovalRequest { id: "r".into(), tool: "Bash".into(), detail: "rm".into() }, 2);
         assert_eq!(s.pending_approvals().len(), 1);
         let fx = s.apply(AgentEvent::Status(AgentStatus::Done), 3);
-        let writes: Vec<_> = fx.persist.iter().filter(|p| matches!(p, Persist::Message(_))).collect();
-        assert_eq!(writes.len(), 1);
+        let writes = fx.persist.iter().filter(|p| matches!(p, Persist::Message(_))).count();
+        assert_eq!(writes, 1);
         let Block::Command(r) = &s.messages[0].blocks[0] else { panic!() };
         assert_eq!(r.status, ToolStatus::Cancelled);
         assert!(s.pending_approvals().is_empty());
@@ -1530,8 +1539,11 @@ mod tests {
     fn claude_cost_is_cumulative_per_process() {
         let mut s = st(AgentKind::ClaudeCode, Some("claude-sonnet-5-5"));
         let usage = |c| AgentEvent::Usage { input: 1, output: 1, cache_create: 0, cache_read: 0, cost_usd: Some(c), context_window: Some(1000) };
+        let text = || AgentEvent::Text { text: "x".into(), delta: false };
+        s.apply(text(), 0);
         s.apply(usage(0.2), 1);
         s.apply(AgentEvent::Status(AgentStatus::Done), 2);
+        s.apply(text(), 2);
         s.apply(usage(0.5), 3);
         s.apply(AgentEvent::Status(AgentStatus::Done), 4);
         let costs: Vec<f64> = s.messages.iter().filter_map(|m| m.cost).map(|c| c.usd).collect();
@@ -1540,6 +1552,7 @@ mod tests {
         assert!((s.usage.cost_usd() - 0.5).abs() < 1e-9 && s.usage.cost_is_exact());
         // process restart: baseline back to zero
         s.driver_restarted();
+        s.apply(text(), 4);
         s.apply(usage(0.1), 5);
         assert!((s.usage.cost_usd() - 0.6).abs() < 1e-9);
     }

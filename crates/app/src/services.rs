@@ -75,6 +75,7 @@ pub fn open_tab_job(owner: u64, cwd: Option<&std::path::Path>, cx: &mut App) -> 
     match ui_procs::open_owner(&services.tracker, owner, meta, proc_svc::JobOptions::default()) {
         Ok(job) => {
             let handle = job.job_handle as isize;
+            log::debug!("tab job: owner {owner} handle {handle:#x}");
             services.procs.update(cx, |m, cx| m.watch_job_events(job.events, cx));
             Some(JobCtx { tracker: services.tracker.clone(), owner, handle })
         },

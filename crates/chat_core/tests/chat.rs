@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use agents_driver::{AgentEvent, AgentKind, AgentStatus, PermissionMode, TaskState, ToolKind};
 use chat_core::{
-    ApprovalDecision, ApprovalState, Block, ChatDb, ChatError, ChatStore, CostSource, DeleteOptions, Role,
+    ApprovalDecision, ApprovalState, Block, ChatDb, ChatError, CostSource, DeleteOptions, Role,
     ThreadFilter, ThreadGroup, ThreadSpec, ThreadStatus, ToolStatus,
 };
 use common::*;
@@ -64,8 +64,7 @@ fn claude_basic_fixture_into_state_hooks_and_db() {
         let ctx = s.context.unwrap();
         assert_eq!(ctx.window_tokens, 1_000_000);
         assert!((ctx.percent - 5.2069).abs() < 0.01, "{}", ctx.percent);
-        let names: Vec<_> = s.rate_limits.iter().map(|w| (w.name.as_str(), w.used_percent)).collect();
-        assert!(names.contains(&("five_hour", 31.0)));
+        assert!(s.rate_limits.iter().any(|w| w.name == "five_hour" && w.used_percent == 31.0));
         assert_eq!(s.session_id.as_deref(), Some("00000000-0000-4000-8000-000000000001"));
         assert_eq!(s.model.as_deref(), Some("claude-haiku-5-5"));
     });
@@ -312,7 +311,7 @@ fn list_filter_group_rename_archive() {
     assert_eq!(groups.settled.len(), 2);
     assert_eq!(groups.busy_count(), 1);
 
-    let in_a = store.list_threads(&ThreadFilter { project: Some(proj_a.clone()), ..Default::default() }).unwrap();
+    let in_a = store.list_threads(&ThreadFilter { project: Some(proj_a), ..Default::default() }).unwrap();
     assert_eq!(in_a.len(), 2);
     let only_done = store
         .list_threads(&ThreadFilter { status: Some(ThreadStatus::Done), ..Default::default() })
@@ -687,7 +686,7 @@ fn delete_preview_and_delete_with_worktree() {
     assert!(w.warnings.iter().any(|m| m.contains("uncommitted")), "{:?}", w.warnings);
 
     // deleting the thread without the worktree keeps the directory
-    let rec_b = store.create_thread(s.clone()).unwrap();
+    let rec_b = store.create_thread(s).unwrap();
     let wt_b = rec_b.worktree_path.clone().unwrap();
     let rep = store.delete_thread(rec_b.id, DeleteOptions::default()).unwrap();
     assert!(!rep.worktree_removed);

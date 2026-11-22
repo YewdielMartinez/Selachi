@@ -5,15 +5,16 @@ use gpui::{
     Styled, Window, div, img, prelude::*, px,
 };
 use store::config::{PredictionSource, TabMode};
-use store::{BuiltinPreset, Density, ProjectKind};
+use store::{Density, ProjectKind};
 use theme::{Radius, Theme};
 use ui_kit::{
     Button, GhostButton, Icon, Segment, SegmentedControl, Slider, Spinner, SwatchRow, Toggle,
-    VirtualList, WirePreset, Wireframe, agent_icon, icon,
+    VirtualList, Wireframe, agent_icon, icon,
 };
 
 use crate::agents::{AgentRow, AgentStatus, short_version};
 use crate::flow::Step;
+use crate::layouts;
 use crate::model::{ACCENTS, ThemeChoice, WorktreeLocation, accent_index};
 use crate::projects::kind_label;
 use crate::shells::auto_index;
@@ -350,8 +351,8 @@ impl OnboardingView {
                 _ => this.pick_worktrees_dir(window, cx),
             }));
         let worktree_hint: SharedString = match &self.draft.worktrees {
-            WorktreeLocation::Beside => "Nuevos worktrees en <repo>-worktrees, junto al repositorio.".into(),
-            WorktreeLocation::Inside => "Nuevos worktrees en <repo>\\.worktrees, dentro del repositorio.".into(),
+            WorktreeLocation::Beside => "En <repo>-worktrees, junto al repositorio.".into(),
+            WorktreeLocation::Inside => "En <repo>\\.worktrees, dentro del repositorio.".into(),
             WorktreeLocation::Custom(p) => format!("Nuevos worktrees en {}.", p.display()).into(),
         };
 
@@ -397,23 +398,45 @@ impl OnboardingView {
             }
         }));
 
-        let mut presets = div().w_full().flex().flex_row().flex_wrap().justify_center().gap(px(8.0)).p(px(8.0));
-        for (ix, (preset, wire)) in BuiltinPreset::ALL.into_iter().zip(WirePreset::ALL).enumerate() {
-            let selected = d.preset == Some(preset);
+        // Two rows of three fixed-width cells; the recommended card comes first.
+        let mut presets = div()
+            .w(px(3.0 * 124.0 + 2.0 * 8.0))
+            .max_w_full()
+            .mx_auto()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_center()
+            .gap(px(8.0))
+            .py(px(8.0));
+        for (ix, card) in layouts::cards().into_iter().enumerate() {
+            let selected = d.layout == Some(card);
             presets = presets.child(
                 div()
                     .id(("preset", ix))
+                    .w(px(124.0))
+                    .flex_none()
                     .flex()
                     .flex_col()
                     .items_center()
                     .gap(px(6.0))
+                    .py(px(4.0))
+                    .rounded(px(12.0))
                     .cursor_pointer()
+                    .hover(move |s| s.bg(c.surface_2))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.draft.preset = Some(preset);
+                        this.draft.layout = Some(card);
                         cx.notify();
                     }))
-                    .child(Wireframe::preset(&t, wire).cell(3.0).selected(selected))
-                    .child(div().text_size(px(12.0)).text_color(if selected { c.text } else { c.muted }).child(wire.label())),
+                    .child(Wireframe::new(&t).rects(card.rects()).cell(3.0).selected(selected))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(if selected { c.text } else { c.muted })
+                            .text_center()
+                            .child(card.label()),
+                    )
+                    .child(div().h(px(20.0)).when(card.is_recommended(), |d| d.child(badge(&t, "Recomendado")))),
             );
         }
 
@@ -486,7 +509,7 @@ impl OnboardingView {
                     .child(setting_row(&t, xs, "Acento", None, swatches)),
             )
             .child(group_label(&t, "Layout inicial"))
-            .child(group(&t).child(presets))
+            .child(group(&t).items_center().child(presets))
             .child(
                 group(&t)
                     .child(setting_row(&t, xs, "Translucidez de la barra lateral", Some("0 % es opaca. Usa el desenfoque de Windows.".into()), translucency))

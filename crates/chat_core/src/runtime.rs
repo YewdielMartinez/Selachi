@@ -729,7 +729,7 @@ impl Worker {
         core.always.lock().clear();
         // 4. Re-point the thread.
         let keep_session = !agent_changed;
-        let session = if keep_session { old.agent_session_id.clone() } else { None };
+        let session = if keep_session { old.agent_session_id } else { None };
         {
             let mut rec = core.record.lock();
             rec.agent = agent.clone();

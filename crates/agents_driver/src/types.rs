@@ -34,6 +34,35 @@ pub enum PermissionMode {
     ReadOnly,
 }
 
+/// Process-level options of [`crate::spawn_with`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpawnOpts {
+    /// Raw Windows `HANDLE` (as an integer) of a Job Object owned by the host
+    /// (`proc_svc::JobGroup::raw_handle`). The agent process is created suspended, assigned to
+    /// the job and then resumed, so it and every descendant are members from the start. The
+    /// handle is never closed here. Ignored off Windows; an assignment failure is logged, never
+    /// an error (rationale in the `job` module source).
+    pub job: Option<usize>,
+}
+
+/// Answer to an [`AgentEvent::ApprovalRequest`] (see [`AgentDriver::approve_with`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ApprovalDecision {
+    Allow,
+    Deny,
+    /// Allow now and ask the agent to remember the grant for the rest of the session, using the
+    /// protocol's native mechanism (ACP `allow_always`, Codex `acceptForSession`, Claude
+    /// `updatedPermissions` with destination `session`).
+    Always,
+}
+
+impl ApprovalDecision {
+    /// `true` for `Allow` and `Always`.
+    pub fn allows(self) -> bool {
+        self != Self::Deny
+    }
+}
+
 /// Everything needed to start (or resume) one chat thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadConfig {
@@ -171,6 +200,17 @@ pub trait AgentDriver: Send {
     fn interrupt(&mut self) -> Result<()>;
     /// Answer an [`AgentEvent::ApprovalRequest`].
     fn approve(&mut self, id: &str, allow: bool) -> Result<()>;
+    /// Like [`approve`](Self::approve) but with the "always" option. The default maps `Always`
+    /// to a plain allow (the caller must then remember the grant itself); every driver in this
+    /// crate overrides it with the protocol-native grant.
+    fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<()> {
+        self.approve(id, decision.allows())
+    }
+    /// Pid of the agent process, when there is one (the root to attribute / track). Default
+    /// `None`; every driver in this crate returns `Some`.
+    fn pid(&self) -> Option<u32> {
+        None
+    }
     /// Stop the process (close stdin, then kill the process tree). Idempotent.
     fn shutdown(&mut self);
 }

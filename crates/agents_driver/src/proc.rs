@@ -131,6 +131,19 @@ pub fn command_for(exe: &Path) -> Command {
     cmd
 }
 
+/// Spawn `cmd`. With `job` (raw Job Object `HANDLE`, Windows only) the child is created
+/// suspended, assigned to the job and resumed, so it and all its descendants are members (see
+/// the `job` module source for the rationale). Assignment failures are logged, not returned.
+/// Without a job (or off Windows) this is plain `cmd.spawn()`.
+pub fn spawn_in_job(cmd: &mut Command, job: Option<usize>) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    if let Some(job) = job {
+        return crate::job::spawn_in_job(cmd, job);
+    }
+    let _ = job;
+    cmd.spawn()
+}
+
 /// Kill a process and its children. Windows: `taskkill /T /F`.
 pub fn kill_tree(pid: u32) {
     #[cfg(windows)]
