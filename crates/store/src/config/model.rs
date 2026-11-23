@@ -47,9 +47,9 @@ impl Default for General {
     }
 }
 
-/// Default grammar index (a placeholder until the first release exists).
+/// Default grammar index: the latest release of the official repository.
 pub const DEFAULT_PLUGIN_INDEX_URL: &str =
-    "https://github.com/OWNER/selachi/releases/latest/download/grammars.toml";
+    "https://github.com/YewdielMartinez/Selachi/releases/latest/download/grammars.toml";
 
 /// `[plugins]`: where language grammars come from.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

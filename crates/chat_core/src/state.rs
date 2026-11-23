@@ -950,6 +950,8 @@ impl ThreadState {
                     fx.merge(self.set_status(ThreadStatus::Error, Some(msg)));
                 }
             },
+            // The model catalogue is for the picker, not for the transcript.
+            AgentEvent::Models { .. } => {}
             AgentEvent::Exited { code } => {
                 fx.merge(self.finalize_open(now_ms));
                 if self.status.is_busy() {

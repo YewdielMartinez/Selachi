@@ -32,7 +32,7 @@ const ROW_H: f32 = 19.0;
 const CH: f32 = 7.9;
 /// Lines longer than this are cut (a minified bundle is one huge line).
 const MAX_LINE_BYTES: usize = 1_200;
-/// Window width under which the file list starts hidden.
+/// Width of the review's own zone under which the file list starts hidden.
 const COMPACT_BELOW_PX: f32 = 720.0;
 
 /// What the review tells the host.
@@ -76,8 +76,9 @@ pub struct ReviewView {
     editor: Option<Editor>,
     focus: FocusHandle,
     scroll: ScrollHandle,
-    /// `None` = decide from the window width.
+    /// `None` = decide from the width of the view's own zone.
     files_open: Option<bool>,
+    measured: ui_kit::MeasuredWidth,
     shown_rows: usize,
     task: Option<Task<()>>,
 }
@@ -149,6 +150,7 @@ impl ReviewView {
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             files_open: None,
+            measured: ui_kit::MeasuredWidth::new(COMPACT_BELOW_PX),
             shown_rows: ROW_PAGE,
             task: None,
         };
@@ -1080,7 +1082,7 @@ impl Render for ReviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let c = theme.colors;
-        let compact = f32::from(window.viewport_size().width) < COMPACT_BELOW_PX;
+        let compact = self.measured.narrow(window);
         let files_open = self.files_open.unwrap_or(!compact);
 
         let body: AnyElement = match &self.load {
@@ -1120,6 +1122,7 @@ impl Render for ReviewView {
             .bg(c.surface_0)
             .font_family(theme.typography.ui_family)
             .text_color(c.text)
+            .child(self.measured.probe())
             .child(self.header(cx, compact))
             .child(div().flex_1().min_h_0().child(body))
     }

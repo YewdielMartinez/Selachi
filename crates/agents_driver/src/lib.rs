@@ -64,6 +64,32 @@ pub fn spawn_with(
     Ok((driver, rx))
 }
 
+/// Which models does this agent offer? Starts the agent (no prompt is ever sent), waits for its
+/// [`AgentEvent::Models`] (Codex `model/list`, ACP `session/new`) for at most `timeout` and shuts it
+/// down. Blocking: call it from a background thread. Claude Code has no such call (its aliases are
+/// documented), so it returns `Unsupported`.
+pub fn probe_models(kind: AgentKind, cwd: impl Into<std::path::PathBuf>, timeout: std::time::Duration) -> Result<Vec<ModelInfo>> {
+    use futures::StreamExt;
+    if kind == AgentKind::ClaudeCode {
+        return Err(DriverError::Unsupported("Claude Code does not list models".into()));
+    }
+    let (mut driver, mut rx) = spawn(kind, &ThreadConfig::new(cwd))?;
+    let (tx, out) = std::sync::mpsc::channel();
+    std::thread::Builder::new().name("model-probe".into()).spawn(move || {
+        futures::executor::block_on(async move {
+            while let Some(ev) = rx.next().await {
+                if let AgentEvent::Models { models, .. } = ev {
+                    let _ = tx.send(models);
+                    break;
+                }
+            }
+        });
+    })?;
+    let got = out.recv_timeout(timeout);
+    driver.shutdown();
+    got.map_err(|_| DriverError::Protocol("the agent did not list its models in time".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

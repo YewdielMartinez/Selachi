@@ -58,6 +58,8 @@ impl AppShell {
         let hub = ChatHub::create(store, self.theme, cx);
         *services.chat.borrow_mut() = Some(hub.clone());
         hub.update(cx, |h, cx| h.detect_agents(cx));
+        // Scripted agents (`SELACHI_CHAT_FAKE`) start no processes, not even to list models.
+        hub.update(cx, |h, _| h.set_probe_models(!chat_host::fake_requested()));
         self._chat_subs.push(cx.subscribe_in(&hub, window, |this, _, ev: &ChatEvent, window, cx| {
             this.on_chat_event(ev.clone(), window, cx);
         }));

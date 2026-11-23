@@ -81,7 +81,8 @@ external_editor = ""
 worktrees = "beside"
 
 [plugins]
-# URL (https://) del índice grammars.toml de los plugins de lenguaje. Vacío = el índice oficial.
+# URL (https://) del índice grammars.toml de los plugins de lenguaje. Vacío = el índice oficial
+# (https://github.com/YewdielMartinez/Selachi/releases/latest/download/grammars.toml).
 # Solo se descarga al abrir Ajustes > Plugins.
 index_url = ""
 

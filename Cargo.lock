@@ -50,6 +50,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "log",
+ "notify",
  "rusqlite",
  "serde",
  "serde_json",

@@ -216,6 +216,12 @@ pub(crate) struct TextField {
     selecting: bool,
     invalid: bool,
     mono: bool,
+    /// Horizontal scroll of the text while focused (the caret is kept in view).
+    scroll_x: Pixels,
+    /// The last paint showed a middle-ellipsized copy of the text (unfocused and too long).
+    ellipsized: bool,
+    /// The text is wider than the box (a tooltip then carries the full value).
+    overflow: bool,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -238,6 +244,9 @@ impl TextField {
             selecting: false,
             invalid: false,
             mono: false,
+            scroll_x: px(0.0),
+            ellipsized: false,
+            overflow: false,
         }
     }
 
@@ -279,8 +288,10 @@ impl TextField {
 
     fn index_for_x(&self, p: Point<Pixels>) -> usize {
         match (&self.last_bounds, &self.last_layout) {
+            // The ellipsized copy has no 1:1 mapping to the text: a click just focuses at the end.
+            (Some(_), Some(_)) if self.ellipsized => self.buf.text.len(),
             (Some(b), Some(line)) if !self.buf.text.is_empty() => {
-                line.closest_index_for_x(p.x - b.left())
+                line.closest_index_for_x(p.x - b.left() + self.scroll_x)
             }
             _ => 0,
         }
@@ -469,7 +480,7 @@ impl EntityInputHandler for TextField {
     ) -> Option<usize> {
         let local = self.last_bounds?.localize(&p)?;
         let line = self.last_layout.as_ref()?;
-        let utf8 = line.index_for_x(p.x - local.x)?;
+        let utf8 = line.index_for_x(p.x - local.x + self.scroll_x)?;
         Some(self.buf.offset_to_utf16(utf8.min(self.buf.text.len())))
     }
 }
@@ -483,6 +494,37 @@ struct Prepaint {
     line: ShapedLine,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    scroll: Pixels,
+    ellipsized: bool,
+    overflow: bool,
+}
+
+/// `abc...xyz`: as much of the start (60 %) and the end of `text` as fits in `max_w`, measured with
+/// `shape` (width of a candidate string). Pure apart from the closure, so it is unit-tested.
+pub(crate) fn middle_ellipsis(text: &str, max_w: f32, shape: &dyn Fn(&str) -> f32) -> String {
+    if shape(text) <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let build = |n: usize| -> String {
+        let pre = (n * 3).div_ceil(5);
+        let suf = n - pre;
+        let mut out: String = chars[..pre].iter().collect();
+        out.push('\u{2026}');
+        out.extend(chars[chars.len() - suf..].iter());
+        out
+    };
+    // Largest kept count that fits (the width grows with it; binary search).
+    let (mut lo, mut hi) = (0usize, chars.len().saturating_sub(1));
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if shape(&build(mid)) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    build(lo)
 }
 
 impl IntoElement for TextElement {
@@ -530,6 +572,8 @@ impl Element for TextElement {
         let c = input.theme.colors;
         let style = window.text_style();
         let empty = input.buf.text.is_empty();
+        let focused = input.focus.is_focused(window);
+        let font_size = style.font_size.to_pixels(window.rem_size());
         let shown: SharedString = if empty {
             input.placeholder.clone()
         } else {
@@ -561,20 +605,50 @@ impl Element for TextElement {
                 },
                 TextRun {
                     len: shown.len() - m.end,
-                    ..run
+                    ..run.clone()
                 },
             ]
             .into_iter()
             .filter(|r| r.len > 0)
             .collect(),
-            _ => vec![run],
+            _ => vec![run.clone()],
         };
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
+        let mut line = window
             .text_system()
-            .shape_line(shown, font_size, &runs, None);
+            .shape_line(shown.clone(), font_size, &runs, None);
+        let overflow = line.width > bounds.size.width;
+        let mut ellipsized = false;
+        let mut scroll = px(0.0);
+        if overflow {
+            if focused && !empty {
+                // Keep the caret inside the box: scroll just enough, never past the end.
+                let caret_x = line.x_for_index(input.buf.cursor());
+                let max_scroll = line.width - bounds.size.width + px(2.0);
+                scroll = input.scroll_x;
+                if caret_x - scroll > bounds.size.width - px(2.0) {
+                    scroll = caret_x - bounds.size.width + px(2.0);
+                }
+                if caret_x < scroll {
+                    scroll = caret_x;
+                }
+                scroll = scroll.clamp(px(0.0), max_scroll.max(px(0.0)));
+            } else {
+                // Unfocused: the middle is elided so both the start and the end stay readable.
+                let measure = |t: &str| -> f32 {
+                    let r = [TextRun { len: t.len(), ..run.clone() }];
+                    f32::from(window.text_system().shape_line(t.to_string().into(), font_size, &r, None).width)
+                };
+                let text = middle_ellipsis(&shown, f32::from(bounds.size.width), &measure);
+                let r = [TextRun { len: text.len(), ..run.clone() }];
+                line = window.text_system().shape_line(text.into(), font_size, &r, None);
+                ellipsized = true;
+            }
+        }
         let (sel, cursor) = (input.buf.sel.clone(), input.buf.cursor());
-        let (selection, cursor) = if sel.is_empty() {
+        let origin_x = bounds.left() - scroll;
+        let (selection, cursor) = if ellipsized && !empty {
+            (None, None)
+        } else if sel.is_empty() {
             let x = if empty {
                 px(0.0)
             } else {
@@ -582,7 +656,7 @@ impl Element for TextElement {
             };
             let quad = fill(
                 Bounds::new(
-                    point(bounds.left() + x, bounds.top()),
+                    point(origin_x + x, bounds.top()),
                     size(px(1.5), bounds.size.height),
                 ),
                 c.accent,
@@ -593,8 +667,8 @@ impl Element for TextElement {
             sel_color.a = 0.3;
             let quad = fill(
                 Bounds::from_corners(
-                    point(bounds.left() + line.x_for_index(sel.start), bounds.top()),
-                    point(bounds.left() + line.x_for_index(sel.end), bounds.bottom()),
+                    point(origin_x + line.x_for_index(sel.start), bounds.top()),
+                    point(origin_x + line.x_for_index(sel.end), bounds.bottom()),
                 ),
                 sel_color,
             );
@@ -604,6 +678,9 @@ impl Element for TextElement {
             line,
             cursor,
             selection,
+            scroll,
+            ellipsized,
+            overflow,
         }
     }
 
@@ -623,21 +700,31 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(sel) = pre.selection.take() {
-            window.paint_quad(sel);
-        }
-        let _ = pre
-            .line
-            .paint(bounds.origin, window.line_height(), window, cx);
-        if focus.is_focused(window)
-            && let Some(cursor) = pre.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
-        let line = pre.line.clone();
-        self.input.update(cx, |input, _| {
+        let (scroll, line_h) = (pre.scroll, window.line_height());
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            if let Some(sel) = pre.selection.take() {
+                window.paint_quad(sel);
+            }
+            let _ = pre
+                .line
+                .paint(point(bounds.origin.x - scroll, bounds.origin.y), line_h, window, cx);
+            if focus.is_focused(window)
+                && let Some(cursor) = pre.cursor.take()
+            {
+                window.paint_quad(cursor);
+            }
+        });
+        let (line, ellipsized, overflow) = (pre.line.clone(), pre.ellipsized, pre.overflow);
+        self.input.update(cx, |input, cx| {
+            let tooltip_changed = input.overflow != overflow;
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
+            input.scroll_x = scroll;
+            input.ellipsized = ellipsized;
+            input.overflow = overflow;
+            if tooltip_changed {
+                cx.notify();
+            }
         });
     }
 }
@@ -647,7 +734,11 @@ impl Render for TextField {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let focused = self.focus.is_focused(window);
+        let full = (self.overflow && !focused && !self.buf.text.is_empty()).then(|| SharedString::from(self.buf.text.clone()));
+        let theme = self.theme;
         div()
+            .id(ElementId::from(("settings-text-field", cx.entity_id().as_u64() as usize)))
+            .when_some(full, |d, text| d.tooltip(ui_kit::Tooltip::text(&theme, text)))
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
@@ -756,5 +847,18 @@ mod tests {
         assert_eq!(b.offset_to_utf16(end), 4);
         assert_eq!(b.offset_from_utf16(3), "a😀".len());
         assert_eq!(b.range_from_utf16(&(1..3)), 1.."a😀".len());
+    }
+
+    #[test]
+    fn middle_ellipsis_fits_and_keeps_both_ends() {
+        let w = |t: &str| t.chars().count() as f32 * 10.0;
+        let url = "https://github.com/YewdielMartinez/Selachi/releases/latest/download/grammars.toml";
+        let out = middle_ellipsis(url, 300.0, &w);
+        assert!(w(&out) <= 300.0, "{out}");
+        assert!(out.starts_with("https://git"), "{out}");
+        assert!(out.ends_with("toml") && out.contains('\u{2026}'), "{out}");
+        // Fits: untouched. Zero room: just the ellipsis.
+        assert_eq!(middle_ellipsis("corto", 300.0, &w), "corto");
+        assert_eq!(middle_ellipsis(url, 5.0, &w), "\u{2026}");
     }
 }

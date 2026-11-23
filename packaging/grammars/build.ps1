@@ -31,7 +31,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = 'https://github.com/OWNER/selachi/releases/download/grammars-v1',
+    [string]$BaseUrl = 'https://github.com/YewdielMartinez/Selachi/releases/download/grammars-v1',
     [string[]]$Only = @()
 )
 

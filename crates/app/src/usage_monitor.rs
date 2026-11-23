@@ -1,30 +1,51 @@
 //! Claude usage for the status bar, from `agents_svc` (local logs, offline).
 //!
-//! The database lives in `%APPDATA%\Selachi\selachi.db`. Opening it and every `scan()` run on
+//! The database lives in `%APPDATA%\Selachi\selachi.db`. Opening it and every ingest run on
 //! gpui's background executor. The `Ingestor` is *moved* into the job and handed back with the
-//! result, so scans can never overlap and no lock is held across an await. A scan runs at startup
-//! and then every 60 s, but only while the window is focused (regaining focus after a longer
-//! pause scans right away).
+//! result, so jobs can never overlap and no lock is held across an await.
+//!
+//! **Event-driven, zero cost at rest.** A [`agents_svc::LogWatcher`] (notify) watches the agents'
+//! log directories and only *marks* what changed: no timer, no database access and no UI wake-up
+//! on its side. Ingestion happens only when the numbers can be seen, that is while the window is
+//! focused, and then
+//! * right when focus returns (at least [`ACTIVATION_GAP`] after the previous ingest), and
+//! * at most once per [`TICK`] while it stays focused,
+//!
+//! and only for the files the watcher named (incremental tail reads; an unchanged file is never
+//! re-read, an unchanged `.zst` is never re-decompressed). A burst is capped at
+//! [`MAX_FILES_PER_JOB`] files per job; the rest follows after a short pause. A full scan runs
+//! only when nothing is known yet (first focus), after an overflow / watcher error, or after a
+//! failed job. Unfocused or minimized: nothing runs, the dirty set just keeps deduplicating.
+//!
+//! Repaints happen only when the displayed numbers actually change (`info` differs); the 60 s
+//! tick is a plain background timer (no frame requested) and exists only while focused.
 //!
 //! Nothing is invented: a percentage is shown only when a fresh official rate-limit snapshot
 //! exists (written by Claude Code itself); otherwise only the local billable total (input +
 //! output + cache creation, no cache reads) is shown and it is labelled "estimado". If the ingest or the queries fail, the monitor reports nothing.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use agents_svc::{Agent, IngestConfig, Ingestor, Range};
+use agents_svc::{Agent, IngestConfig, Ingestor, LogWatcher, Range};
 use gpui::{Context, Task};
 
-const SCAN_EVERY: Duration = Duration::from_secs(60);
-/// A scan that found nothing new doubles the wait up to this (a scan stats every agent log, so
-/// an idle machine should not pay for it every minute); any news resets it to [`SCAN_EVERY`].
-const SCAN_BACKOFF_MAX: Duration = Duration::from_secs(10 * 60);
-
-/// Wait until the next scan after `current`: doubled while scans find nothing, reset otherwise.
-fn next_interval(current: Duration, quiet: bool) -> Duration {
-    if quiet { (current * 2).min(SCAN_BACKOFF_MAX) } else { SCAN_EVERY }
-}
+/// While focused, changed logs are ingested at most this often.
+const TICK: Duration = Duration::from_secs(60);
+/// Minimum time between two ingests when focus returns (debounce of focus flapping).
+const ACTIVATION_GAP: Duration = Duration::from_secs(5);
+/// Minimum time between two ingests on a tick (ticks are 60 s apart; this only guards drift).
+const TICK_GAP: Duration = Duration::from_secs(30);
+/// Pause before the next slice of a burst, so a huge backlog never hogs a core.
+const SLICE_PAUSE: Duration = Duration::from_millis(500);
+/// Files ingested per background job.
+const MAX_FILES_PER_JOB: usize = 24;
+/// The numbers are re-queried at least this often even if no log changed (week rollover,
+/// expiring rate-limit snapshots).
+const RESUMMARIZE_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Benchmark switch: treat the window as always focused (see `bench/README.md`).
+const ASSUME_ACTIVE_ENV: &str = "SELACHI_BENCH_USAGE_ACTIVE";
 
 /// A rate-limit percentage that Claude Code itself reported and that has not expired yet.
 #[derive(Clone, Debug, PartialEq)]
@@ -129,49 +150,80 @@ pub(crate) fn db_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Selachi").join("selachi.db"))
 }
 
-fn open() -> anyhow::Result<Ingestor> {
-    let path = db_path().ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))?;
+fn open(db: &Option<PathBuf>, cfg: &IngestConfig) -> anyhow::Result<Ingestor> {
+    let path = db.clone().ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    Ingestor::open(&path, IngestConfig::from_home())
+    Ingestor::open(&path, cfg.clone())
+}
+
+/// What a background job does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Work {
+    /// Only read the numbers from the database (no log is touched).
+    Summary,
+    /// Ingest everything (initial state, overflow, after a failure).
+    Full,
+    /// Ingest just these files.
+    Paths(Vec<PathBuf>),
 }
 
 struct ScanOutcome {
-    /// Handed back so the next scan reuses the connection; `None` if it could not be opened.
+    /// Handed back so the next job reuses the connection; `None` if it could not be opened.
     ingestor: Option<Ingestor>,
-    info: Option<UsageInfo>,
-    /// No log changed since the previous scan.
-    quiet: bool,
+    /// `Some` = the numbers were (re)computed; `None` = nothing new, keep what is shown.
+    info: Option<Option<UsageInfo>>,
+    /// New events, touches or rate-limit snapshots were stored (or a full scan ran).
+    data_changed: bool,
+    /// The ingest itself failed: the dirty state must be restored.
+    failed: bool,
 }
 
-/// Blocking: open (if needed), scan, query. Only call it off the UI thread.
-fn scan_job(existing: Option<Ingestor>) -> ScanOutcome {
+/// Blocking: open (if needed), ingest `work`, query. Only call it off the UI thread.
+fn scan_job(
+    existing: Option<Ingestor>,
+    db: &Option<PathBuf>,
+    cfg: &IngestConfig,
+    work: &Work,
+    resummarize: bool,
+) -> ScanOutcome {
     let mut ing = match existing {
         Some(i) => i,
-        None => match open() {
+        None => match open(db, cfg) {
             Ok(i) => i,
             Err(e) => {
                 log::warn!("usage database unavailable: {e:#}");
-                return ScanOutcome { ingestor: None, info: None, quiet: false };
+                return ScanOutcome { ingestor: None, info: Some(None), data_changed: false, failed: true };
             },
         },
     };
-    let mut quiet = false;
-    let info = match ing.scan() {
-        Ok(report) => {
-            for e in &report.errors {
+    let mut data_changed = false;
+    let mut failed = false;
+    let report = match work {
+        Work::Summary => None,
+        Work::Full => {
+            data_changed = true;
+            Some(ing.scan())
+        },
+        Work::Paths(paths) => Some(ing.scan_paths(paths)),
+    };
+    match report {
+        Some(Ok(r)) => {
+            for e in &r.errors {
                 log::debug!("usage scan: {e}");
             }
-            quiet = report.files_scanned == 0 && report.events_inserted == 0 && report.events_updated == 0;
-            summarize(&ing)
+            data_changed |= r.events_inserted + r.events_updated + r.touches_inserted + r.rate_snapshots_inserted > 0;
         },
-        Err(e) => {
+        Some(Err(e)) => {
             log::warn!("usage scan failed: {e:#}");
-            None
+            failed = true;
         },
-    };
-    ScanOutcome { ingestor: Some(ing), info, quiet }
+        None => {},
+    }
+    let recompute = data_changed || resummarize || failed || *work == Work::Summary;
+    let info = recompute.then(|| summarize(&ing));
+    ScanOutcome { ingestor: Some(ing), info, data_changed, failed }
 }
 
 fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
@@ -211,37 +263,63 @@ fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
 pub struct UsageMonitor {
     info: Option<UsageInfo>,
     ingestor: Option<Ingestor>,
+    db: Option<PathBuf>,
+    cfg: IngestConfig,
+    /// Started on the background executor together with the first (read-only) job.
+    watcher: Option<Arc<LogWatcher>>,
     in_flight: bool,
     active: bool,
+    /// Benchmark switch: behave as if the window were always focused.
+    pinned_active: bool,
     last_scan: Option<Instant>,
-    /// Wait between scans: grows while they find nothing (see [`next_interval`]).
-    interval: Duration,
-    /// The usage panel's model: told after every successful scan (it re-reads only if visible).
+    last_summary: Instant,
+    /// The usage panel's model: told after every ingest that stored something (it re-reads only
+    /// if visible).
     model: Option<gpui::Entity<ui_usage::UsageModel>>,
-    _timer: Task<()>,
+    /// Exists only while the window is focused; dropping it cancels the timer.
+    tick: Option<Task<()>>,
 }
 
 impl UsageMonitor {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let timer = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(SCAN_EVERY).await;
-                if this.update(cx, |m, cx| m.scan_if_due(cx)).is_err() {
-                    break;
-                }
-            }
-        });
+        let pinned_active = std::env::var_os(ASSUME_ACTIVE_ENV).is_some();
         let mut monitor = Self {
             info: None,
             ingestor: None,
-            in_flight: false,
+            db: db_path(),
+            cfg: IngestConfig::from_home(),
+            watcher: None,
+            in_flight: true, // the init job below
             active: false,
+            pinned_active,
             last_scan: None,
-            interval: SCAN_EVERY,
+            last_summary: Instant::now(),
             model: cx.try_global::<crate::services::Services>().map(|s| s.usage.clone()),
-            _timer: timer,
+            tick: None,
         };
-        monitor.scan(cx); // startup scan, focused or not
+        // Init job: install the watchers and read the numbers already in the database. No log
+        // is touched here; the first focus (or the pin) triggers the full scan.
+        let (db, cfg) = (monitor.db.clone(), monitor.cfg.clone());
+        cx.spawn(async move |this, cx| {
+            let (watcher, out) = cx
+                .background_executor()
+                .spawn(async move {
+                    let watcher = LogWatcher::start(&cfg);
+                    let out = scan_job(None, &db, &cfg, &Work::Summary, true);
+                    (watcher, out)
+                })
+                .await;
+            let _ = this.update(cx, |m, cx| {
+                m.watcher = Some(Arc::new(watcher));
+                m.in_flight = false;
+                m.apply(out, false, cx);
+                m.check(ACTIVATION_GAP, cx);
+            });
+        })
+        .detach();
+        if pinned_active {
+            monitor.set_active(true, cx);
+        }
         monitor
     }
 
@@ -249,48 +327,105 @@ impl UsageMonitor {
         self.info.as_ref()
     }
 
-    /// Window focus changed. Regaining focus after a pause refreshes the numbers.
+    /// Window focus changed. Regaining focus ingests whatever changed while it was away.
     pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        let active = active || self.pinned_active;
+        if active == self.active {
+            return;
+        }
         self.active = active;
-        if active {
-            // Back after a pause: news is likely, so the wait starts from the short interval.
-            self.interval = SCAN_EVERY;
+        if !active {
+            self.tick = None;
+            return;
         }
-        self.scan_if_due(cx);
+        self.tick = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                if this.update(cx, |m, cx| m.on_tick(cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+        self.check(ACTIVATION_GAP, cx);
     }
 
-    fn scan_if_due(&mut self, cx: &mut Context<Self>) {
-        let due = self.last_scan.is_none_or(|t| t.elapsed() >= self.interval);
-        if self.active && due {
-            self.scan(cx);
+    fn on_tick(&mut self, cx: &mut Context<Self>) {
+        if self.watcher.as_ref().is_some_and(|w| w.has_changes()) {
+            self.check(TICK_GAP, cx);
+        } else if self.active && !self.in_flight && self.last_summary.elapsed() >= RESUMMARIZE_AFTER {
+            self.start(Work::Summary, true, cx);
         }
     }
 
-    /// Starts a background scan unless one is already running.
-    fn scan(&mut self, cx: &mut Context<Self>) {
+    /// Ingests what the watcher marked, if the numbers can be seen and `min_gap` has passed.
+    fn check(&mut self, min_gap: Duration, cx: &mut Context<Self>) {
+        if !self.active || self.in_flight {
+            return;
+        }
+        let Some(watcher) = self.watcher.clone() else { return };
+        if !watcher.has_changes() || self.last_scan.is_some_and(|t| t.elapsed() < min_gap) {
+            return;
+        }
+        let changes = watcher.take_changes(MAX_FILES_PER_JOB);
+        let work = if changes.all {
+            Work::Full
+        } else if changes.paths.is_empty() {
+            return;
+        } else {
+            Work::Paths(changes.paths)
+        };
+        self.start(work, false, cx);
+    }
+
+    /// Starts a background job unless one is already running.
+    fn start(&mut self, work: Work, resummarize: bool, cx: &mut Context<Self>) {
         if self.in_flight {
             return;
         }
         self.in_flight = true;
         let ingestor = self.ingestor.take();
+        let (db, cfg) = (self.db.clone(), self.cfg.clone());
+        let ingest = work != Work::Summary;
         cx.spawn(async move |this, cx| {
-            let out = cx.background_executor().spawn(async move { scan_job(ingestor) }).await;
+            let out = cx
+                .background_executor()
+                .spawn(async move { scan_job(ingestor, &db, &cfg, &work, resummarize) })
+                .await;
             let _ = this.update(cx, |m, cx| {
                 m.in_flight = false;
-                m.last_scan = Some(Instant::now());
-                m.interval = next_interval(m.interval, out.quiet);
-                let scanned = out.ingestor.is_some();
-                m.ingestor = out.ingestor;
-                if scanned && let Some(model) = &m.model {
-                    model.update(cx, |u, cx| u.notify_scanned(cx));
-                }
-                if m.info != out.info {
-                    m.info = out.info;
-                    cx.notify();
+                m.apply(out, ingest, cx);
+                // A backlog (capped job): continue after a pause. Plain background timer.
+                if ingest && m.watcher.as_ref().is_some_and(|w| w.has_changes()) {
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(SLICE_PAUSE).await;
+                        let _ = this.update(cx, |m, cx| m.check(Duration::ZERO, cx));
+                    })
+                    .detach();
                 }
             });
         })
         .detach();
+    }
+
+    fn apply(&mut self, out: ScanOutcome, ingest: bool, cx: &mut Context<Self>) {
+        if ingest {
+            self.last_scan = Some(Instant::now());
+            if out.failed && let Some(w) = &self.watcher {
+                w.mark_all(); // retried on the next tick
+            }
+        }
+        let opened = out.ingestor.is_some();
+        self.ingestor = out.ingestor;
+        if let Some(info) = out.info {
+            self.last_summary = Instant::now();
+            if self.info != info {
+                self.info = info;
+                cx.notify(); // the only repaint request: the displayed numbers changed
+            }
+        }
+        if opened && out.data_changed && let Some(model) = &self.model {
+            model.update(cx, |u, cx| u.notify_scanned(cx));
+        }
     }
 }
 
@@ -298,16 +433,37 @@ impl UsageMonitor {
 mod tests {
     use super::*;
 
+    fn temp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("selachi-usage-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     #[test]
-    fn quiet_scans_back_off_and_news_resets() {
-        let mut d = SCAN_EVERY;
-        d = next_interval(d, true);
-        assert_eq!(d, Duration::from_secs(120));
-        for _ in 0..10 {
-            d = next_interval(d, true);
-        }
-        assert_eq!(d, SCAN_BACKOFF_MAX);
-        assert_eq!(next_interval(d, false), SCAN_EVERY);
+    fn jobs_ingest_only_named_files_and_recompute_only_on_news() {
+        let dir = temp_dir("job");
+        let log = dir.join("claude").join("p").join("s.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        let line = r#"{"type":"assistant","timestamp":"2026-03-02T10:00:00.000Z","sessionId":"s","cwd":"C:/p","gitBranch":"main","requestId":"r1","uuid":"u1","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[]}}"#;
+        std::fs::write(&log, format!("{line}
+")).unwrap();
+        let cfg = IngestConfig { claude_projects: Some(dir.join("claude")), ..Default::default() };
+        let db = Some(dir.join("t.db"));
+
+        // Summary: touches no log, but computes the numbers.
+        let out = scan_job(None, &db, &cfg, &Work::Summary, true);
+        assert!(!out.data_changed && !out.failed && out.info.is_some());
+        // Naming the file ingests it.
+        let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![log.clone()]), false);
+        assert!(out.data_changed && out.info.is_some());
+        // Same file again, unchanged: nothing stored, numbers not recomputed.
+        let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![log]), false);
+        assert!(!out.data_changed && out.info.is_none());
+        // An unrelated path is ignored.
+        let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![dir.join("claude").join("x.txt")]), false);
+        assert!(!out.data_changed && out.info.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

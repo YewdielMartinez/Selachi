@@ -279,6 +279,10 @@ pub struct AppShell {
     folded_spaces: HashSet<PathBuf>,
     /// Ctrl+B: the sidebar shows only icons even when there is room for it.
     sidebar_collapsed: bool,
+    /// The unified-sidebar tab row / space header under the pointer (drives the close and "+"
+    /// buttons: state, not group-hover, so they paint deterministically).
+    hovered_row: Option<TabId>,
+    hovered_space: Option<usize>,
     /// Favorite and recent projects (path, label): listed as spaces without tabs.
     known_projects: Vec<(PathBuf, String)>,
     _projects_task: Option<Task<()>>,
@@ -397,6 +401,8 @@ impl AppShell {
         });
         let focused = window.is_window_active();
         status.update(cx, |s, cx| s.set_active(focused, cx));
+        // A window that opens already focused gets no activation event: tell the monitor now.
+        usage.update(cx, |u, cx| u.set_active(focused, cx));
         if let Some(services) = cx.try_global::<Services>().cloned() {
             let weak = cx.weak_entity();
             status.update(cx, |s, cx| {
@@ -538,6 +544,8 @@ impl AppShell {
             blurred: false,
             folded_spaces: HashSet::new(),
             sidebar_collapsed: false,
+            hovered_row: None,
+            hovered_space: None,
             known_projects: Vec::new(),
             _projects_task: None,
             settings: None,
@@ -1508,7 +1516,10 @@ impl AppShell {
         content: impl IntoElement,
     ) -> AnyElement {
         let animate = self.transition.is_some() && (from - to).abs() > 0.5;
-        let full = if animate { from.max(to) } else { to };
+        // The content is always laid out at its *target* size (the old size only when the zone is
+        // going away): the new content shows immediately and never reflows or swaps at the end;
+        // only the clipping box moves (SHEET easing, no overshoot).
+        let full = if animate && to <= 0.5 { from } else { to };
         let inner = if horizontal {
             div().w(px(full)).h_full().flex_none().child(content)
         } else {
@@ -1974,7 +1985,12 @@ impl AppShell {
         match tab.and_then(|id| self.slot(id).map(|s| (id, s))) {
             Some((id, slot)) => {
                 let info = infos.iter().find(|i| i.id == id);
-                card.children(multi.then(|| info.map(|i| self.pane_header(i))).flatten()).child(slot.handle.content(cx))
+                let is_viewer = slot.handle.downcast::<ViewerTab>().is_some();
+                let drop = is_viewer.then(|| self.viewer_drop_zone("viewer-drop", Radius::MD, cx));
+                card.relative()
+                    .children(multi.then(|| info.map(|i| self.pane_header(i))).flatten())
+                    .child(slot.handle.content(cx))
+                    .children(drop)
             },
             None => card.child(
                 div()
@@ -2109,6 +2125,7 @@ impl AppShell {
             tabs: infos,
             active: self.active_id(),
             shell: &shell,
+            hovered_row: self.hovered_row,
             glass: tint.is_some(),
         };
         let right_side = l.sidebar.side == SidebarSide::Right;
@@ -2162,6 +2179,8 @@ impl AppShell {
                 glass: tint.is_some(),
                 spaces: spaces::build_spaces(infos, l.sidebar.group_by, &git, &self.known_projects),
                 folded: &self.folded_spaces,
+                hovered_row: self.hovered_row,
+                hovered_space: self.hovered_space,
                 usage: self.usage_summary(cx),
             };
             let panel_items: Vec<RailItem> =
@@ -2233,7 +2252,14 @@ impl AppShell {
         if with_controls {
             header = header.child(window_controls(&self.theme, window.is_maximized()));
         }
+        let is_tree = self.right.as_ref().is_some_and(|r| r.id.as_str() == ui_viewer::FILES_PANEL_ID);
         let body: AnyElement = match &self.right {
+            Some(RightPanel { view: Some(v), .. }) if is_tree => div()
+                .relative()
+                .size_full()
+                .child(v.clone())
+                .child(self.viewer_drop_zone("tree-drop", Radius::MD, cx))
+                .into_any_element(),
             Some(RightPanel { view: Some(v), .. }) => v.clone().into_any_element(),
             Some(RightPanel { id, view: None, .. }) => Card::new(&self.theme)
                 .p_4()
@@ -2785,6 +2811,7 @@ impl AppShell {
                             tabs: infos,
                             active: self.active_id(),
                             shell: &shell,
+                            hovered_row: self.hovered_row,
                             glass: true,
                         })),
                 )
@@ -3241,6 +3268,48 @@ impl AppShell {
         self.apply_adapted(true, cx);
         self.mark_session_dirty(cx);
         cx.notify();
+    }
+
+    /// The drop target of the file tree / viewer: opens the dropped files in the viewer.
+    fn viewer_drop_zone(&self, id: &'static str, radius: f32, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.entity();
+        ui_kit::DropZone::new(id, &self.theme, "Soltar para abrir en el visor").radius(radius).on_drop(move |paths, window, cx| {
+            let paths = paths.to_vec();
+            shell.update(cx, |s, cx| s.drop_on_viewer(&paths, window, cx));
+        })
+    }
+
+    /// Files dropped on the file tree / a viewer tab: each file opens in the viewer (a folder is
+    /// not a file: it is ignored here, drop it on a space of the sidebar to work in it).
+    pub(crate) fn drop_on_viewer(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        for f in crate::drop::split_for_viewer(paths).files {
+            self.open_viewer(f, None, false, None, window, cx);
+        }
+    }
+
+    /// A folder dropped on a space row of the sidebar: a new terminal tab in it.
+    pub(crate) fn drop_on_space(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(dir) = crate::drop::folder_to_open(paths) {
+            self.new_tab_in(dir, window, cx);
+        }
+    }
+
+    /// The pointer entered / left a tab row of the unified sidebar. Repaints only on a change.
+    pub(crate) fn set_row_hover(&mut self, id: TabId, hovered: bool, cx: &mut Context<Self>) {
+        let next = crate::unified_sidebar::hover_transition(self.hovered_row, id, hovered);
+        if next != self.hovered_row {
+            self.hovered_row = next;
+            cx.notify();
+        }
+    }
+
+    /// The pointer entered / left a space header of the unified sidebar.
+    pub(crate) fn set_space_hover(&mut self, ix: usize, hovered: bool, cx: &mut Context<Self>) {
+        let next = crate::unified_sidebar::hover_transition(self.hovered_space, ix, hovered);
+        if next != self.hovered_space {
+            self.hovered_space = next;
+            cx.notify();
+        }
     }
 
     /// Branch and dirty flag of every repository the open terminals are in.

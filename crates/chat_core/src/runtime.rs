@@ -83,7 +83,7 @@ enum Cmd {
     Send { text: String, attachments: Vec<PathBuf> },
     Interrupt,
     Approve { request_id: String, decision: ApprovalDecision },
-    Switch { agent: AgentKind, model: Option<String> },
+    Switch { agent: AgentKind, model: Option<String>, effort: Option<String> },
     SetPermission(PermissionMode),
     /// The pump saw the agent process exit.
     DriverExited { gen: u64 },
@@ -240,7 +240,14 @@ impl ThreadRuntime {
     ///   as its first message, and it is also recorded as a system message.
     /// * **Same agent, other model**: the session is resumed with the new model, no handoff.
     pub fn switch_agent_or_model(&self, agent: AgentKind, model: Option<String>) -> Result<()> {
-        self.core.dispatch(Cmd::Switch { agent, model })
+        let effort = self.core.record.lock().effort.clone();
+        self.core.dispatch(Cmd::Switch { agent, model, effort })
+    }
+
+    /// [`Self::switch_agent_or_model`] that also sets the reasoning effort (`None` = the agent's
+    /// default). Effort is dropped when the agent has no such knob.
+    pub fn switch_with_effort(&self, agent: AgentKind, model: Option<String>, effort: Option<String>) -> Result<()> {
+        self.core.dispatch(Cmd::Switch { agent, model, effort })
     }
 
     /// The handoff text a switch to `to` would send now, built from what is stored (`None` when
@@ -512,7 +519,7 @@ impl Worker {
                 Cmd::Send { text, attachments } => self.on_send(text, attachments),
                 Cmd::Interrupt => self.on_interrupt(),
                 Cmd::Approve { request_id, decision } => self.on_approve(&request_id, decision),
-                Cmd::Switch { agent, model } => self.on_switch(agent, model),
+                Cmd::Switch { agent, model, effort } => self.on_switch(agent, model, effort),
                 Cmd::SetPermission(mode) => self.on_set_permission(mode),
                 Cmd::DriverExited { gen } => {
                     if self.driver.as_ref().is_some_and(|d| d.gen == gen) {
@@ -571,6 +578,7 @@ impl Worker {
         }
         let mut cfg = ThreadConfig::new(rec.cwd());
         cfg.model = rec.model.clone();
+        cfg.effort = rec.effort.clone();
         cfg.permission_mode = rec.permission;
         cfg.resume_session = rec.agent_session_id.clone();
         let spawned = shared.factory.spawn(&rec.agent, &cfg, self.job).map_err(|e| driver_err_text(&e))?;
@@ -698,10 +706,11 @@ impl Worker {
         core.emit(Changed { list: true, status: true, ..Changed::default() });
     }
 
-    fn on_switch(&mut self, agent: AgentKind, model: Option<String>) {
+    fn on_switch(&mut self, agent: AgentKind, model: Option<String>, effort: Option<String>) {
         let core = self.core.clone();
         let old = core.record.lock().clone();
-        if agent == old.agent && model == old.model {
+        let effort = effort.filter(|_| agents_driver::supports_effort(&agent));
+        if agent == old.agent && model == old.model && effort == old.effort {
             return;
         }
         let agent_changed = agent != old.agent;
@@ -734,9 +743,10 @@ impl Worker {
             let mut rec = core.record.lock();
             rec.agent = agent.clone();
             rec.model = model.clone();
+            rec.effort = effort.clone();
             rec.agent_session_id = session.clone();
         }
-        if let Err(e) = core.shared.db.set_agent(core.id, &agent, model.clone(), session) {
+        if let Err(e) = core.shared.db.set_agent(core.id, &agent, model.clone(), effort, session) {
             log::warn!("chat_core: persisting agent switch failed: {e}");
         }
         let note = match &model {

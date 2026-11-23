@@ -16,7 +16,7 @@ use ui_kit::{Icon, RowStatus};
 
 use crate::chat_view::{ChatView, ChatViewEvent};
 use crate::hub::ChatHub;
-use crate::options::{agent_name, model_label};
+use crate::options::{agent_name, model_effort_label, model_label};
 
 pub struct ChatTab {
     hub: Entity<ChatHub>,
@@ -125,11 +125,14 @@ impl TabModel for ChatTab {
 
     fn subtitle(&self, cx: &App) -> Option<SharedString> {
         match self.record(cx) {
-            Some(r) => Some(match r.model.as_deref() {
-                Some(m) => model_label(Some(m)).into(),
+            Some(r) => Some(match model_effort_label(r.model.as_deref(), r.effort.as_deref()) {
+                Some(l) => l.into(),
                 None => chat_core::agent_label(&r.agent).into(),
             }),
-            None => self.view.read(cx).draft_spec().map(|s| model_label(s.model.as_deref()).into()),
+            None => self.view.read(cx).draft_spec().map(|s| match model_effort_label(s.model.as_deref(), s.effort.as_deref()) {
+                Some(l) => l.into(),
+                None => model_label(None).into(),
+            }),
         }
     }
 

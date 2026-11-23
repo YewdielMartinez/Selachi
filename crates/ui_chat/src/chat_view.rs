@@ -42,13 +42,15 @@ pub struct DraftSpec {
     pub project: Option<PathBuf>,
     pub agent: AgentKind,
     pub model: Option<String>,
+    /// Reasoning effort; only kept for agents that have the knob.
+    pub effort: Option<String>,
     pub permission: PermissionMode,
     pub use_worktree: bool,
 }
 
 impl DraftSpec {
     pub fn new(project: Option<PathBuf>) -> Self {
-        Self { project, agent: AgentKind::ClaudeCode, model: None, permission: PermissionMode::Ask, use_worktree: false }
+        Self { project, agent: AgentKind::ClaudeCode, model: None, effort: None, permission: PermissionMode::Ask, use_worktree: false }
     }
 
     /// The `ThreadSpec` of this draft, or why it cannot be created yet.
@@ -56,6 +58,7 @@ impl DraftSpec {
         let project = self.project.clone().ok_or("Elige un proyecto para empezar el hilo.")?;
         let mut spec = ThreadSpec::new(project, self.agent.clone());
         spec.model = self.model.clone();
+        spec.effort = self.effort.clone().filter(|_| agents_driver::supports_effort(&self.agent));
         spec.permission = self.permission;
         spec.use_worktree = self.use_worktree;
         spec.checkpoint_before_turn = should_checkpoint(self.permission);
@@ -110,9 +113,14 @@ pub struct ChatView {
     branch: Option<String>,
     pending_perm: Option<PermissionMode>,
     pending_model: Option<Option<String>>,
+    pending_effort: Option<Option<String>>,
     notice: Option<String>,
     project_menu_open: bool,
+    /// Width of the chat zone itself (measured while painting; the window's before that).
     viewport_w: f32,
+    /// Width of the window (only the XL reading cap depends on it).
+    window_w: f32,
+    measured: ui_kit::MeasuredWidth,
     reading_width: Option<Option<f32>>,
     thread_sub: Option<Subscription>,
     _subs: Vec<Subscription>,
@@ -158,9 +166,12 @@ impl ChatView {
             branch: None,
             pending_perm: None,
             pending_model: None,
+            pending_effort: None,
             notice: None,
             project_menu_open: false,
             viewport_w: 1200.0,
+            window_w: 1200.0,
+            measured: ui_kit::MeasuredWidth::with_breaks(&[WidthClass::COMPACT_BELOW_PX, 640.0]),
             reading_width: None,
             thread_sub: None,
             _subs: subs,
@@ -251,9 +262,14 @@ impl ChatView {
     pub(crate) fn column_max(&self) -> Option<f32> {
         match self.reading_width {
             Some(w) => w,
-            None if self.viewport_w >= XL_FROM => Some(READING_WIDTH_XL),
+            None if self.window_w >= XL_FROM => Some(READING_WIDTH_XL),
             None => None,
         }
+    }
+
+    /// Opens a composer menu by name (see `Composer::open_popup_named`): demos and screenshots.
+    pub fn open_composer_popup(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.composer.update(cx, |c, cx| c.open_popup_named(name, cx));
     }
 
     pub fn width_class(&self) -> WidthClass {
@@ -277,6 +293,7 @@ impl ChatView {
         self.cstate_dirty = true;
         self.pending_perm = None;
         self.pending_model = None;
+        self.pending_effort = None;
         self.thread_sub = Some(cx.subscribe(&self.hub, move |this, _h, u: &ThreadUpdate, cx| {
             if u.thread_id == id {
                 this.on_update(u, cx);
@@ -353,6 +370,9 @@ impl ChatView {
                 if self.pending_model.as_ref().is_some_and(|m| *m == record.model) {
                     self.pending_model = None;
                 }
+                if self.pending_effort.as_ref().is_some_and(|e| *e == record.effort) {
+                    self.pending_effort = None;
+                }
                 self.record = Some(record);
                 let new_keys = keys_of(&rows);
                 if let Some(sp) = diff_rows(&self.keys, &new_keys) {
@@ -386,6 +406,7 @@ impl ChatView {
                 can_edit_permission: true,
                 agent: spec.agent.clone(),
                 model: spec.model.clone(),
+                effort: spec.effort.clone(),
                 agents,
                 project_root: spec.project.clone(),
                 branch: None,
@@ -402,6 +423,10 @@ impl ChatView {
                 model: match &self.pending_model {
                     Some(m) => m.clone(),
                     None => r.model.clone().or_else(|| self.meta.model.clone()),
+                },
+                effort: match &self.pending_effort {
+                    Some(e) => e.clone(),
+                    None => r.effort.clone(),
                 },
                 agents,
                 project_root: Some(r.cwd().to_path_buf()),
@@ -546,10 +571,35 @@ impl ChatView {
                 }
                 _ => {}
             },
+            ComposerEvent::SetEffort(effort) => match (&mut self.mode, self.runtime.clone()) {
+                (ViewMode::Draft { spec, .. }, _) => {
+                    spec.effort = effort;
+                    self.cstate_dirty = true;
+                    cx.notify();
+                }
+                (_, Some(rt)) => {
+                    let rec = self.record.clone();
+                    let agent = rec.as_ref().map(|r| r.agent.clone()).unwrap_or(AgentKind::ClaudeCode);
+                    let model = match &self.pending_model {
+                        Some(m) => m.clone(),
+                        None => rec.as_ref().and_then(|r| r.model.clone()),
+                    };
+                    match rt.switch_with_effort(agent, model, effort.clone()) {
+                        Ok(()) => {
+                            self.pending_effort = Some(effort);
+                            self.cstate_dirty = true;
+                            cx.notify();
+                        }
+                        Err(e) => self.set_notice(format!("No se pudo cambiar el esfuerzo: {e}"), cx),
+                    }
+                }
+                _ => {}
+            },
             ComposerEvent::PickAgent(kind) => match (&mut self.mode, self.runtime.clone()) {
                 (ViewMode::Draft { spec, .. }, _) => {
                     spec.agent = kind;
                     spec.model = None;
+                    spec.effort = None;
                     self.cstate_dirty = true;
                     self.composer.update(cx, |c, cx| c.close_popup(cx));
                     cx.notify();
@@ -926,7 +976,8 @@ impl ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.viewport_w = f32::from(window.viewport_size().width);
+        self.window_w = f32::from(window.viewport_size().width);
+        self.viewport_w = self.measured.width().unwrap_or(self.window_w);
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
@@ -957,6 +1008,13 @@ impl Render for ChatView {
             ViewMode::Draft { .. } => self.render_draft(cx),
             ViewMode::Thread => self.render_thread(cx),
         };
-        div().size_full().relative().font_family(ty.ui_family).text_color(c.text).line_height(relative(1.4)).child(content)
+        div()
+            .size_full()
+            .relative()
+            .font_family(ty.ui_family)
+            .text_color(c.text)
+            .line_height(relative(1.4))
+            .child(self.measured.probe())
+            .child(content)
     }
 }

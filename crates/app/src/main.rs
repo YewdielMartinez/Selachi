@@ -9,6 +9,7 @@ mod app_shell;
 mod block_layout;
 mod block_ui;
 mod chat_host;
+mod drop;
 mod git_monitor;
 mod git_panel;
 mod grouping;

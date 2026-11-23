@@ -68,12 +68,12 @@ mod tests;
 pub use chat_view::{ChatView, ChatViewEvent, DraftSpec, READING_WIDTH_XL, ViewMode, XL_FROM};
 pub use composer::{ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode};
 pub use field::{ChatField, FieldEvent, Nav, TextBuf};
-pub use hub::{ChatEvent, ChatHub, FilesReady};
+pub use hub::{ChatEvent, ChatHub, FilesReady, ModelsReady};
 pub use md::{MdBody, ParsedMd, parse_markdown};
 pub use mentions::{MentionQuery, filter_files, mention_at, walk_files};
 pub use options::{
-    AgentOption, ModelOption, PERMISSION_ORDER, agent_mark, default_agents, model_label, models_for, permission_hint,
-    permission_label, pretty_model,
+    AgentOption, EFFORTS, ModelOption, PERMISSION_ORDER, agent_mark, default_agents, effort_label, efforts_for, model_effort_label,
+    model_label, models_for, permission_hint, permission_label, pretty_model,
 };
 pub use tab::ChatTab;
 pub use thread_list::{

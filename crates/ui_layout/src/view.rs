@@ -355,35 +355,15 @@ impl LayoutPanel {
         })
     }
 
-    /// A labelled settings row: label on the left, control on the right.
+    /// A labelled settings row: label on the left, control on the right (the shared
+    /// [`ui_kit::SettingRow`]: the label wraps, the control never gets covered).
     fn row(&self, label: &str, control: impl IntoElement) -> Div {
-        let t = self.theme;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(12.0))
-            .min_h(px(36.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_size(px(t.typography.ui_size_md))
-                    .text_color(t.colors.text)
-                    .child(SharedString::from(label.to_string())),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_end()
-                    .child(control),
-            )
+        div().w_full().child(
+            ui_kit::SettingRow::new(&self.theme, SharedString::from(label.to_string()), control)
+                .padded(false)
+                .min_height(36.0)
+                .regular_label(),
+        )
     }
 
     fn group(&self, title: &str, rows: Vec<AnyElement>) -> Div {

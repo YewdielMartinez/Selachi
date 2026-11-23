@@ -256,6 +256,8 @@ impl RenderOnce for Spinner {
 ///     .status(RowStatus::Working)
 ///     .selected(true)
 /// ```
+type HoverFn = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
+
 #[derive(IntoElement)]
 pub struct ListRow {
     id: ElementId,
@@ -269,6 +271,7 @@ pub struct ListRow {
     selected: bool,
     glass: bool,
     on_click: Option<ClickFn>,
+    on_hover: Option<HoverFn>,
 }
 
 impl ListRow {
@@ -288,7 +291,15 @@ impl ListRow {
             selected: false,
             glass: false,
             on_click: None,
+            on_hover: None,
         }
+    }
+
+    /// The pointer entered (`true`) or left (`false`) the row. Drive hover-only affordances from
+    /// state set here rather than from group-hover styles.
+    pub fn on_hover(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_hover = Some(Box::new(f));
+        self
     }
 
     /// The row sits on a glass surface: hover / selected pills are translucent (white 8 / 12 %)
@@ -410,6 +421,9 @@ impl RenderOnce for ListRow {
                         .child(m),
                 )
             });
+        if let Some(f) = self.on_hover {
+            el = el.on_hover(move |h, w, cx| f(*h, w, cx));
+        }
         if let Some(f) = self.on_click {
             el = el.cursor_pointer().on_click(move |e, w, cx| f(e, w, cx));
         }

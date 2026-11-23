@@ -35,8 +35,20 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
+# Perfil de desarrollo ligero en disco: solo tablas de líneas (los backtraces y errores
+# siguen mostrando archivo:línea) para nuestro código, y sin info de depuración para
+# dependencias. Reduce `target/debug` drásticamente (antes ~100 GB con muchos ejemplos).
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "packed"
+
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
+
+# Los tests compilan con el perfil dev; mismo criterio.
+[profile.test]
+debug = "line-tables-only"
 
 # Fork local de gpui 0.2.2 con el parche de rendimiento de Selachi (bench/patches/gpui-selachi.patch):
 # reloj de frames bajo demanda (0% CPU en reposo) y texturas de paths perezosas (-47 MB).

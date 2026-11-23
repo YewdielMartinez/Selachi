@@ -506,6 +506,11 @@ impl OnboardingView {
             }
             // Advance by each frame's own delay, only while the step is shown and the window is
             // active; the loop ends (and with it every wake-up) when the step is left.
+            // While the window is inactive the frame does not advance and the loop only
+            // re-checks once per second (instead of every frame delay), so an unfocused
+            // wizard costs ~nothing.
+            const INACTIVE_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+            let mut active = true;
             loop {
                 let delay = this
                     .read_with(cx, |this, _| {
@@ -514,20 +519,23 @@ impl OnboardingView {
                     .ok()
                     .flatten();
                 let Some(delay) = delay else { break };
-                cx.background_executor().timer(delay).await;
-                let keep_going = this.update_in(cx, |this, window, cx| {
+                let wait = if active { delay } else { INACTIVE_RECHECK };
+                cx.background_executor().timer(wait).await;
+                let state = this.update_in(cx, |this, window, cx| {
                     if this.flow.step() != Step::Welcome {
-                        return false;
+                        return None;
                     }
-                    let Some(shark) = this.shark.as_mut() else { return false };
-                    if window.is_window_active() {
+                    let shark = this.shark.as_mut()?;
+                    let is_active = window.is_window_active();
+                    if is_active {
                         shark.ix = (shark.ix + 1) % shark.frames.len();
                         cx.notify();
                     }
-                    true
+                    Some(is_active)
                 });
-                if !matches!(keep_going, Ok(true)) {
-                    break;
+                match state {
+                    Ok(Some(is_active)) => active = is_active,
+                    _ => break,
                 }
             }
         }));

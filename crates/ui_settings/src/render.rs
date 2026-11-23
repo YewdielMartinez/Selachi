@@ -70,6 +70,7 @@ impl SettingsView {
                 .occlude()
                 .h(px(32.0))
                 .min_w(px(170.0))
+                .max_w(px(280.0))
                 .px(px(12.0))
                 .flex()
                 .flex_row()
@@ -82,8 +83,8 @@ impl SettingsView {
                 .text_size(px(13.0))
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.surface_4))
-                .child(SharedString::from(label))
-                .child(icon(Icon::ChevronDown, 14.0, c.muted))
+                .child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(SharedString::from(label)))
+                .child(icon(Icon::ChevronDown, 14.0, c.muted).flex_none())
                 .on_click(move |_, _, cx| {
                     this.update(cx, |s, cx| {
                         s.open_select = if s.open_select == Some(id) { None } else { Some(id) };
@@ -163,7 +164,11 @@ impl SettingsView {
     }
 
     fn is_narrow(&self, window: &Window) -> bool {
-        self.width_hint.unwrap_or(f32::from(window.viewport_size().width)) < NARROW_BELOW
+        // An explicit hint wins; else the width this view measured on its zone; else the window.
+        match self.width_hint {
+            Some(w) => w < NARROW_BELOW,
+            None => self.measured.narrow(window),
+        }
     }
 
     fn render_section(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -376,6 +381,7 @@ impl Render for SettingsView {
             .track_focus(&self.focus_handle_ref())
             .on_action(cx.listener(|_, _: &FocusNextField, window, _| window.focus_next()))
             .on_action(cx.listener(|_, _: &FocusPrevField, window, _| window.focus_prev()))
+            .relative()
             .size_full()
             .flex()
             .when(narrow, |d| d.flex_col())
@@ -383,6 +389,7 @@ impl Render for SettingsView {
             .font_family(t.typography.ui_family)
             .text_size(px(t.typography.ui_size_md))
             .text_color(c.text)
+            .child(self.measured.probe())
             .child(if narrow { self.top_menu(cx) } else { self.nav(cx) })
             .child(content)
     }

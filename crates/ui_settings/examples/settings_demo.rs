@@ -214,6 +214,20 @@ fn main() {
                         v.capture_shortcut(a, cx);
                     }
                 });
+                if scroll_end {
+                    // The plugin list loads asynchronously: scroll again once it is laid out.
+                    let again = shown.clone();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+                        again
+                            .update(cx, |v, cx| {
+                                v.scroll_to_end();
+                                cx.notify();
+                            })
+                            .ok();
+                    })
+                    .detach();
+                }
                 host
             },
         );

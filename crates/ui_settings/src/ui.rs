@@ -4,9 +4,9 @@
 //! separated by space), titles 13 medium, descriptions 12 muted, the accent only where a state is
 //! active. At narrow widths a row stacks its control under the text.
 
-use gpui::{AnyElement, Div, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px};
+use gpui::{AnyElement, Div, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px};
 use theme::{Radius, Rgba, Theme};
-use ui_kit::{Icon, icon};
+use ui_kit::{Icon, SettingRow, icon};
 
 /// Content width above which the content column stops growing (docs/DESIGN.md, Responsive: XL).
 pub const MAX_CONTENT_WIDTH: f32 = 860.0;
@@ -96,7 +96,8 @@ pub fn group_with_action(theme: &Theme, title: &str, action: impl IntoElement, r
 }
 
 /// One setting: title + description on the left, the control on the right (below at narrow
-/// widths). `error` is shown under the text in `error` color.
+/// widths). `error` is shown under the text in `error` color. This is the shared
+/// [`ui_kit::SettingRow`]: text column `flex_1 min_w_0` (wraps), control column `flex_none`.
 pub fn row(
     theme: &Theme,
     narrow: bool,
@@ -105,26 +106,7 @@ pub fn row(
     control: impl IntoElement,
     error: Option<SharedString>,
 ) -> Div {
-    let c = theme.colors;
-    let text = div()
-        .flex()
-        .flex_col()
-        .gap(px(2.0))
-        .min_w(px(0.0))
-        .when(!narrow, |d| d.flex_1())
-        .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.text).child(title.into()))
-        .when_some(desc, |d, t| d.child(div().text_size(px(12.0)).text_color(c.muted).child(t)))
-        .when_some(error, |d, e| d.child(div().text_size(px(12.0)).text_color(c.error).child(e)));
-    div()
-        .flex()
-        .w_full()
-        .px(px(16.0))
-        .py(px(12.0))
-        .gap(px(if narrow { 10.0 } else { 24.0 }))
-        .when(narrow, |d| d.flex_col())
-        .when(!narrow, |d| d.flex_row().items_center())
-        .child(text)
-        .child(div().flex_none().child(control))
+    div().w_full().child(SettingRow::new(theme, title, control).description_opt(desc).error(error).stacked(narrow))
 }
 
 /// Free-form row: arbitrary content padded like a setting row.

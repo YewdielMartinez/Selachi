@@ -12,6 +12,7 @@ Requirements: Windows 10/11, PowerShell 7 (`pwsh`). No other dependencies. Run f
 | `bench/compare.ps1` | Runs `measure.ps1` for Selachi, Windows Terminal and Warp and writes `bench/results/latest.md`. |
 | `bench/flood.ps1` | Output throughput test. Run it *inside* the terminal under test. |
 | `bench/threads.ps1` | Per-thread CPU of a process over N seconds (thread names via `GetThreadDescription`). Answers "which thread burns CPU at idle?". |
+| `bench/bursts.ps1` | Time-resolved per-thread CPU: prints every sampling interval in which a thread burned CPU (and whether the window was focused). Tells periodic work (timers, scans) from one-off bursts. |
 | `bench/vmregions.ps1` | VMMap-style breakdown of a process' committed memory (private / image / mapped, biggest private regions). Answers "where do the Private Bytes come from?". |
 | `bench/shot.ps1` | Launches an exe, optionally types keys into it, saves a PNG of its window (visual check after render-path changes). |
 | `bench/patches/gpui-selachi.patch` | Patch for gpui 0.2.2 (demand-driven vsync thread + lazy path textures); see the perf notes below. |
@@ -35,6 +36,10 @@ pwsh -File bench/flood.ps1 -Plain           # same amount, no escape sequences
 ```
 
 `measure.ps1 -Exe` accepts a path or an app execution alias (`wt.exe`). Extra arguments: `-Args '--flag','value'`.
+
+### Idle CPU and the usage monitor
+
+`crates/app/src/usage_monitor.rs` ingests the agents' logs only while the window is focused and only for files a notify watcher marked as changed. A benchmark launched from a script is usually *not* the foreground window, so the scan path would never run; set `SELACHI_BENCH_USAGE_ACTIVE=1` in the environment of the process under test to make the monitor behave as if focused (worst case for scans, real `~/.claude` and `~/.codex` logs). Use an isolated `SELACHI_DATA_DIR` for config/state; the usage database stays in `%APPDATA%\Selachi`.
 
 ## What `measure.ps1` measures
 

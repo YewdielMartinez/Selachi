@@ -26,7 +26,7 @@ use ui_kit::{Button, GhostButton, Icon, IconButton, Pill, StatusGlyph, Toggle, a
 
 use crate::field::{ChatField, FieldEvent};
 use crate::hub::{ChatEvent, ChatHub};
-use crate::options::{agent_mark, model_label};
+use crate::options::agent_mark;
 use crate::rows::diff_rows;
 use crate::util::project_name;
 use crate::widgets::amber;
@@ -117,8 +117,8 @@ pub fn subtitle(t: &ThreadRecord, with_project: bool) -> String {
     if with_project {
         parts.push(project_name(&t.project_root));
     }
-    parts.push(match t.model.as_deref() {
-        Some(m) => model_label(Some(m)),
+    parts.push(match crate::options::model_effort_label(t.model.as_deref(), t.effort.as_deref()) {
+        Some(label) => label,
         None => chat_core::agent_label(&t.agent),
     });
     if let Some(w) = &t.worktree_path {
@@ -228,6 +228,8 @@ pub struct ThreadListView {
     keys: Vec<ItemKey>,
     list: ListState,
     renaming: Option<Renaming>,
+    /// The thread row under the pointer: drives the row actions (state, not group-hover).
+    hovered: Option<ThreadId>,
     delete: Option<DeleteState>,
     show_header: bool,
     primary_action: bool,
@@ -248,6 +250,7 @@ impl ThreadListView {
             keys: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(400.0)),
             renaming: None,
+            hovered: None,
             delete: None,
             show_header: true,
             primary_action: false,
@@ -545,6 +548,26 @@ impl ThreadListView {
             .into_any_element()
     }
 
+    fn is_renaming(&self, id: ThreadId) -> bool {
+        self.renaming.as_ref().is_some_and(|r| r.id == id)
+    }
+
+    /// The pointer entered / left a thread row. Repaints only on a change; a late "left" of the
+    /// previous row never clears the next one.
+    fn set_hovered(&mut self, id: ThreadId, hovered: bool, cx: &mut Context<Self>) {
+        let next = if hovered {
+            Some(id)
+        } else if self.hovered == Some(id) {
+            None
+        } else {
+            self.hovered
+        };
+        if next != self.hovered {
+            self.hovered = next;
+            cx.notify();
+        }
+    }
+
     fn thread_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let _ = window;
         let t = self.theme;
@@ -554,7 +577,7 @@ impl ThreadListView {
         let rec = rec.clone();
         let id = rec.id;
         let active = self.hub.read(cx).active_thread() == Some(id);
-        let group = SharedString::from(format!("thr-row-{}", id.0));
+        let hovered = self.hovered == Some(id);
         let with_project = self.mode == GroupMode::Status && self.width_class == WidthClass::Regular;
         let elapsed = format_elapsed(((now_ms() - rec.updated_ms).max(0) / 1000) as u64);
         let glyph: Option<AnyElement> = match rec.status {
@@ -586,10 +609,9 @@ impl ThreadListView {
             .flex_row()
             .items_center()
             .gap(px(2.0))
-            .invisible()
-            .group_hover(group.clone(), |s| s.visible())
             .child(
                 IconButton::new(format!("thr-rename-{}", id.0), &t, Icon::Edit)
+                    .passthrough(true)
                     .size(26.0)
                     .icon_size(14.0)
                     .tooltip("Renombrar")
@@ -598,6 +620,7 @@ impl ThreadListView {
             .child(
                 // TODO-SVG: `assets/icons/archive.svg` (16x16). Placeholder: the folder icon.
                 IconButton::new(format!("thr-archive-{}", id.0), &t, Icon::Folder)
+                    .passthrough(true)
                     .size(26.0)
                     .icon_size(14.0)
                     .tooltip("Archivar")
@@ -605,6 +628,7 @@ impl ThreadListView {
             )
             .child(
                 IconButton::new(format!("thr-delete-{}", id.0), &t, Icon::Trash)
+                    .passthrough(true)
                     .size(26.0)
                     .icon_size(14.0)
                     .tooltip("Eliminar…")
@@ -618,7 +642,7 @@ impl ThreadListView {
             .gap(px(6.0))
             .text_size(px(ty.ui_size_sm))
             .text_color(c.muted)
-            .group_hover(group.clone(), |s| s.invisible())
+            .when(hovered && !self.is_renaming(id), |d| d.invisible())
             .child(elapsed)
             .children(glyph);
         div()
@@ -628,7 +652,6 @@ impl ThreadListView {
             .child(
                 div()
                     .id(("thr", ix))
-                    .group(group)
                     .relative()
                     .occlude()
                     .w_full()
@@ -643,6 +666,7 @@ impl ThreadListView {
                     .font_family(ty.ui_family)
                     .when(active, |d| d.bg(c.surface_3))
                     .when(!active, |d| d.hover(move |s| s.bg(c.surface_2)))
+                    .on_hover(cx.listener(move |this, h: &bool, _, cx| this.set_hovered(id, *h, cx)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_thread(id, cx)))
                     .child(agent_icon(agent_mark(&rec.agent), 16.0, c.muted))
                     .child(
@@ -665,7 +689,7 @@ impl ThreadListView {
                             ),
                     )
                     .child(meta)
-                    .child(actions),
+                    .children((hovered && !self.is_renaming(id)).then_some(actions)),
             )
             .into_any_element()
     }
@@ -907,6 +931,7 @@ mod tests {
             worktree_path: None,
             agent: AgentKind::ClaudeCode,
             model: Some("opus".into()),
+            effort: None,
             permission: PermissionMode::Ask,
             status,
             created_ms: 0,
@@ -978,8 +1003,11 @@ mod tests {
     #[test]
     fn subtitles_say_what_matters() {
         let mut t = rec(1, ThreadStatus::Working, "C:\\p\\terminal", 0);
-        assert_eq!(subtitle(&t, false), "Working · Opus");
-        assert_eq!(subtitle(&t, true), "Working · terminal · Opus");
+        assert_eq!(subtitle(&t, false), "Working · Opus 5.5");
+        assert_eq!(subtitle(&t, true), "Working · terminal · Opus 5.5");
+        t.effort = Some("high".into());
+        assert_eq!(subtitle(&t, false), "Working · Opus 5.5 · Alto");
+        t.effort = None;
         t.status = ThreadStatus::Done;
         t.model = None;
         t.worktree_path = Some(PathBuf::from("C:\\p\\terminal-wt"));

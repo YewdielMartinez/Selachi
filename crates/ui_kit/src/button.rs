@@ -32,6 +32,7 @@ pub struct IconButton {
     active: bool,
     emphasize_on_hover: bool,
     glass: bool,
+    passthrough: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
 }
@@ -47,9 +48,17 @@ impl IconButton {
             active: false,
             emphasize_on_hover: false,
             glass: false,
+            passthrough: false,
             tooltip: None,
             on_click: None,
         }
+    }
+
+    /// Do not occlude the hitboxes behind: a hovered ancestor stays hovered while the pointer is
+    /// over this button (use it for affordances that live inside a hover-driven row).
+    pub fn passthrough(mut self, on: bool) -> Self {
+        self.passthrough = on;
+        self
     }
 
     /// The button sits on a glass surface: its pills are translucent white (8 % hover, 12 %
@@ -117,7 +126,7 @@ impl RenderOnce for IconButton {
         let mut el = div()
             .id(self.id)
             .group(group)
-            .occlude()
+            .when(!self.passthrough, |d| d.occlude())
             .size(px(self.size))
             .flex_none()
             .flex()

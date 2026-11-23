@@ -11,6 +11,22 @@ pub const MAX_FILES: usize = 30_000;
 /// Deepest folder level walked.
 pub const MAX_DEPTH: usize = 12;
 
+/// The `@relative/path` mention of `path` when it lies inside `root` (compared case-insensitively
+/// with `/` and `\` alike, as Windows does). `None` for files elsewhere and for the root itself.
+pub fn mention_for(root: &Path, path: &Path) -> Option<String> {
+    let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_string();
+    let (r, f) = (norm(root), norm(path));
+    let (rl, fl) = (r.to_lowercase(), f.to_lowercase());
+    let rest = fl.strip_prefix(&rl)?.strip_prefix('/')?;
+    if rest.is_empty() {
+        return None;
+    }
+    // `to_lowercase` can change byte lengths: slice the original by chars instead.
+    let skip = r.chars().count() + 1;
+    let rel: String = f.chars().skip(skip).collect();
+    Some(format!("@{rel}"))
+}
+
 /// The `@query` token the caret is in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionQuery {
@@ -155,5 +171,16 @@ mod tests {
         let files = walk_files(r, 100);
         assert_eq!(files, vec!["b.md".to_string(), "src/a.rs".to_string()]);
         assert_eq!(walk_files(r, 1).len(), 1);
+    }
+
+    #[test]
+    fn dropped_files_inside_the_project_become_mentions() {
+        let root = Path::new(r"C:\dev\Selachi");
+        assert_eq!(mention_for(root, Path::new(r"C:\dev\Selachi\crates\app\main.rs")).as_deref(), Some("@crates/app/main.rs"));
+        assert_eq!(mention_for(root, Path::new(r"c:\DEV\selachi\README.md")).as_deref(), Some("@README.md"));
+        assert_eq!(mention_for(root, Path::new(r"C:\dev\Selachi-other\x.rs")), None, "a sibling with the same prefix is outside");
+        assert_eq!(mention_for(root, Path::new(r"D:\elsewhere\x.rs")), None);
+        assert_eq!(mention_for(root, root), None);
+        assert_eq!(mention_for(Path::new("/home/u/p"), Path::new("/home/u/p/src/a b.rs")).as_deref(), Some("@src/a b.rs"));
     }
 }

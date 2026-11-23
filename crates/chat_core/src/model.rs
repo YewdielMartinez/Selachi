@@ -166,6 +166,8 @@ pub struct ThreadSpec {
     pub project_root: PathBuf,
     pub agent: AgentKind,
     pub model: Option<String>,
+    /// Reasoning effort (`low | medium | high | xhigh | max`); `None` = the agent's default.
+    pub effort: Option<String>,
     pub permission: PermissionMode,
     /// Create a git worktree `selachi/<slug>` for the thread and run the agent there (A8).
     pub use_worktree: bool,
@@ -180,6 +182,7 @@ impl ThreadSpec {
             project_root: project_root.into(),
             agent,
             model: None,
+            effort: None,
             permission: PermissionMode::Ask,
             use_worktree: false,
             checkpoint_before_turn: false,
@@ -197,6 +200,8 @@ pub struct ThreadRecord {
     pub worktree_path: Option<PathBuf>,
     pub agent: AgentKind,
     pub model: Option<String>,
+    /// Reasoning effort chosen for this thread (see [`ThreadSpec::effort`]).
+    pub effort: Option<String>,
     pub permission: PermissionMode,
     pub status: ThreadStatus,
     pub created_ms: i64,

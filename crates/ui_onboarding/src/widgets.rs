@@ -95,7 +95,8 @@ pub fn row_text(t: &Theme, title: impl Into<SharedString>, subtitle: Option<Shar
         })
 }
 
-/// Label (+ hint) on the left, the control on the right (below it on narrow windows).
+/// Label (+ hint) on the left, the control on the right (below it on narrow windows): the shared
+/// [`ui_kit::SettingRow`] (text column `flex_1 min_w_0` and wrapping, control column `flex_none`).
 pub fn setting_row(
     t: &Theme,
     xs: bool,
@@ -103,29 +104,14 @@ pub fn setting_row(
     hint: Option<SharedString>,
     control: impl IntoElement,
 ) -> Div {
-    let c = t.colors;
-    let ty = t.typography;
-    div()
-        .w_full()
-        .min_h(px(44.0))
-        .px(px(12.0))
-        .py(px(10.0))
-        .flex()
-        .when(xs, |d| d.flex_col().items_start())
-        .when(!xs, |d| d.flex_row().items_center())
-        .justify_between()
-        .gap(px(12.0))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(div().text_size(px(ty.ui_size_md)).text_color(c.text).child(title.into()))
-                .when_some(hint, |d, h| d.child(div().text_size(px(ty.ui_size_sm)).line_height(px(17.0)).text_color(c.muted).child(h))),
-        )
-        .child(div().flex_none().child(control))
+    div().w_full().px(px(12.0)).py(px(10.0)).child(
+        ui_kit::SettingRow::new(t, title, control)
+            .description_opt(hint)
+            .stacked(xs)
+            .padded(false)
+            .min_height(24.0)
+            .regular_label(),
+    )
 }
 
 /// Checkbox: `accent_strong` when on (a strong selection), `surface_3` when off.

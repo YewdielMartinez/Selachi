@@ -28,6 +28,8 @@ pub struct SidebarProps<'a> {
     pub tabs: &'a [TabInfo],
     pub active: Option<TabId>,
     pub shell: &'a Entity<AppShell>,
+    /// The tab row under the pointer (state kept by the shell).
+    pub hovered_row: Option<TabId>,
     /// The column is glass: rows use translucent pills so the backdrop shows through.
     pub glass: bool,
 }
@@ -215,8 +217,10 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     let theme = p.theme;
     let c = theme.colors;
     let id = info.id;
-    let group: SharedString = format!("srow-{}", id.as_u64()).into();
+    let show_close = crate::unified_sidebar::close_visible(Some(id) == p.active, p.hovered_row, id);
+    let shell_hover = p.shell.clone();
     let mut row = ListRow::new(("srow", id), theme)
+        .on_hover(move |h, _, cx| shell_hover.update(cx, |s, cx| s.set_row_hover(id, h, cx)))
         .icon(info.icon.icon())
         .when_some(crate::agents::agent_of(&info.icon), |r, m| r.agent(m))
         .glass(p.glass)
@@ -228,7 +232,7 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     }
     if let Some(s) = info.status {
         row = row.status(s);
-        if let Some(t) = info.last_activity {
+        if let Some(t) = info.last_activity.filter(|_| !show_close) {
             row = row.meta(format_elapsed(Instant::now().saturating_duration_since(t).as_secs()));
         }
     }
@@ -236,18 +240,16 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     let close_id: SharedString = format!("srow-close-{}", id.as_u64()).into();
     div()
         .relative()
-        .group(group.clone())
         .child(row)
-        .child(
+        .children(show_close.then(|| {
             div()
                 .absolute()
                 .right(px(8.0))
                 .top(px(10.0))
-                .opacity(0.0)
-                .group_hover(group, |s| s.opacity(1.0))
                 .child(
                     IconButton::new(close_id, theme, Icon::Close)
                         .glass(p.glass)
+                        .passthrough(true)
                         .size(22.0)
                         .icon_size(10.0)
                         .tooltip("Cerrar (Ctrl+W)")
@@ -255,7 +257,7 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
                             cx.stop_propagation();
                             shell.update(cx, |s, cx| s.request_close(id, window, cx));
                         }),
-                ),
-        )
+                )
+        }))
         .text_color(c.text)
 }

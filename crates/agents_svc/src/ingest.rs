@@ -52,6 +52,70 @@ impl IngestConfig {
     }
 }
 
+/// Which agent log a changed path belongs to (see [`IngestConfig::classify`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// A Claude Code `projects/**/*.jsonl` file.
+    Claude,
+    /// A Codex `sessions/**/rollout-*.jsonl[.zst]` file.
+    Codex,
+    /// The OpenCode SQLite database (or its `-wal` / `-shm` companions).
+    OpenCodeDb,
+    /// A legacy OpenCode `storage/message/*/*.json` file.
+    OpenCodeJson,
+}
+
+impl IngestConfig {
+    /// Directories whose changes can mean new usage, with whether to watch them recursively.
+    /// OpenCode's data dir is shallow (the database files sit directly in it); its legacy message
+    /// tree is only watched if it exists. Missing directories are skipped by the caller.
+    pub fn watch_dirs(&self) -> Vec<(PathBuf, bool)> {
+        let mut v = vec![];
+        if let Some(p) = &self.claude_projects {
+            v.push((p.clone(), true));
+        }
+        if let Some(p) = &self.codex_sessions {
+            v.push((p.clone(), true));
+        }
+        if let Some(p) = &self.opencode_data {
+            v.push((p.clone(), false));
+            let legacy = p.join("storage").join("message");
+            if legacy.is_dir() {
+                v.push((legacy, true));
+            }
+        }
+        v
+    }
+
+    /// Is `path` a log file this config ingests? Pure string work (no I/O), so it is cheap enough
+    /// to run on every file-system event.
+    pub fn classify(&self, path: &Path) -> Option<SourceKind> {
+        let name = path.file_name()?.to_str()?;
+        if let Some(root) = &self.claude_projects {
+            if path.starts_with(root) {
+                return path.extension().is_some_and(|e| e == "jsonl").then_some(SourceKind::Claude);
+            }
+        }
+        if let Some(root) = &self.codex_sessions {
+            if path.starts_with(root) {
+                let ok = name.starts_with("rollout-") && (name.ends_with(".jsonl.zst") || name.ends_with(".jsonl"));
+                return ok.then_some(SourceKind::Codex);
+            }
+        }
+        if let Some(root) = &self.opencode_data {
+            if path.starts_with(root) {
+                if path.starts_with(root.join("storage").join("message")) {
+                    return path.extension().is_some_and(|e| e == "json").then_some(SourceKind::OpenCodeJson);
+                }
+                let db = name.starts_with("opencode")
+                    && (name.ends_with(".db") || name.ends_with(".db-wal") || name.ends_with(".db-shm"));
+                return (db && path.parent() == Some(root.as_path())).then_some(SourceKind::OpenCodeDb);
+            }
+        }
+        None
+    }
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -188,6 +252,76 @@ impl Ingestor {
             }
         }
         self.scan_opencode(&mut rep)?;
+        Ok(rep)
+    }
+
+    /// Ingest only `paths` (typically what a file watcher reported as changed): no directory
+    /// walk, one `stat` + one offset lookup per path, and only the bytes after the stored offset
+    /// of each plain `.jsonl`. Paths that are not agent logs, or that no longer exist, are
+    /// ignored. An OpenCode database path (or its `-wal`) triggers one cursor read of that
+    /// database. `Err` only for database failures, like [`Ingestor::scan`].
+    pub fn scan_paths(&mut self, paths: &[PathBuf]) -> Result<ScanReport> {
+        let mut rep = ScanReport::default();
+        let mut oc_dbs: Vec<PathBuf> = vec![];
+        for p in paths {
+            let Some(kind) = self.cfg.classify(p) else { continue };
+            match kind {
+                SourceKind::Claude | SourceKind::Codex => {
+                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let (agent, kind) = if kind == SourceKind::Claude {
+                        (Agent::Claude, Kind::Plain)
+                    } else if name.ends_with(".zst") {
+                        (Agent::Codex, Kind::Zst)
+                    } else {
+                        (Agent::Codex, Kind::Plain)
+                    };
+                    if !p.is_file() {
+                        continue;
+                    }
+                    rep.files_seen += 1;
+                    match agent {
+                        Agent::Claude => rep.claude_files += 1,
+                        _ => rep.codex_files += 1,
+                    }
+                    let f = SourceFile { path: p.clone(), agent, kind };
+                    if let Err(e) = self.scan_file(&f, &mut rep) {
+                        if is_db_error(&e) {
+                            return Err(e);
+                        }
+                        rep.errors.push(format!("{}: {e:#}", p.display()));
+                    }
+                }
+                SourceKind::OpenCodeDb => {
+                    let s = p.to_string_lossy();
+                    let base = s.strip_suffix("-wal").or_else(|| s.strip_suffix("-shm")).unwrap_or(&s);
+                    let db = PathBuf::from(base);
+                    if db.is_file() && !oc_dbs.contains(&db) {
+                        oc_dbs.push(db);
+                    }
+                }
+                SourceKind::OpenCodeJson => {
+                    if !p.is_file() {
+                        continue;
+                    }
+                    rep.files_seen += 1;
+                    rep.opencode_files += 1;
+                    match self.scan_opencode_json(p, &mut rep) {
+                        Ok(()) => {}
+                        Err(OcError::Store(e)) => return Err(e),
+                        Err(OcError::Source(m)) => rep.errors.push(format!("{}: {m}", p.display())),
+                    }
+                }
+            }
+        }
+        for db in oc_dbs {
+            rep.files_seen += 1;
+            rep.opencode_files += 1;
+            match self.scan_opencode_db(&db, &mut rep) {
+                Ok(()) => {}
+                Err(OcError::Store(e)) => return Err(e),
+                Err(OcError::Source(m)) => rep.errors.push(format!("{}: {m}", db.display())),
+            }
+        }
         Ok(rep)
     }
 

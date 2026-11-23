@@ -94,6 +94,8 @@ CREATE TABLE plans(
     json      TEXT NOT NULL
 );
 "#,
+    // v2: reasoning effort per thread
+    "ALTER TABLE threads ADD COLUMN effort TEXT;",
 ];
 
 /// Latest schema version this build knows.
@@ -315,8 +317,8 @@ impl ChatDb {
             let now = now_ms();
             c.execute(
                 "INSERT INTO threads(title, project_root, worktree_path, agent_kind, model, permission_mode, \
-                 status, created, updated, archived, checkpoint_before_turn) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'idle', ?7, ?7, 0, ?8)",
+                 status, created, updated, archived, checkpoint_before_turn, effort) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'idle', ?7, ?7, 0, ?8, ?9)",
                 params![
                     new.title,
                     new.spec.project_root.to_string_lossy(),
@@ -326,6 +328,7 @@ impl ChatDb {
                     permission_to_db(new.spec.permission),
                     now,
                     new.spec.checkpoint_before_turn,
+                    new.spec.effort,
                 ],
             )?;
             Ok(ThreadId(c.last_insert_rowid()))
@@ -379,19 +382,20 @@ impl ChatDb {
         })
     }
 
-    /// Agent / model switch: the agent session id is cleared unless `session` keeps one.
+    /// Agent / model / effort switch: the agent session id is cleared unless `session` keeps one.
     pub fn set_agent(
         &self,
         id: ThreadId,
         agent: &agents_driver::AgentKind,
         model: Option<String>,
+        effort: Option<String>,
         session: Option<String>,
     ) -> Result<()> {
         let agent = agent_to_db(agent);
         self.exec_sync(move |c| {
             c.execute(
-                "UPDATE threads SET agent_kind = ?2, model = ?3, agent_session_id = ?4, updated = ?5 WHERE id = ?1",
-                params![id.0, agent, model, session, now_ms()],
+                "UPDATE threads SET agent_kind = ?2, model = ?3, agent_session_id = ?4, updated = ?5, effort = ?6 WHERE id = ?1",
+                params![id.0, agent, model, session, now_ms(), effort],
             )?;
             Ok(())
         })
@@ -582,7 +586,7 @@ impl ChatDb {
 }
 
 const THREAD_SELECT: &str = "SELECT id, title, project_root, worktree_path, agent_kind, model, permission_mode, status, \
-     created, updated, agent_session_id, archived, checkpoint_before_turn FROM threads";
+     created, updated, agent_session_id, archived, checkpoint_before_turn, effort FROM threads";
 
 fn thread_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadRecord> {
     Ok(ThreadRecord {
@@ -599,6 +603,7 @@ fn thread_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadRecord> {
         agent_session_id: r.get(10)?,
         archived: r.get::<_, i64>(11)? != 0,
         checkpoint_before_turn: r.get::<_, i64>(12)? != 0,
+        effort: r.get(13)?,
     })
 }
 
@@ -728,12 +733,13 @@ mod tests {
         db.set_status(id, ThreadStatus::Done).unwrap();
         db.set_session(id, Some("sess".into())).unwrap();
         db.set_archived(id, true).unwrap();
-        db.set_agent(id, &AgentKind::Codex, Some("gpt".into()), None).unwrap();
+        db.set_agent(id, &AgentKind::Codex, Some("gpt".into()), Some("high".into()), None).unwrap();
         db.flush().unwrap();
         let t = db.get_thread(id).unwrap().unwrap();
         assert_eq!((t.status, t.archived, t.agent_session_id.clone()), (ThreadStatus::Done, true, None));
         assert_eq!(t.agent, AgentKind::Codex);
         assert_eq!(t.model.as_deref(), Some("gpt"));
+        assert_eq!(t.effort.as_deref(), Some("high"));
     }
 
     #[test]

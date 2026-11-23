@@ -48,7 +48,7 @@ fn control(
         })
         .active(move |s| {
             if close {
-                s.bg(rgb(0x9E2216))
+                s.bg(rgb(CLOSE_HOVER))
             } else {
                 s.bg(c.surface_3)
             }

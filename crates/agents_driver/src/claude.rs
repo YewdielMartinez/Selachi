@@ -425,6 +425,9 @@ pub fn build_args(cfg: &ThreadConfig) -> Vec<String> {
     if let Some(m) = &cfg.model {
         a.extend(["--model".into(), m.clone()]);
     }
+    if let Some(e) = cfg.effort.as_deref().filter(|e| EFFORT_LEVELS.contains(e)) {
+        a.extend(["--effort".into(), e.to_string()]);
+    }
     match cfg.permission_mode {
         PermissionMode::Full => a.push("--dangerously-skip-permissions".into()),
         mode => {
@@ -862,5 +865,15 @@ mod tests {
         d.shutdown();
         assert!(done, "turn did not finish");
         assert!(text.to_lowercase().contains("ok"), "got {text:?}");
+    }
+
+    #[test]
+    fn effort_becomes_a_flag_only_for_known_levels() {
+        let mut cfg = ThreadConfig::new(".");
+        assert!(!build_args(&cfg).contains(&"--effort".to_string()));
+        cfg.effort = Some("xhigh".into());
+        assert!(build_args(&cfg).windows(2).any(|w| w == ["--effort", "xhigh"]));
+        cfg.effort = Some("turbo".into());
+        assert!(!build_args(&cfg).contains(&"--effort".to_string()));
     }
 }

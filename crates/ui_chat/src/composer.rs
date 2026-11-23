@@ -19,7 +19,7 @@ use crate::field::{ChatField, FieldEvent, Nav};
 use crate::hub::{ChatHub, FilesReady};
 use crate::mentions::{MentionQuery, filter_files, mention_at};
 use crate::options::{
-    AgentOption, PERMISSION_ORDER, is_dangerous, model_label, models_for, permission_hint, permission_label,
+    AgentOption, PERMISSION_ORDER, effort_label, efforts_for, is_dangerous, model_label, models_for, permission_hint, permission_label,
 };
 use crate::util::{file_name, format_tokens, format_window, tail_path};
 use crate::widgets::{amber, file_chip, green, menu_row};
@@ -38,6 +38,8 @@ pub struct ComposerState {
     pub can_edit_permission: bool,
     pub agent: AgentKind,
     pub model: Option<String>,
+    /// Reasoning effort (`low`..`max`); the pill only exists for agents that support it.
+    pub effort: Option<String>,
     pub agents: Vec<AgentOption>,
     /// Root of the project: where `@` mentions come from.
     pub project_root: Option<PathBuf>,
@@ -59,6 +61,7 @@ impl Default for ComposerState {
             can_edit_permission: true,
             agent: AgentKind::ClaudeCode,
             model: None,
+            effort: None,
             agents: crate::options::default_agents(),
             project_root: None,
             branch: None,
@@ -98,6 +101,8 @@ pub enum ComposerEvent {
     Stop,
     SetPermission(PermissionMode),
     SetModel(Option<String>),
+    /// `None` = the agent's default effort.
+    SetEffort(Option<String>),
     /// The user picked another agent in the menu: the owner decides (a draft just switches; a
     /// thread asks for the handoff preview and calls [`Composer::set_handoff_preview`]).
     PickAgent(AgentKind),
@@ -119,6 +124,7 @@ pub enum Popup {
     Plus,
     Permission,
     Model,
+    Effort,
     Agent,
     Handoff { agent: AgentKind, preview: Preview },
 }
@@ -128,6 +134,9 @@ struct Mention {
     items: Vec<String>,
     selected: usize,
 }
+
+/// The composer's own width below which its pills collapse to icons.
+const COMPACT_BELOW: f32 = 480.0;
 
 pub struct Composer {
     hub: Entity<ChatHub>,
@@ -139,6 +148,8 @@ pub struct Composer {
     popup: Option<Popup>,
     mention: Option<Mention>,
     plan_open: bool,
+    /// Own width (the chat column), not the window's: compact pills below it.
+    measured: ui_kit::MeasuredWidth,
     _subs: Vec<Subscription>,
 }
 
@@ -168,12 +179,13 @@ impl Composer {
             FieldEvent::Cancel => this.close_popup(cx),
             _ => {}
         }));
+        subs.push(cx.subscribe(&hub, |_, _hub, _: &crate::hub::ModelsReady, cx| cx.notify()));
         subs.push(cx.subscribe(&hub, |this, _hub, ev: &FilesReady, cx| {
             if this.mention.is_some() && this.state.project_root.as_deref() == Some(ev.root.as_path()) {
                 this.refresh_mention(cx);
             }
         }));
-        Self { hub, theme, state, field, model_field, attachments: Vec::new(), popup: None, mention: None, plan_open: false, _subs: subs }
+        Self { hub, theme, state, field, model_field, attachments: Vec::new(), popup: None, mention: None, plan_open: false, measured: ui_kit::MeasuredWidth::new(COMPACT_BELOW), _subs: subs }
     }
 
     // ----- state ---------------------------------------------------------------------------
@@ -235,12 +247,43 @@ impl Composer {
         cx.notify();
     }
 
+    /// Files dropped from Explorer: attached to the message, and `@mentioned` in the text when
+    /// they are files inside the project.
+    pub fn add_dropped(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let root = self.state.project_root.clone();
+        let mut mentions = String::new();
+        for p in paths {
+            if let Some(m) = root.as_deref().filter(|_| p.is_file()).and_then(|r| crate::mentions::mention_for(r, p)) {
+                mentions.push_str(&m);
+                mentions.push(' ');
+            }
+        }
+        self.add_attachments(paths.iter().cloned(), cx);
+        if !mentions.is_empty() {
+            self.field.update(cx, |f, cx| f.insert(&mentions, cx));
+        }
+    }
+
     pub fn focus(&self, window: &mut Window, cx: &App) {
         self.field.read(cx).focus(window);
     }
 
     pub fn popup(&self) -> Option<&Popup> {
         self.popup.as_ref()
+    }
+
+    /// Opens a composer menu by name (`model`, `effort`, `permission`, `agent`): screenshots and
+    /// demos drive the UI through this instead of synthetic clicks.
+    pub fn open_popup_named(&mut self, name: &str, cx: &mut Context<Self>) {
+        let p = match name {
+            "model" => Popup::Model,
+            "effort" => Popup::Effort,
+            "permission" => Popup::Permission,
+            "agent" => Popup::Agent,
+            _ => return,
+        };
+        self.popup = Some(p);
+        cx.notify();
     }
 
     pub fn close_popup(&mut self, cx: &mut Context<Self>) {
@@ -416,6 +459,11 @@ impl Composer {
     }
 
     fn toggle_popup(&mut self, p: Popup, cx: &mut Context<Self>) {
+        if p == Popup::Model {
+            // The first time: ask the agent which models it has (no prompt is sent).
+            let (agent, root) = (self.state.agent.clone(), self.state.project_root.clone());
+            self.hub.update(cx, |h, cx| h.ensure_models(&agent, root, cx));
+        }
         self.popup = if self.popup.as_ref().map(std::mem::discriminant) == Some(std::mem::discriminant(&p)) { None } else { Some(p) };
         cx.notify();
     }
@@ -644,7 +692,8 @@ impl Composer {
             .child(chevron(&t))
             .tooltip("Modelo")
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Model, cx)));
-        let known = models_for(&self.state.agent);
+        let catalog = self.hub.read(cx).models_of(&self.state.agent).to_vec();
+        let known = models_for(&self.state.agent, &catalog);
         let mut rows: Vec<AnyElement> = Vec::new();
         rows.push(
             menu_row("model-default", &t, None, "Predeterminado del agente", None, current.is_none(), true, cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -655,11 +704,12 @@ impl Composer {
             .into_any_element(),
         );
         for (i, m) in known.iter().enumerate() {
-            let id = m.id;
+            let id = m.id.clone();
+            let selected = current.as_deref() == Some(id.as_str());
             rows.push(
-                menu_row(("model", i), &t, None, m.label, Some(id.into()), current.as_deref() == Some(id), true, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                menu_row(("model", i), &t, None, m.label.clone(), Some(id.clone().into()), selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.popup = None;
-                    cx.emit(ComposerEvent::SetModel(Some(id.to_string())));
+                    cx.emit(ComposerEvent::SetModel(Some(id.clone())));
                     cx.notify();
                 }))
                 .into_any_element(),
@@ -688,6 +738,52 @@ impl Composer {
             .trigger(pill)
             .children(rows)
             .into_any_element()
+    }
+
+    /// The effort pill (Bajo .. Máx). `None` (hidden) for agents without the knob.
+    fn effort_popover(&self, open: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = self.theme;
+        let catalog = self.hub.read(cx).models_of(&self.state.agent).to_vec();
+        let levels = efforts_for(&self.state.agent, self.state.model.as_deref(), &catalog);
+        if levels.is_empty() {
+            return None;
+        }
+        let this = cx.entity();
+        let current = self.state.effort.clone();
+        let pill = Pill::new("cmp-effort", &t)
+            .label(current.as_deref().map_or_else(|| "Esfuerzo".to_string(), effort_label))
+            .child(chevron(&t))
+            .tooltip("Esfuerzo de razonamiento")
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Effort, cx)));
+        let mut rows: Vec<AnyElement> = vec![
+            menu_row("effort-default", &t, None, "Predeterminado del agente", None, current.is_none(), true, cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.popup = None;
+                cx.emit(ComposerEvent::SetEffort(None));
+                cx.notify();
+            }))
+            .into_any_element(),
+        ];
+        for (i, (value, label)) in levels.into_iter().enumerate() {
+            rows.push(
+                menu_row(("effort", i), &t, None, label, None, current.as_deref() == Some(value), true, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.popup = None;
+                    cx.emit(ComposerEvent::SetEffort(Some(value.to_string())));
+                    cx.notify();
+                }))
+                .into_any_element(),
+            );
+        }
+        Some(
+            Popover::new("cmp-effort-pop", &t)
+                .open(open)
+                .placement(Placement::TopEnd)
+                .width(220.0)
+                .padding(6.0)
+                .on_dismiss(move |_, cx| this.update(cx, |c, cx| c.close_popup(cx)))
+                .trigger(pill)
+                .children(rows)
+                .into_any_element(),
+        )
     }
 
     fn agent_popover(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -848,7 +944,7 @@ impl Render for Composer {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
-        let compact = f32::from(window.viewport_size().width) < 760.0;
+        let compact = self.measured.narrow(window);
         let mode = self.button_mode(cx);
         let popup = self.popup.clone();
 
@@ -897,6 +993,7 @@ impl Render for Composer {
                     .children(context_meter(&t, self.state.context, compact))
                     .child(self.permission_popover(matches!(popup, Some(Popup::Permission)), cx))
                     .child(self.model_popover(matches!(popup, Some(Popup::Model)), cx))
+                    .children(self.effort_popover(matches!(popup, Some(Popup::Effort)), cx))
                     .child(self.agent_popover(compact, cx))
                     .child(div().w(px(6.0)).h(px(1.0)))
                     .child(self.round_button(mode, cx)),
@@ -916,7 +1013,13 @@ impl Render for Composer {
             .children(chips)
             .child(self.field.clone())
             .child(controls)
-            .children(self.mention_overlay(cx));
+            .children(self.mention_overlay(cx))
+            .child({
+                let this = cx.entity();
+                ui_kit::DropZone::new("composer-drop", &t, "Soltar para adjuntar")
+                    .radius(Radius::LG)
+                    .on_drop(move |paths, _, cx| this.update(cx, |c, cx| c.add_dropped(paths, cx)))
+            });
 
         let path_line = (self.state.branch.is_some() || self.state.path.is_some()).then(|| {
             div()
@@ -940,11 +1043,13 @@ impl Render for Composer {
         let plan = self.state.plan.clone().filter(|p| !p.items.is_empty()).map(|p| self.plan_bar(&p, cx));
 
         div()
+            .relative()
             .w_full()
             .flex()
             .flex_col()
             .gap(px(6.0))
             .font_family(ty.ui_family)
+            .child(self.measured.probe())
             .children(plan)
             .child(card)
             .children(path_line)

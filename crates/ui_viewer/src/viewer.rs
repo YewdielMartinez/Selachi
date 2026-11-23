@@ -160,6 +160,8 @@ pub struct FileViewer {
     data_scroll: UniformListScrollHandle,
     md_scroll: ScrollHandle,
     focus: FocusHandle,
+    /// Width of the viewer's own zone (the window's before the first paint).
+    measured: ui_kit::MeasuredWidth,
 
     // find / go to line
     find: FindState,
@@ -243,6 +245,7 @@ impl FileViewer {
             data_scroll: UniformListScrollHandle::new(),
             md_scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
+            measured: ui_kit::MeasuredWidth::new(720.0),
             find: FindState::default(),
             find_open: false,
             find_field,
@@ -1373,7 +1376,7 @@ impl Render for FileViewer {
             }
         };
 
-        let compact = window_w < 720.0;
+        let compact = self.measured.narrow(window);
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
@@ -1400,6 +1403,7 @@ impl Render for FileViewer {
             .bg(c.surface_0)
             .font_family(theme.typography.ui_family)
             .text_color(c.text)
+            .child(self.measured.probe())
             .child(self.header(&this, compact))
             .children(self.banner(&this))
             .child(div().flex_1().min_h_0().child(body))

@@ -84,6 +84,7 @@ enum Req {
     ThreadStart,
     TurnStart,
     RateLimits,
+    ModelList,
     Other,
 }
 
@@ -95,6 +96,29 @@ enum ApprovalKind {
 
 fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
+}
+
+/// Our effort level as Codex spells it (`max` is Codex's `xhigh`).
+fn codex_effort(e: &str) -> &str {
+    if e == "max" { "xhigh" } else { e }
+}
+
+/// `model/list` -> models (hidden ones dropped).
+fn parse_model_list(result: &Value) -> Vec<ModelInfo> {
+    let Some(data) = result.get("data").and_then(Value::as_array) else { return Vec::new() };
+    data.iter()
+        .filter(|m| m.get("hidden").and_then(Value::as_bool) != Some(true))
+        .filter_map(|m| {
+            let id = s(m, "model").or_else(|| s(m, "id"))?.to_string();
+            let label = s(m, "displayName").filter(|l| !l.is_empty()).unwrap_or(&id).to_string();
+            let efforts = m
+                .get("supportedReasoningEfforts")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|o| s(o, "reasoningEffort").map(str::to_string)).collect())
+                .unwrap_or_default();
+            Some(ModelInfo { id, label, efforts, default_effort: s(m, "defaultReasoningEffort").map(str::to_string) })
+        })
+        .collect()
 }
 
 fn rate_windows(rl: &Value) -> Vec<RateWindow> {
@@ -122,6 +146,7 @@ fn id_key(id: &Value) -> String {
 /// Pure Codex app-server protocol state machine.
 pub struct CodexSession {
     model: Option<String>,
+    effort: Option<String>,
     cwd: String,
     approval_policy: &'static str,
     sandbox: &'static str,
@@ -146,6 +171,7 @@ impl CodexSession {
         let (approval_policy, sandbox) = policy_for(cfg.permission_mode);
         Self {
             model: cfg.model.clone(),
+            effort: cfg.effort.as_deref().map(codex_effort).map(str::to_string),
             cwd: cfg.cwd.to_string_lossy().into_owned(),
             approval_policy,
             sandbox,
@@ -206,11 +232,11 @@ impl CodexSession {
             return;
         };
         self.busy = true;
-        step.outgoing.push(self.request(
-            Req::TurnStart,
-            "turn/start",
-            json!({ "threadId": tid, "input": Self::input(text) }),
-        ));
+        let mut params = json!({ "threadId": tid, "input": Self::input(text) });
+        if let Some(e) = &self.effort {
+            params["effort"] = json!(e);
+        }
+        step.outgoing.push(self.request(Req::TurnStart, "turn/start", params));
     }
 
     /// User message: starts a turn, steers the running one, or queues until ready.
@@ -304,6 +330,7 @@ impl CodexSession {
             let msg = s(err, "message").unwrap_or("request failed").to_string();
             match kind {
                 Req::RateLimits => log::debug!("codex: rateLimits unavailable: {msg}"),
+                Req::ModelList => log::debug!("codex: model/list unavailable: {msg}"),
                 Req::TurnStart => {
                     self.busy = false;
                     step.events.push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300))));
@@ -325,6 +352,16 @@ impl CodexSession {
                 step.outgoing.push(m);
                 let m = self.request(Req::RateLimits, "account/rateLimits/read", Value::Null);
                 step.outgoing.push(m);
+                // The catalogue for the model picker (no model call).
+                let m = self.request(Req::ModelList, "model/list", json!({ "includeHidden": false }));
+                step.outgoing.push(m);
+            }
+            Req::ModelList => {
+                let models = parse_model_list(result);
+                if !models.is_empty() {
+                    let current = self.model.clone();
+                    step.events.push(AgentEvent::Models { models, current });
+                }
             }
             Req::ThreadStart => {
                 let Some(tid) = result.pointer("/thread/id").and_then(Value::as_str) else {
@@ -949,5 +986,32 @@ mod tests {
         }
         d.shutdown();
         assert!(started, "no SessionStarted");
+    }
+
+    #[test]
+    fn model_list_is_parsed_and_effort_rides_on_turn_start() {
+        let r = json!({"data":[
+            {"id":"a","model":"gpt-5.6-luna","displayName":"GPT-5.6 Luna","hidden":false,"isDefault":true,
+             "defaultReasoningEffort":"medium",
+             "supportedReasoningEfforts":[{"reasoningEffort":"low","description":""},{"reasoningEffort":"high","description":""}]},
+            {"id":"b","model":"secret","displayName":"Secret","hidden":true}
+        ]});
+        let m = parse_model_list(&r);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].id, "gpt-5.6-luna");
+        assert_eq!(m[0].label, "GPT-5.6 Luna");
+        assert_eq!(m[0].efforts, vec!["low", "high"]);
+        assert_eq!(m[0].default_effort.as_deref(), Some("medium"));
+
+        let mut cfg = ThreadConfig::new("C:/work");
+        cfg.effort = Some("max".into());
+        let mut s = CodexSession::new(&cfg);
+        let _ = s.start();
+        let step = s.on_message(&json!({"id":0,"result":{}}));
+        assert!(step.outgoing.iter().any(|m| m["method"] == "model/list"));
+        let tid = step.outgoing[1]["id"].clone();
+        s.on_message(&json!({"id":tid,"result":{"thread":{"id":"t1"},"model":"m"}}));
+        let step = s.user_message("hi");
+        assert_eq!(step.outgoing[0]["params"]["effort"], "xhigh", "max is Codex's xhigh");
     }
 }

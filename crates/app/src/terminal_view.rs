@@ -449,6 +449,15 @@ impl TerminalView {
         self.send(bytes, cx);
     }
 
+    /// Files dropped from Explorer: their paths, quoted for this shell and space-separated, typed
+    /// at the prompt **without Enter**.
+    pub fn insert_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let text = crate::drop::quote_paths(crate::drop::shell_kind(&self.shell_name), paths);
+        if !text.is_empty() {
+            self.send_text(&text, false, cx);
+        }
+    }
+
     /// Writes bytes to the shell and snaps the viewport back to the live bottom.
     fn send(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         if bytes.is_empty() {
@@ -674,6 +683,12 @@ impl Render for TerminalView {
             )
             .child(div().size_full().p(px(TERM_PAD)).child(TerminalElement::new(cx.entity())))
             .children(self.block_bar(cx))
+            .child({
+                let this = cx.entity();
+                ui_kit::DropZone::new("terminal-drop", &self.theme, "Soltar para pegar las rutas")
+                    .radius(Radius::MD)
+                    .on_drop(move |paths, _, cx| this.update(cx, |t, cx| t.insert_paths(paths, cx)))
+            })
             .children(notice.map(|text| {
                 div()
                     .absolute()

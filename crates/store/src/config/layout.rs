@@ -1951,6 +1951,8 @@ path = ""
         assert!(!c.agents.oauth_usage_endpoint);
         assert_eq!(c.git.worktrees, WorktreeLocation::Beside);
         assert_eq!(c.plugins.effective_index_url(), DEFAULT_PLUGIN_INDEX_URL);
+        assert!(DEFAULT_PLUGIN_INDEX_URL.starts_with("https://github.com/YewdielMartinez/Selachi/releases/"));
+        assert!(!DEFAULT_PLUGIN_INDEX_URL.contains("OWNER"));
         let p = Config::parse(
             "[general]
 language = \"es\"

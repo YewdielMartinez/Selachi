@@ -33,6 +33,9 @@ mod block_layout;
 #[path = "../src/block_ui.rs"]
 #[allow(dead_code)]
 mod block_ui;
+#[path = "../src/drop.rs"]
+#[allow(dead_code)]
+mod drop;
 #[path = "../src/links.rs"]
 #[allow(dead_code)]
 mod links;

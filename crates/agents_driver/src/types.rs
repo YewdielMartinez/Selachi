@@ -63,11 +63,48 @@ impl ApprovalDecision {
     }
 }
 
+/// Effort levels shared by Claude Code (`--effort`) and the Antigravity CLI (`agy --effort`), low to high.
+pub const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// One model an agent offers (from Codex `model/list` or ACP `session/new`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// What to pass back as the model (`--model`, `thread/start.model`, `session/set_model`).
+    pub id: String,
+    /// Human name (`GPT-5.6 Luna`).
+    pub label: String,
+    /// Efforts this model supports (empty = unknown or not selectable).
+    pub efforts: Vec<String>,
+    pub default_effort: Option<String>,
+}
+
+/// Does this backend take a reasoning effort at all? (The UI hides the effort pill otherwise.)
+pub fn supports_effort(kind: &AgentKind) -> bool {
+    match kind {
+        AgentKind::ClaudeCode | AgentKind::Codex => true,
+        AgentKind::OpenCode => false,
+        AgentKind::Acp { command } => is_antigravity(command),
+    }
+}
+
+/// `agy` / `antigravity` (the Antigravity CLI), by executable stem.
+pub fn is_antigravity(command: &str) -> bool {
+    let first = command.trim_start().trim_start_matches('"');
+    let stem = first.split(['"', ' ']).next().unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
+    let stem = stem.trim_end_matches(".exe").trim_end_matches(".cmd").to_ascii_lowercase();
+    stem == "agy" || stem == "antigravity"
+}
+
 /// Everything needed to start (or resume) one chat thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadConfig {
     pub cwd: PathBuf,
     pub model: Option<String>,
+    /// Reasoning effort (`low | medium | high | xhigh | max`, see [`EFFORT_LEVELS`]). `None` = the
+    /// agent's own default. Claude: `--effort`; Codex: `turn/start.effort` (`max` -> `xhigh`);
+    /// ACP agents that are the Antigravity CLI (`agy`): `--effort`; ignored by the rest.
+    #[serde(default)]
+    pub effort: Option<String>,
     pub permission_mode: PermissionMode,
     /// Claude: `--resume <session_id>`. Codex: `thread/resume` with this thread id.
     pub resume_session: Option<String>,
@@ -80,6 +117,7 @@ impl ThreadConfig {
         Self {
             cwd: cwd.into(),
             model: None,
+            effort: None,
             permission_mode: PermissionMode::default(),
             resume_session: None,
             extra_args: Vec::new(),
@@ -170,6 +208,9 @@ pub enum AgentEvent {
     /// Subscription/rate-limit windows pushed by the CLI (no estimation).
     RateLimits { windows: Vec<RateWindow> },
     Status(AgentStatus),
+    /// The models the agent offers (Codex `model/list`, ACP `session/new`). Informational: the
+    /// chat core ignores it; [`crate::probe_models`] and the model picker use it.
+    Models { models: Vec<ModelInfo>, current: Option<String> },
     /// The agent process exited (stream closed).
     Exited { code: Option<i32> },
 }

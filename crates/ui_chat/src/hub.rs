@@ -66,6 +66,10 @@ pub struct ChatHub {
     projects: Vec<PathBuf>,
     default_project: Option<PathBuf>,
     files: HashMap<String, FileSlot>,
+    /// Models each agent told us (`agents_driver::probe_models`), by [`agent_key`]. An entry
+    /// (even empty) means the agent was asked once: no retry this session.
+    models: HashMap<String, Vec<agents_driver::ModelInfo>>,
+    probe_models: bool,
     error: Option<String>,
     _pump: Task<()>,
 }
@@ -73,6 +77,19 @@ pub struct ChatHub {
 impl EventEmitter<ChatEvent> for ChatHub {}
 impl EventEmitter<ThreadUpdate> for ChatHub {}
 impl EventEmitter<FilesReady> for ChatHub {}
+impl EventEmitter<ModelsReady> for ChatHub {}
+
+/// Fired when [`ChatHub::ensure_models`] learned the models of an agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelsReady;
+
+/// Cache key of an agent kind.
+fn agent_key(kind: &AgentKind) -> String {
+    match kind {
+        AgentKind::Acp { command } => format!("acp:{command}"),
+        other => crate::options::agent_name(other).to_string(),
+    }
+}
 
 fn path_key(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
@@ -111,6 +128,8 @@ impl ChatHub {
             projects: Vec::new(),
             default_project: None,
             files: HashMap::new(),
+            models: HashMap::new(),
+            probe_models: true,
             error: None,
             _pump: pump,
         };
@@ -232,6 +251,43 @@ impl ChatHub {
         let project = project.or_else(|| self.default_project().map(Path::to_path_buf));
         let theme = self.theme;
         TabHandle::new(cx.new(|cx| ChatTab::draft(hub, theme, project, cx)))
+    }
+
+    /// What the agent told us about its models (empty until asked, or when it has none).
+    pub fn models_of(&self, kind: &AgentKind) -> &[agents_driver::ModelInfo] {
+        self.models.get(&agent_key(kind)).map_or(&[], Vec::as_slice)
+    }
+
+    /// Hosts that use scripted agents turn the real probe off (no processes are started).
+    pub fn set_probe_models(&mut self, on: bool) {
+        self.probe_models = on;
+    }
+
+    /// Asks the agent for its models once per session (started without a prompt, see
+    /// `agents_driver::probe_models`) and emits [`ModelsReady`]. Claude Code needs no probe.
+    pub fn ensure_models(&mut self, kind: &AgentKind, cwd: Option<PathBuf>, cx: &mut Context<Self>) {
+        if !self.probe_models || *kind == AgentKind::ClaudeCode {
+            return;
+        }
+        let key = agent_key(kind);
+        if self.models.contains_key(&key) {
+            return;
+        }
+        self.models.insert(key.clone(), Vec::new());
+        let (kind, cwd) = (kind.clone(), cwd.or_else(|| std::env::current_dir().ok()).unwrap_or_default());
+        let task = cx.background_spawn(async move { agents_driver::probe_models(kind, cwd, std::time::Duration::from_secs(20)) });
+        cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok(models) => {
+                    let _ = this.update(cx, |hub, cx| {
+                        hub.models.insert(key, models);
+                        cx.emit(ModelsReady);
+                    });
+                }
+                Err(e) => log::debug!("chat: could not list the models of {key}: {e}"),
+            }
+        })
+        .detach();
     }
 
     /// The open tab of `id`, if any (to focus it instead of opening a second one).

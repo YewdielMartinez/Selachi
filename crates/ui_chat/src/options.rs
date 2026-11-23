@@ -1,6 +1,6 @@
 //! What the composer pills offer: agents, models and permission modes. Pure.
 
-use agents_driver::{AgentKind, PermissionMode};
+use agents_driver::{AgentKind, ModelInfo, PermissionMode};
 use gpui::SharedString;
 use ui_kit::AgentMark;
 
@@ -49,40 +49,52 @@ pub fn agent_name(kind: &AgentKind) -> &'static str {
     }
 }
 
-/// A model the agent is known to accept (`--model <id>`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A model the agent accepts (`--model <id>`): what to pass and what to show.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelOption {
-    pub id: &'static str,
-    pub label: &'static str,
+    pub id: String,
+    pub label: String,
 }
 
-const CLAUDE_MODELS: &[ModelOption] = &[
-    ModelOption { id: "opus", label: "Opus" },
-    ModelOption { id: "sonnet", label: "Sonnet" },
-    ModelOption { id: "haiku", label: "Haiku" },
+/// Claude Code's models: (full id passed to `--model`, name shown, alias the CLI also accepts).
+/// `claude --help`: "--model: an alias for the latest model (e.g. 'fable', 'opus', 'sonnet') or a
+/// model's full name". We pass the full id and show the versioned name.
+const CLAUDE_MODELS: [(&str, &str, &str); 4] = [
+    ("claude-opus-5-5", "Opus 5.5", "opus"),
+    ("claude-sonnet-5-5", "Sonnet 5.5", "sonnet"),
+    ("claude-haiku-5-5", "Haiku 5.5", "haiku"),
+    ("claude-fable-5-2", "Fable 5.2", "fable"),
 ];
 
-/// Models listed for an agent. Only Claude has stable aliases; the others take free text (the
-/// handshake of the agent is the real source: see the report, `agents_driver` does not expose it).
-pub fn models_for(kind: &AgentKind) -> &'static [ModelOption] {
+/// Models listed for an agent: Claude's fixed catalogue; for every other agent what it told us
+/// (`catalog`: Codex `model/list`, ACP `session/new`, see `agents_driver::probe_models`). Empty
+/// until the agent answered: the picker then offers the default and a free-text field.
+pub fn models_for(kind: &AgentKind, catalog: &[ModelInfo]) -> Vec<ModelOption> {
     match kind {
-        AgentKind::ClaudeCode => CLAUDE_MODELS,
-        _ => &[],
+        AgentKind::ClaudeCode => CLAUDE_MODELS
+            .iter()
+            .map(|(id, label, _)| ModelOption { id: (*id).to_string(), label: (*label).to_string() })
+            .collect(),
+        _ => catalog.iter().map(|m| ModelOption { id: m.id.clone(), label: m.label.clone() }).collect(),
     }
 }
 
+/// `claude-opus-5-5` -> `Opus 5.5`; the alias `opus` -> `Opus 5.5` (the catalogue's latest);
 /// `claude-opus-4-5-20251101` -> `Opus 4.5`; `claude-3-5-sonnet-20241022` -> `Sonnet 3.5`;
-/// aliases are capitalized; anything else is returned as is.
+/// anything else is returned as is.
 pub fn pretty_model(id: &str) -> String {
     let id = id.trim();
     let lower = id.to_ascii_lowercase();
     let bare = lower.strip_prefix("claude-").unwrap_or(&lower);
     let bare = bare.split('[').next().unwrap_or(bare);
+    if let Some((_, label, _)) = CLAUDE_MODELS.iter().find(|(full, _, alias)| *full == lower.split('[').next().unwrap_or(&lower) || *alias == bare) {
+        return (*label).to_string();
+    }
     let mut family = None;
     let mut nums: Vec<&str> = Vec::new();
     for part in bare.split('-') {
         match part {
-            "opus" | "sonnet" | "haiku" => family = Some(part),
+            "opus" | "sonnet" | "haiku" | "fable" => family = Some(part),
             p if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() && p.len() < 6 => nums.push(p),
             _ => {}
         }
@@ -97,6 +109,49 @@ pub fn pretty_model(id: &str) -> String {
             name
         }
         None => id.to_string(),
+    }
+}
+
+/// Effort levels in menu order: (value stored and passed to the agent, label).
+pub const EFFORTS: [(&str, &str); 5] =
+    [("low", "Bajo"), ("medium", "Medio"), ("high", "Alto"), ("xhigh", "Muy alto"), ("max", "Máx")];
+
+/// Label of an effort value (`high` -> `Alto`); unknown values are shown as they are.
+pub fn effort_label(effort: &str) -> String {
+    EFFORTS.iter().find(|(v, _)| *v == effort).map_or_else(|| effort.to_string(), |(_, l)| (*l).to_string())
+}
+
+/// The efforts to offer for `kind` + `model`; **empty = the agent has no such knob** (the pill is
+/// hidden). Claude: all five. Codex: what the model lists (its `xhigh` is our "Muy alto"; "Máx"
+/// is Claude's / Antigravity's), else low..xhigh. Antigravity (`agy`): all five. OpenCode and other
+/// ACP agents: none.
+pub fn efforts_for(kind: &AgentKind, model: Option<&str>, catalog: &[ModelInfo]) -> Vec<(&'static str, &'static str)> {
+    if !agents_driver::supports_effort(kind) {
+        return Vec::new();
+    }
+    if *kind == AgentKind::Codex {
+        let listed: Vec<&str> = model
+            .and_then(|m| catalog.iter().find(|c| c.id == m))
+            .map(|m| m.efforts.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        return EFFORTS
+            .iter()
+            .copied()
+            .filter(|(v, _)| *v != "max" && (listed.is_empty() || listed.contains(v)))
+            .collect();
+    }
+    EFFORTS.to_vec()
+}
+
+/// `Opus 5.5 · Alto` (the model alone without an effort).
+pub fn model_effort_label(model: Option<&str>, effort: Option<&str>) -> Option<String> {
+    let m = model.filter(|m| !m.trim().is_empty()).map(pretty_model);
+    let e = effort.filter(|e| !e.is_empty()).map(effort_label);
+    match (m, e) {
+        (Some(m), Some(e)) => Some(format!("{m} · {e}")),
+        (Some(m), None) => Some(m),
+        (None, Some(e)) => Some(e),
+        (None, None) => None,
     }
 }
 
@@ -145,11 +200,14 @@ mod tests {
     fn model_names_are_prettified() {
         assert_eq!(pretty_model("claude-opus-4-5-20251101"), "Opus 4.5");
         assert_eq!(pretty_model("claude-3-5-sonnet-20241022"), "Sonnet 3.5");
-        assert_eq!(pretty_model("opus"), "Opus");
-        assert_eq!(pretty_model("opus[1m]"), "Opus");
+        assert_eq!(pretty_model("claude-opus-5-5"), "Opus 5.5");
+        assert_eq!(pretty_model("claude-fable-5-2"), "Fable 5.2");
+        assert_eq!(pretty_model("opus"), "Opus 5.5", "aliases show the version they resolve to");
+        assert_eq!(pretty_model("opus[1m]"), "Opus 5.5");
+        assert_eq!(pretty_model("claude-haiku-5-5-20260101"), "Haiku 5.5");
         assert_eq!(pretty_model("gpt-5-codex"), "gpt-5-codex");
         assert_eq!(model_label(None), "Modelo");
-        assert_eq!(model_label(Some("sonnet")), "Sonnet");
+        assert_eq!(model_label(Some("sonnet")), "Sonnet 5.5");
     }
 
     #[test]
@@ -157,11 +215,38 @@ mod tests {
         assert_eq!(agent_mark(&AgentKind::ClaudeCode), AgentMark::Claude);
         assert_eq!(agent_mark(&AgentKind::Acp { command: "\"C:/x/gemini.exe\" --acp".into() }), AgentMark::Gemini);
         assert_eq!(default_agents().len(), 3);
-        assert!(models_for(&AgentKind::ClaudeCode).len() >= 3);
-        assert!(models_for(&AgentKind::Codex).is_empty());
+        let claude = models_for(&AgentKind::ClaudeCode, &[]);
+        assert_eq!(claude.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(), ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.2"]);
+        assert_eq!(claude[0].id, "claude-opus-5-5");
+        assert!(models_for(&AgentKind::Codex, &[]).is_empty());
+        let cat = [ModelInfo { id: "gpt-5.6".into(), label: "GPT-5.6".into(), efforts: vec!["low".into(), "high".into()], default_effort: None }];
+        assert_eq!(models_for(&AgentKind::Codex, &cat)[0].label, "GPT-5.6");
         assert!(is_dangerous(PermissionMode::Full));
         assert!(permission_hint(PermissionMode::Full).contains("dangerously"));
         assert_eq!(PERMISSION_ORDER.len(), 4);
         assert_eq!(permission_label(PermissionMode::AcceptEdits), "Aceptar ediciones");
+    }
+
+    #[test]
+    fn effort_pill_only_where_the_agent_has_the_knob() {
+        let all = |k: &AgentKind| efforts_for(k, None, &[]).iter().map(|(v, _)| *v).collect::<Vec<_>>();
+        assert_eq!(all(&AgentKind::ClaudeCode), ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(all(&AgentKind::Codex), ["low", "medium", "high", "xhigh"]);
+        assert!(all(&AgentKind::OpenCode).is_empty());
+        assert!(all(&AgentKind::Acp { command: "gemini --acp".into() }).is_empty());
+        assert_eq!(all(&AgentKind::Acp { command: "agy acp".into() }).len(), 5);
+        // Codex narrows to what the chosen model lists.
+        let cat = [ModelInfo { id: "m".into(), label: "M".into(), efforts: vec!["low".into(), "high".into()], default_effort: None }];
+        let v: Vec<_> = efforts_for(&AgentKind::Codex, Some("m"), &cat).iter().map(|(v, _)| *v).collect();
+        assert_eq!(v, ["low", "high"]);
+    }
+
+    #[test]
+    fn model_and_effort_read_as_one_label() {
+        assert_eq!(model_effort_label(Some("claude-opus-5-5"), Some("high")).as_deref(), Some("Opus 5.5 · Alto"));
+        assert_eq!(model_effort_label(Some("claude-opus-5-5"), None).as_deref(), Some("Opus 5.5"));
+        assert_eq!(model_effort_label(None, None), None);
+        assert_eq!(effort_label("xhigh"), "Muy alto");
+        assert_eq!(effort_label("max"), "Máx");
     }
 }

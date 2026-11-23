@@ -213,6 +213,8 @@ pub struct SettingsView {
     pub(crate) capture: Option<Capture>,
     pub(crate) capture_sub: Option<Subscription>,
     pub(crate) width_hint: Option<f32>,
+    /// The zone width really measured while painting (preferred over the window width).
+    pub(crate) measured: ui_kit::MeasuredWidth,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -295,6 +297,7 @@ impl SettingsView {
             capture: None,
             capture_sub: None,
             width_hint: None,
+            measured: ui_kit::MeasuredWidth::new(crate::ui::NARROW_BELOW),
             focus: cx.focus_handle(),
             _subs: subs,
         }

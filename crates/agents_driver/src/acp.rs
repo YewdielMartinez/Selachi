@@ -134,6 +134,30 @@ pub fn tool_kind(kind: &str) -> ToolKind {
 
 /// Split a command line into program and arguments. Double quotes group (and are removed);
 /// there is no escaping, which is enough for Windows paths.
+/// The models of a `session/new` result: `models.availableModels` (`modelId`, `name`) or the
+/// `model` config option (`options[]` with `value`, `name`).
+pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
+    let plain = |id: &str, label: Option<&str>| ModelInfo {
+        id: id.to_string(),
+        label: label.filter(|l| !l.is_empty()).unwrap_or(id).to_string(),
+        efforts: Vec::new(),
+        default_effort: None,
+    };
+    if let Some(a) = result.pointer("/models/availableModels").and_then(Value::as_array) {
+        let v: Vec<ModelInfo> = a.iter().filter_map(|m| s(m, "modelId").map(|id| plain(id, s(m, "name")))).collect();
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    result
+        .get("configOptions")
+        .and_then(Value::as_array)
+        .and_then(|opts| opts.iter().find(|o| s(o, "id") == Some("model")))
+        .and_then(|o| o.get("options").and_then(Value::as_array))
+        .map(|a| a.iter().filter_map(|m| s(m, "value").map(|id| plain(id, s(m, "name")))).collect())
+        .unwrap_or_default()
+}
+
 pub fn split_command(cmd: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -545,6 +569,10 @@ impl AcpSession {
             session_id: sid.clone(),
             model: self.current_model.clone(),
         });
+        let models = parse_models(result);
+        if !models.is_empty() {
+            step.events.push(AgentEvent::Models { models, current: self.current_model.clone() });
+        }
 
         if let Some(want) = self.model.clone().filter(|m| Some(m) != self.current_model.as_ref()) {
             if self.has_model_option {
@@ -1045,6 +1073,10 @@ impl AcpCommand {
         let prog = parts.remove(0);
         let exe = proc::resolve_executable(&prog).ok_or(DriverError::NotFound(prog))?;
         parts.extend(cfg.extra_args.iter().cloned());
+        // The Antigravity CLI takes the effort as a flag (`agy --effort high`).
+        if let Some(e) = cfg.effort.as_deref().filter(|e| EFFORT_LEVELS.contains(e) && is_antigravity(command)) {
+            parts.extend(["--effort".to_string(), e.to_string()]);
+        }
         Ok(Self::new(exe, parts))
     }
 }
@@ -1331,12 +1363,14 @@ mod tests {
         assert_eq!(a.outgoing[0]["method"], "session/new");
         let b = sess.on_message(&msgs[1]);
         assert_eq!(
-            b.events,
-            vec![AgentEvent::SessionStarted {
+            b.events[0],
+            AgentEvent::SessionStarted {
                 session_id: "ses_e048338a7ffeMneVXo2TD5D85l".into(),
                 model: Some("opencode/big-pickle".into())
-            }]
+            }
         );
+        assert!(matches!(&b.events[1], AgentEvent::Models { models, .. } if models.len() == 2));
+        assert_eq!(b.events.len(), 2);
         assert_eq!(sess.session_id(), Some("ses_e048338a7ffeMneVXo2TD5D85l"));
         assert_eq!(sess.modes, vec!["build", "plan"]);
         assert!(sess.has_model_option && sess.has_models && sess.has_mode_option);
@@ -1704,5 +1738,27 @@ mod tests {
         let r = ro.on_message(&write_req(41, &ws.join("ro.txt"), "f"));
         assert!(r.outgoing[0].get("error").is_some() && !ws.join("ro.txt").exists());
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn session_new_models_are_listed_and_agy_gets_an_effort_flag() {
+        let line = include_str!("../tests/fixtures/opencode_acp_handshake.jsonl").lines().nth(1).unwrap();
+        let v: Value = serde_json::from_str(line).unwrap();
+        let models = parse_models(&v["result"]);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "opencode/big-pickle");
+        assert_eq!(models[0].label, "OpenCode/Big Pickle");
+        // The `model` config option alone is enough.
+        let only_opt = serde_json::json!({"configOptions":[{"id":"model","options":[{"value":"m1","name":"M One"}]}]});
+        assert_eq!(parse_models(&only_opt)[0].label, "M One");
+        assert!(parse_models(&serde_json::json!({})).is_empty());
+
+        assert!(crate::is_antigravity(r#""C:\Users\x\AppData\agy.exe" acp"#));
+        assert!(crate::is_antigravity("agy"));
+        assert!(!crate::is_antigravity("gemini --acp"));
+        assert!(crate::supports_effort(&AgentKind::ClaudeCode));
+        assert!(crate::supports_effort(&AgentKind::Codex));
+        assert!(!crate::supports_effort(&AgentKind::OpenCode));
+        assert!(!crate::supports_effort(&AgentKind::Acp { command: "gemini --acp".into() }));
     }
 }
