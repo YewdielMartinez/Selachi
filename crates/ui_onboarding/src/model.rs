@@ -99,6 +99,15 @@ pub enum WorktreeLocation {
 }
 
 impl WorktreeLocation {
+    /// The `[git] worktrees` value.
+    pub fn to_store(&self) -> store::WorktreeLocation {
+        match self {
+            WorktreeLocation::Beside => store::WorktreeLocation::Beside,
+            WorktreeLocation::Inside => store::WorktreeLocation::Inside,
+            WorktreeLocation::Custom(p) => store::WorktreeLocation::Custom(p.to_string_lossy().into_owned()),
+        }
+    }
+
     pub fn describe(&self) -> String {
         match self {
             WorktreeLocation::Beside => "junto al repositorio".to_string(),
@@ -106,17 +115,6 @@ impl WorktreeLocation {
             WorktreeLocation::Custom(p) => p.display().to_string(),
         }
     }
-}
-
-/// Choices that `store::Config` cannot hold yet (see the report for the wanted keys).
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Extras {
-    pub worktrees: WorktreeLocation,
-    /// Claude OAuth usage endpoint (experimental, off by default).
-    pub oauth_endpoint: bool,
-    /// "Espacios unificados" was chosen but `store` has no such preset yet, so `espacios` was
-    /// written: the host must apply the unified layout itself (see `layouts`).
-    pub unified_layout: bool,
 }
 
 /// Everything the wizard can change, as plain values.
@@ -157,7 +155,7 @@ impl Draft {
                 PresetId::Builtin(BuiltinPreset::Terminal) if config.layout.overrides.is_empty() => {
                     Some(LayoutCard::Unified)
                 }
-                PresetId::Builtin(b) if Some(*b) == layouts::store_unified() => Some(LayoutCard::Unified),
+                PresetId::Builtin(BuiltinPreset::EspaciosUnificados) => Some(LayoutCard::Unified),
                 PresetId::Builtin(b) => Some(LayoutCard::Builtin(*b)),
                 PresetId::Custom(_) => None,
             },
@@ -177,13 +175,17 @@ impl Draft {
         let mut cfg = base.clone();
         if !skipped.contains(&Step::Agents) {
             cfg.agents.claude_statusline_hook = self.claude_statusline_hook;
+            cfg.agents.oauth_usage_endpoint = self.oauth_endpoint;
+        }
+        if !skipped.contains(&Step::Projects) {
+            cfg.git.worktrees = self.worktrees.to_store();
         }
         if !skipped.contains(&Step::Appearance) {
             cfg.appearance.mode = self.theme.to_config();
             cfg.appearance.accent = self.accent.clone();
             cfg.appearance.mono_size = f64::from(self.mono_size);
             if let Some(card) = self.layout {
-                let (id, _) = layouts::resolve(card);
+                let id = layouts::resolve(card);
                 if cfg.layout.preset != id {
                     cfg.layout.select_preset(id);
                 }
@@ -213,14 +215,6 @@ impl Draft {
         }
         cfg
     }
-
-    pub fn extras(&self, skipped: &BTreeSet<Step>) -> Extras {
-        Extras {
-            worktrees: if skipped.contains(&Step::Projects) { WorktreeLocation::default() } else { self.worktrees.clone() },
-            oauth_endpoint: !skipped.contains(&Step::Agents) && self.oauth_endpoint,
-            unified_layout: !skipped.contains(&Step::Appearance) && self.layout.is_some_and(|c| layouts::resolve(c).1),
-        }
-    }
 }
 
 /// The result of the wizard.
@@ -229,11 +223,10 @@ pub struct Outcome {
     pub config: Config,
     pub projects: Vec<DiscoveredProject>,
     pub favorites: Vec<PathBuf>,
-    pub extras: Extras,
 }
 
 /// Write the outcome: `config.toml` (comments kept), projects and favorites into `state.db`, and
-/// the first-run flag, but only when the config was saved (so a failed save shows the wizard
+/// the first-run flag (`meta` in `state.db`, a marker file without a database), but only when the config was saved (so a failed save shows the wizard
 /// again next time). Blocking I/O: call it from a background thread. Returns the first error.
 pub fn persist(dir: &Path, outcome: &Outcome, db: Option<&StateDb>) -> Result<(), String> {
     let mut first_error = None;
@@ -261,7 +254,7 @@ pub fn persist(dir: &Path, outcome: &Outcome, db: Option<&StateDb>) -> Result<()
         }
     }
     if config_saved
-        && let Err(e) = crate::flag::mark_done_in(dir)
+        && let Err(e) = crate::flag::mark_done_with(db, dir)
     {
         note("no se pudo guardar la bandera de primer arranque", &e);
     }
@@ -373,13 +366,12 @@ mod tests {
         let draft = Draft::from_config(&base);
         let mut expected = base.clone();
         // Only the recommended layout is applied on an untouched stock config.
-        expected.layout.select_preset(layouts::resolve(LayoutCard::Unified).0);
+        expected.layout.select_preset(layouts::resolve(LayoutCard::Unified));
         assert_eq!(draft.layout, Some(LayoutCard::Unified), "recommended by default");
         assert_eq!(draft.build_config(&base, &BTreeSet::new()), expected);
         let mut skipped = BTreeSet::new();
         skipped.insert(Step::Appearance);
         assert_eq!(draft.build_config(&base, &skipped), base);
-        assert!(draft.extras(&BTreeSet::new()).unified_layout == layouts::resolve(LayoutCard::Unified).1);
     }
 
     #[test]
@@ -471,7 +463,6 @@ mod tests {
             config: d.build_config(&base, &BTreeSet::new()),
             projects: vec![],
             favorites: vec![],
-            extras: Extras::default(),
         };
         persist(dir.path(), &outcome, None).unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();
@@ -484,7 +475,7 @@ mod tests {
         let reloaded = Config::load_from(&path).unwrap();
         assert_eq!(reloaded.config, outcome.config);
         assert!(reloaded.warnings.iter().any(|w| w == "experimental"), "unknown keys only warn");
-        assert!(crate::flag::flag_path(dir.path()).is_file(), "flag written after a good save");
+        assert!(!crate::flag::needs_onboarding_in(dir.path()), "flag written after a good save");
     }
 
     #[test]
@@ -495,7 +486,6 @@ mod tests {
             config: Config::default(),
             projects: vec![],
             favorites: vec![],
-            extras: Extras::default(),
         };
         let err = persist(dir.path(), &outcome, None).unwrap_err();
         assert!(err.contains("config.toml"), "{err}");
@@ -517,7 +507,6 @@ mod tests {
             config: Config::default(),
             projects: vec![p("one"), p("two")],
             favorites: vec![PathBuf::from("C:\\dev\\two")],
-            extras: Extras::default(),
         };
         persist(dir.path(), &outcome, Some(&db)).unwrap();
         assert_eq!(db.projects().unwrap().len(), 2);
@@ -551,15 +540,22 @@ mod tests {
     }
 
     #[test]
-    fn extras_ignore_skipped_steps() {
-        let mut d = Draft::from_config(&Config::default());
+    fn worktrees_and_oauth_land_in_the_config_unless_their_step_is_skipped() {
+        let base = Config::default();
+        let mut d = Draft::from_config(&base);
         d.oauth_endpoint = true;
         d.worktrees = WorktreeLocation::Inside;
-        let e = d.extras(&BTreeSet::new());
-        assert!(e.oauth_endpoint);
-        assert_eq!(e.worktrees, WorktreeLocation::Inside);
-        let e = d.extras(&skipped(&[Step::Agents, Step::Projects, Step::Appearance]));
-        assert_eq!(e, Extras::default());
+        let cfg = d.build_config(&base, &BTreeSet::new());
+        assert!(cfg.agents.oauth_usage_endpoint);
+        assert_eq!(cfg.git.worktrees, store::WorktreeLocation::Inside);
+        let cfg = d.build_config(&base, &skipped(&[Step::Agents, Step::Projects]));
+        assert!(!cfg.agents.oauth_usage_endpoint);
+        assert_eq!(cfg.git.worktrees, store::WorktreeLocation::Beside);
+        d.worktrees = WorktreeLocation::Custom(PathBuf::from(r"D:\wt"));
+        assert_eq!(
+            d.build_config(&base, &BTreeSet::new()).git.worktrees,
+            store::WorktreeLocation::Custom(r"D:\wt".into())
+        );
     }
 
     #[test]

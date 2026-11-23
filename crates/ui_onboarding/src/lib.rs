@@ -7,7 +7,7 @@
 //! if ui_onboarding::needs_onboarding(&db) {
 //!     let view = ui_onboarding::onboarding(config, Some(db.clone()), theme, cx);
 //!     cx.subscribe(&view, |_, ev, cx| match ev {
-//!         OnboardingEvent::Finished { config, projects, favorites, extras } => { /* apply, open the shell */ }
+//!         OnboardingEvent::Finished { config, projects, favorites } => { /* apply, open the shell */ }
 //!         OnboardingEvent::Skipped => { /* open the shell */ }
 //!         OnboardingEvent::OpenLoginTerminal { agent, command } => { /* new tab running `command` */ }
 //!         OnboardingEvent::ThemePreview(mode) => { /* re-theme the window */ }
@@ -38,9 +38,9 @@ mod view;
 mod widgets;
 
 pub use agents::{AgentCli, AgentRow, AgentStatus};
-pub use flag::{mark_done, needs_onboarding};
+pub use flag::{mark_done, needs_onboarding, reset};
 pub use flow::{Flow, Nav, Step};
-pub use model::{Draft, Extras, Outcome, ThemeChoice, WorktreeLocation};
+pub use model::{Draft, Outcome, ThemeChoice, WorktreeLocation};
 pub use view::{OnboardingEvent, OnboardingView, Services, onboarding, onboarding_with};
 
 #[cfg(test)]

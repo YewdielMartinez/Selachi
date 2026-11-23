@@ -243,7 +243,7 @@ async fn finishing_writes_config_projects_favorites_and_the_flag(cx: &mut TestAp
     press(&h, cx, |v, w, cx| v.primary(w, cx)); // Abrir Selachi
 
     let events = h.events.borrow();
-    let Some(OnboardingEvent::Finished { config, projects, favorites, extras }) = events.iter().find(|e| matches!(e, OnboardingEvent::Finished { .. })) else {
+    let Some(OnboardingEvent::Finished { config, projects, favorites }) = events.iter().find(|e| matches!(e, OnboardingEvent::Finished { .. })) else {
         panic!("no Finished event in {events:?}");
     };
     assert!(config.agents.claude_statusline_hook);
@@ -251,7 +251,6 @@ async fn finishing_writes_config_projects_favorites_and_the_flag(cx: &mut TestAp
     assert!(!config.session.restore);
     assert_eq!(projects.len(), 2);
     assert_eq!(favorites.len(), 1);
-    assert_eq!(*extras, crate::model::Extras::default());
 
     let saved = std::fs::read_to_string(data.join("config.toml")).unwrap();
     assert!(saved.starts_with("# keep this comment"));

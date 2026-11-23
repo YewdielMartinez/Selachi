@@ -88,6 +88,12 @@ impl Config {
                 Ok(()) => out.created = true,
                 Err(e) => out.error = Some(e),
             }
+            // A new install starts from the template (its preset is `espacios_unificados`),
+            // not from the serde defaults that existing files without the key keep.
+            if let Ok(p) = Self::parse(TEMPLATE) {
+                out.config = p.config;
+                out.warnings = p.warnings;
+            }
             return out;
         }
         match Self::load_from(path) {
@@ -175,6 +181,7 @@ const OPEN_MAPS: &[&str] = &[
     "keybindings",
     "layout.overrides",
     "layout.overrides.sidebar",
+    "layout.overrides.titlebar",
 ];
 
 fn merge_table(old: &mut Table, new: &Table, defaults: Option<&Table>, path: &str) {
@@ -313,9 +320,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn template_equals_defaults() {
+    fn template_equals_defaults_except_the_new_install_preset() {
         let parsed = Config::parse(TEMPLATE).unwrap();
-        assert_eq!(parsed.config, Config::default());
+        let mut expected = Config::default();
+        expected.layout.preset = PresetId::Builtin(BuiltinPreset::EspaciosUnificados);
+        assert_eq!(parsed.config, expected);
+        // Existing files without the key keep the classic preset.
+        assert_eq!(
+            Config::parse("[layout]").unwrap().config.layout.preset,
+            PresetId::Builtin(BuiltinPreset::Terminal)
+        );
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
     }
 
@@ -455,7 +469,10 @@ mod tests {
         let load = Config::load_or_default_at(&path);
         assert!(load.created);
         assert!(load.error.is_none());
-        assert_eq!(load.config, Config::default());
+        assert_eq!(
+            load.config.layout.preset,
+            PresetId::Builtin(BuiltinPreset::EspaciosUnificados)
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), TEMPLATE);
         let again = Config::load_or_default_at(&path);
         assert!(!again.created);

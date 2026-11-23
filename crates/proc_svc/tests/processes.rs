@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use proc_svc::{
-    Error, JobEvent, JobGroup, JobOptions, OwnerMeta, ProcState, RefuseReason, SafetyPolicy,
-    TerminateOptions, Tracker, check_safe, listening_ports, snapshot, terminate_job,
+    Attribution, Error, JobEvent, JobGroup, JobOptions, OwnerMeta, ProcState, RefuseReason,
+    SafetyPolicy, TerminateOptions, TrackingMode, Tracker, check_safe, listening_ports, snapshot, terminate_job,
     terminate_tree,
 };
 
@@ -277,4 +277,110 @@ fn heuristic_on_real_system_does_not_panic() {
     let t = Tracker::new();
     let r = t.heuristic_untracked(&["claude", "codex"]);
     assert!(r.iter().all(|u| u.attribution == proc_svc::Attribution::Probable));
+}
+
+/// Owns a job-less tracker plus its root; kills everything on drop (even when
+/// an assertion fails halfway).
+struct TreeGuard {
+    tracker: Tracker,
+    root: std::process::Child,
+}
+
+impl Drop for TreeGuard {
+    fn drop(&mut self) {
+        let opts = TerminateOptions { grace: Duration::ZERO, ..Default::default() };
+        let _ = self.tracker.terminate_owner(1, &opts);
+        let _ = self.root.kill();
+        let _ = self.root.wait();
+    }
+}
+
+/// A root that detaches a hidden `ping -n 30` (a child that survives the
+/// root) and then sleeps. Never put in a job.
+fn detaching_root() -> Command {
+    let script = "Start-Process -WindowStyle Hidden -FilePath ping -ArgumentList '-n','30','127.0.0.1'; Start-Sleep 30";
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut c = Command::new("powershell");
+    c.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &b64(&utf16)])
+        .creation_flags(CREATE_NO_WINDOW);
+    quiet(&mut c);
+    c
+}
+
+#[test]
+fn tree_only_owner_tracks_descendants_and_reports_orphan_after_root_dies() {
+    let root = detaching_root().spawn().expect("spawn root");
+    let root_pid = root.id();
+    let mut tracker = Tracker::new();
+    tracker.register_root_untracked_job(1, root_pid).expect("register");
+    tracker.meta_mut(1).unwrap().label = "tree".into();
+    let mut guard = TreeGuard { tracker, root };
+
+    assert_eq!(guard.tracker.attachment_hint(1), TrackingMode::TreeOnly);
+    assert_eq!(guard.tracker.attribution(1), Some(Attribution::Tree));
+    assert!(guard.tracker.needs_polling());
+
+    // The detached ping shows up as an Active member while the root lives.
+    let ping_pid = {
+        let mut found = None;
+        let ok = wait_until(Duration::from_secs(30), || {
+            found = guard.tracker.report()[0]
+                .processes
+                .iter()
+                .find(|p| p.info.name.to_ascii_lowercase().starts_with("ping"))
+                .map(|p| p.info.pid);
+            found.is_some()
+        });
+        assert!(ok, "ping never seen: {:?}", guard.tracker.report()[0].processes);
+        found.unwrap()
+    };
+    let report = guard.tracker.report();
+    let procs = &report[0].processes;
+    assert!(procs[0].is_root && procs[0].info.pid == root_pid, "{procs:?}");
+    assert!(procs.iter().all(|p| p.state == ProcState::Active), "{procs:?}");
+    // Nothing but descendants of the root (no unrelated processes leaked in).
+    assert!(procs.len() <= 4, "{procs:?}");
+    assert!(guard.tracker.poll_tree());
+
+    // Kill only the root: the detached ping must become an Orphan.
+    guard.root.kill().unwrap();
+    guard.root.wait().unwrap();
+    let ok = wait_until(Duration::from_secs(10), || {
+        guard.tracker.report()[0]
+            .processes
+            .iter()
+            .any(|p| p.info.pid == ping_pid && p.state == ProcState::Orphan)
+    });
+    assert!(ok, "no orphan: {:?}", guard.tracker.report()[0].processes);
+    assert!(guard.tracker.needs_polling());
+
+    // Terminating the orphans (tree-based) cleans up; polling then stops.
+    let out = guard.tracker.terminate_orphans(1, &TerminateOptions::default()).expect("terminate");
+    assert!(out.is_clean(), "{out:?}");
+    assert!(wait_until(Duration::from_secs(5), || !alive(ping_pid)));
+    assert!(wait_until(Duration::from_secs(5), || !guard.tracker.poll_tree()));
+}
+
+#[test]
+fn tree_only_late_report_still_finds_orphan() {
+    // No report/poll between spawn and root death: the orphan is still found
+    // through the dead root's remembered identity.
+    let root = detaching_root().spawn().expect("spawn root");
+    let mut tracker = Tracker::new();
+    tracker.register_root_untracked_job(1, root.id()).expect("register");
+    let mut guard = TreeGuard { tracker, root };
+    // Let ping start, then take the root down without reporting.
+    assert!(wait_until(Duration::from_secs(30), || {
+        snapshot().iter().any(|p| {
+            p.ppid == guard.root.id() && p.name.to_ascii_lowercase().starts_with("ping")
+        })
+    }));
+    guard.root.kill().unwrap();
+    guard.root.wait().unwrap();
+    let ok = wait_until(Duration::from_secs(10), || {
+        guard.tracker.report()[0].processes.iter().any(|p| {
+            p.state == ProcState::Orphan && p.info.name.to_ascii_lowercase().starts_with("ping")
+        })
+    });
+    assert!(ok, "{:?}", guard.tracker.report()[0].processes);
 }

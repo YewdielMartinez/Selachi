@@ -4,6 +4,12 @@
 # has a mistake, Selachi keeps the last good configuration and shows the error.
 # Delete any line to go back to its default. Unknown keys are kept as they are.
 
+[general]
+# Idioma de la interfaz. Por ahora solo existe "es" (español).
+language = "es"
+# Pedir confirmación al cerrar una pestaña o la ventana mientras corre un comando.
+confirm_close_running = true
+
 [appearance]
 # "dark" | "light" | "oled" | "system"
 mode = "dark"
@@ -59,10 +65,25 @@ show_estimates = true
 permission_default = "ask"
 # Install the Claude Code statusline hook to read exact context and cost.
 claude_statusline_hook = false
+# Experimental: consultar el endpoint OAuth de uso de Anthropic para ver los límites exactos
+# (5 h y semanal). Apagado por defecto: Selachi no hace llamadas de red a tu cuenta si no lo activas.
+oauth_usage_endpoint = false
 
 [git]
 # Ask before force-push, hard reset, branch delete and similar actions.
 confirm_sensitive = true
+# Comando para abrir un archivo en tu editor, p. ej. "code -g". Vacío = el editor del sistema.
+external_editor = ""
+# Dónde se crean los worktrees nuevos:
+#   "beside"  junto a la carpeta del repositorio (por defecto)
+#   "inside"  dentro del repositorio, en .worktrees
+#   o una ruta: una carpeta única para todos, p. ej. "D:\worktrees"
+worktrees = "beside"
+
+[plugins]
+# URL (https://) del índice grammars.toml de los plugins de lenguaje. Vacío = el índice oficial.
+# Solo se descarga al abrir Ajustes > Plugins.
+index_url = ""
 
 [session]
 # Restaurar la sesión al abrir Selachi: pestañas, paneles divididos y la carpeta de cada
@@ -85,14 +106,18 @@ history_max_rows = 500000
 
 [layout]
 # Organización visual de Selachi (también se cambia en vivo desde el panel de
-# layout, Ctrl+Shift+L). Preset de partida, uno de:
-#   "terminal"     rail + pestañas arriba + terminal; sin sidebar (por defecto)
+# layout, Ctrl+Shift+L, o en Ajustes > Diseño). Preset de partida, uno de:
+#   "espacios_unificados"  sidebar de cristal con los espacios (proyectos y worktrees) y sus
+#                  pestañas anidadas, acciones arriba, medidor de uso abajo; sin rail ni pestañas
+#                  arriba; los botones de paneles van a la derecha de la barra de título.
+#                  Es el preset de las instalaciones nuevas (las existentes conservan el suyo).
+#   "terminal"     rail + pestañas arriba + terminal; sin sidebar (por defecto si falta la clave)
 #   "espacios"     sidebar con espacios, proyectos y agentes; pestañas arriba; 2 splits
 #   "orquestador"  proyecto > worktree > agentes con pestañas verticales; 3 paneles; barra completa
 #   "chat"         hilos agrupados por estado a la izquierda y panel de contexto a la derecha
 #   "zen"          solo la terminal; el resto aparece al pasar el ratón por el borde
 # o el nombre de uno de tus presets propios (ver [[layout.custom_presets]] más abajo).
-preset = "terminal"
+preset = "espacios_unificados"
 
 # Ajustes finos sobre el preset. Todo es opcional: descomenta solo lo que quieras
 # cambiar. Cambiar de preset desde el panel borra estos ajustes. Las combinaciones
@@ -131,6 +156,24 @@ preset = "terminal"
 # sections = ["projects", "agents"]
 # Agrupar pestañas e hilos por: "project" | "status" | "agent" | "none"
 # group_by = "none"
+# Sidebar unificada (preset "espacios_unificados"):
+# Acciones "Nueva pestaña" y "Buscar" arriba.
+# show_actions = true
+# Fila de iconos pequeños, uno por panel registrado.
+# panel_icons = true
+# Las pestañas son filas anidadas dentro de su espacio (proyecto / worktree).
+# nested_tabs = true
+# Medidor de uso compacto y botón de Ajustes al pie.
+# footer_usage = true
+# Cada fila muestra el modelo (y la rama) y el tiempo transcurrido.
+# row_model = true
+# row_time = true
+#
+# Botones de la derecha de la barra de título, en orden. Ids de panel ("git", "files",
+# "procs", "usage", "attention"...) más "review" (abre la pestaña de revisión) y "layout"
+# (el panel de layout). Descomenta también el encabezado de abajo.
+# [layout.overrides.titlebar]
+# panel_buttons = ["git", "files", "procs", "usage", "review", "attention", "layout"]
 
 # Un layout distinto para un proyecto: se aplica a todo directorio dentro de "path"
 # (sin distinguir mayúsculas; gana la ruta más específica). Mismas claves que
@@ -163,6 +206,14 @@ preset = "terminal"
 # width_px = 260
 # sections = ["projects", "worktrees"]
 # group_by = "project"
+# show_actions = false
+# panel_icons = false
+# nested_tabs = false
+# footer_usage = false
+# row_model = true
+# row_time = true
+# [layout.custom_presets.titlebar]
+# panel_buttons = ["layout"]
 
 # Extra shell profiles. Example:
 #

@@ -94,6 +94,13 @@ INSERT INTO snippets(name, template, description, tags, created) VALUES
  ('Cargo: test de un crate', 'cargo test -p {crate}', 'Ejecuta los tests de un crate del workspace', 'cargo,rust,test', CAST(strftime('%s','now') AS INTEGER) * 1000),
  ('Git: log corto', 'git log --oneline -n {n:20}', 'Últimos commits en una línea', 'git,log', CAST(strftime('%s','now') AS INTEGER) * 1000);
 "#,
+    // v3: generic key/value table (first-run flag and other small app state).
+    r#"
+CREATE TABLE meta(
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"#,
 ];
 
 /// Latest schema version this build knows.

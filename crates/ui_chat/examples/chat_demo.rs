@@ -282,7 +282,7 @@ fn main() {
     };
     let store = ChatStore::builder()
         .path(tmp.join("chat.db"))
-        .factory(Arc::new(FactoryHandle(factory.clone())))
+        .factory(Arc::new(FactoryHandle(factory)))
         .open()
         .expect("open chat store");
 

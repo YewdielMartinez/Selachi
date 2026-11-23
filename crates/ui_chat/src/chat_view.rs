@@ -461,8 +461,7 @@ impl ChatView {
             Err(why) => {
                 *error = Some(why.to_string());
                 // Put the text back: nothing was sent.
-                let t = text.clone();
-                self.composer.update(cx, |c, cx| c.set_text(&t, cx));
+                self.composer.update(cx, |c, cx| c.set_text(&text, cx));
                 cx.notify();
                 return;
             }
@@ -502,11 +501,9 @@ impl ChatView {
 
     /// Interrupts the running turn.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
-        if let Some(rt) = &self.runtime {
-            if let Err(e) = rt.interrupt() {
-                let msg = format!("No se pudo detener: {e}");
-                self.set_notice(msg, cx);
-            }
+        if let Some(Err(e)) = self.runtime.as_ref().map(ThreadRuntime::interrupt) {
+            let msg = format!("No se pudo detener: {e}");
+            self.set_notice(msg, cx);
         }
     }
 
@@ -571,11 +568,9 @@ impl ChatView {
                 _ => {}
             },
             ComposerEvent::ConfirmSwitch { agent, model } => {
-                if let Some(rt) = &self.runtime {
-                    if let Err(e) = rt.switch_agent_or_model(agent, model) {
-                        let msg = format!("No se pudo cambiar de agente: {e}");
-                        self.set_notice(msg, cx);
-                    }
+                if let Some(Err(e)) = self.runtime.as_ref().map(|rt| rt.switch_agent_or_model(agent, model)) {
+                    let msg = format!("No se pudo cambiar de agente: {e}");
+                    self.set_notice(msg, cx);
                 }
             }
         }
@@ -618,10 +613,11 @@ impl ChatView {
         }
         self.title_subs.clear();
         let text = text.trim().to_string();
-        if let (Some(id), Some(rec)) = (self.thread_id(), &self.record) {
-            if !text.is_empty() && text != rec.display_title() {
-                self.hub.update(cx, |h, cx| h.rename_thread(id, text, cx));
-            }
+        if let (Some(id), Some(rec)) = (self.thread_id(), &self.record)
+            && !text.is_empty()
+            && text != rec.display_title()
+        {
+            self.hub.update(cx, |h, cx| h.rename_thread(id, text, cx));
         }
         cx.notify();
     }
@@ -860,10 +856,10 @@ impl ChatView {
         self.project_menu_open = false;
         let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: None });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(mut paths))) = rx.await {
-                if let Some(p) = paths.pop() {
-                    let _ = this.update(cx, |this, cx| this.set_project(Some(p), cx));
-                }
+            if let Ok(Ok(Some(mut paths))) = rx.await
+                && let Some(p) = paths.pop()
+            {
+                let _ = this.update(cx, |this, cx| this.set_project(Some(p), cx));
             }
         })
         .detach();

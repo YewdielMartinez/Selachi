@@ -118,9 +118,9 @@ fn main() {
                 view.read(cx).focus(window);
                 cx.subscribe(&view, |_, ev: &OnboardingEvent, cx| {
                     match ev {
-                        OnboardingEvent::Finished { config, projects, favorites, extras } => {
+                        OnboardingEvent::Finished { config, projects, favorites } => {
                             eprintln!(
-                                "Finished: preset={:?} projects={} favorites={} extras={extras:?}",
+                                "Finished: preset={:?} projects={} favorites={}",
                                 config.layout.preset,
                                 projects.len(),
                                 favorites.len()

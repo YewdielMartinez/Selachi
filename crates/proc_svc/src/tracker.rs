@@ -7,6 +7,10 @@
 //! * A process in the job is [`ProcState::Active`] while a root is alive,
 //!   [`ProcState::Orphan`] once every root has exited, and
 //!   [`ProcState::PortZombie`] when an orphan still holds a listening port.
+//! * Owners whose shell cannot be put in a Job Object (Microsoft Store `pwsh`:
+//!   `AssignProcessToJobObject` is denied) use [`TrackingMode::TreeOnly`]: members
+//!   are the live descendants of the root, remembered across reports so they turn
+//!   into orphans when the root dies (see [`Tracker::register_root_untracked_job`]).
 //! * Processes outside our jobs are attributed heuristically by walking the
 //!   parent chain ([`Tracker::heuristic_untracked`]) and are only ever
 //!   [`Attribution::Probable`].
@@ -14,14 +18,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::time::SystemTime;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, SystemTime};
 
 use crate::actions::{TerminateOutcome, TerminateOptions, terminate_job_with, terminate_tree_with};
 use crate::error::{Error, Result};
 use crate::job::{JobGroup, JobOptions};
 use crate::ports::{PortInfo, listening_ports, ports_by_pid};
 use crate::runtime::{Runtime, RuntimeKind, classify};
-use crate::snapshot::{ProcInfo, snapshot, start_time_of};
+use crate::snapshot::{ProcInfo, SnapshotOptions, snapshot, snapshot_with, start_time_of};
 
 /// Opaque owner id (tab / thread), chosen by the app.
 pub type OwnerId = u64;
@@ -55,7 +60,52 @@ pub enum Attribution {
     Certain,
     /// Inferred from the parent chain.
     Probable,
+    /// Descendant of the owner's root found by walking the process tree
+    /// ([`TrackingMode::TreeOnly`]): exact enough, weaker than a job.
+    Tree,
 }
+
+/// How an owner's processes are tracked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrackingMode {
+    /// Job Object membership: exact, survives parent death.
+    Job,
+    /// No usable job: live descendant tree of the root + remembered members.
+    TreeOnly,
+}
+
+impl TrackingMode {
+    /// Attribution level of processes tracked in this mode.
+    pub fn attribution(self) -> Attribution {
+        match self {
+            Self::Job => Attribution::Certain,
+            Self::TreeOnly => Attribution::Tree,
+        }
+    }
+
+    /// Short UI label: `"exacta"` (job) or `"árbol"` (tree).
+    pub fn attribution_label(self) -> &'static str {
+        match self {
+            Self::Job => "exacta",
+            Self::TreeOnly => "árbol",
+        }
+    }
+
+    /// One-line hint for the doctor / procs UI.
+    pub fn hint_es(self) -> &'static str {
+        match self {
+            Self::Job => "seguimiento exacto (Job Object)",
+            Self::TreeOnly => "seguimiento por árbol (sin Job Object, p. ej. pwsh de Microsoft Store)",
+        }
+    }
+}
+
+/// Recommended interval for the host's background tick while
+/// [`Tracker::needs_polling`] is true (never poll faster).
+pub const TREE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long a dead member is remembered so children of it can still be adopted.
+const TOMBSTONE_TTL: Duration = Duration::from_secs(120);
 
 /// A process attributed to an owner.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,10 +167,33 @@ struct Root {
     start: Option<SystemTime>,
 }
 
+/// A process identity remembered by a tree-only owner.
+#[derive(Debug, Clone, Copy)]
+struct Known {
+    pid: u32,
+    start: Option<SystemTime>,
+    /// When we first saw it gone (None while alive).
+    died_seen: Option<SystemTime>,
+}
+
+#[derive(Default)]
+struct TreeState {
+    known: Vec<Known>,
+    /// Some known member was alive at the last update.
+    active: bool,
+}
+
 struct Entry {
+    /// For tree-only owners this is an empty, unassigned job (kept so
+    /// [`Tracker::job`] stays total).
     job: JobGroup,
     meta: OwnerMeta,
     roots: Vec<Root>,
+    tree: Option<Mutex<TreeState>>,
+}
+
+fn lock(m: &Mutex<TreeState>) -> MutexGuard<'_, TreeState> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Holds one job per owner and produces attribution reports.
@@ -149,7 +222,14 @@ impl Tracker {
 
     /// Registers an existing job for `owner`.
     pub fn add_owner(&mut self, owner: OwnerId, meta: OwnerMeta, job: JobGroup) -> &JobGroup {
-        &self.owners.entry(owner).insert_entry(Entry { job, meta, roots: Vec::new() }).into_mut().job
+        &self.add_owner_entry(owner, meta, job).job
+    }
+
+    fn add_owner_entry(&mut self, owner: OwnerId, meta: OwnerMeta, job: JobGroup) -> &mut Entry {
+        self.owners
+            .entry(owner)
+            .insert_entry(Entry { job, meta, roots: Vec::new(), tree: None })
+            .into_mut()
     }
 
     /// The job of `owner`.
@@ -184,9 +264,98 @@ impl Tracker {
     pub fn register_root(&mut self, owner: OwnerId, pid: u32) -> Result<()> {
         let e = self.owners.get_mut(&owner).ok_or(Error::UnknownOwner(owner))?;
         if !e.roots.iter().any(|r| r.pid == pid) {
-            e.roots.push(Root { pid, start: start_time_of(pid) });
+            let root = Root { pid, start: start_time_of(pid) };
+            e.roots.push(root);
+            if let Some(t) = &e.tree {
+                remember_root(&mut lock(t), root);
+            }
         }
         Ok(())
+    }
+
+    /// Registers `pid` as a root of `owner` **without a usable Job Object**
+    /// ([`TrackingMode::TreeOnly`]). Use it when job attachment failed or was
+    /// skipped (`JobAttachment::AssignFailed` / `None`), e.g. Microsoft Store
+    /// `pwsh`, which Windows refuses to assign to a job.
+    ///
+    /// * Creates the owner (default metadata, empty job) if it is unknown; if it
+    ///   exists (e.g. via [`create_owner`](Self::create_owner)) it is switched to
+    ///   tree-only mode and keeps its metadata.
+    /// * [`report`](Self::report) then computes its members as the live
+    ///   descendants of the root(s) (ToolHelp `ppid` validated by start time, so
+    ///   a reused pid is never followed) plus every previously seen member still
+    ///   alive. When the root dies those survivors become
+    ///   [`ProcState::Orphan`] / [`ProcState::PortZombie`]; new processes whose
+    ///   (possibly dead) parent is a remembered member are adopted too.
+    /// * Cost: nothing runs by itself. Members are refreshed on every
+    ///   [`report`](Self::report) and on [`poll_tree`](Self::poll_tree). Poll
+    ///   only while [`needs_polling`](Self::needs_polling) is true, at
+    ///   [`TREE_POLL_INTERVAL`] or slower: it narrows the window in which a
+    ///   short-lived intermediate (or a pid reuse) could hide a descendant.
+    pub fn register_root_untracked_job(&mut self, owner: OwnerId, pid: u32) -> Result<()> {
+        if !self.owners.contains_key(&owner) {
+            let job = JobGroup::new("tree-only")?;
+            self.add_owner(owner, OwnerMeta::default(), job);
+        }
+        if let Some(e) = self.owners.get_mut(&owner) {
+            e.tree.get_or_insert_with(|| Mutex::new(TreeState::default()));
+        }
+        self.register_root(owner, pid)
+    }
+
+    /// Creates a job-less (tree-only) owner without a root yet.
+    pub fn add_owner_tree_only(&mut self, owner: OwnerId, meta: OwnerMeta) -> Result<()> {
+        let job = JobGroup::new(meta.label.clone())?;
+        self.add_owner_entry(owner, meta, job).tree = Some(Mutex::new(TreeState::default()));
+        Ok(())
+    }
+
+    /// How `owner` is tracked, for the doctor / procs UI (see
+    /// [`TrackingMode::hint_es`]). Unknown owners report [`TrackingMode::Job`].
+    pub fn attachment_hint(&self, owner: OwnerId) -> TrackingMode {
+        match self.owners.get(&owner) {
+            Some(Entry { tree: Some(_), .. }) => TrackingMode::TreeOnly,
+            _ => TrackingMode::Job,
+        }
+    }
+
+    /// True while at least one tree-only owner still has something to follow
+    /// (a live remembered member). The host should run a background
+    /// [`poll_tree`](Self::poll_tree) every [`TREE_POLL_INTERVAL`] (>= 5 s)
+    /// **only** while this is true and a consumer (procs panel, orphan pill)
+    /// needs fresh data; otherwise do nothing: zero cost at rest. Job owners
+    /// never need polling.
+    pub fn needs_polling(&self) -> bool {
+        self.owners.values().any(|e| e.tree.as_ref().is_some_and(|t| lock(t).active))
+    }
+
+    /// Cheap refresh of the remembered members of every tree-only owner (one
+    /// ToolHelp snapshot, no command lines, no port table). Returns
+    /// [`needs_polling`](Self::needs_polling).
+    pub fn poll_tree(&self) -> bool {
+        if self.owners.values().all(|e| e.tree.is_none()) {
+            return false;
+        }
+        let procs = snapshot_with(SnapshotOptions { cmdline: false });
+        self.update_trees(&procs);
+        self.needs_polling()
+    }
+
+    /// Attribution level of `owner`'s processes (`None` for unknown owners).
+    pub fn attribution(&self, owner: OwnerId) -> Option<Attribution> {
+        self.owners.contains_key(&owner).then(|| self.attachment_hint(owner).attribution())
+    }
+
+    /// Updates every tree-only owner against `procs`; returns alive members.
+    fn update_trees(&self, procs: &[ProcInfo]) -> HashMap<OwnerId, HashSet<u32>> {
+        let now = SystemTime::now();
+        self.owners
+            .iter()
+            .filter_map(|(id, e)| {
+                let t = e.tree.as_ref()?;
+                Some((*id, update_tree(&mut lock(t), &e.roots, procs, now)))
+            })
+            .collect()
     }
 
     /// Spawns `cmd` inside the owner's job (suspended, assigned, resumed: no
@@ -213,11 +382,17 @@ impl Tracker {
         ports: &HashMap<u32, Vec<PortInfo>>,
     ) -> Vec<OwnerReport> {
         let by_pid: HashMap<u32, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
+        let tree_members = self.update_trees(procs);
         let mut out: Vec<OwnerReport> = self
             .owners
             .iter()
             .map(|(owner, e)| {
-                let members = e.job.members();
+                let mut members = e.job.members();
+                if let Some(extra) = tree_members.get(owner) {
+                    members.extend(extra.iter().copied());
+                    members.sort_unstable();
+                    members.dedup();
+                }
                 let root_alive = e.roots.is_empty()
                     || e.roots.iter().any(|r| {
                         by_pid.get(&r.pid).is_some_and(|p| r.start.is_none() || p.start_time == r.start)
@@ -251,8 +426,9 @@ impl Tracker {
     pub fn heuristic_untracked(&self, agent_names: &[&str]) -> Vec<UntrackedProc> {
         let procs = snapshot();
         let ports = ports_by_pid(&listening_ports());
-        let tracked: HashSet<u32> =
+        let mut tracked: HashSet<u32> =
             self.owners.values().flat_map(|e| e.job.members()).collect();
+        tracked.extend(self.update_trees(&procs).into_values().flatten());
         heuristic_from(&procs, &ports, &tracked, agent_names, std::process::id())
     }
 
@@ -285,8 +461,109 @@ impl Tracker {
     /// Terminates everything in the owner's job.
     pub fn terminate_owner(&self, owner: OwnerId, opts: &TerminateOptions) -> Result<TerminateOutcome> {
         let e = self.owners.get(&owner).ok_or(Error::UnknownOwner(owner))?;
-        terminate_job_with(&e.job, opts)
+        let mut total = terminate_job_with(&e.job, opts)?;
+        if e.tree.is_some() {
+            // Tree-only: take down each live remembered member's tree.
+            let report = self.report().into_iter().find(|r| r.owner == owner);
+            for p in report.iter().flat_map(|r| r.processes.iter()) {
+                if total.killed.contains(&p.info.pid) || total.exited_gracefully.contains(&p.info.pid) {
+                    continue;
+                }
+                let o = terminate_tree_with(p.info.pid, opts)?;
+                total.targeted.extend(o.targeted);
+                total.exited_gracefully.extend(o.exited_gracefully);
+                total.killed.extend(o.killed);
+                total.failed.extend(o.failed);
+            }
+        }
+        Ok(total)
     }
+}
+
+fn remember_root(t: &mut TreeState, r: Root) {
+    if let Some(k) = t.known.iter_mut().find(|k| k.pid == r.pid && k.start.is_none()) {
+        k.start = r.start; // learned the start time later
+    }
+    if !t.known.iter().any(|k| k.pid == r.pid && k.start == r.start) {
+        t.known.push(Known { pid: r.pid, start: r.start, died_seen: None });
+        t.active = true;
+    }
+}
+
+fn is_alive(k: &Known, by_pid: &HashMap<u32, &ProcInfo>) -> bool {
+    by_pid.get(&k.pid).is_some_and(|p| k.start.is_none() || p.start_time == k.start)
+}
+
+/// Pure core of tree-only tracking: refreshes `t.known` against `procs` and
+/// returns the pids of the live members.
+///
+/// A process `c` is adopted when its parent identity is a known member:
+/// * the live process with pid `c.ppid` started strictly before `c` (so it is
+///   the real parent, not a reused pid) and is known; or
+/// * no such live parent exists and a **dead** known member with that pid
+///   started before `c` and was last seen at or after `c` started (a parent
+///   must be alive when its child is created). A live process that reused the
+///   pid and started after `c` therefore cannot capture `c`'s ancestry.
+fn update_tree(t: &mut TreeState, roots: &[Root], procs: &[ProcInfo], now: SystemTime) -> HashSet<u32> {
+    let by_pid: HashMap<u32, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
+    for r in roots {
+        // Only a live root is (re-)remembered; a dead one lives on as a tombstone
+        // until it expires, it is never resurrected.
+        let Some(live) = by_pid.get(&r.pid) else { continue };
+        if r.start.is_none() || live.start_time == r.start {
+            remember_root(t, Root { pid: r.pid, start: r.start.or(live.start_time) });
+        }
+    }
+    for k in &mut t.known {
+        if is_alive(k, &by_pid) {
+            k.died_seen = None;
+        } else if k.died_seen.is_none() {
+            k.died_seen = Some(now);
+        }
+    }
+
+    let mut order: Vec<&ProcInfo> =
+        procs.iter().filter(|p| p.pid > 4 && p.start_time.is_some()).collect();
+    order.sort_by_key(|p| (p.start_time, p.pid));
+    loop {
+        let mut added = false;
+        for c in &order {
+            let Some(cs) = c.start_time else { continue };
+            if c.ppid == c.pid || t.known.iter().any(|k| k.pid == c.pid && k.start == Some(cs)) {
+                continue;
+            }
+            let live_parent = by_pid
+                .get(&c.ppid)
+                .and_then(|lp| lp.start_time.filter(|ls| *ls < cs).map(|ls| (lp.pid, ls)));
+            let adopted = match live_parent {
+                Some((pid, ls)) => t
+                    .known
+                    .iter()
+                    .any(|k| k.pid == pid && k.start == Some(ls) && k.died_seen.is_none()),
+                None => t.known.iter().any(|k| {
+                    k.pid == c.ppid
+                        && k.start.is_some_and(|ks| ks < cs)
+                        && k.died_seen.is_some_and(|d| cs <= d)
+                }),
+            };
+            if adopted {
+                t.known.push(Known { pid: c.pid, start: Some(cs), died_seen: None });
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
+    // Forget dead members after the grace period.
+    t.known.retain(|k| {
+        k.died_seen.is_none_or(|d| now.duration_since(d).unwrap_or_default() <= TOMBSTONE_TTL)
+    });
+    let alive: HashSet<u32> =
+        t.known.iter().filter(|k| is_alive(k, &by_pid)).map(|k| k.pid).collect();
+    t.active = !alive.is_empty();
+    alive
 }
 
 /// Pure state rule.
@@ -406,5 +683,162 @@ mod tests {
         assert_eq!(r[1].agent_pid, 100);
         assert_eq!(r[2].agent, "codex");
         assert_eq!(r[1].runtime.tag, Some("vite"));
+    }
+
+    fn at(secs: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    fn root(pid: u32, start: u64) -> Root {
+        Root { pid, start: Some(at(start)) }
+    }
+
+    fn pids(set: &HashSet<u32>) -> Vec<u32> {
+        let mut v: Vec<u32> = set.iter().copied().collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn tree_walk_follows_descendants_and_rejects_stale_ppid() {
+        let mut t = TreeState::default();
+        let roots = [root(100, 10)];
+        let procs = [
+            p(100, 1, "pwsh.exe", "pwsh", 10),
+            p(101, 100, "cmd.exe", "cmd", 20),
+            p(102, 101, "node.exe", "node", 30),
+            p(103, 100, "old.exe", "old", 5), // ppid 100 but older than it: reused ppid
+            p(104, 999, "other.exe", "other", 40),
+        ];
+        let alive = update_tree(&mut t, &roots, &procs, at(100));
+        assert_eq!(pids(&alive), vec![100, 101, 102]);
+        assert!(t.active);
+    }
+
+    #[test]
+    fn survivors_stay_members_after_root_dies() {
+        let mut t = TreeState::default();
+        let roots = [root(100, 10)];
+        let first = [
+            p(100, 1, "pwsh.exe", "pwsh", 10),
+            p(101, 100, "cmd.exe", "cmd", 20),
+            p(102, 101, "ping.exe", "ping", 30),
+        ];
+        update_tree(&mut t, &roots, &first, at(100));
+        // Root and the middle process die; ping (ppid 101) survives.
+        let second = [p(102, 101, "ping.exe", "ping", 30), p(500, 1, "x.exe", "x", 50)];
+        let alive = update_tree(&mut t, &roots, &second, at(200));
+        assert_eq!(pids(&alive), vec![102]);
+        assert!(t.active);
+        // Later it is still remembered even though its parent is long gone.
+        let alive = update_tree(&mut t, &roots, &second, at(260));
+        assert_eq!(pids(&alive), vec![102]);
+    }
+
+    #[test]
+    fn child_of_dead_member_is_adopted_but_pid_reuse_is_not() {
+        let mut t = TreeState::default();
+        let roots = [root(100, 10)];
+        update_tree(
+            &mut t,
+            &roots,
+            &[p(100, 1, "pwsh.exe", "pwsh", 10), p(101, 100, "cmd.exe", "cmd", 20)],
+            at(100),
+        );
+        // Root dies unseen; its child 101 (never reported alive again) spawned 102
+        // before dying, and 102 survives. Meanwhile pid 100 is REUSED by an
+        // unrelated process (start 500) that has its own child 300.
+        let procs = [
+            p(102, 101, "node.exe", "node", 60),
+            p(100, 1, "unrelated.exe", "u", 500),
+            p(300, 100, "child-of-reused.exe", "c", 510),
+        ];
+        let alive = update_tree(&mut t, &roots, &procs, at(600));
+        assert_eq!(pids(&alive), vec![102], "{alive:?}");
+    }
+
+    #[test]
+    fn dead_parent_adoption_requires_child_older_than_death() {
+        let mut t = TreeState::default();
+        let roots = [root(100, 10)];
+        update_tree(&mut t, &roots, &[p(100, 1, "pwsh.exe", "pwsh", 10)], at(100));
+        // Observed dead at 200. A child started at 150 (before) is adopted;
+        // one started at 300 (after we saw the parent gone) is not.
+        let procs = [p(110, 100, "a.exe", "a", 150), p(111, 100, "b.exe", "b", 300)];
+        let alive = update_tree(&mut t, &roots, &procs, at(200));
+        assert_eq!(pids(&alive), vec![110]);
+    }
+
+    #[test]
+    fn tombstones_expire_and_polling_stops() {
+        let mut t = TreeState::default();
+        let roots = [root(100, 10)];
+        update_tree(&mut t, &roots, &[p(100, 1, "pwsh.exe", "pwsh", 10)], at(100));
+        assert!(t.active);
+        let alive = update_tree(&mut t, &roots, &[], at(110));
+        assert!(alive.is_empty());
+        assert!(!t.active, "nothing alive: no polling needed");
+        update_tree(&mut t, &roots, &[], at(110) + TOMBSTONE_TTL + Duration::from_secs(1));
+        assert!(t.known.is_empty(), "{:?}", t.known);
+    }
+
+    #[test]
+    fn report_marks_orphans_for_tree_only_owner() {
+        let mut tr = Tracker::new();
+        tr.add_owner_tree_only(7, OwnerMeta { label: "t".into(), ..Default::default() }).unwrap();
+        tr.owners.get_mut(&7).unwrap().roots.push(Root { pid: 100, start: None });
+        assert_eq!(tr.attachment_hint(7), TrackingMode::TreeOnly);
+        assert_eq!(tr.attribution(7), Some(Attribution::Tree));
+
+        let live = [
+            p(100, 1, "pwsh.exe", "pwsh", 10),
+            p(101, 100, "cmd.exe", "cmd", 20),
+            p(102, 101, "node.exe", "node vite.js", 30),
+        ];
+        let ports: HashMap<u32, Vec<PortInfo>> = HashMap::new();
+        let r = &tr.report_from(&live, &ports)[0];
+        assert_eq!(r.processes.len(), 3);
+        assert!(r.processes.iter().all(|x| x.state == ProcState::Active));
+        assert!(tr.needs_polling());
+
+        // Root + cmd die; node survives -> orphan.
+        let after = [p(102, 101, "node.exe", "node vite.js", 30)];
+        let r = &tr.report_from(&after, &ports)[0];
+        assert_eq!(r.processes.len(), 1);
+        assert_eq!(r.processes[0].state, ProcState::Orphan);
+        assert_eq!(r.orphans().count(), 1);
+
+        // A port makes it a zombie.
+        let mut with_port = HashMap::new();
+        with_port.insert(
+            102,
+            vec![PortInfo {
+                proto: crate::ports::Proto::Tcp,
+                local_addr: "127.0.0.1".parse().unwrap(),
+                port: 5173,
+                state: crate::ports::PortState::Listen,
+                pid: 102,
+            }],
+        );
+        let r = &tr.report_from(&after, &with_port)[0];
+        assert_eq!(r.processes[0].state, ProcState::PortZombie);
+
+        // Everything gone -> nothing to poll.
+        let _ = tr.report_from(&[], &ports);
+        assert!(!tr.needs_polling());
+    }
+
+    #[test]
+    fn job_owner_hint_and_labels() {
+        let mut tr = Tracker::new();
+        tr.create_owner(1, OwnerMeta::default(), JobOptions::default()).unwrap();
+        assert_eq!(tr.attachment_hint(1), TrackingMode::Job);
+        assert_eq!(tr.attachment_hint(99), TrackingMode::Job);
+        assert_eq!(tr.attribution(99), None);
+        assert!(!tr.needs_polling());
+        assert!(!tr.poll_tree());
+        assert_eq!(TrackingMode::Job.attribution_label(), "exacta");
+        assert_eq!(TrackingMode::TreeOnly.attribution_label(), "árbol");
+        assert!(TrackingMode::TreeOnly.hint_es().contains("árbol"));
     }
 }

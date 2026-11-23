@@ -7,6 +7,7 @@
 //! * [`CpuSampler`]: CPU % from snapshot deltas.
 //! * [`listening_ports`]: TCP listeners / UDP sockets with owning pid.
 //! * [`Tracker`]: owner -> job attribution, orphans, port zombies, heuristics.
+//!   Job-less owners (Store `pwsh`) use [`TrackingMode::TreeOnly`] (process-tree walk).
 //! * [`classify`]: runtime kind (`node`/`vite`, `dotnet`, ...).
 //! * [`terminate_tree`] / [`terminate_job`]: graceful then forced, with safety checks.
 //!
@@ -38,6 +39,7 @@ pub use snapshot::{
     ProcInfo, SnapshotOptions, snapshot, snapshot_with, start_time_of, try_snapshot,
 };
 pub use tracker::{
-    Attribution, OwnerId, OwnerMeta, OwnerReport, ProcState, Tracker, TrackedProc, UntrackedProc,
+    Attribution, OwnerId, OwnerMeta, OwnerReport, ProcState, TREE_POLL_INTERVAL, TrackedProc,
+    TrackingMode, Tracker, UntrackedProc,
     heuristic_from,
 };

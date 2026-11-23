@@ -256,14 +256,14 @@ impl Composer {
     /// The answer to [`ComposerEvent::PickAgent`] for a thread: the handoff text, or `None` when
     /// there is nothing to hand over.
     pub fn set_handoff_preview(&mut self, agent: &AgentKind, text: Option<String>, cx: &mut Context<Self>) {
-        if let Some(Popup::Handoff { agent: a, preview }) = &mut self.popup {
-            if a == agent {
-                *preview = match text {
-                    Some(t) => Preview::Text(t),
-                    None => Preview::Empty,
-                };
-                cx.notify();
-            }
+        if let Some(Popup::Handoff { agent: a, preview }) = &mut self.popup
+            && a == agent
+        {
+            *preview = match text {
+                Some(t) => Preview::Text(t),
+                None => Preview::Empty,
+            };
+            cx.notify();
         }
     }
 
@@ -701,7 +701,7 @@ impl Composer {
             .tooltip(format!("Agente: {}", cur.label))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Agent, cx)));
         if !compact {
-            pill = pill.label(cur.label.clone());
+            pill = pill.label(cur.label);
         }
         let open = matches!(self.popup, Some(Popup::Agent) | Some(Popup::Handoff { .. }));
         let body: Vec<AnyElement> = match &self.popup {

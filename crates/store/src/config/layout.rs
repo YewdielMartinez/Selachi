@@ -34,7 +34,26 @@ pub mod panel_ids {
     pub const CONTEXT: &str = "context";
     pub const PROCS: &str = "procs";
     pub const VIEWER: &str = "viewer";
+    /// The file tree panel (`ui_viewer`).
+    pub const FILES: &str = "files";
+    pub const USAGE: &str = "usage";
+    pub const ATTENTION: &str = "attention";
+    /// Not a docked panel: the "Revisión" tab (diff with line notes).
+    pub const REVIEW: &str = "review";
+    /// Not a docked panel: the layout popover.
+    pub const LAYOUT: &str = "layout";
 }
+
+/// Ids of the buttons the titlebar shows by default in the unified layout, in display order.
+pub const DEFAULT_TITLEBAR_BUTTONS: [&str; 7] = [
+    panel_ids::GIT,
+    panel_ids::FILES,
+    panel_ids::PROCS,
+    panel_ids::USAGE,
+    panel_ids::REVIEW,
+    panel_ids::ATTENTION,
+    panel_ids::LAYOUT,
+];
 
 // ---------------------------------------------------------------------------
 // Simple enums
@@ -206,10 +225,16 @@ pub enum BuiltinPreset {
     Chat,
     /// Only the terminal; chrome appears on edge hover.
     Zen,
+    /// Shell v2 (Odla style): one full-height glass sidebar with the spaces (projects and
+    /// worktrees) and their tabs nested as rows, quick actions on top and a usage footer; no
+    /// rail, no top tabs; the panel buttons live at the right of the titlebar. Default of new
+    /// installs (existing configs keep their preset).
+    EspaciosUnificados,
 }
 
 impl BuiltinPreset {
-    pub const ALL: [BuiltinPreset; 5] = [
+    pub const ALL: [BuiltinPreset; 6] = [
+        BuiltinPreset::EspaciosUnificados,
         BuiltinPreset::Terminal,
         BuiltinPreset::Espacios,
         BuiltinPreset::Orquestador,
@@ -225,6 +250,7 @@ impl BuiltinPreset {
             Self::Orquestador => "orquestador",
             Self::Chat => "chat",
             Self::Zen => "zen",
+            Self::EspaciosUnificados => "espacios_unificados",
         }
     }
 
@@ -238,7 +264,7 @@ impl BuiltinPreset {
 }
 
 /// Which preset a layout starts from. Serialized as a plain string: one of the
-/// five built-in ids, or the name of a `[[layout.custom_presets]]` entry.
+/// built-in ids, or the name of a `[[layout.custom_presets]]` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PresetId {
     Builtin(BuiltinPreset),
@@ -304,6 +330,18 @@ pub struct SidebarLayout {
     /// Ordered; a section that is absent is off.
     pub sections: Vec<SidebarSection>,
     pub group_by: GroupBy,
+    /// Unified sidebar: "Nueva pestaña" and "Buscar" at the top.
+    pub show_actions: bool,
+    /// Unified sidebar: a row of small buttons, one per registered panel.
+    pub panel_icons: bool,
+    /// Unified sidebar: the tabs are rows nested inside their space (project / worktree).
+    pub nested_tabs: bool,
+    /// Unified sidebar: compact usage meter and the settings button at the bottom.
+    pub footer_usage: bool,
+    /// Rows show the model (and the branch) as a second line.
+    pub row_model: bool,
+    /// Rows show the elapsed time.
+    pub row_time: bool,
 }
 
 impl Default for SidebarLayout {
@@ -313,7 +351,41 @@ impl Default for SidebarLayout {
             width_px: 240,
             sections: vec![SidebarSection::Projects],
             group_by: GroupBy::None,
+            show_actions: false,
+            panel_icons: false,
+            nested_tabs: false,
+            footer_usage: false,
+            row_model: true,
+            row_time: true,
         }
+    }
+}
+
+/// The titlebar's right side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TitlebarLayout {
+    /// Buttons at the right of the titlebar, in order: ids of right panels (`"git"`, `"files"`,
+    /// `"procs"`, `"usage"`, `"attention"`...) plus `"review"` (opens the review tab) and
+    /// `"layout"` (the layout popover). Ids nobody registered are skipped when drawing.
+    pub panel_buttons: Vec<PanelId>,
+}
+
+impl Default for TitlebarLayout {
+    /// Only the layout popover button: the classic presets keep their rail for the panels.
+    fn default() -> Self {
+        Self { panel_buttons: vec![PanelId::new(panel_ids::LAYOUT)] }
+    }
+}
+
+impl TitlebarLayout {
+    /// Every button of [`DEFAULT_TITLEBAR_BUTTONS`] (the unified preset).
+    pub fn all_buttons() -> Self {
+        Self { panel_buttons: DEFAULT_TITLEBAR_BUTTONS.iter().map(|id| PanelId::new(id)).collect() }
+    }
+
+    pub fn has(&self, id: &str) -> bool {
+        self.panel_buttons.iter().any(|p| p.as_str() == id)
     }
 }
 
@@ -324,6 +396,7 @@ impl Default for SidebarLayout {
 pub struct ResolvedLayout {
     pub tabs_position: TabsPosition,
     pub sidebar: SidebarLayout,
+    pub titlebar: TitlebarLayout,
     pub rail: RailVisibility,
     /// Id of the panel docked on the right; `None` = no right panel.
     #[serde(with = "slot")]
@@ -354,6 +427,7 @@ impl ResolvedLayout {
         let base = ResolvedLayout {
             tabs_position: TabsPosition::Top,
             sidebar: SidebarLayout::default(),
+            titlebar: TitlebarLayout::default(),
             rail: RailVisibility::Visible,
             right_panel: None,
             bottom_bar: BottomBar::Compact,
@@ -369,6 +443,7 @@ impl ResolvedLayout {
             width_px,
             sections: sections.to_vec(),
             group_by,
+            ..SidebarLayout::default()
         };
         match preset {
             BuiltinPreset::Terminal => base,
@@ -400,6 +475,20 @@ impl ResolvedLayout {
                 rail: RailVisibility::Hidden,
                 bottom_bar: BottomBar::Hidden,
                 zen: true,
+                ..base
+            },
+            BuiltinPreset::EspaciosUnificados => ResolvedLayout {
+                tabs_position: TabsPosition::Sidebar,
+                sidebar: SidebarLayout {
+                    show_actions: true,
+                    panel_icons: true,
+                    nested_tabs: true,
+                    footer_usage: true,
+                    ..sidebar(260, &[S::Spaces], GroupBy::Project)
+                },
+                titlebar: TitlebarLayout::all_buttons(),
+                rail: RailVisibility::Hidden,
+                breadcrumb: false,
                 ..base
             },
         }
@@ -442,6 +531,18 @@ impl ResolvedLayout {
             ));
             self.sidebar_translucency = TRANSLUCENCY_MAX;
         }
+        let mut buttons: Vec<PanelId> = Vec::with_capacity(self.titlebar.panel_buttons.len());
+        for b in &self.titlebar.panel_buttons {
+            if b.as_str().is_empty() || b.as_str() == "none" {
+                continue;
+            }
+            if buttons.contains(b) {
+                w.push(format!("titlebar.panel_buttons lists \"{}\" more than once; keeping the first", b.as_str()));
+            } else {
+                buttons.push(b.clone());
+            }
+        }
+        self.titlebar.panel_buttons = buttons;
         let mut seen = Vec::with_capacity(sb.sections.len());
         for s in &sb.sections {
             if seen.contains(s) {
@@ -502,9 +603,35 @@ pub struct SidebarOverrides {
     pub sections: Option<Vec<SidebarSection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_by: Option<GroupBy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_actions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel_icons: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_tabs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footer_usage: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_model: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_time: Option<bool>,
 }
 
 impl SidebarOverrides {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Sparse titlebar changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TitlebarOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel_buttons: Option<Vec<PanelId>>,
+}
+
+impl TitlebarOverrides {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
@@ -518,6 +645,8 @@ pub struct LayoutOverrides {
     pub tabs_position: Option<TabsPosition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidebar: Option<SidebarOverrides>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub titlebar: Option<TitlebarOverrides>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rail: Option<RailVisibility>,
     /// `Some(None)` forces the panel off (`right_panel = "none"`).
@@ -562,6 +691,22 @@ impl LayoutOverrides {
             if let Some(v) = sb.group_by {
                 layout.sidebar.group_by = v;
             }
+            let flags = [
+                (sb.show_actions, &mut layout.sidebar.show_actions),
+                (sb.panel_icons, &mut layout.sidebar.panel_icons),
+                (sb.nested_tabs, &mut layout.sidebar.nested_tabs),
+                (sb.footer_usage, &mut layout.sidebar.footer_usage),
+                (sb.row_model, &mut layout.sidebar.row_model),
+                (sb.row_time, &mut layout.sidebar.row_time),
+            ];
+            for (v, slot) in flags {
+                if let Some(v) = v {
+                    *slot = v;
+                }
+            }
+        }
+        if let Some(v) = self.titlebar.as_ref().and_then(|t| t.panel_buttons.as_ref()) {
+            layout.titlebar.panel_buttons = v.clone();
         }
         if let Some(v) = self.rail {
             layout.rail = v;
@@ -602,10 +747,20 @@ impl LayoutOverrides {
             width_px: changed(&base.sidebar.width_px, &target.sidebar.width_px),
             sections: changed(&base.sidebar.sections, &target.sidebar.sections),
             group_by: changed(&base.sidebar.group_by, &target.sidebar.group_by),
+            show_actions: changed(&base.sidebar.show_actions, &target.sidebar.show_actions),
+            panel_icons: changed(&base.sidebar.panel_icons, &target.sidebar.panel_icons),
+            nested_tabs: changed(&base.sidebar.nested_tabs, &target.sidebar.nested_tabs),
+            footer_usage: changed(&base.sidebar.footer_usage, &target.sidebar.footer_usage),
+            row_model: changed(&base.sidebar.row_model, &target.sidebar.row_model),
+            row_time: changed(&base.sidebar.row_time, &target.sidebar.row_time),
+        };
+        let titlebar = TitlebarOverrides {
+            panel_buttons: changed(&base.titlebar.panel_buttons, &target.titlebar.panel_buttons),
         };
         LayoutOverrides {
             tabs_position: changed(&base.tabs_position, &target.tabs_position),
             sidebar: (!sidebar.is_empty()).then_some(sidebar),
+            titlebar: (!titlebar.is_empty()).then_some(titlebar),
             rail: changed(&base.rail, &target.rail),
             right_panel: changed(&base.right_panel, &target.right_panel),
             bottom_bar: changed(&base.bottom_bar, &target.bottom_bar),
@@ -949,7 +1104,8 @@ pub fn wireframe(l: &ResolvedLayout) -> Vec<WireRect> {
             right -= sw;
             right
         };
-        if l.tabs_position == TabsPosition::Sidebar {
+        // With nested tabs the rows live inside the spaces: one full-height sidebar.
+        if l.tabs_position == TabsPosition::Sidebar && !l.sidebar.nested_tabs {
             let top = body_h * WIRE_SIDEBAR_SECTIONS;
             out.push(rect(Zone::Sidebar, x, 0.0, sw, top));
             out.push(rect(Zone::Tabs, x, top, sw, body_h - top));
@@ -1002,7 +1158,7 @@ pub fn wireframe(l: &ResolvedLayout) -> Vec<WireRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::TEMPLATE;
+    use crate::config::{GitConfig, WorktreeLocation, DEFAULT_PLUGIN_INDEX_URL, TEMPLATE};
     use std::path::PathBuf;
 
     #[test]
@@ -1406,7 +1562,12 @@ path = ""
     fn template_layout_section_parses_to_defaults() {
         assert!(TEMPLATE.contains("[layout]"));
         let p = Config::parse(TEMPLATE).unwrap();
-        assert_eq!(p.config.layout, LayoutConfig::default());
+        // The only difference with the serde defaults is the preset of new installs.
+        let expected = LayoutConfig {
+            preset: BuiltinPreset::EspaciosUnificados.into(),
+            ..LayoutConfig::default()
+        };
+        assert_eq!(p.config.layout, expected);
         for b in BuiltinPreset::ALL {
             assert!(
                 TEMPLATE.contains(&format!("\"{}\"", b.id())),
@@ -1441,7 +1602,10 @@ path = ""
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let text = TEMPLATE
-            .replace("preset = \"terminal\"", "preset = \"terminal\" # mi preset")
+            .replace(
+                "preset = \"espacios_unificados\"",
+                "preset = \"espacios_unificados\" # mi preset",
+            )
             .replace("mode = \"dark\"", "mode = \"dark\" # mi modo");
         std::fs::write(&path, format!("# cabecera propia\n{text}")).unwrap();
         let template_comment = TEMPLATE
@@ -1717,5 +1881,98 @@ path = ""
             };
             assert_eq!(count(&wireframe(&l), Zone::Main), n);
         }
+    }
+
+    #[test]
+    fn unified_preset_is_shell_v2() {
+        let u = ResolvedLayout::builtin(BuiltinPreset::EspaciosUnificados);
+        assert_eq!(u.tabs_position, TabsPosition::Sidebar);
+        assert_eq!(u.rail, RailVisibility::Hidden);
+        assert_eq!(u.sidebar.side, SidebarSide::Left);
+        assert_eq!(u.sidebar.sections, vec![SidebarSection::Spaces]);
+        let s = &u.sidebar;
+        assert!(s.show_actions && s.panel_icons && s.nested_tabs && s.footer_usage);
+        assert!(s.row_model && s.row_time);
+        let ids: Vec<&str> = u.titlebar.panel_buttons.iter().map(PanelId::as_str).collect();
+        assert_eq!(ids, DEFAULT_TITLEBAR_BUTTONS);
+        let mut n = u.clone();
+        assert!(n.normalize().is_empty());
+        assert_eq!(BuiltinPreset::from_id("ESPACIOS_UNIFICADOS"), Some(BuiltinPreset::EspaciosUnificados));
+        // The classic presets keep the old chrome.
+        for b in [BuiltinPreset::Terminal, BuiltinPreset::Espacios, BuiltinPreset::Orquestador, BuiltinPreset::Chat, BuiltinPreset::Zen] {
+            let l = ResolvedLayout::builtin(b);
+            assert!(!l.sidebar.nested_tabs && !l.sidebar.show_actions, "{b:?}");
+            assert_eq!(l.titlebar.panel_buttons, vec![PanelId::new("layout")]);
+        }
+        // One full-height sidebar, no rail, no top tabs.
+        let w = u.wireframe();
+        assert_eq!(count(&w, Zone::Rail), 0);
+        assert_eq!(count(&w, Zone::Tabs), 0);
+        assert_eq!(count(&w, Zone::Sidebar), 1);
+        let sb = w.iter().find(|r| r.zone == Zone::Sidebar).unwrap();
+        assert!((sb.h - (100.0 - 6.0)).abs() < 0.01 && sb.x == 0.0);
+    }
+
+    #[test]
+    fn sidebar_and_titlebar_options_roundtrip_as_overrides() {
+        let mut c = LayoutConfig::default();
+        c.select_preset(BuiltinPreset::EspaciosUnificados.into());
+        let mut target = c.resolve();
+        target.sidebar.footer_usage = false;
+        target.sidebar.row_time = false;
+        target.titlebar.panel_buttons = vec![PanelId::new("git"), PanelId::new("layout")];
+        c.set_resolved(&target);
+        assert_eq!(c.resolve(), target);
+        let o = &c.overrides;
+        assert_eq!(o.sidebar.as_ref().unwrap().footer_usage, Some(false));
+        assert_eq!(o.sidebar.as_ref().unwrap().nested_tabs, None);
+        assert_eq!(
+            o.titlebar.as_ref().unwrap().panel_buttons,
+            Some(vec![PanelId::new("git"), PanelId::new("layout")])
+        );
+        let text = toml::to_string(&Config { layout: c.clone(), ..Config::default() }).unwrap();
+        assert!(text.contains("footer_usage = false"), "{text}");
+        assert!(text.contains("panel_buttons"), "{text}");
+        assert_eq!(Config::parse(&text).unwrap().config.layout, c);
+        // Duplicates in the button list are dropped with a warning.
+        let mut l = ResolvedLayout::default();
+        l.titlebar.panel_buttons = vec![PanelId::new("git"), PanelId::new("git")];
+        assert_eq!(l.normalize().len(), 1);
+        assert_eq!(l.titlebar.panel_buttons.len(), 1);
+    }
+
+    #[test]
+    fn new_config_fields_parse_validate_and_default() {
+        let c = Config::default();
+        assert_eq!(c.general.language, "es");
+        assert!(c.general.confirm_close_running);
+        assert!(!c.agents.oauth_usage_endpoint);
+        assert_eq!(c.git.worktrees, WorktreeLocation::Beside);
+        assert_eq!(c.plugins.effective_index_url(), DEFAULT_PLUGIN_INDEX_URL);
+        let p = Config::parse(
+            "[general]
+language = \"es\"
+confirm_close_running = false
+[git]
+external_editor = \"code -g\"
+worktrees = \"inside\"
+[plugins]
+index_url = \"https://x.test/g.toml\"
+[agents]
+oauth_usage_endpoint = true
+",
+        )
+        .unwrap();
+        assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+        assert!(!p.config.general.confirm_close_running);
+        assert_eq!(p.config.git.external_editor, "code -g");
+        assert_eq!(p.config.git.worktrees, WorktreeLocation::Inside);
+        assert_eq!(p.config.plugins.effective_index_url(), "https://x.test/g.toml");
+        assert!(p.config.agents.oauth_usage_endpoint);
+        let custom = Config::parse("[git]\nworktrees = 'D:\\wt'").unwrap().config;
+        assert_eq!(custom.git.worktrees, WorktreeLocation::Custom(r"D:\wt".into()));
+        assert!(Config::parse("[plugins]\nindex_url = \"http://insecure\"").is_err());
+        let text = toml::to_string(&Config { git: GitConfig { worktrees: custom.git.worktrees.clone(), ..GitConfig::default() }, ..Config::default() }).unwrap();
+        assert_eq!(Config::parse(&text).unwrap().config.git.worktrees, custom.git.worktrees);
     }
 }

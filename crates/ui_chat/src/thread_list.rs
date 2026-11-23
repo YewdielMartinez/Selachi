@@ -202,7 +202,7 @@ impl DeleteDialog {
 
 enum DeleteState {
     Loading(ThreadId),
-    Ready(DeleteDialog),
+    Ready(Box<DeleteDialog>),
 }
 
 struct Renaming {
@@ -406,7 +406,7 @@ impl ThreadListView {
             let _ = this.update(cx, |this, cx| match res {
                 Ok(p) => {
                     if matches!(this.delete, Some(DeleteState::Loading(i)) if i == id) {
-                        this.delete = Some(DeleteState::Ready(DeleteDialog::new(p)));
+                        this.delete = Some(DeleteState::Ready(Box::new(DeleteDialog::new(p))));
                     }
                     cx.notify();
                 }

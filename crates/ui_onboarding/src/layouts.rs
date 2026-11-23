@@ -1,10 +1,6 @@
 //! The layout cards of step 4, including "Espacios unificados" (docs/olas/ola-5.md §5.10).
 //!
-//! `store` has no `espacios_unificados` preset yet (wave 5.10 adds it). Until then the card is
-//! described here (label and wireframe) and choosing it writes the closest existing preset,
-//! `espacios`, plus `Extras::unified_layout = true` so the host can apply the real layout.
-//! As soon as `BuiltinPreset::from_id("espacios_unificados")` resolves, the card writes that id
-//! and the flag stays false: no change is needed here.
+//! `store` has the `espacios_unificados` preset; the card writes it (the default of new installs).
 
 use store::{BuiltinPreset, PresetId};
 use ui_kit::{WireFill, WirePreset, WireRect};
@@ -22,7 +18,7 @@ pub enum LayoutCard {
 impl LayoutCard {
     pub const fn label(self) -> &'static str {
         match self {
-            LayoutCard::Unified => "Espacios unificados",
+            LayoutCard::Unified | LayoutCard::Builtin(BuiltinPreset::EspaciosUnificados) => "Espacios unificados",
             LayoutCard::Builtin(BuiltinPreset::Terminal) => "Terminal",
             LayoutCard::Builtin(BuiltinPreset::Espacios) => "Espacios",
             LayoutCard::Builtin(BuiltinPreset::Orquestador) => "Orquestador",
@@ -47,7 +43,7 @@ impl LayoutCard {
 fn builtin_wire(b: BuiltinPreset) -> WirePreset {
     match b {
         BuiltinPreset::Terminal => WirePreset::Terminal,
-        BuiltinPreset::Espacios => WirePreset::Spaces,
+        BuiltinPreset::Espacios | BuiltinPreset::EspaciosUnificados => WirePreset::Spaces,
         BuiltinPreset::Orquestador => WirePreset::Orchestrator,
         BuiltinPreset::Chat => WirePreset::Chat,
         BuiltinPreset::Zen => WirePreset::Zen,
@@ -85,20 +81,11 @@ pub fn cards() -> Vec<LayoutCard> {
     v
 }
 
-/// The preset `store` knows for "Espacios unificados", if any.
-pub fn store_unified() -> Option<BuiltinPreset> {
-    BuiltinPreset::from_id(UNIFIED_ID)
-}
-
-/// What to write for `card`: the preset id and whether the host must still apply the unified
-/// layout itself.
-pub fn resolve(card: LayoutCard) -> (PresetId, bool) {
+/// What to write for `card`.
+pub fn resolve(card: LayoutCard) -> PresetId {
     match card {
-        LayoutCard::Builtin(b) => (PresetId::Builtin(b), false),
-        LayoutCard::Unified => match store_unified() {
-            Some(b) => (PresetId::Builtin(b), false),
-            None => (PresetId::Builtin(BuiltinPreset::Espacios), true),
-        },
+        LayoutCard::Builtin(b) => PresetId::Builtin(b),
+        LayoutCard::Unified => PresetId::Builtin(BuiltinPreset::EspaciosUnificados),
     }
 }
 
@@ -123,18 +110,8 @@ mod tests {
     }
 
     #[test]
-    fn unified_falls_back_to_espacios_until_store_has_it() {
-        let (id, host_applies) = resolve(LayoutCard::Unified);
-        match store_unified() {
-            None => {
-                assert_eq!(id, PresetId::Builtin(BuiltinPreset::Espacios));
-                assert!(host_applies);
-            }
-            Some(b) => {
-                assert_eq!(id, PresetId::Builtin(b));
-                assert!(!host_applies);
-            }
-        }
-        assert_eq!(resolve(LayoutCard::Builtin(BuiltinPreset::Chat)), (PresetId::Builtin(BuiltinPreset::Chat), false));
+    fn unified_writes_the_store_preset() {
+        assert_eq!(resolve(LayoutCard::Unified), PresetId::Builtin(BuiltinPreset::EspaciosUnificados));
+        assert_eq!(resolve(LayoutCard::Builtin(BuiltinPreset::Chat)), PresetId::Builtin(BuiltinPreset::Chat));
     }
 }

@@ -125,7 +125,10 @@ impl TabModel for ChatTab {
 
     fn subtitle(&self, cx: &App) -> Option<SharedString> {
         match self.record(cx) {
-            Some(r) => Some(model_label(r.model.as_deref()).into()).filter(|_| r.model.is_some()).or_else(|| Some(chat_core::agent_label(&r.agent).into())),
+            Some(r) => Some(match r.model.as_deref() {
+                Some(m) => model_label(Some(m)).into(),
+                None => chat_core::agent_label(&r.agent).into(),
+            }),
             None => self.view.read(cx).draft_spec().map(|s| model_label(s.model.as_deref()).into()),
         }
     }

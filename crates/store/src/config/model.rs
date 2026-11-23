@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// App-wide behaviour: language, close confirmation (`[general]`).
+    pub general: General,
     pub appearance: Appearance,
     pub terminal: Terminal,
     /// Extra shell profiles. Empty = the app auto-detects (pwsh, powershell, cmd, WSL).
@@ -25,6 +27,89 @@ pub struct Config {
     /// Shell layout: preset, overrides, custom presets, per-project overrides
     /// (see `config/layout.rs`).
     pub layout: super::LayoutConfig,
+    /// Grammar plugins (`[plugins]`).
+    pub plugins: Plugins,
+}
+
+/// `[general]`: app-wide behaviour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct General {
+    /// UI language id (`"es"`). Only Spanish exists today.
+    pub language: String,
+    /// Ask before closing a tab or the window while a command is still running.
+    pub confirm_close_running: bool,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self { language: "es".to_string(), confirm_close_running: true }
+    }
+}
+
+/// Default grammar index (a placeholder until the first release exists).
+pub const DEFAULT_PLUGIN_INDEX_URL: &str =
+    "https://github.com/OWNER/selachi/releases/latest/download/grammars.toml";
+
+/// `[plugins]`: where language grammars come from.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Plugins {
+    /// URL of `grammars.toml` (empty = [`DEFAULT_PLUGIN_INDEX_URL`]). Must be `https://`.
+    pub index_url: String,
+}
+
+impl Plugins {
+    /// The index URL in effect.
+    pub fn effective_index_url(&self) -> &str {
+        let u = self.index_url.trim();
+        if u.is_empty() { DEFAULT_PLUGIN_INDEX_URL } else { u }
+    }
+}
+
+/// Where git worktrees created by Selachi live (`[git] worktrees`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum WorktreeLocation {
+    /// Next to the repository folder (`<repo>-<branch>`).
+    #[default]
+    Beside,
+    /// In `<repo>\.worktrees`.
+    Inside,
+    /// One folder for all of them.
+    Custom(String),
+}
+
+impl WorktreeLocation {
+    /// `"beside"`, `"inside"` or the folder path.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Beside => "beside",
+            Self::Inside => "inside",
+            Self::Custom(p) => p,
+        }
+    }
+
+    /// Parses the config string; empty means the default.
+    pub fn parse(s: &str) -> Self {
+        let s = s.trim();
+        match s.to_ascii_lowercase().as_str() {
+            "" | "beside" => Self::Beside,
+            "inside" => Self::Inside,
+            _ => Self::Custom(s.to_string()),
+        }
+    }
+}
+
+impl Serialize for WorktreeLocation {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for WorktreeLocation {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self::parse(&String::deserialize(d)?))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -310,6 +395,8 @@ pub struct Agents {
     pub permission_default: PermissionDefault,
     /// Install the Claude Code statusline hook (reads exact context/cost numbers).
     pub claude_statusline_hook: bool,
+    /// Experimental: ask Anthropic's OAuth usage endpoint for the exact 5 h / weekly limits.
+    pub oauth_usage_endpoint: bool,
 }
 
 impl Default for Agents {
@@ -319,6 +406,7 @@ impl Default for Agents {
             show_estimates: true,
             permission_default: PermissionDefault::Ask,
             claude_statusline_hook: false,
+            oauth_usage_endpoint: false,
         }
     }
 }
@@ -328,12 +416,18 @@ impl Default for Agents {
 pub struct GitConfig {
     /// Ask before force-push, hard reset, branch delete and similar.
     pub confirm_sensitive: bool,
+    /// Command that opens a file in the user's editor (empty = the system default).
+    pub external_editor: String,
+    /// Where new worktrees are created.
+    pub worktrees: WorktreeLocation,
 }
 
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
             confirm_sensitive: true,
+            external_editor: String::new(),
+            worktrees: WorktreeLocation::Beside,
         }
     }
 }
@@ -440,6 +534,13 @@ impl Config {
             problems.push(format!(
                 "terminal.completion.accept_word_key = {key:?} is not a key chord (e.g. \"Ctrl+RightArrow\")"
             ));
+        }
+        let url = self.plugins.index_url.trim();
+        if !url.is_empty() && !url.starts_with("https://") {
+            problems.push(format!("plugins.index_url = {url:?} must start with https://"));
+        }
+        if self.git.external_editor.chars().any(char::is_control) {
+            problems.push("git.external_editor must not contain line breaks".to_string());
         }
         for (i, p) in self.profiles.iter().enumerate() {
             if p.name.trim().is_empty() || p.program.trim().is_empty() {

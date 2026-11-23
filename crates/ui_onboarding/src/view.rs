@@ -18,7 +18,7 @@ use crate::agents::{self, AgentCli, AgentRow};
 use crate::flag;
 use crate::flow::{Flow, Nav, Step};
 use crate::gif::{self, SharkFrame};
-use crate::model::{Draft, Extras, Outcome, ProjectCounts, ThemeChoice, WorktreeLocation, summary_lines};
+use crate::model::{Draft, Outcome, ProjectCounts, ThemeChoice, WorktreeLocation, summary_lines};
 use crate::projects::{self, CancelFlag, ProjectList, ScanMsg};
 use crate::shells::{self, ShellInfo};
 
@@ -33,8 +33,6 @@ pub enum OnboardingEvent {
         config: Config,
         projects: Vec<DiscoveredProject>,
         favorites: Vec<PathBuf>,
-        /// Choices `store::Config` has no key for yet (worktree location, OAuth endpoint).
-        extras: Extras,
     },
     /// "Omitir por ahora" on the welcome step: nothing was changed; the first-run flag is written.
     Skipped,
@@ -248,7 +246,6 @@ impl OnboardingView {
             config: self.draft.build_config(&self.base, skipped),
             projects: if projects_skipped { Vec::new() } else { self.projects.selected() },
             favorites: if projects_skipped { Vec::new() } else { self.projects.favorites() },
-            extras: self.draft.extras(skipped),
         }
     }
 
@@ -433,7 +430,6 @@ impl OnboardingView {
                     config: outcome.config,
                     projects: outcome.projects,
                     favorites: outcome.favorites,
-                    extras: outcome.extras,
                 });
                 cx.notify();
             });
@@ -444,8 +440,9 @@ impl OnboardingView {
         self.finishing = true;
         cx.notify();
         let dir = self.data_dir.clone();
+        let db = self.db.clone();
         self.finish_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let marked = cx.background_executor().spawn(async move { flag::mark_done_in(&dir) }).await;
+            let marked = cx.background_executor().spawn(async move { flag::mark_done_with(db.as_ref(), &dir) }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Err(e) = marked {
                     log::warn!("onboarding: cannot write the first-run flag: {e}");

@@ -164,12 +164,12 @@ fn counts_of(v: &Value, depth: usize) -> Option<(usize, usize)> {
             }
             let mut total: Option<(usize, usize)> = None;
             for k in ["edits", "changes", "files"] {
-                if let Some(x) = o.get(k) {
-                    if let Some((a, d)) = counts_of(x, depth + 1) {
-                        let t = total.get_or_insert((0, 0));
-                        t.0 += a;
-                        t.1 += d;
-                    }
+                if let Some(x) = o.get(k)
+                    && let Some((a, d)) = counts_of(x, depth + 1)
+                {
+                    let t = total.get_or_insert((0, 0));
+                    t.0 += a;
+                    t.1 += d;
                 }
             }
             total
