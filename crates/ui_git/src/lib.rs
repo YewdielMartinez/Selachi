@@ -35,7 +35,6 @@ mod data;
 mod diffview;
 mod fmt;
 mod gate;
-mod input;
 mod model;
 mod sections;
 mod view;

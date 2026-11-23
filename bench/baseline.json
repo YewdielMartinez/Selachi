@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "threshold_pct": 15,
+  "profiles": {
+    "local": {
+      "machine": {
+        "cpu": "Intel(R) Core(TM) Ultra 9 185H",
+        "logical": 22,
+        "ram_gb": 31.5,
+        "gpu": [
+          "NVIDIA GeForce RTX 4070 Laptop GPU",
+          "Intel(R) Arc(TM) Graphics"
+        ],
+        "os": "Microsoft Windows 11 Pro 10.0.26300",
+        "exe_mb": 22.5,
+        "commit": "967418e",
+        "date": "2026-11-23"
+      },
+      "startup_ms": 218.8,
+      "private_mb_app": 84.1,
+      "cpu_idle_pct": 0.47,
+      "runs": 3,
+      "idle_seconds": 10
+    }
+  }
+}

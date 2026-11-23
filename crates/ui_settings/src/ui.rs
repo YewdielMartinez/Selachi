@@ -18,6 +18,7 @@ pub const NAV_WIDTH: f32 = 208.0;
 /// Page title + subtitle at the top of a section.
 pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
     let c = theme.colors;
+        let ty = theme.typography;
     div()
         .flex()
         .flex_col()
@@ -25,23 +26,24 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
         .pb(px(8.0))
         .child(
             div()
-                .text_size(px(22.0))
+                .text_size(px(ty.ui_size_xl))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c.text)
                 .child(SharedString::from(title.to_string())),
         )
-        .child(div().text_size(px(13.0)).text_color(c.muted).child(SharedString::from(subtitle.to_string())))
+        .child(div().text_size(px(ty.ui_size_md)).text_color(c.muted).child(SharedString::from(subtitle.to_string())))
 }
 
 /// A titled card of rows. `title` is the 11 px micro label above it.
 pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
     let c = theme.colors;
+        let ty = theme.typography;
     let mut wrap = div().flex().flex_col().gap(px(8.0)).w_full();
     if let Some(t) = title {
         wrap = wrap.child(
             div()
                 .px(px(4.0))
-                .text_size(px(11.0))
+                .text_size(px(ty.ui_size_xs))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(c.muted)
                 .child(SharedString::from(t.to_string())),
@@ -62,6 +64,7 @@ pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
 /// A group header with a trailing action (for instance "Volver a comprobar").
 pub fn group_with_action(theme: &Theme, title: &str, action: impl IntoElement, rows: Vec<AnyElement>) -> Div {
     let c = theme.colors;
+        let ty = theme.typography;
     div()
         .flex()
         .flex_col()
@@ -76,7 +79,7 @@ pub fn group_with_action(theme: &Theme, title: &str, action: impl IntoElement, r
                 .px(px(4.0))
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(px(ty.ui_size_xs))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.muted)
                         .child(SharedString::from(title.to_string())),
@@ -117,6 +120,7 @@ pub fn plain_row(content: impl IntoElement) -> Div {
 /// Small rounded label ("Listo", "v0.24.2", "Instalado").
 pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone) -> Div {
     let c = theme.colors;
+        let ty = theme.typography;
     let (bg, fg): (Rgba, Rgba) = match tone {
         PillTone::Neutral => (c.surface_3, c.muted),
         PillTone::Ok => (c.surface_3, c.text),
@@ -129,9 +133,9 @@ pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone)
         .gap(px(5.0))
         .h(px(22.0))
         .px(px(9.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .bg(bg)
-        .text_size(px(12.0))
+        .text_size(px(ty.ui_size_sm))
         .text_color(fg);
     if tone == PillTone::Ok {
         // A signal dot (progress / ready) is where the accent belongs.
@@ -150,6 +154,7 @@ pub enum PillTone {
 /// A tonal info banner with an icon ("Reinicia Selachi para completar").
 pub fn banner(theme: &Theme, ic: Icon, title: &str, body: &str, trailing: Option<AnyElement>) -> Div {
     let c = theme.colors;
+        let ty = theme.typography;
     div()
         .flex()
         .flex_row()
@@ -168,18 +173,19 @@ pub fn banner(theme: &Theme, ic: Icon, title: &str, body: &str, trailing: Option
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.text).child(SharedString::from(title.to_string())))
-                .child(div().text_size(px(12.0)).text_color(c.muted).child(SharedString::from(body.to_string()))),
+                .child(div().text_size(px(ty.ui_size_md)).font_weight(FontWeight::MEDIUM).text_color(c.text).child(SharedString::from(title.to_string())))
+                .child(div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(SharedString::from(body.to_string()))),
         )
         .children(trailing)
 }
 
 /// Current value shown next to a slider (`13 pt`, `35 %`).
 pub fn value_label(theme: &Theme, text: impl Into<SharedString>) -> Div {
+    let ty = theme.typography;
     div()
         .w(px(52.0))
         .flex_none()
-        .text_size(px(12.0))
+        .text_size(px(ty.ui_size_sm))
         .text_color(theme.colors.muted)
         .flex()
         .justify_end()
@@ -188,7 +194,8 @@ pub fn value_label(theme: &Theme, text: impl Into<SharedString>) -> Div {
 
 /// Muted explanatory paragraph.
 pub fn note(theme: &Theme, text: impl Into<SharedString>) -> Div {
-    div().px(px(4.0)).text_size(px(12.0)).text_color(theme.colors.muted).child(text.into())
+    let ty = theme.typography;
+    div().px(px(4.0)).text_size(px(ty.ui_size_sm)).text_color(theme.colors.muted).child(text.into())
 }
 
 /// Spanish decimal comma for display (`1.3` -> `1,3`).

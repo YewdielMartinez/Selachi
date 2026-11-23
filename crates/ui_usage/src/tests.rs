@@ -31,6 +31,7 @@ fn event(agent: Agent, key: &str, ts_ms: i64, t: TokenCounts, branch: Option<&st
             Agent::Claude => "claude-opus-5-5",
             Agent::Codex => "gpt-6.1-sol",
             Agent::OpenCode => "mystery-model",
+            Agent::Antigravity => "gemini-4-neon",
         }
         .into(),
         tokens: t,
@@ -278,20 +279,51 @@ fn days_bucket_billable_tokens_per_agent_without_cache_reads() {
     store.upsert_usage(&event(Agent::Codex, "t2", mid(13), tok(1_000, 500), None, "C:/p/a")).unwrap();
     // Three days ago and an event older than the window (not in the chart).
     store.upsert_usage(&event(Agent::Claude, "t3", mid(10), tok(10, 5), None, "C:/p/a")).unwrap();
+    // Antigravity (tokens only) is a fourth column of the stack, not a hidden agent.
+    store.upsert_usage(&event(Agent::Antigravity, "t4", mid(13), tok(300, 40), None, "C:/p/a")).unwrap();
     store.upsert_usage(&event(Agent::Claude, "old", bounds[0].1 - 5 * 24 * H, tok(77, 77), None, "C:/p/a")).unwrap();
 
     let snap = load_from(&store, &UsageQuery::default()).unwrap();
     assert_eq!(snap.days.len(), CHART_DAYS);
-    assert_eq!(snap.days[13].per_agent, [175, 1_500, 0]);
-    assert_eq!(snap.days[10].per_agent, [15, 0, 0]);
-    assert_eq!(snap.days[13].total(), 1_675);
+    assert_eq!(snap.days[13].per_agent, [175, 1_500, 0, 340]);
+    assert_eq!(snap.days[10].per_agent, [15, 0, 0, 0]);
+    assert_eq!(snap.days[13].total(), 2_015);
     assert!(snap.days.iter().enumerate().all(|(i, d)| i == 13 || i == 10 || d.total() == 0));
     assert_eq!(snap.days[13].date, local.date_naive());
     // Tooltip: date, total, and only the agents that have tokens.
     let tip = day_tooltip(&snap.days[13], local.date_naive());
-    assert!(tip.contains("hoy") && tip.contains("1.7K") && tip.contains("Claude 175") && tip.contains("Codex 1.5K"), "{tip}");
+    assert!(tip.contains("hoy") && tip.contains("2K") && tip.contains("Claude 175") && tip.contains("Codex 1.5K"), "{tip}");
+    assert!(tip.contains("Antigravity 340"), "{tip}");
     assert!(!tip.contains("OpenCode"));
     assert!(day_tooltip(&snap.days[0], local.date_naive()).ends_with("sin actividad"));
+}
+
+#[test]
+fn the_chart_stack_has_a_slot_for_every_agent() {
+    // Exhaustive on purpose: a new `Agent` variant stops compiling here until the chart is told.
+    let slot = |a: Agent| match a {
+        Agent::Claude | Agent::Codex | Agent::OpenCode | Agent::Antigravity => AGENT_ORDER.iter().position(|x| *x == a),
+    };
+    for a in [Agent::Claude, Agent::Codex, Agent::OpenCode, Agent::Antigravity] {
+        assert!(slot(a).is_some(), "{a:?} is not in AGENT_ORDER, so its usage would be hidden");
+    }
+    assert_eq!(AGENT_ORDER.len(), DayUsage { date: chrono::NaiveDate::MIN, per_agent: Default::default() }.per_agent.len());
+    // Four distinct tones, each softer than the one before and never fully transparent.
+    let t = Theme::dark();
+    let tones: Vec<f32> = (0..AGENT_ORDER.len()).map(|i| crate::chart::slot_tone(&t, i, false).a).collect();
+    assert!(tones.windows(2).all(|w| w[0] > w[1]) && tones.iter().all(|a| *a > 0.15), "{tones:?}");
+    // Four agents on a short bar still keep one cell each when there is room.
+    assert_eq!(stack_cells(&[10, 10, 10, 10], 40, 8), vec![2, 2, 2, 2]);
+    assert!(stack_cells(&[10, 10, 10, 10], 40, 3).iter().sum::<usize>() <= 3);
+}
+
+#[test]
+fn the_legend_lists_only_agents_that_have_tokens_antigravity_included() {
+    let d = |per_agent| DayUsage { date: chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap(), per_agent };
+    let days = [d([5, 0, 0, 0]), d([0, 0, 0, 9])];
+    let names: Vec<_> = crate::view::legend_agents(&days).into_iter().map(|(slot, a)| (slot, agent_name(a))).collect();
+    assert_eq!(names, vec![(0, "Claude"), (3, "Antigravity")]);
+    assert!(matches!(agent_mark(Agent::Antigravity), ui_kit::AgentMark::Antigravity));
 }
 
 // ----- agents, costs, branches ----------------------------------------------------------------------------
@@ -320,6 +352,9 @@ fn agent_cards_count_billable_tokens_and_label_every_cost() {
     let reported = vec![ReportedCost { agent: Agent::OpenCode, model: "x".into(), source: "opencode".into(), cost_usd: 0.8, events: 3 }];
     let agents = aggregate_agents(&rows, &reported);
     assert_eq!(agents.iter().map(|a| a.agent).collect::<Vec<_>>(), vec![Agent::Claude, Agent::Codex, Agent::OpenCode]);
+    // Antigravity rows get their own card, in the fixed order.
+    let with_agy = aggregate_agents(&[usage_row(Agent::Antigravity, "gemini-4-neon", 2, None), usage_row(Agent::Claude, "a", 1, Some(1.0))], &[]);
+    assert_eq!(with_agy.iter().map(|a| a.agent).collect::<Vec<_>>(), vec![Agent::Claude, Agent::Antigravity]);
 
     let claude = &agents[0];
     assert_eq!((claude.input, claude.output, claude.cache_create, claude.cache_read, claude.events), (2_000, 1_000, 500, 198_000, 6));
@@ -503,13 +538,7 @@ async fn the_panel_paints_in_every_width_and_zone_and_switches_to_compact(cx: &m
         cx.text_system().add_fonts(theme::fonts::embedded()).ok();
     });
     let (model, src) = new_model(cx);
-    let ctx = |zone, w| PanelCtx {
-        zone,
-        width_class: w,
-        cwd: None,
-        project_root: Some("C:/p/selachi".into()),
-        theme: Theme::light(),
-    };
+    let ctx = |zone, w| PanelCtx::new(zone, w, Theme::light()).with_project_root("C:/p/selachi");
     let (panel, vcx) = {
         let m = model.clone();
         cx.add_window_view(move |_, cx| UsagePanel::new(ctx(PanelZone::Right, WidthClass::Regular), m, cx))

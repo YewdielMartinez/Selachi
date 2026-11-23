@@ -80,11 +80,11 @@ pub const READING_MAX_PX: f32 = 860.0;
 
 /// Width cap for the body: markdown and trees are reading panels; at XL they are limited to 860 px
 /// and centered so lines stay legible. Markdown is always capped (a 4K pane of prose is unreadable
-/// at any window size); code, diff, images and hex use the whole pane.
-pub fn reading_cap(window_w: f32, body: Body) -> Option<f32> {
+/// at any size); code, diff, images and hex use the whole pane. `width` is the pane's zone.
+pub fn reading_cap(width: f32, body: Body) -> Option<f32> {
     match body {
         Body::Markdown => Some(READING_MAX_PX),
-        Body::Tree(_) if window_w >= XL_FROM_PX => Some(READING_MAX_PX),
+        Body::Tree(_) if width >= XL_FROM_PX => Some(READING_MAX_PX),
         _ => None,
     }
 }

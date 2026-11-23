@@ -30,6 +30,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent_harness"
+version = "0.1.0"
+dependencies = [
+ "agents_driver",
+ "agents_svc",
+ "chat_core",
+ "chrono",
+ "env_logger",
+ "futures",
+ "git_svc",
+ "log",
+ "parking_lot",
+ "proc_svc",
+ "serde",
+ "serde_json",
+ "store",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "agents_driver"
 version = "0.1.0"
 dependencies = [

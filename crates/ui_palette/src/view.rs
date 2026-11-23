@@ -13,10 +13,10 @@ use gpui::{
 };
 use panel_api::{TabId, TabInfo};
 use store::StateDb;
-use theme::{Mode, Radius, Rgba, Theme};
-use ui_kit::{Icon, ListRow, Pill, SectionLabel, icon};
+use theme::{Radius, Theme};
+use ui_kit::text_field::act as text_act;
+use ui_kit::{Icon, ListRow, Nav, Pill, SectionLabel, TextField, TextFieldEvent, icon};
 
-use crate::input::{self, TextField, TextFieldEvent};
 use crate::item::{Effect, PaletteEvent};
 use crate::model::{Confirmed, LayoutRow, PaletteModel, Section, plan, run_source};
 use crate::query::{Query, Scope};
@@ -36,8 +36,6 @@ actions!(
         Dismiss,
         NextScope,
         PrevScope,
-        OptionPrev,
-        OptionNext,
     ]
 );
 
@@ -56,26 +54,20 @@ const INPUT_ROW_H: f32 = 56.0;
 const FOOTER_H: f32 = 34.0;
 const PAGE: isize = 7;
 
-/// Registers the palette's key bindings (Up/Down/PageUp/PageDown/Enter/Ctrl+Enter/Esc/Tab and the
-/// text input). Call once at startup. Does **not** bind the opening shortcut: see
+/// Registers the palette's key bindings (`Ctrl+P` / `Ctrl+N` / `PageUp` / `PageDown`) and the
+/// kit's. The search field is a `ui_kit::TextField` with navigation capture: `Up` / `Down` / `Tab`
+/// reach the palette as [`TextFieldEvent::Nav`], `Enter` as `Submit` and `Esc` as `Cancel`;
+/// `Ctrl+Enter`, `Shift+Tab` and (on a choice parameter) `Left` / `Right` are intercepted on the
+/// card, before the field. Call once at startup. Does **not** bind the opening shortcut: see
 /// [`bind_toggle_key`].
 pub fn init(cx: &mut App) {
+    ui_kit::init(cx);
     cx.bind_keys([
-        KeyBinding::new("up", SelectPrev, Some(CONTEXT)),
-        KeyBinding::new("down", SelectNext, Some(CONTEXT)),
         KeyBinding::new("ctrl-p", SelectPrev, Some(CONTEXT)),
         KeyBinding::new("ctrl-n", SelectNext, Some(CONTEXT)),
         KeyBinding::new("pageup", PageUp, Some(CONTEXT)),
         KeyBinding::new("pagedown", PageDown, Some(CONTEXT)),
-        KeyBinding::new("enter", Confirm, Some(CONTEXT)),
-        KeyBinding::new("ctrl-enter", ConfirmAlt, Some(CONTEXT)),
-        KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
-        KeyBinding::new("tab", NextScope, Some(CONTEXT)),
-        KeyBinding::new("shift-tab", PrevScope, Some(CONTEXT)),
-        KeyBinding::new("left", OptionPrev, Some(CONTEXT)),
-        KeyBinding::new("right", OptionNext, Some(CONTEXT)),
     ]);
-    input::bind_keys(cx);
 }
 
 /// Binds `Ctrl+K` (everywhere) to [`TogglePalette`]. The host handles the action with
@@ -135,7 +127,7 @@ pub struct CommandPalette {
     model: PaletteModel,
     list: ListState,
     prev_focus: Option<FocusHandle>,
-    _input_sub: Subscription,
+    _input_sub: Option<Subscription>,
 }
 
 impl EventEmitter<PaletteEvent> for CommandPalette {}
@@ -152,9 +144,10 @@ pub fn command_palette(
 
 impl CommandPalette {
     pub fn new(theme: Theme, db: Option<StateDb>, sources: Vec<Arc<dyn PaletteSource>>, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextField::new(theme, Scope::All.placeholder(), cx));
-        let sub = cx.subscribe(&input, |this, _, event: &TextFieldEvent, cx| match event {
-            TextFieldEvent::Changed => this.on_text_changed(cx),
+        let input = cx.new(|cx| {
+            let mut field = TextField::new(theme, cx).bare().placeholder(Scope::All.placeholder());
+            field.set_capture_nav(true);
+            field
         });
         Self {
             theme,
@@ -173,12 +166,41 @@ impl CommandPalette {
             model: PaletteModel::default(),
             list: ListState::new(0, ListAlignment::Top, px(200.0)),
             prev_focus: None,
-            _input_sub: sub,
+            _input_sub: None,
         }
+    }
+
+    /// Listens to the search field. Needs the window (confirming and closing move the focus), so
+    /// it is done by the first [`open`](Self::open) rather than by the constructor.
+    fn listen_to_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self._input_sub.is_some() {
+            return;
+        }
+        self._input_sub = Some(cx.subscribe_in(&self.input, window, |this, _, event: &TextFieldEvent, window, cx| {
+            match event {
+                TextFieldEvent::Changed => this.on_text_changed(cx),
+                TextFieldEvent::Submit => this.confirm(false, window, cx),
+                TextFieldEvent::Cancel => this.dismiss(window, cx),
+                TextFieldEvent::Nav(Nav::Up) => this.move_selection(-1, false, cx),
+                TextFieldEvent::Nav(Nav::Down) => this.move_selection(1, false, cx),
+                TextFieldEvent::Nav(Nav::Tab) => this.tab(1, cx),
+                TextFieldEvent::SubmitReverse | TextFieldEvent::Blur => {}
+            }
+        }));
     }
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    #[cfg(test)]
+    pub(crate) fn input_text(&self, cx: &App) -> String {
+        self.input.read(cx).text().to_string()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn in_form_for_test(&self) -> bool {
+        self.in_form()
     }
 
     pub fn timings(&self) -> &Timings {
@@ -199,13 +221,14 @@ impl CommandPalette {
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
-        self.input.update(cx, |i, _| i.set_theme(theme));
+        self.input.update(cx, |i, cx| i.set_theme(theme, cx));
         cx.notify();
     }
 
     /// Opens the palette (no-op when it already is), focuses the search field and queries the
     /// in-memory sources right away.
     pub fn open(&mut self, ctx: OpenContext, window: &mut Window, cx: &mut Context<Self>) {
+        self.listen_to_input(window, cx);
         if self.open {
             self.input.read(cx).focus(window);
             return;
@@ -218,7 +241,7 @@ impl CommandPalette {
         self.input.update(cx, |i, cx| {
             i.set_text(&ctx.initial, cx);
             i.set_placeholder(self.query.scope.placeholder(), cx);
-            i.set_readonly(false, cx);
+            i.set_read_only(false, cx);
         });
         self.input.read(cx).focus(window);
         self.run_query(true, cx);
@@ -256,7 +279,7 @@ impl CommandPalette {
         }
         self.input.update(cx, |i, cx| {
             i.set_text("", cx);
-            i.set_readonly(false, cx);
+            i.set_read_only(false, cx);
         });
         if let Some(prev) = self.prev_focus.take() {
             window.focus(&prev);
@@ -418,13 +441,22 @@ impl CommandPalette {
             let raw = self.query.rewritten(self.query.scope);
             self.input.update(cx, |i, cx| {
                 i.set_text(&raw, cx);
-                i.set_readonly(false, cx);
+                i.set_read_only(false, cx);
                 i.set_placeholder(self.query.scope.placeholder(), cx);
             });
             self.run_query(true, cx);
             cx.notify();
         } else {
             self.close(window, cx);
+        }
+    }
+
+    /// `Tab` / `Shift+Tab`: the next / previous form field, or outside a form the next scope prefix.
+    fn tab(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.in_form() {
+            self.move_selection(delta, false, cx);
+        } else {
+            self.cycle_scope(delta, cx);
         }
     }
 
@@ -447,10 +479,15 @@ impl CommandPalette {
             .unwrap_or_default();
         self.input.update(cx, |i, cx| {
             i.set_text(&value, cx);
-            i.set_readonly(choice, cx);
+            i.set_read_only(choice, cx);
             i.set_placeholder(hint, cx);
         });
         cx.notify();
+    }
+
+    /// The active form parameter is a pick-one (its field is read-only: arrows cycle the options).
+    fn on_choice(&self) -> bool {
+        self.model.form.as_ref().is_some_and(|f| f.active_is_choice())
     }
 
     fn cycle_choice(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -482,7 +519,11 @@ impl CommandPalette {
                 .child(SectionLabel::new(&theme, *title))
                 .into_any_element(),
             Some(LayoutRow::Item(item)) => {
-                let mut row = ListRow::new(("palette-row", ix), &theme).title(item.title.clone()).selected(selected);
+                let mut row = ListRow::new(SharedString::from(format!("palette-row-{}", item.key)), &theme)
+                    .title(item.title.clone())
+                    .selected(selected)
+                    // The search field keeps the keyboard focus; the arrows move `selected`.
+                    .focusable(false);
                 if let Some(s) = &item.subtitle {
                     row = row.subtitle(s.clone());
                 }
@@ -566,9 +607,9 @@ impl CommandPalette {
                             .px(px(6.0))
                             .flex()
                             .items_center()
-                            .rounded(px(6.0))
+                            .rounded(px(Radius::CHIP))
                             .bg(c.surface_3)
-                            .text_size(px(11.0))
+                            .text_size(px(t.typography.ui_size_xs))
                             .text_color(c.text)
                             .child(k),
                     )
@@ -609,20 +650,23 @@ impl CommandPalette {
                     .flex_row()
                     .gap(px(6.0))
                     .children(p.options.iter().map(|o| {
-                        Pill::compact(format!("opt-{i}-{o}"), &t).label(o.clone()).active(*o == value)
+                        Pill::compact(format!("palette-opt-{}-{o}", p.name), &t)
+                            .label(o.clone())
+                            .active(*o == value)
+                            .focusable(false)
                     }))
                     .into_any_element()
             };
             col = col.child(
                 div()
-                    .id(("palette-field", i))
+                    .id(SharedString::from(format!("palette-field-{}", p.name)))
                     .h(px(36.0))
                     .px(px(10.0))
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(px(12.0))
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .cursor_pointer()
                     .when(active, |d| d.bg(c.surface_3))
                     .when(!active, |d| d.hover(move |s| s.bg(c.surface_2)))
@@ -641,7 +685,7 @@ impl CommandPalette {
                 .mx(px(2.0))
                 .px(px(12.0))
                 .py(px(10.0))
-                .rounded(px(10.0))
+                .rounded(px(Radius::PILL))
                 .bg(c.surface_0)
                 .text_color(color)
                 .when(mono, |d| d.font_family(t.typography.mono_family).text_size(px(t.typography.mono_size)))
@@ -650,11 +694,6 @@ impl CommandPalette {
         );
         col.into_any_element()
     }
-}
-
-fn scrim(theme: &Theme) -> Rgba {
-    let a = if theme.mode == Mode::Light { 0.22 } else { 0.5 };
-    Rgba { r: 0.0, g: 0.0, b: 0.0, a }
 }
 
 impl Render for CommandPalette {
@@ -692,7 +731,7 @@ impl Render for CommandPalette {
             .items_center()
             .gap(px(10.0))
             .child(icon(Icon::Search, 16.0, c.muted))
-            .when_some(chip, |d, label| d.child(Pill::compact("palette-scope", &t).label(label).active(true)))
+            .when_some(chip, |d, label| d.child(Pill::compact("palette-scope", &t).label(label).active(true).focusable(false)))
             .child(self.input.clone());
 
         let body: AnyElement = if in_form {
@@ -744,7 +783,7 @@ impl Render for CommandPalette {
             .border_1()
             .border_color(c.outline_soft)
             .shadow(vec![BoxShadow {
-                color: gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.35 }.into(),
+                color: gpui::Rgba { a: 0.35, ..c.scrim }.into(),
                 offset: point(px(0.0), px(18.0)),
                 blur_radius: px(48.0),
                 spread_radius: px(0.0),
@@ -762,22 +801,32 @@ impl Render for CommandPalette {
             .on_action(cx.listener(|this, _: &ConfirmAlt, window, cx| this.confirm(true, window, cx)))
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &TogglePalette, window, cx| this.close(window, cx)))
-            .on_action(cx.listener(|this, _: &NextScope, _, cx| {
-                if this.in_form() {
-                    this.move_selection(1, false, cx);
-                } else {
-                    this.cycle_scope(1, cx);
+            .on_action(cx.listener(|this, _: &NextScope, _, cx| this.tab(1, cx)))
+            .on_action(cx.listener(|this, _: &PrevScope, _, cx| this.tab(-1, cx)))
+            // The field is deeper in the tree, so its key bindings win; these four are taken on
+            // the way down (capture), before it sees them. What the field would do instead is
+            // either nothing useful in a palette (`Shift+Tab` moves focus away, `Ctrl+Enter` is
+            // a plain submit) or only wanted when the active parameter is a choice.
+            .capture_action(cx.listener(|this, _: &text_act::CtrlEnter, window, cx| {
+                this.confirm(true, window, cx);
+                cx.stop_propagation();
+            }))
+            .capture_action(cx.listener(|this, _: &text_act::BackTab, _, cx| {
+                this.tab(-1, cx);
+                cx.stop_propagation();
+            }))
+            .capture_action(cx.listener(|this, _: &text_act::Left, _, cx| {
+                if this.on_choice() {
+                    this.cycle_choice(-1, cx);
+                    cx.stop_propagation();
                 }
             }))
-            .on_action(cx.listener(|this, _: &PrevScope, _, cx| {
-                if this.in_form() {
-                    this.move_selection(-1, false, cx);
-                } else {
-                    this.cycle_scope(-1, cx);
+            .capture_action(cx.listener(|this, _: &text_act::Right, _, cx| {
+                if this.on_choice() {
+                    this.cycle_choice(1, cx);
+                    cx.stop_propagation();
                 }
             }))
-            .on_action(cx.listener(|this, _: &OptionPrev, _, cx| this.cycle_choice(-1, cx)))
-            .on_action(cx.listener(|this, _: &OptionNext, _, cx| this.cycle_choice(1, cx)))
             .child(header)
             .child(panel)
             .child(self.render_keys());
@@ -789,7 +838,7 @@ impl Render for CommandPalette {
             .left_0()
             .size_full()
             .occlude()
-            .bg(scrim(&t))
+            .bg(c.scrim)
             .pt(px(top))
             .flex()
             .flex_col()

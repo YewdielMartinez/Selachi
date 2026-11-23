@@ -49,7 +49,6 @@ mod render;
 mod save;
 mod sections;
 mod terminal_ui;
-mod text_field;
 mod ui;
 mod validate;
 mod view;

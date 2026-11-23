@@ -1,4 +1,4 @@
-//! `agents_svc` - real, local, offline token-usage accounting for Claude Code, Codex and OpenCode.
+//! `agents_svc` - real, local, offline token-usage accounting for Claude Code, Codex, OpenCode and Antigravity.
 //!
 //! Nothing here is invented: every figure comes from the agents' own log files (or, for limits, from
 //! rate-limit numbers the providers themselves wrote into those logs / the statusLine payload), and each
@@ -14,6 +14,7 @@
 //! ```
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod db;

@@ -63,7 +63,8 @@ impl ApprovalDecision {
     }
 }
 
-/// Effort levels shared by Claude Code (`--effort`) and the Antigravity CLI (`agy --effort`), low to high.
+/// Effort levels shared by Claude Code (`--effort`) and the Antigravity CLI (`agy --effort`, or its
+/// ACP `thought_level` option), low to high.
 pub const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// One model an agent offers (from Codex `model/list` or ACP `session/new`).
@@ -87,11 +88,16 @@ pub fn supports_effort(kind: &AgentKind) -> bool {
     }
 }
 
-/// `agy` / `antigravity` (the Antigravity CLI), by executable stem.
+/// `agy` / `antigravity` (the Antigravity CLI), by the executable stem of the first token of a
+/// command line (a double-quoted path may contain spaces).
 pub fn is_antigravity(command: &str) -> bool {
-    let first = command.trim_start().trim_start_matches('"');
-    let stem = first.split(['"', ' ']).next().unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
-    let stem = stem.trim_end_matches(".exe").trim_end_matches(".cmd").to_ascii_lowercase();
+    let c = command.trim_start();
+    let first = match c.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(""),
+        None => c.split_whitespace().next().unwrap_or(""),
+    };
+    let stem = first.rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+    let stem = stem.trim_end_matches(".exe").trim_end_matches(".cmd");
     stem == "agy" || stem == "antigravity"
 }
 
@@ -102,7 +108,8 @@ pub struct ThreadConfig {
     pub model: Option<String>,
     /// Reasoning effort (`low | medium | high | xhigh | max`, see [`EFFORT_LEVELS`]). `None` = the
     /// agent's own default. Claude: `--effort`; Codex: `turn/start.effort` (`max` -> `xhigh`);
-    /// ACP agents that are the Antigravity CLI (`agy`): `--effort`; ignored by the rest.
+    /// ACP agents that are the Antigravity CLI (`agy`): the `thought_level` session option (`max` ->
+    /// `xhigh`, clamped to the model's levels); ignored by the rest.
     #[serde(default)]
     pub effort: Option<String>,
     pub permission_mode: PermissionMode,

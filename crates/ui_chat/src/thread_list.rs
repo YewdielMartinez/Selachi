@@ -22,14 +22,12 @@ use gpui::{
 };
 use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass, format_elapsed};
 use theme::{Radius, Theme};
-use ui_kit::{Button, GhostButton, Icon, IconButton, Pill, StatusGlyph, Toggle, agent_icon, icon};
+use ui_kit::{Button, GhostButton, Icon, IconButton, Pill, StatusGlyph, TextField, TextFieldEvent, Toggle, agent_icon, icon};
 
-use crate::field::{ChatField, FieldEvent};
 use crate::hub::{ChatEvent, ChatHub};
 use crate::options::agent_mark;
 use crate::rows::diff_rows;
 use crate::util::project_name;
-use crate::widgets::amber;
 
 /// Id of the panel (`layout.right_panel`, sidebar sections).
 pub const PANEL_ID: &str = "threads";
@@ -50,6 +48,16 @@ pub enum GroupKey {
     Waiting,
     Settled,
     Project(String),
+}
+
+/// Stable element id fragment of a group (the project path for project groups).
+fn group_slug(key: &GroupKey) -> String {
+    match key {
+        GroupKey::Working => "working".into(),
+        GroupKey::Waiting => "waiting".into(),
+        GroupKey::Settled => "settled".into(),
+        GroupKey::Project(p) => format!("project-{p}"),
+    }
 }
 
 /// One line of the list.
@@ -207,7 +215,7 @@ enum DeleteState {
 
 struct Renaming {
     id: ThreadId,
-    field: Entity<ChatField>,
+    field: Entity<TextField>,
     _subs: Vec<Subscription>,
 }
 
@@ -361,19 +369,18 @@ impl ThreadListView {
         let theme = self.theme;
         let title = rec.display_title().to_string();
         let field = cx.new(|cx| {
-            let mut f = ChatField::new(theme, "Título", false, cx);
-            f.set_font_size(13.0);
+            let mut f = TextField::new(theme, cx).bare().placeholder("Título").font_size(theme.typography.ui_size_md);
             f.set_text(&title, cx);
             f
         });
         let focus = gpui::Focusable::focus_handle(field.read(cx), cx);
         let subs = vec![
-            cx.subscribe(&field, |this, f, ev: &FieldEvent, cx| match ev {
-                FieldEvent::Submit => {
+            cx.subscribe(&field, |this, f, ev: &TextFieldEvent, cx| match ev {
+                TextFieldEvent::Submit => {
                     let t = f.read(cx).text().to_string();
                     this.commit_rename(t, cx);
                 }
-                FieldEvent::Cancel => {
+                TextFieldEvent::Cancel => {
                     this.renaming = None;
                     cx.notify();
                 }
@@ -527,7 +534,7 @@ impl ThreadListView {
         let ListItem::Header { key, label, count, collapsed } = &self.items[ix] else { return div().into_any_element() };
         let key = key.clone();
         div()
-            .id(("thr-hdr", ix))
+            .id(SharedString::from(format!("thr-hdr-{}", group_slug(&key))))
             .w_full()
             .h(px(32.0))
             .px(px(18.0))
@@ -537,7 +544,7 @@ impl ThreadListView {
             .gap(px(6.0))
             .cursor_pointer()
             .font_family(ty.ui_family)
-            .text_size(px(11.0))
+            .text_size(px(ty.ui_size_xs))
             .font_weight(FontWeight::MEDIUM)
             .text_color(c.muted)
             .hover(move |s| s.text_color(c.text))
@@ -582,14 +589,14 @@ impl ThreadListView {
         let elapsed = format_elapsed(((now_ms() - rec.updated_ms).max(0) / 1000) as u64);
         let glyph: Option<AnyElement> = match rec.status {
             ThreadStatus::Working => Some(StatusGlyph::new(&t, ui_kit::RowStatus::Working).into_any_element()),
-            ThreadStatus::WaitingForInput => Some(icon(Icon::Dots, 16.0, amber(&t)).into_any_element()),
+            ThreadStatus::WaitingForInput => Some(icon(Icon::Dots, 16.0, t.colors.warning).into_any_element()),
             ThreadStatus::Done => Some(StatusGlyph::new(&t, ui_kit::RowStatus::Done).into_any_element()),
             ThreadStatus::Error => Some(StatusGlyph::new(&t, ui_kit::RowStatus::Error).into_any_element()),
             ThreadStatus::Idle => None,
         };
         let renaming = self.renaming.as_ref().filter(|r| r.id == id).map(|r| r.field.clone());
         let title_el: AnyElement = match renaming {
-            Some(f) => div().px(px(6.0)).py(px(1.0)).rounded(px(6.0)).bg(c.surface_3).child(f).into_any_element(),
+            Some(f) => div().px(px(6.0)).py(px(1.0)).rounded(px(Radius::CHIP)).bg(c.surface_3).child(f).into_any_element(),
             None => div()
                 .w_full()
                 .overflow_hidden()
@@ -651,7 +658,7 @@ impl ThreadListView {
             .py(px(2.0))
             .child(
                 div()
-                    .id(("thr", ix))
+                    .id(("thr", id.0 as usize))
                     .relative()
                     .occlude()
                     .w_full()
@@ -661,7 +668,7 @@ impl ThreadListView {
                     .flex_row()
                     .items_center()
                     .gap(px(10.0))
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .cursor_pointer()
                     .font_family(ty.ui_family)
                     .when(active, |d| d.bg(c.surface_3))
@@ -787,7 +794,7 @@ impl ThreadListView {
                 .items_center()
                 .justify_center()
                 .p(px(16.0))
-                .bg(gpui::black().opacity(0.45))
+                .bg(c.scrim)
                 .occlude()
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_delete(cx)))
                 .child(card)
@@ -851,13 +858,13 @@ impl Render for ThreadListView {
                     .mb(px(6.0))
                     .px(px(10.0))
                     .py(px(6.0))
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .bg(c.surface_2)
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .text_size(px(12.0))
+                    .text_size(px(ty.ui_size_sm))
                     .text_color(c.error)
                     .child(div().flex_1().min_w_0().child(SharedString::from(e)))
                     .child(GhostButton::new("threads-error-x", &t, "Cerrar").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {

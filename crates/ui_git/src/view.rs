@@ -6,29 +6,26 @@
 //! * Regular and at least [`WIDE_FROM_PX`] wide: two columns (changes + commit | history +
 //!   checkpoints).
 
-use std::cell::Cell;
 use std::collections::HashSet;
-use std::rc::Rc;
 use std::time::SystemTime;
 
 use git_svc::{DeltaKind, GitAction, Worktree};
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, Entity, Focusable,
+    AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, Entity,
     FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, canvas, div, hsla, prelude::*, px,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::*, px,
 };
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
-use theme::Theme;
+use theme::{Radius, Theme};
 use ui_kit::{
-    ActionSize, Button, GhostButton, ListRow, Pill, Placement, Popover,
-    Tooltip, VirtualList, WireFill, WireRect, Wireframe, icon,
+    ActionSize, Button, EnterMode, GhostButton, ListRow, MeasuredWidth, Pill, Placement, Popover, TextField,
+    TextFieldEvent, Tooltip, VirtualList, WireFill, WireRect, Wireframe, icon,
 };
 
 use crate::cmd::{GitOp, Slot, commit_message};
 use crate::gate::Gate;
 use crate::data::{DiffTarget, GitData, same_path, worktree_label};
 use crate::fmt::{plural, relative_time, truncate_end, truncate_middle, unix_secs};
-use crate::input::{TextField, TextFieldEvent};
 use crate::model::{CheckpointFiles, GitModel, Load, OpFinished};
 use crate::sections::{FileRow, Section, build_sections, total_changes};
 use crate::widgets::{
@@ -156,16 +153,12 @@ impl Tab {
             Tab::Checkpoints => "Checkpoints",
         }
     }
-
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
-    }
 }
 
 /// Characters a path may use on a file row in a column `width_px` wide.
 pub fn path_budget(width_px: f32, compact: bool) -> usize {
     let overhead = 24.0 /* padding */ + 26.0 /* letter */ + 28.0 /* stage button */ + 14.0
-        + if compact { 0.0 } else { 62.0 /* +n -m */ };
+        + if compact { 0.0 } else { 62.0 /* +n -m */ + 24.0 /* file icon */ };
     (((width_px - overhead) / 6.6).floor() as i64).clamp(10, 120) as usize
 }
 
@@ -186,9 +179,8 @@ pub struct GitPanel {
     wt_open: bool,
     wt_new: bool,
     cp_new: bool,
-    /// Measured width of the panel (logical px).
-    width: f32,
-    probe: Rc<Cell<f32>>,
+    /// The real width of the panel's zone (logical px), measured while painting.
+    measure: MeasuredWidth,
     _subs: Vec<Subscription>,
 }
 
@@ -196,22 +188,29 @@ impl GitPanel {
     pub fn new(ctx: PanelCtx, model: Entity<GitModel>, cx: &mut Context<Self>) -> Self {
         model.update(cx, |m, _| m.attach_view());
         let theme = ctx.theme;
-        let subject = cx.new(|cx| TextField::new(theme, "Mensaje del commit", cx));
-        let body = cx.new(|cx| TextField::new(theme, "Descripción (opcional)", cx));
-        let wt_name = cx.new(|cx| TextField::new(theme, "nombre del worktree", cx));
-        let cp_label = cx.new(|cx| TextField::new(theme, "etiqueta (opcional)", cx));
+        // The panel draws the box around each field (`input_box`): the fields are bare.
+        let subject = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Mensaje del commit"));
+        // The description is a real multi-line area: Enter is a newline, Ctrl+Enter commits.
+        let body = cx.new(|cx| {
+            TextField::area(theme, cx)
+                .bare()
+                .enter_mode(EnterMode::Newline)
+                .lines(2, 6)
+                .placeholder("Descripción (opcional)")
+        });
+        let wt_name = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("nombre del worktree"));
+        let cp_label = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("etiqueta (opcional)"));
 
         let mut subs = vec![cx.observe(&model, |_, _, cx| cx.notify())];
-        subs.push(cx.subscribe(&subject, |this, _, ev: &TextFieldEvent, cx| match ev {
-            TextFieldEvent::Changed => cx.notify(),
-            TextFieldEvent::Submit => this.begin_commit(false, cx),
-            TextFieldEvent::Cancel => {}
-        }));
-        subs.push(cx.subscribe(&body, |_, _, ev: &TextFieldEvent, cx| {
-            if matches!(ev, TextFieldEvent::Changed) {
-                cx.notify();
-            }
-        }));
+        // Enter in the subject, or Ctrl+Enter in the description, starts the commit. That only
+        // opens the review card: nothing runs until "Confirmar".
+        for field in [&subject, &body] {
+            subs.push(cx.subscribe(field, |this, _, ev: &TextFieldEvent, cx| match ev {
+                TextFieldEvent::Changed => cx.notify(),
+                TextFieldEvent::Submit => this.begin_commit(false, cx),
+                _ => {}
+            }));
+        }
         subs.push(cx.subscribe(&wt_name, |this, _, ev: &TextFieldEvent, cx| match ev {
             TextFieldEvent::Changed => cx.notify(),
             TextFieldEvent::Submit => this.create_worktree(cx),
@@ -219,20 +218,20 @@ impl GitPanel {
                 this.wt_new = false;
                 cx.notify();
             }
+            _ => {}
         }));
         subs.push(cx.subscribe(&cp_label, |this, _, ev: &TextFieldEvent, cx| match ev {
-            TextFieldEvent::Changed => {}
             TextFieldEvent::Submit => this.create_checkpoint(cx),
             TextFieldEvent::Cancel => {
                 this.cp_new = false;
                 cx.notify();
             }
+            _ => {}
         }));
         subs.push(cx.subscribe(&model, |this, _, ev: &OpFinished, cx| this.op_finished(ev, cx)));
         let for_release = model.clone();
         subs.push(cx.on_release(move |_, cx| for_release.update(cx, |m, cx| m.detach_view(cx))));
 
-        let width = if ctx.width_class == WidthClass::Compact { 260.0 } else { 420.0 };
         Self {
             ctx,
             model,
@@ -246,8 +245,7 @@ impl GitPanel {
             wt_open: false,
             wt_new: false,
             cp_new: false,
-            width,
-            probe: Rc::new(Cell::new(width)),
+            measure: MeasuredWidth::with_breaks(&[WIDE_FROM_PX]),
             _subs: subs,
         }
     }
@@ -258,15 +256,17 @@ impl GitPanel {
         if self.ctx.theme != ctx.theme {
             for f in [&self.subject, &self.body, &self.wt_name, &self.cp_label] {
                 let theme = ctx.theme;
-                f.update(cx, |f, cx| {
-                    f.set_theme(theme);
-                    cx.notify();
-                });
+                f.update(cx, |f, cx| f.set_theme(theme, cx));
             }
         }
         self.ctx = ctx;
         self.model.update(cx, |m, cx| m.set_root(root, cx));
         cx.notify();
+    }
+
+    /// Width of the panel's zone (logical px): the measured one, else a guess by width class.
+    fn width(&self) -> f32 {
+        self.measure.width().unwrap_or(if self.is_compact() { 260.0 } else { 420.0 })
     }
 
     pub fn is_compact(&self) -> bool {
@@ -275,7 +275,7 @@ impl GitPanel {
 
     /// The arrangement the next frame uses.
     pub fn layout(&self) -> Layout {
-        layout_for(self.ctx.width_class, self.width)
+        layout_for(self.ctx.width_class, self.width())
     }
 
     pub fn tab(&self) -> Tab {
@@ -300,6 +300,12 @@ impl GitPanel {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn focus_field(&self, body: bool, window: &mut Window, cx: &App) {
+        let field = if body { &self.body } else { &self.subject };
+        field.read(cx).focus(window);
+    }
+
     /// The commit message typed so far (subject plus optional body).
     pub fn message(&self, cx: &App) -> String {
         commit_message(self.subject.read(cx).text(), self.body.read(cx).text())
@@ -317,11 +323,19 @@ impl GitPanel {
         cx.notify();
     }
 
+    /// A commit can be started: a subject, something staged and no other operation in flight.
+    /// The button and the keyboard (Enter / Ctrl+Enter) share this rule.
+    fn can_commit(&self, cx: &App) -> bool {
+        let m = self.model.read(cx);
+        let staged = m.data().is_some_and(|d| !d.status.staged.is_empty());
+        !self.subject.read(cx).is_blank() && staged && !m.gate().is_busy()
+    }
+
     fn begin_commit(&mut self, push: bool, cx: &mut Context<Self>) {
-        let subject = self.subject.read(cx).text().to_string();
-        if subject.trim().is_empty() {
+        if !self.can_commit(cx) {
             return;
         }
+        let subject = self.subject.read(cx).text().to_string();
         let message = commit_message(&subject, self.body.read(cx).text());
         let op = if push {
             GitOp::CommitAndPush { message }
@@ -370,32 +384,29 @@ impl GitPanel {
         }
     }
 
-    fn input_box(&self, field: &Entity<TextField>, window: &Window, cx: &App) -> gpui::Div {
+    /// The tone box around a bare field: `surface_3` on the card, accent border while focused.
+    /// `area` boxes grow with their lines instead of being one 32 px row.
+    fn input_box(&self, field: &Entity<TextField>, area: bool, window: &Window, cx: &App) -> gpui::Div {
         let c = self.ctx.theme.colors;
-        let focused = field.read(cx).focus_handle(cx).is_focused(window);
+        let focused = field.read(cx).is_focused(window);
         div()
             .w_full()
-            .h(px(32.0))
             .px(px(10.0))
             .flex()
-            .items_center()
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .bg(c.surface_3)
             .border_1()
-            .border_color(if focused { c.accent.into() } else { hsla(0.0, 0.0, 0.0, 0.0) })
+            .border_color(if focused { c.accent } else { c.surface_3 })
+            .when(area, |d| d.py(px(7.0)))
+            .when(!area, |d| d.h(px(32.0)).items_center())
             .child(field.clone())
     }
 }
 
-/// Binds the text field's keys once (idempotent). Call it at startup, before the first panel.
+/// Registers the key bindings of the text fields (`ui_kit::init`, idempotent). Call it at
+/// startup, before the first panel.
 pub fn init(cx: &mut App) {
-    struct Bound;
-    impl gpui::Global for Bound {}
-    if cx.has_global::<Bound>() {
-        return;
-    }
-    cx.set_global(Bound);
-    crate::input::bind_keys(cx);
+    ui_kit::init(cx);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -425,7 +436,7 @@ impl GitPanel {
             .flex_row()
             .items_center()
             .gap(px(6.0))
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .bg(c.surface_2)
             .child(icon(Icon::GitBranch, 16.0, c.muted))
             .child(
@@ -457,7 +468,7 @@ impl GitPanel {
                 }
                 counts.push_str(&format!("↓{}", st.behind));
             }
-            pill = pill.child(div().text_size(px(11.0)).text_color(c.muted).child(counts));
+            pill = pill.child(div().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(counts));
         }
         if dirty {
             pill = pill.child(
@@ -470,7 +481,6 @@ impl GitPanel {
                     .tooltip(Tooltip::text(&theme, "Hay cambios sin confirmar")),
             );
         }
-        let _ = window;
         let this = cx.entity();
         let wt_name = data
             .worktree_at(self.model.read(cx).root().unwrap_or(std::path::Path::new("")))
@@ -495,7 +505,7 @@ impl GitPanel {
                     });
                 }
             });
-        let menu = self.worktree_menu(data, cx);
+        let menu = self.worktree_menu(data, window, cx);
         let popover = Popover::new("git-wt-pop", &theme)
             .open(self.wt_open)
             .placement(Placement::BottomEnd)
@@ -556,15 +566,15 @@ impl GitPanel {
         col.into_any_element()
     }
 
-    fn worktree_menu(&mut self, data: &GitData, cx: &mut Context<Self>) -> AnyElement {
+    fn worktree_menu(&mut self, data: &GitData, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let current = self.model.read(cx).root().map(std::path::Path::to_path_buf);
         let this = cx.entity();
         let mut col = div().w_full().flex().flex_col().gap(px(2.0)).font_family(theme.typography.ui_family);
-        for (i, w) in data.worktrees.iter().enumerate() {
+        for w in data.worktrees.iter() {
             let is_current = current.as_deref().is_some_and(|r| same_path(r, &w.path));
-            col = col.child(self.worktree_row(i, w, is_current, &this));
+            col = col.child(self.worktree_row(w, is_current, &this));
         }
         let toggle = {
             let this = this.clone();
@@ -586,17 +596,9 @@ impl GitPanel {
             let this2 = this;
             col = col
                 .child(
-                    div()
-                        .w_full()
-                        .h(px(32.0))
-                        .px(px(10.0))
-                        .flex()
-                        .items_center()
-                        .rounded(px(10.0))
-                        .bg(c.surface_3)
-                        .child(self.wt_name.clone()),
+                    self.input_box(&self.wt_name, false, window, cx),
                 )
-                .when_some(problem, |d, p| d.child(div().px(px(4.0)).text_size(px(11.0)).text_color(c.error).child(p)))
+                .when_some(problem, |d, p| d.child(div().px(px(4.0)).text_size(px(theme.typography.ui_size_xs)).text_color(c.error).child(p)))
                 .child(
                     div().pt(px(4.0)).flex().flex_row().gap(px(6.0)).child(
                         Button::tonal("git-wt-create", &theme, "Crear")
@@ -612,11 +614,13 @@ impl GitPanel {
         col.into_any_element()
     }
 
-    fn worktree_row(&self, i: usize, w: &Worktree, is_current: bool, this: &Entity<Self>) -> AnyElement {
+    fn worktree_row(&self, w: &Worktree, is_current: bool, this: &Entity<Self>) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let (name, branch) = worktree_label(w);
         let path = w.path.clone();
+        // Rows are keyed by the worktree's path: a list that grows or reorders keeps each row's state.
+        let key = path.display().to_string();
         let model = self.model.clone();
         let pick = {
             let (model, this, path) = (model.clone(), this.clone(), path.clone());
@@ -633,7 +637,7 @@ impl GitPanel {
         };
         let dirty = w.dirty == Some(true);
         let main = div()
-            .id(SharedString::from(format!("git-wt-{i}")))
+            .id(SharedString::from(format!("git-wt-{key}")))
             .occlude()
             .flex_1()
             .min_w_0()
@@ -651,7 +655,7 @@ impl GitPanel {
                     .flex()
                     .flex_col()
                     .child(div().overflow_hidden().whitespace_nowrap().text_size(px(theme.typography.ui_size_md)).text_color(c.text).child(truncate_middle(&name, 26)))
-                    .child(div().overflow_hidden().whitespace_nowrap().text_size(px(11.0)).text_color(c.muted).child(truncate_middle(&branch, 30))),
+                    .child(div().overflow_hidden().whitespace_nowrap().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(truncate_middle(&branch, 30))),
             )
             .when(is_current, |d| d.child(tag(&theme, "actual")))
             .on_click(pick);
@@ -668,17 +672,17 @@ impl GitPanel {
             .items_center()
             .gap(px(4.0))
             .px(px(8.0))
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .when(is_current, |d| d.bg(c.surface_3))
             .when(!is_current, |d| d.hover(move |s| s.bg(c.surface_2)))
             .child(main)
-            .child(GhostButton::new(SharedString::from(format!("git-wt-edit-{i}")), &theme, "Editor").tooltip("Abrir en el editor").on_click(
+            .child(GhostButton::new(SharedString::from(format!("git-wt-edit-{key}")), &theme, "Editor").tooltip("Abrir en el editor").on_click(
                 move |_, _, cx| {
                     m_edit.update(cx, |m, cx| m.open_in_editor(&p_edit, cx));
                 },
             ))
             .when(removable, |d| {
-                d.child(mini_button(format!("git-wt-rm-{i}"), &theme, "×", "Eliminar worktree…", move |_, _, cx| {
+                d.child(mini_button(format!("git-wt-rm-{key}"), &theme, "×", "Eliminar worktree…", move |_, _, cx| {
                     let op = GitOp::RemoveWorktree { path: p_rm.clone(), force };
                     m_rm.update(cx, |m, cx| m.request(op, cx));
                 }))
@@ -690,7 +694,7 @@ impl GitPanel {
     fn changes_block(&mut self, data: &GitData, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = self.ctx.theme;
         let compact = self.is_compact();
-        let col_width = if self.layout() == Layout::Columns { self.width * 0.5 } else { self.width };
+        let col_width = if self.layout() == Layout::Columns { self.width() * 0.5 } else { self.width() };
         let budget = path_budget(col_width, compact);
         let sections = build_sections(&data.status, &data.counts);
         let mut out: Vec<AnyElement> = Vec::new();
@@ -730,7 +734,9 @@ impl GitPanel {
             }
             let all = self.show_all.contains(section);
             let limit = if all { rows.len() } else { rows.len().min(SECTION_LIMIT) };
-            for (i, row) in rows.iter().take(limit).enumerate() {
+            for row in rows.iter().take(limit) {
+                // Keyed by path: a row keeps its hover / focus when the list around it changes.
+                let path_key = row.path.display().to_string();
                 let target = working_target(row);
                 let selected = diff.as_ref().is_some_and(|d| d.target == target);
                 let (btn, op) = if row.section == Section::Staged {
@@ -739,13 +745,13 @@ impl GitPanel {
                     ("+", GitOp::Stage(row.path.clone()))
                 };
                 let tip = if row.section == Section::Staged { "Quitar de staged" } else { "Preparar (stage)" };
-                let action = mini_button(format!("{key}-act-{i}"), &theme, btn, tip, self.act(op)).into_any_element();
+                let action = mini_button(format!("{key}-act-{path_key}"), &theme, btn, tip, self.act(op)).into_any_element();
                 let model = self.model.clone();
                 let t = target.clone();
                 out.push(
                     file_row(
                         &theme,
-                        SharedString::from(format!("{key}-row-{i}")),
+                        SharedString::from(format!("{key}-row-{path_key}")),
                         row,
                         selected,
                         compact,
@@ -784,8 +790,7 @@ impl GitPanel {
         let c = theme.colors;
         let staged = data.status.staged.len();
         let subject = self.subject.read(cx).text().trim().to_string();
-        let busy = self.model.read(cx).gate().is_busy();
-        let can = !subject.is_empty() && staged > 0 && !busy;
+        let can = self.can_commit(cx);
         let gate = self.model.read(cx).gate().clone();
         // The optional description appears as soon as there is a subject (or already has text).
         let show_body = !subject.is_empty() || !self.body.read(cx).text().is_empty();
@@ -796,10 +801,10 @@ impl GitPanel {
             .flex_col()
             .gap(px(8.0))
             .p(px(10.0))
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_2)
-            .child(self.input_box(&self.subject, window, cx))
-            .when(show_body, |d| d.child(self.input_box(&self.body, window, cx)));
+            .child(self.input_box(&self.subject, false, window, cx))
+            .when(show_body, |d| d.child(self.input_box(&self.body, true, window, cx)));
         if let Some(review) = gate_card(&theme, &gate, Slot::Commit, &self.model) {
             card = card.child(review);
         }
@@ -838,7 +843,7 @@ impl GitPanel {
                     .child(commit)
                     .child(push),
             )
-            .when_some(hint, |d, h| d.child(div().text_size(px(11.0)).text_color(c.muted).child(h)));
+            .when_some(hint, |d, h| d.child(div().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(h)));
         card.into_any_element()
     }
 
@@ -864,7 +869,7 @@ impl GitPanel {
         }
         let commits = data.commits.clone();
         let now = unix_secs(SystemTime::now());
-        let budget = (((self.width - 90.0) / 6.6) as usize).clamp(14, 90);
+        let budget = (((self.width() - 90.0) / 6.6) as usize).clamp(14, 90);
         let t = theme;
         let list = VirtualList::new("git-history", commits.len(), ListRow::HEIGHT, move |range, _, _| {
             range
@@ -946,7 +951,7 @@ impl GitPanel {
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))
-                    .child(div().flex_1().min_w_0().child(self.input_box(&self.cp_label, window, cx)))
+                    .child(div().flex_1().min_w_0().child(self.input_box(&self.cp_label, false, window, cx)))
                     .child(Button::tonal("git-cp-create", &theme, "Crear").on_click(move |_, _, cx| {
                         let label = this.read(cx).cp_label.read(cx).text().trim().to_string();
                         model.update(cx, |m, cx| m.request(GitOp::CreateCheckpoint { label }, cx));
@@ -968,7 +973,7 @@ impl GitPanel {
             (m.checkpoint_view().cloned(), m.diff().cloned())
         };
         let busy = self.model.read(cx).gate().is_busy();
-        for (i, cp) in data.checkpoints.iter().enumerate() {
+        for cp in data.checkpoints.iter() {
             let open = view.as_ref().is_some_and(|v| v.id == cp.id);
             let (m_view, m_restore) = (self.model.clone(), self.model.clone());
             let (id_view, id_restore) = (cp.id.clone(), cp.id.clone());
@@ -980,7 +985,7 @@ impl GitPanel {
                 .flex_col()
                 .gap(px(4.0))
                 .p(px(8.0))
-                .rounded(px(10.0))
+                .rounded(px(Radius::PILL))
                 .bg(c.surface_2)
                 .child(
                     div()
@@ -1000,7 +1005,7 @@ impl GitPanel {
                                 .child(label),
                         )
                         .when(cp.auto, |d| d.child(tag(&theme, "auto")))
-                        .child(div().flex_none().text_size(px(11.0)).text_color(c.muted).child(relative_time(unix_secs(cp.created), now))),
+                        .child(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(relative_time(unix_secs(cp.created), now))),
                 )
                 .child(
                     div()
@@ -1009,7 +1014,7 @@ impl GitPanel {
                         .flex_wrap()
                         .gap(px(2.0))
                         .child(
-                            GhostButton::new(SharedString::from(format!("cp-view-{i}")), &theme, match (open, compact) {
+                            GhostButton::new(SharedString::from(format!("cp-view-{}", cp.id)), &theme, match (open, compact) {
                                 (true, _) => "Ocultar cambios",
                                 (false, true) => "Ver cambios",
                                 (false, false) => "Ver cambios desde aquí",
@@ -1017,7 +1022,7 @@ impl GitPanel {
                                 .on_click(move |_, _, cx| m_view.update(cx, |m, cx| m.toggle_checkpoint_view(id_view.clone(), cx))),
                         )
                         .child(
-                            GhostButton::new(SharedString::from(format!("cp-restore-{i}")), &theme, "Restaurar…").on_click(move |_, _, cx| {
+                            GhostButton::new(SharedString::from(format!("cp-restore-{}", cp.id)), &theme, "Restaurar…").on_click(move |_, _, cx| {
                                 if !busy {
                                     let op = GitOp::RestoreCheckpoint { id: id_restore.clone() };
                                     m_restore.update(cx, |m, cx| m.request(op, cx));
@@ -1043,16 +1048,16 @@ impl GitPanel {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let compact = self.is_compact();
-        let note = |t: String| div().px(px(6.0)).py(px(4.0)).text_size(px(12.0)).text_color(c.muted).child(t).into_any_element();
+        let note = |t: String| div().px(px(6.0)).py(px(4.0)).text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(t).into_any_element();
         let files = match state {
             CheckpointFiles::Loading => return vec![note("Comparando…".into())],
             CheckpointFiles::Failed(e) => return vec![note(format!("No se pudo comparar: {e}"))],
             CheckpointFiles::Ready(f) if f.is_empty() => return vec![note("Sin cambios desde este checkpoint".into())],
             CheckpointFiles::Ready(f) => f,
         };
-        let budget = path_budget(self.width - 16.0, true);
+        let budget = path_budget(self.width() - 16.0, true);
         let mut out = Vec::new();
-        for (i, f) in files.iter().enumerate() {
+        for f in files {
             let letter = match f.kind {
                 DeltaKind::Added => 'A',
                 DeltaKind::Modified => 'M',
@@ -1075,7 +1080,7 @@ impl GitPanel {
             out.push(
                 file_row(
                     &theme,
-                    SharedString::from(format!("cpf-{i}")),
+                    SharedString::from(format!("cpf-{id}-{}", f.path.display())),
                     &row,
                     selected,
                     compact,
@@ -1125,7 +1130,7 @@ impl GitPanel {
                 let this = cx.entity();
                 let tabs = div().flex().flex_row().flex_wrap().gap(px(4.0)).children(Tab::ALL.map(|t| {
                     let this = this.clone();
-                    Pill::compact(SharedString::from(format!("git-tab-{}", t.index())), &theme)
+                    Pill::compact(SharedString::from(format!("git-tab-{}", t.label())), &theme)
                         .label(t.label())
                         .active(self.tab == t)
                         .on_click(move |_, _, cx| this.update(cx, |p, cx| p.select_tab(t, cx)))
@@ -1212,32 +1217,6 @@ impl GitPanel {
             }
         }
     }
-
-    /// Zero-height element at the root that reports the real width of the panel.
-    fn probe(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let seen = self.probe.clone();
-        let this = cx.entity();
-        canvas(
-            move |bounds, window, cx| {
-                let w = f32::from(bounds.size.width);
-                if (seen.get() - w).abs() > 6.0 {
-                    seen.set(w);
-                    window.defer(cx, move |_, cx| {
-                        this.update(cx, |p, cx| {
-                            p.width = w;
-                            cx.notify();
-                        });
-                    });
-                }
-            },
-            |_, (), _, _| {},
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .w_full()
-        .h(px(0.0))
-    }
 }
 
 fn section_key(s: Section) -> &'static str {
@@ -1285,7 +1264,7 @@ impl Render for GitPanel {
             .pb(px(pad - 4.0))
             .font_family(theme.typography.ui_family)
             .text_color(c.text)
-            .child(self.probe(cx))
+            .child(self.measure.probe())
             .child(content)
     }
 }

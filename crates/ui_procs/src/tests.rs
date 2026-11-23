@@ -189,13 +189,61 @@ async fn a_vanished_process_gives_a_notice_not_a_kill(cx: &mut TestAppContext) {
 }
 
 fn ctx(width: WidthClass) -> PanelCtx {
-    PanelCtx {
-        zone: PanelZone::Right,
-        width_class: width,
-        cwd: None,
-        project_root: None,
-        theme: Theme::dark(),
-    }
+    PanelCtx::new(PanelZone::Right, width, Theme::dark())
+}
+
+/// The panel over a fake source in a real test window (fonts loaded, one frame painted).
+fn open_panel(cx: &mut TestAppContext) -> (gpui::Entity<ProcsModel>, std::sync::Arc<FakeSource>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        cx.text_system().add_fonts(theme::fonts::embedded()).ok();
+    });
+    let (model, src) = new_model(cx);
+    let (_panel, vcx) = {
+        let model = model.clone();
+        ui_kit::testing::open_window(cx, move |_, cx| ProcsPanel::new(ctx(WidthClass::Regular), model, cx))
+    };
+    vcx.run_until_parked();
+    (model, src, vcx)
+}
+
+#[gpui::test]
+async fn the_buttons_gate_every_termination_behind_the_preview(cx: &mut TestAppContext) {
+    use ui_kit::testing::click_id;
+    let (model, src, vcx) = open_panel(cx);
+    // Two orphans are in the fake tree: the header button is enabled and only opens a preview.
+    click_id(vcx, "procs-clean");
+    vcx.run_until_parked();
+    assert!(model.read_with(vcx, |m, _| matches!(m.dialog(), Dialog::Confirm(_))), "the click opens the confirmation");
+    assert_eq!(src.terminations(), 0, "clicking \"Limpiar huérfanos\" must not terminate anything");
+
+    // Cancel discards the plan; there is nothing left to confirm.
+    click_id(vcx, "dlg-cancel");
+    vcx.run_until_parked();
+    assert_eq!(model.read_with(vcx, |m, _| m.dialog().clone()), Dialog::None);
+    assert_eq!(src.terminations(), 0);
+
+    // Preview again and confirm: exactly the previewed roots are stopped.
+    click_id(vcx, "procs-clean");
+    vcx.run_until_parked();
+    click_id(vcx, "dlg-confirm");
+    vcx.run_until_parked();
+    assert_eq!(*src.terminated.lock().unwrap(), vec![vec![102]]);
+    assert!(model.read_with(vcx, |m, _| matches!(m.dialog(), Dialog::Done { .. })));
+}
+
+#[gpui::test]
+async fn a_refused_plan_has_a_disabled_confirm_button(cx: &mut TestAppContext) {
+    use ui_kit::testing::click_id;
+    let (model, src, vcx) = open_panel(cx);
+    // The only root of the preview is refused by the safety layer: the plan is empty.
+    src.refuse.lock().unwrap().push(102);
+    model.update(vcx, |m, cx| m.request_stop(102, cx));
+    vcx.run_until_parked();
+    assert!(model.read_with(vcx, |m, _| matches!(m.dialog(), Dialog::Confirm(p) if p.is_empty())));
+    click_id(vcx, "dlg-confirm");
+    vcx.run_until_parked();
+    assert_eq!(src.terminations(), 0, "a disabled confirm button does nothing when clicked");
+    assert!(model.read_with(vcx, |m, _| matches!(m.dialog(), Dialog::Confirm(_))), "the dialog stays open");
 }
 
 #[gpui::test]

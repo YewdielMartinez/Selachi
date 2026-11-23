@@ -117,17 +117,13 @@ impl RenderOnce for Card {
 // Glass (frosted sidebar / right panel / drawers)
 // ---------------------------------------------------------------------------------------------
 
-/// Tint painted over the blurred backdrop of a glass zone. Dark: neutral gray `#2A2A2E` (OLED: a
-/// deeper `#121214`), light: white. `translucency` is `0..=100` (percent); the alpha is
+/// Tint painted over the blurred backdrop of a glass zone. The base is the theme's `glass` token (dark `#2A2A2E`, OLED
+/// `#121214`, light white). `translucency` is `0..=100` (percent); the alpha is
 /// `1 - translucency * 0.6`, so 35 % reads clearly see-through but calm and 0 % is opaque.
 pub fn glass_tint(theme: &Theme, translucency: u8) -> gpui::Hsla {
     let t = f32::from(translucency.min(100)) / 100.0;
     let alpha = 1.0 - t * 0.6;
-    let base: gpui::Hsla = match theme.mode {
-        theme::Mode::Dark => gpui::rgb(0x2A2A2E).into(),
-        theme::Mode::Oled => gpui::rgb(0x121214).into(),
-        theme::Mode::Light => gpui::rgb(0xFFFFFF).into(),
-    };
+    let base: gpui::Hsla = theme.colors.glass.into();
     base.opacity(alpha)
 }
 

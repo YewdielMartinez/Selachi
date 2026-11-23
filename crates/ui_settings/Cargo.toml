@@ -28,6 +28,7 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+ui_kit = { version = "0.1.0", path = "../ui_kit", features = ["test-support"] }
 tempfile = "3"
 
 [[example]]

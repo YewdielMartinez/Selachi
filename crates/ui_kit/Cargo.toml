@@ -11,3 +11,10 @@ workspace = true
 anyhow.workspace = true
 gpui.workspace = true
 theme = { version = "0.1.0", path = "../theme" }
+
+[features]
+# `ui_kit::testing` for the crates that test their views (enable it in their dev-dependencies).
+test-support = ["gpui/test-support"]
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

@@ -627,6 +627,7 @@ fn classify_matches_ingested_files_only() {
         claude_projects: Some("C:/h/.claude/projects".into()),
         codex_sessions: Some("C:/h/.codex/sessions".into()),
         opencode_data: Some("C:/h/.local/share/opencode".into()),
+        antigravity_data: Some("C:/h/.gemini".into()),
     };
     assert_eq!(cfg.classify(Path::new("C:/h/.claude/projects/p/s.jsonl")), Some(Claude));
     assert_eq!(cfg.classify(Path::new("C:/h/.claude/projects/p/s.txt")), None);

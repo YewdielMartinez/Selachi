@@ -1,6 +1,5 @@
 //! The gpui view of the layout panel.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -15,20 +14,24 @@ use store::{
 };
 use theme::{Radius, Rgba, Theme};
 use ui_kit::{
-    Button, Card, Icon, Pill, SectionLabel, SegmentedControl, Slider, Toggle, Tooltip, icon,
+    Button, Card, Icon, InputModality, MeasuredWidth, Pill, SectionLabel, SegmentedControl, Slider, TextField,
+    TextFieldEvent, Toggle, Tooltip, icon, input_modality,
 };
 
 use crate::state::{
     ALL_SECTIONS, LayoutState, Scope, builtin_description, builtin_name, section_label,
 };
-use crate::text_field::{TextField, TextFieldEvent};
 use crate::wire;
-use crate::{FocusNextField, FocusPrevField, PANEL_CONTEXT};
+use crate::{FocusNextField, FocusPrevField, PANEL_CONTEXT, STEP_CONTEXT, StepNext, StepPrev};
 
 /// Width of the panel content in px.
 pub const PANEL_WIDTH: f32 = 560.0;
 const PAD: f32 = 14.0;
 const CARD_W: f32 = 101.0;
+/// Below this measured width a row puts its control under the label.
+const STACK_BELOW: f32 = 480.0;
+/// Blocks of the scroll column: header, presets, tabs, sidebar, titlebar, zones, look.
+const BLOCKS: usize = 7;
 
 /// Buttons the titlebar can show, in display order: `(id, label)`. `review` opens the review tab
 /// and `layout` is this panel's own popover.
@@ -56,15 +59,22 @@ pub struct LayoutPanel {
     theme: Theme,
     on_change: ChangeFn,
     root_focus: FocusHandle,
-    fields: HashMap<String, FocusHandle>,
+    /// Roving lists: one tab stop each, the arrows (`StepPrev` / `StepNext`) move the selection.
+    presets_focus: FocusHandle,
+    splits_focus: FocusHandle,
+    /// One non-tab-stop handle per block of the scroll column, to scroll the block that holds the
+    /// focus into view after `Tab` (see `reveal_focus`).
+    blocks: [FocusHandle; BLOCKS],
     naming: Option<Entity<TextField>>,
     _naming_sub: Option<Subscription>,
     message: Option<Message>,
     scroll: ScrollHandle,
-    /// The last input was the keyboard: only then are focus rings painted.
-    kbd: bool,
-    /// Child index of: header, presets, tabs, sidebar, zones, look in the scroll container.
-    section_ix: [usize; 6],
+    /// Child index of each block in the scroll container.
+    block_ix: [usize; BLOCKS],
+    /// The zone width really measured (the panel is a popover, a tab or a Settings block).
+    measured: MeasuredWidth,
+    /// Rows stack their control under the label (decided each frame from `measured`).
+    stacked: bool,
     /// Hosted inside another screen (Settings > Diseño): full width, no card chrome, no own scroll.
     embedded: bool,
 }
@@ -87,13 +97,16 @@ pub fn layout_panel(
         theme,
         on_change: Rc::new(on_change),
         root_focus: cx.focus_handle(),
-        fields: HashMap::new(),
+        presets_focus: cx.focus_handle().tab_stop(true),
+        splits_focus: cx.focus_handle().tab_stop(true),
+        blocks: std::array::from_fn(|_| cx.focus_handle()),
         naming: None,
         _naming_sub: None,
         message: None,
         scroll: ScrollHandle::new(),
-        kbd: false,
-        section_ix: [0, 1, 2, 3, 4, 5],
+        block_ix: [0, 1, 2, 3, 4, 5, 6],
+        measured: MeasuredWidth::new(STACK_BELOW),
+        stacked: false,
         embedded: false,
     })
 }
@@ -122,7 +135,7 @@ impl LayoutPanel {
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
         if let Some(n) = &self.naming {
-            n.update(cx, |f, _| f.set_theme(theme));
+            n.update(cx, |f, cx| f.set_theme(theme, cx));
         }
         cx.notify();
     }
@@ -159,37 +172,16 @@ impl LayoutPanel {
         window.focus(&self.root_focus);
     }
 
-    /// Scroll the section that holds the focused control into view (after Tab / Shift+Tab).
-    fn reveal_focus(&self, window: &Window) {
-        let Some(key) = self
-            .fields
-            .iter()
-            .find(|(_, h)| h.is_focused(window))
-            .map(|(k, _)| k.as_str())
-        else {
-            return;
-        };
-        let slot = match key {
-            "scope" => 0,
-            "presets" => 1,
-            "tabs" => 2,
-            "sidebar-side" | "sidebar-width" | "group-by" => 3,
-            "rail" | "right-panel" | "bottom-bar" | "splits" => 4,
-            _ => 5,
-        };
-        self.scroll.scroll_to_item(self.section_ix[slot]);
+    /// Scroll the block that holds the focused control into view (after Tab / Shift+Tab).
+    fn reveal_focus(&self, window: &Window, cx: &App) {
+        if let Some(slot) = self.blocks.iter().position(|h| h.contains_focused(window, cx)) {
+            self.scroll.scroll_to_item(self.block_ix[slot]);
+        }
     }
 
     /// Scroll the panel to its end (screenshots, tests).
     pub fn scroll_to_end(&self) {
         self.scroll.scroll_to_bottom();
-    }
-
-    fn focus_for(&mut self, key: &str, cx: &mut Context<Self>) -> FocusHandle {
-        self.fields
-            .entry(key.to_string())
-            .or_insert_with(|| cx.focus_handle().tab_stop(true))
-            .clone()
     }
 
     // -------------------------------------------------------------------------------------
@@ -233,6 +225,16 @@ impl LayoutPanel {
         self.emit(changed, window, cx);
     }
 
+    /// The arrow keys on the preset grid: pick the neighbour of the active card.
+    fn step_preset(&mut self, ids: &[PresetId], active: Option<usize>, dir: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = stepped(active, ids.len(), dir);
+        if let Some(id) = ids.get(ix).cloned()
+            && Some(ix) != active
+        {
+            self.pick_preset(id, window, cx);
+        }
+    }
+
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.message = None;
         let changed = self.state.reset();
@@ -254,12 +256,14 @@ impl LayoutPanel {
 
     fn start_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = self.theme;
-        let field = cx.new(|cx| TextField::new(theme, "Nombre del preset", cx));
+        let field = cx.new(|cx| TextField::new(theme, cx).placeholder("Nombre del preset"));
         self._naming_sub = Some(cx.subscribe_in(
             &field,
             window,
             |this, _, event: &TextFieldEvent, window, cx| match event {
                 TextFieldEvent::Submit => this.confirm_naming(window, cx),
+                TextFieldEvent::Cancel => this.cancel_naming(window, cx),
+                _ => {}
             },
         ));
         window.focus(&field.focus_handle(cx));
@@ -345,9 +349,11 @@ impl LayoutPanel {
     // Building blocks
     // -------------------------------------------------------------------------------------
 
-    /// The accent focus ring: a 2 px border that is only painted while focused.
-    fn ring(&self, el: Stateful<Div>, focused: bool, radius: f32) -> Stateful<Div> {
+    /// The accent focus ring of a roving list: a 2 px border painted only while the list has the
+    /// focus and the last input was the keyboard (the kit's controls draw their own ring).
+    fn ring(&self, el: Stateful<Div>, focus: &FocusHandle, window: &Window, radius: f32) -> Stateful<Div> {
         let c = self.theme.colors;
+        let focused = input_modality() == InputModality::Keyboard && focus.is_focused(window);
         el.rounded(px(radius)).border_2().border_color(if focused {
             c.accent.into()
         } else {
@@ -360,6 +366,7 @@ impl LayoutPanel {
     fn row(&self, label: &str, control: impl IntoElement) -> Div {
         div().w_full().child(
             ui_kit::SettingRow::new(&self.theme, SharedString::from(label.to_string()), control)
+                .stacked(self.stacked)
                 .padded(false)
                 .min_height(36.0)
                 .regular_label(),
@@ -387,60 +394,31 @@ impl LayoutPanel {
             )
     }
 
-    /// A focusable segmented control; `pick` receives the index of the chosen segment.
-    #[allow(clippy::too_many_arguments)]
+    /// A segmented control (each segment is a tab stop); `pick` receives the index of the chosen one.
     fn seg_core(
-        &mut self,
+        &self,
         key: &str,
         labels: Vec<SharedString>,
         selected: Option<usize>,
         track: Rgba,
         pick: impl Fn(&mut Self, usize, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let t = self.theme;
-        let handle = self.focus_for(key, cx);
-        let focused = self.kbd && handle.is_focused(window);
         let this = cx.entity();
-        let pick = Rc::new(pick);
-        let n = labels.len();
-        let control = SegmentedControl::new(SharedString::from(key.to_string()), &t, labels)
+        SegmentedControl::new(SharedString::from(key.to_string()), &self.theme, labels)
             .track(track)
             .selected(selected.unwrap_or(usize::MAX))
-            .on_change({
-                let (this, pick) = (this.clone(), pick.clone());
-                move |ix, window, cx| this.update(cx, |p, cx| pick(p, ix, window, cx))
-            });
-        self.ring(
-            div().id(SharedString::from(format!("{key}-focus"))),
-            focused,
-            14.0,
-        )
-        .track_focus(&handle)
-        .on_key_down(move |ev, window, cx| {
-            let ix = match ev.keystroke.key.as_str() {
-                "left" => selected.map_or(0, |s| s.saturating_sub(1)),
-                "right" => selected.map_or(0, |s| (s + 1).min(n.saturating_sub(1))),
-                _ => return,
-            };
-            cx.stop_propagation();
-            if Some(ix) != selected {
-                this.update(cx, |p, cx| pick(p, ix, window, cx));
-            }
-        })
-        .child(control)
-        .into_any_element()
+            .on_change(move |ix, window, cx| this.update(cx, |p, cx| pick(p, ix, window, cx)))
+            .into_any_element()
     }
 
     /// A segmented control over enum values, applied with `set`.
     fn seg<T: Clone + PartialEq + 'static>(
-        &mut self,
+        &self,
         key: &str,
         options: &[(T, &'static str)],
         current: Option<T>,
         set: fn(&mut ResolvedLayout, T),
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let values: Vec<T> = options.iter().map(|o| o.0.clone()).collect();
@@ -456,97 +434,40 @@ impl LayoutPanel {
                     p.edit(window, cx, |l| set(l, v));
                 }
             },
-            window,
             cx,
         )
     }
 
     fn toggle(
-        &mut self,
+        &self,
         key: &str,
         value: bool,
         set: fn(&mut ResolvedLayout, bool),
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let t = self.theme;
-        let handle = self.focus_for(key, cx);
-        let focused = self.kbd && handle.is_focused(window);
-        let flip = {
-            let this = cx.entity();
-            move |v: bool, window: &mut Window, cx: &mut App| {
-                this.update(cx, |p, cx| p.edit(window, cx, |l| set(l, v)));
-            }
-        };
-        let on_key = flip.clone();
-        self.ring(
-            div().id(SharedString::from(format!("{key}-focus"))),
-            focused,
-            12.0,
-        )
-        .track_focus(&handle)
-        .on_key_down(move |ev, window, cx| {
-            if matches!(ev.keystroke.key.as_str(), "space" | "enter") {
-                cx.stop_propagation();
-                on_key(!value, window, cx);
-            }
-        })
-        .p(px(2.0))
-        .child(
-            Toggle::new(SharedString::from(key.to_string()), &t)
-                .on(value)
-                .on_change(move |v, window, cx| flip(v, window, cx)),
-        )
-        .into_any_element()
+        let this = cx.entity();
+        Toggle::new(SharedString::from(key.to_string()), &self.theme)
+            .on(value)
+            .on_change(move |v, window, cx| this.update(cx, |p, cx| p.edit(window, cx, |l| set(l, v))))
+            .into_any_element()
     }
 
-    /// A slider with a value label; `set` receives the rounded value.
+    /// A slider (arrow keys, `Home` / `End`, `PageUp` / `PageDown` come from the kit) with a value
+    /// label; `set` receives the rounded value.
     #[allow(clippy::too_many_arguments)]
     fn slider(
-        &mut self,
+        &self,
         key: &str,
         (min, max, step): (f32, f32, f32),
         value: f32,
         default: f32,
         unit: &'static str,
         set: fn(&mut ResolvedLayout, f32),
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
-        let handle = self.focus_for(key, cx);
-        let focused = self.kbd && handle.is_focused(window);
-        let apply = {
-            let this = cx.entity();
-            move |v: f32, window: &mut Window, cx: &mut App| {
-                this.update(cx, |p, cx| p.edit(window, cx, |l| set(l, v)));
-            }
-        };
-        let on_key = apply.clone();
-        let ring = self
-            .ring(
-                div().id(SharedString::from(format!("{key}-focus"))),
-                focused,
-                12.0,
-            )
-            .track_focus(&handle)
-            .on_key_down(move |ev, window, cx| {
-                let big = if ev.keystroke.modifiers.shift {
-                    5.0
-                } else {
-                    1.0
-                };
-                let v = match ev.keystroke.key.as_str() {
-                    "left" | "down" => value - step * big,
-                    "right" | "up" => value + step * big,
-                    "home" => min,
-                    "end" => max,
-                    _ => return,
-                };
-                cx.stop_propagation();
-                on_key(v.clamp(min, max), window, cx);
-            });
-        ring.p(px(2.0))
+        let this = cx.entity();
+        div()
             .flex()
             .flex_row()
             .items_center()
@@ -558,7 +479,9 @@ impl LayoutPanel {
                     .value(value)
                     .default_value(default)
                     .width(196.0)
-                    .on_change(move |v, window, cx| apply(v, window, cx)),
+                    .on_change(move |v, window, cx| {
+                        this.update(cx, |p, cx| p.edit(window, cx, |l| set(l, v)));
+                    }),
             )
             .child(
                 div()
@@ -566,10 +489,7 @@ impl LayoutPanel {
                     .flex_none()
                     .text_size(px(t.typography.ui_size_sm))
                     .text_color(t.colors.muted)
-                    .child(SharedString::from(format!(
-                        "{} {unit}",
-                        value.round() as i32
-                    ))),
+                    .child(SharedString::from(format!("{} {unit}", value.round() as i32))),
             )
             .into_any_element()
     }
@@ -578,14 +498,10 @@ impl LayoutPanel {
     // Sections
     // -------------------------------------------------------------------------------------
 
-    fn header(
-        &mut self,
-        layout: &ResolvedLayout,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn header(&mut self, layout: &ResolvedLayout, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let this = cx.entity();
 
         let scope_control = self.state.project_name().map(|name| {
@@ -614,7 +530,6 @@ impl LayoutPanel {
                         cx,
                     )
                 },
-                window,
                 cx,
             )
         });
@@ -660,7 +575,7 @@ impl LayoutPanel {
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(px(ty.ui_size_xs))
                             .text_color(c.muted)
                             .child("Los cambios se aplican al instante"),
                     ),
@@ -686,7 +601,7 @@ impl LayoutPanel {
             .child(wire::wireframe(&t, layout, wire::PREVIEW).selected(true))
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(px(ty.ui_size_xs))
                     .text_color(c.muted)
                     .child("Vista previa"),
             );
@@ -703,6 +618,7 @@ impl LayoutPanel {
     fn notes(&self) -> Option<Div> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let warnings = self.state.warnings();
         if warnings.is_empty() {
             return None;
@@ -722,7 +638,7 @@ impl LayoutPanel {
                         .child(icon(Icon::Alert, 14.0, c.muted))
                         .child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(px(ty.ui_size_xs))
                                 .text_color(c.muted)
                                 .child(SharedString::from(w.clone())),
                         )
@@ -733,7 +649,6 @@ impl LayoutPanel {
     #[allow(clippy::too_many_arguments)]
     fn preset_card(
         &self,
-        ix: usize,
         id: PresetId,
         name: String,
         description: &'static str,
@@ -743,11 +658,13 @@ impl LayoutPanel {
     ) -> Stateful<Div> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let this = cx.entity();
         let custom_name = matches!(id, PresetId::Custom(_)).then(|| name.clone());
+        let key = preset_key(&id);
         let pick = id;
         let mut card = div()
-            .id(("preset", ix))
+            .id(SharedString::from(format!("preset-{key}")))
             .relative()
             .w(px(CARD_W))
             .flex_none()
@@ -785,7 +702,7 @@ impl LayoutPanel {
                     .child(
                         div()
                             .min_h(px(42.0))
-                            .text_size(px(11.0))
+                            .text_size(px(ty.ui_size_xs))
                             .text_color(c.muted)
                             .child(description),
                     ),
@@ -799,7 +716,7 @@ impl LayoutPanel {
             });
         if let Some(n) = custom_name {
             let del = div()
-                .id(("preset-del", ix))
+                .id(SharedString::from(format!("preset-del-{key}")))
                 .occlude()
                 .absolute()
                 .top(px(8.0))
@@ -808,7 +725,7 @@ impl LayoutPanel {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(7.0))
+                rounded(px(Radius::CHIP))
                 .bg(c.surface_3)
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.surface_4))
@@ -844,41 +761,30 @@ impl LayoutPanel {
             entries.push((PresetId::parse(&p.name), p.name.clone(), "Preset propio", l));
         }
         let active = self.state.active_preset();
-        let ids: Vec<PresetId> = entries.iter().map(|e| e.0.clone()).collect();
-        let active_ix = active
-            .as_ref()
-            .and_then(|a| ids.iter().position(|i| i == a));
+        let ids: Rc<Vec<PresetId>> = Rc::new(entries.iter().map(|e| e.0.clone()).collect());
+        let active_ix = active.as_ref().and_then(|a| ids.iter().position(|i| i == a));
 
-        let handle = self.focus_for("presets", cx);
-        let focused = self.kbd && handle.is_focused(window);
-        let this = cx.entity();
-        let n = ids.len();
         let cards: Vec<AnyElement> = entries
             .into_iter()
-            .enumerate()
-            .map(|(ix, (id, name, desc, layout))| {
+            .map(|(id, name, desc, layout)| {
                 let selected = Some(&id) == active.as_ref();
-                self.preset_card(ix, id, name, desc, &layout, selected, cx)
+                self.preset_card(id, name, desc, &layout, selected, cx)
                     .into_any_element()
             })
             .collect();
 
         let grid = self
-            .ring(div().id("presets-focus"), focused, 16.0)
-            .track_focus(&handle)
-            .on_key_down(move |ev, window, cx| {
-                let ix = match ev.keystroke.key.as_str() {
-                    "left" | "up" => active_ix.map_or(0, |s| s.saturating_sub(1)),
-                    "right" | "down" => active_ix.map_or(0, |s| (s + 1).min(n.saturating_sub(1))),
-                    _ => return,
-                };
-                cx.stop_propagation();
-                if let Some(id) = ids.get(ix).cloned()
-                    && Some(ix) != active_ix
-                {
-                    this.update(cx, |p, cx| p.pick_preset(id, window, cx));
-                }
-            })
+            .ring(div().id("presets-focus"), &self.presets_focus, window, 16.0)
+            .track_focus(&self.presets_focus)
+            .key_context(STEP_CONTEXT)
+            .on_action(cx.listener({
+                let ids = ids.clone();
+                move |p, _: &StepPrev, window, cx| p.step_preset(&ids, active_ix, -1, window, cx)
+            }))
+            .on_action(cx.listener({
+                let ids = ids.clone();
+                move |p, _: &StepNext, window, cx| p.step_preset(&ids, active_ix, 1, window, cx)
+            }))
             .flex()
             .flex_row()
             .flex_wrap()
@@ -895,10 +801,11 @@ impl LayoutPanel {
             .child(actions);
         if let Some(m) = &self.message {
             let c = t.colors;
+        let ty = t.typography;
             col = col.child(
                 div()
                     .px(px(4.0))
-                    .text_size(px(11.0))
+                    .text_size(px(ty.ui_size_xs))
                     .text_color(if m.error { c.error } else { c.muted })
                     .child(SharedString::from(m.text.clone())),
             );
@@ -975,12 +882,16 @@ impl LayoutPanel {
             div()
                 .id(id)
                 .occlude()
+                .tab_index(0)
+                .focus(move |s| s.border_color(c.accent))
                 .size(px(22.0))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(7.0))
+                .border_2()
+                .border_color(transparent_black())
+                .rounded(px(Radius::CHIP))
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.surface_4))
                 .child(icon(Icon::ChevronDown, 14.0, c.muted).with_transformation(
@@ -1017,8 +928,11 @@ impl LayoutPanel {
                     });
                 }
             };
+            let name = section_label(section);
             let mut row = div()
-                .id(SharedString::from(format!("section-{ix}")))
+                .id(SharedString::from(format!("section-{name}")))
+                .tab_index(0)
+                .focus(move |s| s.bg(c.surface_4))
                 .w(px(200.0))
                 .h(px(28.0))
                 .flex_none()
@@ -1028,7 +942,7 @@ impl LayoutPanel {
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .rounded(px(10.0))
+                .rounded(px(Radius::PILL))
                 .cursor_pointer()
                 .text_size(px(t.typography.ui_size_md))
                 .on_click(toggle);
@@ -1047,8 +961,8 @@ impl LayoutPanel {
                 )
                 .child(div().flex_1().child(section_label(section)));
             if on {
-                let up = arrow(SharedString::from(format!("section-up-{ix}")), true);
-                let down = arrow(SharedString::from(format!("section-down-{ix}")), false);
+                let up = arrow(SharedString::from(format!("section-up-{name}")), true);
+                let down = arrow(SharedString::from(format!("section-down-{name}")), false);
                 let up = if ix > 0 {
                     up.on_click(mv(-1)).into_any_element()
                 } else {
@@ -1087,34 +1001,31 @@ impl LayoutPanel {
         ];
         let t = self.theme;
         let c = t.colors;
-        let handle = self.focus_for("splits", cx);
-        let focused = self.kbd && handle.is_focused(window);
         let this = cx.entity();
         let cur_ix = ALL.iter().position(|(s, _)| *s == current);
-        let key_this = this.clone();
-        self.ring(div().id("splits-focus"), focused, 14.0)
-            .track_focus(&handle)
-            .on_key_down(move |ev, window, cx| {
-                let ix = match ev.keystroke.key.as_str() {
-                    "left" => cur_ix.map_or(0, |s| s.saturating_sub(1)),
-                    "right" => cur_ix.map_or(0, |s| (s + 1).min(ALL.len() - 1)),
-                    _ => return,
-                };
-                cx.stop_propagation();
+        let step = move |p: &mut Self, dir: isize, window: &mut Window, cx: &mut Context<Self>| {
+            let ix = stepped(cur_ix, ALL.len(), dir);
+            if Some(ix) != cur_ix {
                 let v = ALL[ix].0;
-                key_this.update(cx, |p, cx| p.edit(window, cx, |l| l.splits = v));
-            })
+                p.edit(window, cx, |l| l.splits = v);
+            }
+        };
+        self.ring(div().id("splits-focus"), &self.splits_focus, window, Radius::SM + 2.0)
+            .track_focus(&self.splits_focus)
+            .key_context(STEP_CONTEXT)
+            .on_action(cx.listener(move |p, _: &StepPrev, window, cx| step(p, -1, window, cx)))
+            .on_action(cx.listener(move |p, _: &StepNext, window, cx| step(p, 1, window, cx)))
             .flex()
             .flex_row()
             .gap(px(4.0))
-            .children(ALL.iter().enumerate().map(|(ix, (s, name))| {
+            .children(ALL.iter().map(|(s, name)| {
                 let this = this.clone();
                 let s = *s;
                 let sel = s == current;
                 div()
-                    .id(("split", ix))
+                    .id(SharedString::from(format!("split-{name}")))
                     .p(px(2.0))
-                    .rounded(px(12.0))
+                    .rounded(px(Radius::SM))
                     .border_2()
                     .border_color(if sel {
                         c.accent.into()
@@ -1149,10 +1060,7 @@ impl LayoutPanel {
                 (TabsPosition::Hidden, "Ocultas"),
             ],
             Some(l.tabs_position),
-            |l, v| l.tabs_position = v,
-            window,
-            cx,
-        );
+            |l, v| l.tabs_position = v, cx);
         let tabs_group = self.group(
             "Pestañas",
             vec![self.row("Posición", tabs).into_any_element()],
@@ -1167,20 +1075,14 @@ impl LayoutPanel {
                 (SidebarSide::Hidden, "Oculta"),
             ],
             Some(l.sidebar.side),
-            |l, v| l.sidebar.side = v,
-            window,
-            cx,
-        );
+            |l, v| l.sidebar.side = v, cx);
         let width = self.slider(
             "sidebar-width",
             (180.0, 480.0, 10.0),
             f32::from(l.sidebar.width_px),
             f32::from(base.sidebar.width_px),
             "px",
-            |l, v| l.sidebar.width_px = v as u16,
-            window,
-            cx,
-        );
+            |l, v| l.sidebar.width_px = v as u16, cx);
         let sections = self.sections_row(l, cx);
         let group_by = self.seg(
             "group-by",
@@ -1191,16 +1093,13 @@ impl LayoutPanel {
                 (GroupBy::None, "Ninguno"),
             ],
             Some(l.sidebar.group_by),
-            |l, v| l.sidebar.group_by = v,
-            window,
-            cx,
-        );
-        let show_actions = self.toggle("sb-actions", l.sidebar.show_actions, |l, v| l.sidebar.show_actions = v, window, cx);
-        let panel_icons = self.toggle("sb-icons", l.sidebar.panel_icons, |l, v| l.sidebar.panel_icons = v, window, cx);
-        let nested = self.toggle("sb-nested", l.sidebar.nested_tabs, |l, v| l.sidebar.nested_tabs = v, window, cx);
-        let footer = self.toggle("sb-footer", l.sidebar.footer_usage, |l, v| l.sidebar.footer_usage = v, window, cx);
-        let row_model = self.toggle("sb-model", l.sidebar.row_model, |l, v| l.sidebar.row_model = v, window, cx);
-        let row_time = self.toggle("sb-time", l.sidebar.row_time, |l, v| l.sidebar.row_time = v, window, cx);
+            |l, v| l.sidebar.group_by = v, cx);
+        let show_actions = self.toggle("sb-actions", l.sidebar.show_actions, |l, v| l.sidebar.show_actions = v, cx);
+        let panel_icons = self.toggle("sb-icons", l.sidebar.panel_icons, |l, v| l.sidebar.panel_icons = v, cx);
+        let nested = self.toggle("sb-nested", l.sidebar.nested_tabs, |l, v| l.sidebar.nested_tabs = v, cx);
+        let footer = self.toggle("sb-footer", l.sidebar.footer_usage, |l, v| l.sidebar.footer_usage = v, cx);
+        let row_model = self.toggle("sb-model", l.sidebar.row_model, |l, v| l.sidebar.row_model = v, cx);
+        let row_time = self.toggle("sb-time", l.sidebar.row_time, |l, v| l.sidebar.row_time = v, cx);
         let sidebar_group = self.group(
             "Sidebar",
             vec![
@@ -1243,10 +1142,7 @@ impl LayoutPanel {
                 } else {
                     RailVisibility::Hidden
                 }
-            },
-            window,
-            cx,
-        );
+            }, cx);
         let right_panel = self.seg(
             "right-panel",
             &[
@@ -1257,10 +1153,7 @@ impl LayoutPanel {
                 (None, "Ninguno"),
             ],
             Some(l.right_panel.clone()),
-            |l, v| l.right_panel = v,
-            window,
-            cx,
-        );
+            |l, v| l.right_panel = v, cx);
         let bottom = self.seg(
             "bottom-bar",
             &[
@@ -1269,10 +1162,7 @@ impl LayoutPanel {
                 (BottomBar::Hidden, "Oculta"),
             ],
             Some(l.bottom_bar),
-            |l, v| l.bottom_bar = v,
-            window,
-            cx,
-        );
+            |l, v| l.bottom_bar = v, cx);
         let splits = self.splits_row(l.splits, window, cx);
         let zones_group = self.group(
             "Zonas",
@@ -1292,35 +1182,23 @@ impl LayoutPanel {
                 (Density::Comfortable, "Cómoda"),
             ],
             Some(l.density),
-            |l, v| l.density = v,
-            window,
-            cx,
-        );
+            |l, v| l.density = v, cx);
         let translucency = self.slider(
             "translucency",
             (0.0, 100.0, 5.0),
             f32::from(l.sidebar_translucency),
             f32::from(base.sidebar_translucency),
             "%",
-            |l, v| l.sidebar_translucency = v as u8,
-            window,
-            cx,
-        );
+            |l, v| l.sidebar_translucency = v as u8, cx);
         let breadcrumb = self.toggle(
             "breadcrumb",
             l.breadcrumb,
-            |l, v| l.breadcrumb = v,
-            window,
-            cx,
-        );
+            |l, v| l.breadcrumb = v, cx);
         let motion = self.toggle(
             "reduced-motion",
             l.reduced_motion,
-            |l, v| l.reduced_motion = v,
-            window,
-            cx,
-        );
-        let zen = self.toggle("zen", l.zen, |l, v| l.zen = v, window, cx);
+            |l, v| l.reduced_motion = v, cx);
+        let zen = self.toggle("zen", l.zen, |l, v| l.zen = v, cx);
         let look_group = self.group(
             "Apariencia",
             vec![
@@ -1335,10 +1213,10 @@ impl LayoutPanel {
         [tabs_group, sidebar_group, titlebar_group, zones_group, look_group]
     }
 
-    /// One toggle chip per button the titlebar can show (right panels, review, layout).
+    /// One toggle chip per button the titlebar can show (right panels, review, layout). Each chip is
+    /// a focusable `Pill`; the active ones carry a check.
     fn titlebar_chips(&mut self, l: &ResolvedLayout, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let c = t.colors;
         let this = cx.entity();
         div()
             .flex()
@@ -1351,23 +1229,10 @@ impl LayoutPanel {
                 let on = l.titlebar.has(id);
                 let this = this.clone();
                 let id = *id;
-                div()
-                    .id(SharedString::from(format!("tb-btn-{id}")))
-                    .occlude()
-                    .h(px(26.0))
-                    .px(px(10.0))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(5.0))
-                    .rounded(px(9.0))
-                    .cursor_pointer()
-                    .bg(if on { c.surface_4 } else { c.surface_1 })
-                    .text_size(px(12.0))
-                    .text_color(if on { c.text } else { c.muted })
-                    .hover(move |s| s.bg(c.surface_3).text_color(c.text))
-                    .when(on, |d| d.child(icon(Icon::Check, 12.0, c.text)))
-                    .child(*label)
+                Pill::compact(format!("tb-btn-{id}"), &t)
+                    .label(*label)
+                    .active(on)
+                    .when(on, |p| p.icon(Icon::Check))
                     .on_click(move |_, window, cx| {
                         this.update(cx, |p, cx| {
                             p.edit(window, cx, |l| {
@@ -1392,49 +1257,59 @@ impl LayoutPanel {
     }
 }
 
+/// Stable element-id key of a preset: its name, tagged so a custom preset that shares a built-in
+/// name never collides with it (and survives other presets being added or deleted).
+fn preset_key(id: &PresetId) -> String {
+    match id {
+        PresetId::Builtin(b) => format!("b-{}", builtin_name(*b)),
+        PresetId::Custom(name) => format!("c-{name}"),
+    }
+}
+
+/// The neighbour of `current` in a roving list of `len` items: `dir` < 0 is the previous one
+/// (the first when nothing is selected), `dir` > 0 the next one; it clamps at both ends.
+fn stepped(current: Option<usize>, len: usize, dir: isize) -> usize {
+    let last = len.saturating_sub(1);
+    match (current, dir < 0) {
+        (None, _) => 0,
+        (Some(s), true) => s.saturating_sub(1),
+        (Some(s), false) => (s + 1).min(last),
+    }
+}
+
 impl Render for LayoutPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let c = t.colors;
         let layout = self.state.layout();
         let max_h = (f32::from(window.viewport_size().height) - 96.0).clamp(280.0, 880.0);
+        self.stacked = self.measured.narrow(window);
 
-        let header = self.header(&layout, window, cx);
+        let header = self.header(&layout, cx);
         let notes = self.notes();
         let presets = self.presets(window, cx);
         let [tabs, sidebar, titlebar, zones, look] = self.fine_options(&layout, window, cx);
-        // Child index of each section in the scroll container (see `reveal_focus`).
+        // Child index of each block in the scroll container (see `reveal_focus`).
         let first = 1 + usize::from(notes.is_some());
-        self.section_ix = [0, first, first + 1, first + 2, first + 4, first + 5];
+        self.block_ix = [0, first, first + 1, first + 2, first + 3, first + 4, first + 5];
         let embedded = self.embedded;
+        let blocks = &self.blocks;
+        let block = |ix: usize, el: Div| div().track_focus(&blocks[ix]).child(el);
 
         div()
             .key_context(PANEL_CONTEXT)
             .track_focus(&self.root_focus)
             .on_action(cx.listener(|this, _: &FocusNextField, window, cx| {
-                this.kbd = true;
                 window.focus_next();
-                this.reveal_focus(window);
+                this.reveal_focus(window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FocusPrevField, window, cx| {
-                this.kbd = true;
                 window.focus_prev();
-                this.reveal_focus(window);
+                this.reveal_focus(window, cx);
                 cx.notify();
             }))
-            .capture_key_down(cx.listener(|this, _, _, cx| {
-                if !this.kbd {
-                    this.kbd = true;
-                    cx.notify();
-                }
-            }))
-            .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
-                if this.kbd {
-                    this.kbd = false;
-                    cx.notify();
-                }
-            }))
+            .relative()
             .when(!embedded, |d| {
                 d.w(px(PANEL_WIDTH)).flex_none().rounded(px(Radius::SM)).bg(c.surface_2)
             })
@@ -1442,6 +1317,7 @@ impl Render for LayoutPanel {
             .text_color(c.text)
             .font_family(t.typography.ui_family)
             .text_size(px(t.typography.ui_size_md))
+            .child(self.measured.probe())
             .child(
                 div()
                     .id("layout-panel-scroll")
@@ -1451,14 +1327,14 @@ impl Render for LayoutPanel {
                     .flex()
                     .flex_col()
                     .gap(px(16.0))
-                    .child(header)
+                    .child(block(0, header))
                     .children(notes)
-                    .child(presets)
-                    .child(tabs)
-                    .child(sidebar)
-                    .child(titlebar)
-                    .child(zones)
-                    .child(look),
+                    .child(block(1, presets))
+                    .child(block(2, tabs))
+                    .child(block(3, sidebar))
+                    .child(block(4, titlebar))
+                    .child(block(5, zones))
+                    .child(block(6, look)),
             )
     }
 }

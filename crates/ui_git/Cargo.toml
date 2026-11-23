@@ -19,3 +19,4 @@ viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
+ui_kit = { version = "0.1.0", path = "../ui_kit", features = ["test-support"] }

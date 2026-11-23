@@ -94,6 +94,36 @@ pub struct PanelCtx {
     pub theme: Theme,
 }
 
+impl PanelCtx {
+    /// A context with no directory yet; add them with [`with_cwd`](Self::with_cwd) and
+    /// [`with_project_root`](Self::with_project_root). Prefer this over a struct literal: a new
+    /// field then does not break the caller (the struct will become `#[non_exhaustive]` once every
+    /// host builds it this way).
+    pub fn new(zone: PanelZone, width_class: WidthClass, theme: Theme) -> Self {
+        Self { zone, width_class, cwd: None, project_root: None, theme }
+    }
+
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    pub fn with_project_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.project_root = Some(root.into());
+        self
+    }
+
+    /// Whether the panel got the dense layout ([`WidthClass::Compact`]).
+    pub fn is_compact(&self) -> bool {
+        self.width_class == WidthClass::Compact
+    }
+
+    /// The folder the panel is about: the project root, else the tab's directory.
+    pub fn base_dir(&self) -> Option<&std::path::Path> {
+        self.project_root.as_deref().or(self.cwd.as_deref())
+    }
+}
+
 /// A view factory registered in the [`PanelRegistry`].
 ///
 /// ```ignore
@@ -302,6 +332,59 @@ pub struct TabInfo {
     pub agent: Option<SharedString>,
 }
 
+impl TabInfo {
+    /// A snapshot with the three things every tab has; the rest starts empty and is filled with the
+    /// `with_*` builders. Prefer this over a struct literal (see [`PanelCtx::new`]).
+    pub fn new(id: TabId, title: impl Into<SharedString>, icon: TabIcon) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            icon,
+            subtitle: None,
+            status: None,
+            last_activity: None,
+            cwd: None,
+            project_root: None,
+            agent: None,
+        }
+    }
+
+    pub fn with_subtitle(mut self, subtitle: impl Into<SharedString>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    pub fn with_status(mut self, status: RowStatus) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    pub fn with_last_activity(mut self, at: Instant) -> Self {
+        self.last_activity = Some(at);
+        self
+    }
+
+    pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    pub fn with_project_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.project_root = Some(root.into());
+        self
+    }
+
+    pub fn with_agent(mut self, agent: impl Into<SharedString>) -> Self {
+        self.agent = Some(agent.into());
+        self
+    }
+
+    /// The folder the tab groups under: its project root, else its working directory.
+    pub fn group_dir(&self) -> Option<&std::path::Path> {
+        self.project_root.as_deref().or(self.cwd.as_deref())
+    }
+}
+
 type TabEventFn = Box<dyn FnMut(TabEvent, &mut App)>;
 
 /// Type-erased access to a [`TabModel`] entity.
@@ -326,17 +409,14 @@ impl<T: TabModel> TabOps for EntityOps<T> {
 
     fn info(&self, cx: &App) -> TabInfo {
         let m = self.0.read(cx);
-        TabInfo {
-            id: self.0.entity_id(),
-            title: m.title(cx),
-            icon: m.icon(cx),
-            subtitle: m.subtitle(cx),
-            status: m.status(cx),
-            last_activity: m.last_activity(cx),
-            cwd: m.cwd(cx),
-            project_root: m.project_root(cx),
-            agent: m.agent(cx),
-        }
+        let mut info = TabInfo::new(self.0.entity_id(), m.title(cx), m.icon(cx));
+        info.subtitle = m.subtitle(cx);
+        info.status = m.status(cx);
+        info.last_activity = m.last_activity(cx);
+        info.cwd = m.cwd(cx);
+        info.project_root = m.project_root(cx);
+        info.agent = m.agent(cx);
+        info
     }
 
     fn content(&self, cx: &App) -> AnyView {
@@ -447,6 +527,39 @@ mod tests {
         assert_eq!(format_elapsed(49 * 60), "49m");
         assert_eq!(format_elapsed(2 * 3_600 + 5), "2h");
         assert_eq!(format_elapsed(3 * 86_400), "3d");
+    }
+
+    #[test]
+    fn ctx_and_info_builders_fill_only_what_is_given() {
+        let ctx = PanelCtx::new(PanelZone::Right, WidthClass::Compact, Theme::dark());
+        assert!(ctx.is_compact() && ctx.cwd.is_none() && ctx.base_dir().is_none());
+        let ctx = ctx.with_cwd("C:/p/a/src");
+        assert_eq!(ctx.base_dir(), Some(std::path::Path::new("C:/p/a/src")));
+        let ctx = ctx.with_project_root("C:/p/a");
+        assert_eq!(ctx.base_dir(), Some(std::path::Path::new("C:/p/a")), "the project root wins over cwd");
+        // Same value as the struct literal it replaces.
+        assert_eq!(
+            ctx,
+            PanelCtx {
+                zone: PanelZone::Right,
+                width_class: WidthClass::Compact,
+                cwd: Some("C:/p/a/src".into()),
+                project_root: Some("C:/p/a".into()),
+                theme: Theme::dark(),
+            }
+        );
+    }
+
+    #[test]
+    fn tab_info_builder_and_group_dir() {
+        let id = EntityId::from(1u64);
+        let info = TabInfo::new(id, "main", TabIcon::Kind(Icon::Terminal));
+        assert_eq!((info.subtitle.clone(), info.status, info.agent.clone()), (None, None, None));
+        assert_eq!(info.group_dir(), None);
+        let info = info.with_cwd("C:/p/a/src").with_agent("claude").with_subtitle("rama");
+        assert_eq!(info.group_dir(), Some(std::path::Path::new("C:/p/a/src")));
+        assert_eq!(info.agent.as_ref().map(|a| a.as_ref()), Some("claude"));
+        assert_eq!(info.with_project_root("C:/p/a").group_dir(), Some(std::path::Path::new("C:/p/a")));
     }
 
     #[test]

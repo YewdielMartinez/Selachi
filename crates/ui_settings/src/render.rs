@@ -4,13 +4,20 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::*, px,
 };
-use ui_kit::{Icon, Placement, Popover, SegmentedControl, Toggle, icon};
+use ui_kit::{Pill, SegmentedControl, Select, SelectEvent, SelectOption, Toggle};
 
 use crate::ui::{self, MAX_CONTENT_WIDTH, NARROW_BELOW, NAV_WIDTH};
-use crate::view::{CONTEXT, FocusNextField, FocusPrevField, Section, SettingsView};
+use crate::view::{CONTEXT, FocusNextField, FocusPrevField, Section, SelectSlot, SettingsView};
+
+/// Width of a drop-down trigger in a setting row.
+const SELECT_WIDTH: f32 = 220.0;
+
+fn select_options(options: &[(String, String)]) -> Vec<SelectOption> {
+    options.iter().map(|(v, l)| SelectOption::new(v.clone(), l.clone())).collect()
+}
 
 impl SettingsView {
     /// A toggle wired to `f`.
@@ -45,103 +52,53 @@ impl SettingsView {
             })
     }
 
-    /// A drop-down: a tonal button with the current label that opens a list of `(value, label)`.
+    /// A drop-down (`ui_kit::Select`) over `(value, label)` options. The entity lives in
+    /// [`SettingsView::selects`] under `id`; every render re-syncs its options, theme and
+    /// selected value (each is a no-op, with no notification, while nothing moved).
     pub(crate) fn select(
-        &self,
+        &mut self,
         cx: &mut Context<Self>,
         id: &'static str,
         options: Vec<(String, String)>,
         selected: &str,
         f: impl Fn(&mut Self, &str, &mut Context<Self>) + 'static,
     ) -> AnyElement {
-        let c = self.theme.colors;
-        let this = cx.entity();
-        let open = self.open_select == Some(id);
-        let label = options
-            .iter()
-            .find(|(v, _)| v == selected)
-            .map(|(_, l)| l.clone())
-            .unwrap_or_else(|| selected.to_string());
-        let f = Rc::new(f);
-        let trigger = {
-            let this = this.clone();
-            div()
-                .id(SharedString::from(format!("{id}-trigger")))
-                .occlude()
-                .h(px(32.0))
-                .min_w(px(170.0))
-                .max_w(px(280.0))
-                .px(px(12.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap(px(10.0))
-                .rounded(px(10.0))
-                .bg(if open { c.surface_4 } else { c.surface_3 })
-                .text_color(c.text)
-                .text_size(px(13.0))
-                .cursor_pointer()
-                .hover(move |s| s.bg(c.surface_4))
-                .child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(SharedString::from(label)))
-                .child(icon(Icon::ChevronDown, 14.0, c.muted).flex_none())
-                .on_click(move |_, _, cx| {
-                    this.update(cx, |s, cx| {
-                        s.open_select = if s.open_select == Some(id) { None } else { Some(id) };
-                        cx.notify();
-                    });
-                })
-        };
-        let dismiss = {
-            let this = this.clone();
-            move |_: &mut Window, cx: &mut App| {
-                this.update(cx, |s, cx| {
-                    if s.open_select == Some(id) {
-                        s.open_select = None;
-                        cx.notify();
+        let theme = self.theme;
+        let entity = match self.selects.get_mut(id) {
+            Some(slot) => {
+                if slot.options != options {
+                    slot.options = options.clone();
+                    slot.entity.update(cx, |s, cx| s.set_options(select_options(&options), cx));
+                }
+                slot.entity.update(cx, |s, cx| {
+                    s.set_theme(theme, cx);
+                    s.select_value(selected, cx);
+                });
+                slot.entity.clone()
+            }
+            None => {
+                let entity = cx.new(|cx| {
+                    Select::new(id, theme, cx).options(select_options(&options)).with_value(selected).width(SELECT_WIDTH)
+                });
+                let f = Rc::new(f);
+                let sub = cx.subscribe(&entity, move |this, select, ev: &SelectEvent, cx| {
+                    let SelectEvent::Changed(_) = ev;
+                    if let Some(value) = select.read(cx).value().cloned() {
+                        f(this, &value, cx);
                     }
                 });
+                self.selects.insert(id, SelectSlot { entity: entity.clone(), options, _sub: sub });
+                entity
             }
         };
-        let items = options.into_iter().enumerate().map(|(ix, (value, text))| {
-            let is_sel = value == selected;
-            let this = this.clone();
-            let f = f.clone();
-            div()
-                .id(SharedString::from(format!("{id}-opt-{ix}")))
-                .h(px(32.0))
-                .px(px(10.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap(px(14.0))
-                .rounded(px(8.0))
-                .text_size(px(13.0))
-                .text_color(if is_sel { c.text } else { c.muted })
-                .cursor_pointer()
-                .when(is_sel, |d| d.bg(c.surface_3))
-                .hover(move |s| s.bg(c.surface_3).text_color(c.text))
-                .child(SharedString::from(text))
-                .when(is_sel, |d| d.child(icon(Icon::Check, 14.0, c.text)))
-                .on_click(move |_, _, cx| {
-                    let (this, f, value) = (this.clone(), f.clone(), value.clone());
-                    this.update(cx, |s, cx| {
-                        s.open_select = None;
-                        f(s, &value, cx);
-                        cx.notify();
-                    });
-                })
-        });
-        Popover::new(SharedString::from(format!("{id}-pop")), &self.theme)
-            .open(open)
-            .placement(Placement::BottomEnd)
-            .padding(6.0)
-            .sheet_when_narrow(false)
-            .on_dismiss(dismiss)
-            .trigger(trigger)
-            .children(items)
-            .into_any_element()
+        entity.into_any_element()
+    }
+
+    /// Closes every open drop-down (a section change must not leave one hanging).
+    pub(crate) fn close_selects(&mut self, cx: &mut Context<Self>) {
+        for slot in self.selects.values() {
+            slot.entity.update(cx, |s, cx| s.close(cx));
+        }
     }
 
     /// The text field `key` laid out at `width`.
@@ -154,8 +111,8 @@ impl SettingsView {
         mono: bool,
     ) -> AnyElement {
         let field = self.field(key, |s| s.field_value(key).unwrap_or_default(), placeholder, mono, cx);
-        let bad = self.errors.contains_key(key);
-        field.update(cx, |f, cx| f.set_invalid(bad, cx));
+        let message = self.errors.get(key).cloned();
+        field.update(cx, |f, cx| f.set_error(message, cx));
         div().w(px(width)).max_w_full().flex().child(field).into_any_element()
     }
 
@@ -195,6 +152,7 @@ impl SettingsView {
 
     fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let c = self.theme.colors;
+        let ty = self.theme.typography;
         let this = cx.entity();
         let (status, is_err) = self.save_status();
         div()
@@ -210,114 +168,45 @@ impl SettingsView {
                 div()
                     .px(px(10.0))
                     .pb(px(10.0))
-                    .text_size(px(15.0))
+                    .text_size(px(ty.ui_size_lg))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(c.text)
                     .child("Ajustes"),
             )
             .children(Section::ALL.into_iter().map(|s| {
-                let active = s == self.section;
                 let this = this.clone();
-                div()
-                    .id(SharedString::from(format!("nav-{}", s.label())))
-                    .occlude()
-                    .h(px(34.0))
-                    .px(px(10.0))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(10.0))
-                    .rounded(px(10.0))
-                    .text_size(px(13.0))
-                    .text_color(if active { c.text } else { c.muted })
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(c.surface_3))
-                    .when(!active, |d| d.hover(move |s| s.bg(c.surface_2).text_color(c.text)))
-                    .child(icon(s.icon(), 16.0, if active { c.text } else { c.muted }))
-                    .child(s.label())
-                    .on_click(move |_, _, cx| {
-                        this.update(cx, |v, cx| v.set_section(s, cx));
-                    })
+                div().w_full().flex().child(
+                    Pill::new(format!("nav-{}", s.label()), &self.theme)
+                        .icon(s.icon())
+                        .label(s.label())
+                        .active(s == self.section)
+                        .on_click(move |_, _, cx| {
+                            this.update(cx, |v, cx| v.set_section(s, cx));
+                        }),
+                )
             }))
             .child(div().flex_1())
             .child(
                 div()
                     .px(px(10.0))
-                    .text_size(px(11.0))
+                    .text_size(px(ty.ui_size_xs))
                     .text_color(if is_err { c.error } else { c.muted })
                     .child(SharedString::from(status)),
             )
             .into_any_element()
     }
 
-    /// Top bar of the narrow layout: a menu with the current section and the save state.
-    fn top_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Top bar of the narrow layout: a section drop-down and the save state.
+    fn top_menu(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let c = self.theme.colors;
-        let this = cx.entity();
-        let open = self.nav_open_flag();
+        let ty = self.theme.typography;
         let (status, is_err) = self.save_status();
-        let trigger = {
-            let this = this.clone();
-            div()
-                .id("settings-menu")
-                .occlude()
-                .h(px(34.0))
-                .px(px(12.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .rounded(px(10.0))
-                .bg(if open { c.surface_4 } else { c.surface_3 })
-                .text_size(px(13.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(c.text)
-                .cursor_pointer()
-                .child(icon(self.section.icon(), 16.0, c.text))
-                .child(self.section.label())
-                .child(icon(Icon::ChevronDown, 14.0, c.muted))
-                .on_click(move |_, _, cx| {
-                    this.update(cx, |s, cx| {
-                        s.toggle_nav();
-                        cx.notify();
-                    });
-                })
-        };
-        let items = Section::ALL.into_iter().map(|s| {
-            let active = s == self.section;
-            let this = this.clone();
-            div()
-                .id(SharedString::from(format!("menu-{}", s.label())))
-                .h(px(34.0))
-                .min_w(px(200.0))
-                .px(px(10.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(10.0))
-                .rounded(px(8.0))
-                .text_size(px(13.0))
-                .text_color(if active { c.text } else { c.muted })
-                .cursor_pointer()
-                .when(active, |d| d.bg(c.surface_3))
-                .hover(move |st| st.bg(c.surface_3).text_color(c.text))
-                .child(icon(s.icon(), 16.0, if active { c.text } else { c.muted }))
-                .child(s.label())
-                .on_click(move |_, _, cx| {
-                    this.update(cx, |v, cx| v.set_section(s, cx));
-                })
-        });
-        let dismiss = {
-            let this = this.clone();
-            move |_: &mut Window, cx: &mut App| {
-                this.update(cx, |s, cx| {
-                    if s.nav_open_flag() {
-                        s.close_nav();
-                        cx.notify();
-                    }
-                });
+        let options = Section::ALL.iter().map(|s| (s.label().to_string(), s.label().to_string())).collect();
+        let sections = self.select(cx, "settings-section", options, self.section.label(), |s, v, cx| {
+            if let Some(section) = Section::ALL.into_iter().find(|s| s.label() == v) {
+                s.set_section(section, cx);
             }
-        };
+        });
         div()
             .w_full()
             .flex_none()
@@ -328,18 +217,12 @@ impl SettingsView {
             .flex_row()
             .items_center()
             .justify_between()
-            .child(
-                Popover::new("settings-menu-pop", &self.theme)
-                    .open(open)
-                    .placement(Placement::BottomStart)
-                    .padding(6.0)
-                    .on_dismiss(dismiss)
-                    .trigger(trigger)
-                    .children(items),
-            )
+            .gap(px(12.0))
+            .child(sections)
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .min_w_0()
+                    .text_size(px(ty.ui_size_xs))
                     .text_color(if is_err { c.error } else { c.muted })
                     .child(SharedString::from(status)),
             )

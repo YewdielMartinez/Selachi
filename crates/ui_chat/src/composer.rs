@@ -13,16 +13,15 @@ use gpui::{
     Render, SharedString, Styled as _, Subscription, Window, div, prelude::*, px, relative,
 };
 use theme::{Radius, Theme};
-use ui_kit::{Button, DitherMeter, Icon, IconButton, Pill, Placement, Popover, Spinner, Tooltip, icon};
+use ui_kit::{Button, DitherMeter, Icon, IconButton, Nav, Pill, Placement, Popover, Spinner, TextArea, TextField, TextFieldEvent, Tooltip, icon};
 
-use crate::field::{ChatField, FieldEvent, Nav};
 use crate::hub::{ChatHub, FilesReady};
 use crate::mentions::{MentionQuery, filter_files, mention_at};
 use crate::options::{
     AgentOption, PERMISSION_ORDER, effort_label, efforts_for, is_dangerous, model_label, models_for, permission_hint, permission_label,
 };
 use crate::util::{file_name, format_tokens, format_window, tail_path};
-use crate::widgets::{amber, file_chip, green, menu_row};
+use crate::widgets::{file_chip, menu_row};
 
 /// How many files the `@` picker lists.
 const MENTION_ROWS: usize = 8;
@@ -142,8 +141,8 @@ pub struct Composer {
     hub: Entity<ChatHub>,
     theme: Theme,
     state: ComposerState,
-    field: Entity<ChatField>,
-    model_field: Entity<ChatField>,
+    field: Entity<TextArea>,
+    model_field: Entity<TextField>,
     attachments: Vec<PathBuf>,
     popup: Option<Popup>,
     mention: Option<Mention>,
@@ -158,16 +157,13 @@ impl EventEmitter<ComposerEvent> for Composer {}
 impl Composer {
     pub fn new(hub: Entity<ChatHub>, theme: Theme, cx: &mut Context<Self>) -> Self {
         let state = ComposerState::default();
-        let field = cx.new(|cx| {
-            let mut f = ChatField::new(theme, state.placeholder.clone(), true, cx);
-            f.set_lines(1, 10);
-            f
-        });
-        let model_field = cx.new(|cx| ChatField::new(theme, "Otro modelo…", false, cx));
+        // `Enter` sends, `Shift+Enter` adds a line (the area's default `EnterMode::Submit`).
+        let field = cx.new(|cx| TextArea::area(theme, cx).bare().lines(1, 10).placeholder(state.placeholder.clone()));
+        let model_field = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Otro modelo…"));
         let mut subs = Vec::new();
-        subs.push(cx.subscribe(&field, |this, _f, ev: &FieldEvent, cx| this.on_field(*ev, cx)));
-        subs.push(cx.subscribe(&model_field, |this, f, ev: &FieldEvent, cx| match ev {
-            FieldEvent::Submit => {
+        subs.push(cx.subscribe(&field, |this, _f, ev: &TextFieldEvent, cx| this.on_field(*ev, cx)));
+        subs.push(cx.subscribe(&model_field, |this, f, ev: &TextFieldEvent, cx| match ev {
+            TextFieldEvent::Submit => {
                 let m = f.read(cx).text().trim().to_string();
                 if !m.is_empty() {
                     this.popup = None;
@@ -176,7 +172,7 @@ impl Composer {
                     cx.notify();
                 }
             }
-            FieldEvent::Cancel => this.close_popup(cx),
+            TextFieldEvent::Cancel => this.close_popup(cx),
             _ => {}
         }));
         subs.push(cx.subscribe(&hub, |_, _hub, _: &crate::hub::ModelsReady, cx| cx.notify()));
@@ -201,7 +197,7 @@ impl Composer {
         }
         if self.state.placeholder != state.placeholder {
             let p = state.placeholder.clone();
-            self.field.update(cx, |f, _| f.set_placeholder(p));
+            self.field.update(cx, |f, cx| f.set_placeholder(p, cx));
         }
         if state.working != self.state.working {
             // A running turn closes pickers that would change it under its feet.
@@ -215,12 +211,12 @@ impl Composer {
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
-        self.field.update(cx, |f, _| f.set_theme(theme));
-        self.model_field.update(cx, |f, _| f.set_theme(theme));
+        self.field.update(cx, |f, cx| f.set_theme(theme, cx));
+        self.model_field.update(cx, |f, cx| f.set_theme(theme, cx));
         cx.notify();
     }
 
-    pub fn field(&self) -> &Entity<ChatField> {
+    pub fn field(&self) -> &Entity<TextArea> {
         &self.field
     }
 
@@ -296,6 +292,12 @@ impl Composer {
         self.mention.is_some()
     }
 
+    /// The `@` picker: its entries and the highlighted one.
+    #[cfg(test)]
+    pub(crate) fn mention_state(&self) -> Option<(&[String], usize)> {
+        self.mention.as_ref().map(|m| (m.items.as_slice(), m.selected))
+    }
+
     /// The answer to [`ComposerEvent::PickAgent`] for a thread: the handoff text, or `None` when
     /// there is nothing to hand over.
     pub fn set_handoff_preview(&mut self, agent: &AgentKind, text: Option<String>, cx: &mut Context<Self>) {
@@ -311,7 +313,7 @@ impl Composer {
     }
 
     pub fn has_content(&self, cx: &App) -> bool {
-        !self.field.read(cx).is_empty() || !self.attachments.is_empty()
+        !self.field.read(cx).is_blank() || !self.attachments.is_empty()
     }
 
     pub fn button_mode(&self, cx: &App) -> ButtonMode {
@@ -346,17 +348,17 @@ impl Composer {
         }
     }
 
-    fn on_field(&mut self, ev: FieldEvent, cx: &mut Context<Self>) {
+    fn on_field(&mut self, ev: TextFieldEvent, cx: &mut Context<Self>) {
         match ev {
-            FieldEvent::Changed => self.refresh_mention(cx),
-            FieldEvent::Submit => {
+            TextFieldEvent::Changed => self.refresh_mention(cx),
+            TextFieldEvent::Submit => {
                 if self.mention.as_ref().is_some_and(|m| !m.items.is_empty()) {
                     self.accept_mention(None, cx);
                 } else {
                     self.submit(cx);
                 }
             }
-            FieldEvent::Cancel => {
+            TextFieldEvent::Cancel => {
                 if self.mention.is_some() || self.popup.is_some() {
                     self.mention = None;
                     self.popup = None;
@@ -366,7 +368,7 @@ impl Composer {
                     cx.emit(ComposerEvent::Stop);
                 }
             }
-            FieldEvent::Nav(nav) => {
+            TextFieldEvent::Nav(nav) => {
                 if let Some(m) = &mut self.mention {
                     let n = m.items.len();
                     if n > 0 {
@@ -382,6 +384,7 @@ impl Composer {
                     }
                 }
             }
+            TextFieldEvent::SubmitReverse | TextFieldEvent::Blur => {}
         }
     }
 
@@ -571,7 +574,7 @@ impl Composer {
         let items = open.then(|| {
             div().px(px(14.0)).pb(px(10.0)).flex().flex_col().gap(px(6.0)).children(plan.items.iter().enumerate().map(|(i, item)| {
                 let glyph: AnyElement = match item.state {
-                    TaskState::Done => icon(Icon::Check, 16.0, green(&t)).into_any_element(),
+                    TaskState::Done => icon(Icon::Check, 16.0, t.colors.success).into_any_element(),
                     TaskState::InProgress => Spinner::new(c.accent).into_any_element(),
                     TaskState::Pending => div().size(px(16.0)).flex().items_center().justify_center().child(div().size(px(8.0)).rounded_full().bg(c.surface_4)).into_any_element(),
                 };
@@ -581,7 +584,7 @@ impl Composer {
                     .flex_row()
                     .items_start()
                     .gap(px(10.0))
-                    .text_size(px(13.0))
+                    .text_size(px(ty.ui_size_md))
                     .text_color(if item.state == TaskState::Done { c.muted } else { c.text })
                     .child(glyph)
                     .child(div().flex_1().min_w_0().child(SharedString::from(item.text.clone())))
@@ -611,7 +614,7 @@ impl Composer {
                     let dir = path.strip_suffix(name.as_str()).unwrap_or("").trim_end_matches('/').to_string();
                     let lead = crate::widgets::file_glyph(&name, c.muted);
                     let hint = (!dir.is_empty()).then(|| SharedString::from(dir));
-                    menu_row(("mention", i), &t, Some(lead), name, hint, i == m.selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    menu_row(SharedString::from(format!("mention-{path}")), &t, Some(lead), name, hint, i == m.selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.accept_mention(Some(i), cx);
                     }))
                 }))
@@ -660,7 +663,7 @@ impl Composer {
             .trigger(pill)
             .children(PERMISSION_ORDER.iter().map(|m| {
                 let m = *m;
-                let lead = icon(if is_dangerous(m) { Icon::Alert } else { Icon::Check }, 16.0, if is_dangerous(m) { amber(&t) } else { c.muted });
+                let lead = icon(if is_dangerous(m) { Icon::Alert } else { Icon::Check }, 16.0, if is_dangerous(m) { t.colors.warning } else { c.muted });
                 menu_row(
                     ("perm", m as usize),
                     &t,
@@ -703,11 +706,11 @@ impl Composer {
             }))
             .into_any_element(),
         );
-        for (i, m) in known.iter().enumerate() {
+        for m in known.iter() {
             let id = m.id.clone();
             let selected = current.as_deref() == Some(id.as_str());
             rows.push(
-                menu_row(("model", i), &t, None, m.label.clone(), Some(id.clone().into()), selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                menu_row(SharedString::from(format!("model-{}", m.id)), &t, None, m.label.clone(), Some(id.clone().into()), selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.popup = None;
                     cx.emit(ComposerEvent::SetModel(Some(id.clone())));
                     cx.notify();
@@ -724,7 +727,7 @@ impl Composer {
                 .mx(px(4.0))
                 .px(px(10.0))
                 .py(px(6.0))
-                .rounded(px(10.0))
+                .rounded(px(Radius::PILL))
                 .bg(c.surface_3)
                 .child(self.model_field.clone())
                 .into_any_element(),
@@ -763,9 +766,9 @@ impl Composer {
             }))
             .into_any_element(),
         ];
-        for (i, (value, label)) in levels.into_iter().enumerate() {
+        for (value, label) in levels {
             rows.push(
-                menu_row(("effort", i), &t, None, label, None, current.as_deref() == Some(value), true, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                menu_row(SharedString::from(format!("effort-{value}")), &t, None, label, None, current.as_deref() == Some(value), true, cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.popup = None;
                     cx.emit(ComposerEvent::SetEffort(Some(value.to_string())));
                     cx.notify();
@@ -787,6 +790,7 @@ impl Composer {
     }
 
     fn agent_popover(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let ty = self.theme.typography;
         let t = self.theme;
         let c = t.colors;
         let this = cx.entity();
@@ -811,9 +815,9 @@ impl Composer {
                         .max_h(px(220.0))
                         .overflow_y_scroll()
                         .p(px(10.0))
-                        .rounded(px(10.0))
+                        .rounded(px(Radius::PILL))
                         .bg(c.surface_3)
-                        .text_size(px(12.0))
+                        .text_size(px(ty.ui_size_sm))
                         .text_color(c.muted)
                         .child(SharedString::from(s.clone()))
                         .into_any_element(),
@@ -829,7 +833,7 @@ impl Composer {
                         .flex_col()
                         .gap(px(8.0))
                         .child(div().font_weight(FontWeight::MEDIUM).child(format!("Cambiar a {label}")))
-                        .child(div().text_size(px(12.0)).text_color(c.muted).child("El nuevo agente recibirá este resumen como primer mensaje:"))
+                        .child(div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child("El nuevo agente recibirá este resumen como primer mensaje:"))
                         .child(text)
                         .child(
                             div()
@@ -949,25 +953,20 @@ impl Render for Composer {
         let popup = self.popup.clone();
 
         let chips = (!self.attachments.is_empty()).then(|| {
-            div().w_full().flex().flex_row().flex_wrap().gap(px(6.0)).pb(px(8.0)).children(self.attachments.iter().enumerate().map(|(i, p)| {
+            div().w_full().flex().flex_row().flex_wrap().gap(px(6.0)).pb(px(8.0)).children(self.attachments.iter().map(|p| {
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                file_chip(&t, &name, c.text).id(("attach", i)).tooltip(Tooltip::text(&t, p.display().to_string())).child(
-                    div()
-                        .id(("attach-x", i))
-                        .size(px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.0))
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(c.surface_4))
-                        .child(icon(Icon::Close, 10.0, c.muted))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            if i < this.attachments.len() {
-                                this.attachments.remove(i);
-                            }
-                            cx.notify();
-                        })),
+                file_chip(&t, &name, c.text).id(SharedString::from(format!("attach-{}", p.display()))).tooltip(Tooltip::text(&t, p.display().to_string())).child(
+                    IconButton::new(format!("attach-x-{}", p.display()), &t, Icon::Close)
+                        .size(18.0)
+                        .icon_size(10.0)
+                        .tooltip("Quitar")
+                        .on_click({
+                            let path = p.clone();
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.attachments.retain(|a| a != &path);
+                                cx.notify();
+                            })
+                        }),
                 )
             }))
         });

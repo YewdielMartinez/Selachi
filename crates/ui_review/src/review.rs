@@ -14,15 +14,15 @@ use gpui::{
     MouseButton, MouseDownEvent, ScrollHandle, SharedString, StyledText, Subscription, Task, Window, div, prelude::*,
     px,
 };
-use theme::{Mode, Radius, Theme, rgb};
+use theme::{Radius, Theme};
 use ui_kit::{ActionButton, Button, GhostButton, Icon, IconButton, SectionLabel, Spinner, icon};
 use viewer_svc::{DiffLine, LineKind};
 
 use crate::diff::{DiffRow, FileBody, FileDiff, FileStatus, ReviewSource, anchor_of, load_source};
-use crate::field::{NoteField, NoteFieldEvent};
 use crate::markdown::build_markdown;
 use crate::note::{Note, NoteId, NoteRef, NoteSet, NoteState, Side};
 use crate::store::{ReviewStore, draft_key};
+use crate::tone::{Tone, ink, tint};
 
 /// Rows of one file painted before the "show more" button.
 pub const ROW_PAGE: usize = 1_200;
@@ -59,7 +59,7 @@ struct Editor {
     start: usize,
     end: usize,
     editing: Option<NoteId>,
-    field: Entity<NoteField>,
+    field: Entity<ui_kit::TextArea>,
     _sub: Subscription,
 }
 
@@ -95,23 +95,11 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// `ansi[i]` of the theme at `alpha`.
-fn tint(theme: &Theme, ansi: usize, alpha: f32) -> Hsla {
-    let mut c = rgb(theme.terminal.ansi[ansi]);
-    c.a = alpha;
-    c.into()
-}
-
-/// Foreground for text over a tint of `ansi_dark`/`ansi_light` (bright hues on dark, base on light).
-fn ink(theme: &Theme, dark: usize, light: usize) -> Hsla {
-    rgb(theme.terminal.ansi[if theme.mode == Mode::Light { light } else { dark }]).into()
-}
-
 fn state_colors(theme: &Theme, state: NoteState) -> (Hsla, Hsla) {
     match state {
-        NoteState::Draft => (tint(theme, 3, 0.20), ink(theme, 11, 3)),
-        NoteState::Sent => (tint(theme, 4, 0.20), ink(theme, 12, 4)),
-        NoteState::Resolved => (tint(theme, 2, 0.20), ink(theme, 10, 2)),
+        NoteState::Draft => (tint(theme, Tone::Warning, 0.20), ink(theme, Tone::Warning)),
+        NoteState::Sent => (tint(theme, Tone::Info, 0.20), ink(theme, Tone::Info)),
+        NoteState::Resolved => (tint(theme, Tone::Success, 0.20), ink(theme, Tone::Success)),
     }
 }
 
@@ -198,7 +186,7 @@ impl ReviewView {
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
         if let Some(ed) = &self.editor {
-            ed.field.update(cx, |f, _| f.set_theme(theme));
+            ed.field.update(cx, |f, cx| f.set_theme(theme, cx));
         }
         cx.notify();
     }
@@ -347,12 +335,20 @@ impl ReviewView {
         cx: &mut Context<Self>,
     ) {
         let theme = self.theme;
-        let field = cx.new(|cx| NoteField::new(theme, "Escribe tu nota para el agente...", cx));
+        // `Enter` adds a line, `Ctrl+Enter` saves (the editor of a note is a small document).
+        let field = cx.new(|cx| {
+            ui_kit::TextArea::area(theme, cx)
+                .bare()
+                .lines(3, 12)
+                .enter_mode(ui_kit::EnterMode::Newline)
+                .placeholder("Escribe tu nota para el agente...")
+        });
         field.update(cx, |f, cx| f.set_text(text, cx));
-        let sub = cx.subscribe(&field, |this, _, ev: &NoteFieldEvent, cx| match ev {
-            NoteFieldEvent::Submit => this.save_editor(cx),
-            NoteFieldEvent::Cancel => this.cancel_editor(cx),
-            NoteFieldEvent::Changed => cx.notify(),
+        let sub = cx.subscribe(&field, |this, _, ev: &ui_kit::TextFieldEvent, cx| match ev {
+            ui_kit::TextFieldEvent::Submit => this.save_editor(cx),
+            ui_kit::TextFieldEvent::Cancel => this.cancel_editor(cx),
+            ui_kit::TextFieldEvent::Changed => cx.notify(),
+            ui_kit::TextFieldEvent::SubmitReverse | ui_kit::TextFieldEvent::Blur | ui_kit::TextFieldEvent::Nav(_) => {}
         });
         field.read(cx).focus(window);
         self.editor = Some(Editor { path, side, anchor: start, start, end, editing, field, _sub: sub });
@@ -468,7 +464,7 @@ impl ReviewView {
             .px(px(9.0))
             .flex()
             .items_center()
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .bg(c.surface_3)
             .text_size(px(self.theme.typography.ui_size_sm))
             .text_color(c.muted)
@@ -576,9 +572,9 @@ impl ReviewView {
             let selected = i == self.selected;
             let notes = self.notes.for_path(&f.path).len();
             let (mark_bg, mark_fg) = match f.status {
-                FileStatus::Added => (tint(&theme, 2, 0.20), ink(&theme, 10, 2)),
-                FileStatus::Modified => (tint(&theme, 3, 0.20), ink(&theme, 11, 3)),
-                FileStatus::Deleted => (tint(&theme, 1, 0.20), ink(&theme, 9, 1)),
+                FileStatus::Added => (tint(&theme, Tone::Success, 0.20), ink(&theme, Tone::Success)),
+                FileStatus::Modified => (tint(&theme, Tone::Warning, 0.20), ink(&theme, Tone::Warning)),
+                FileStatus::Deleted => (tint(&theme, Tone::Error, 0.20), ink(&theme, Tone::Error)),
             };
             let stats: AnyElement = match f.body {
                 FileBody::Text => div()
@@ -588,15 +584,15 @@ impl ReviewView {
                     .gap(px(5.0))
                     .text_size(px(ty.ui_size_sm))
                     .font_family(ty.mono_family)
-                    .child(div().text_color(ink(&theme, 10, 2)).child(SharedString::from(format!("+{}", f.added))))
-                    .child(div().text_color(ink(&theme, 9, 1)).child(SharedString::from(format!("\u{2212}{}", f.removed))))
+                    .child(div().text_color(ink(&theme, Tone::Success)).child(SharedString::from(format!("+{}", f.added))))
+                    .child(div().text_color(ink(&theme, Tone::Error)).child(SharedString::from(format!("\u{2212}{}", f.removed))))
                     .into_any_element(),
                 FileBody::Binary => div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child("binario").into_any_element(),
                 FileBody::TooLarge => div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child("grande").into_any_element(),
             };
             list = list.child(
                 div()
-                    .id(("review-file", i))
+                    .id(SharedString::from(format!("review-file-{}", f.path)))
                     .occlude()
                     .w_full()
                     .h(px(48.0))
@@ -605,7 +601,7 @@ impl ReviewView {
                     .flex_row()
                     .items_center()
                     .gap(px(10.0))
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .cursor_pointer()
                     .when(selected, |d| d.bg(c.surface_3))
                     .when(!selected, |d| d.hover(move |s| s.bg(c.surface_2)))
@@ -618,9 +614,9 @@ impl ReviewView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(6.0))
+                            .rounded(px(Radius::CHIP))
                             .bg(mark_bg)
-                            .text_size(px(11.0))
+                            .text_size(px(ty.ui_size_xs))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(mark_fg)
                             .child(f.status.mark()),
@@ -664,10 +660,10 @@ impl ReviewView {
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(9.0))
-                                .bg(tint(&theme, 3, 0.24))
-                                .text_size(px(11.0))
+                                .bg(tint(&theme, Tone::Warning, 0.24))
+                                .text_size(px(ty.ui_size_xs))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(ink(&theme, 11, 3))
+                                .text_color(ink(&theme, Tone::Warning))
                                 .child(SharedString::from(notes.to_string())),
                         )
                     }),
@@ -689,38 +685,39 @@ impl ReviewView {
     }
 
     fn number_cell(&self, n: Option<usize>, digits: usize) -> AnyElement {
+        let ty = self.theme.typography;
         div()
             .flex_none()
             .w(px(gutter_width(digits)))
             .pr(px(10.0))
             .flex()
             .justify_end()
-            .text_size(px(12.0))
+            .text_size(px(ty.ui_size_sm))
             .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
             .into_any_element()
     }
 
     /// One diff line. The gutter (both numbers) is the click target for notes.
-    fn line_row(&self, ix: usize, line: &DiffLine, digits: usize, in_range: bool, noted: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn line_row(&self, line: &DiffLine, digits: usize, in_range: bool, noted: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let c = theme.colors;
         let bg: Option<Hsla> = if in_range {
-            Some(tint(&theme, 4, 0.16))
+            Some(tint(&theme, Tone::Info, 0.16))
         } else {
             match line.kind {
-                LineKind::Added => Some(tint(&theme, 2, 0.13)),
-                LineKind::Removed => Some(tint(&theme, 1, 0.13)),
+                LineKind::Added => Some(tint(&theme, Tone::Success, 0.13)),
+                LineKind::Removed => Some(tint(&theme, Tone::Error, 0.13)),
                 LineKind::Context => None,
             }
         };
         let (sign, sign_color): (&str, Hsla) = match line.kind {
-            LineKind::Added => ("+", ink(&theme, 10, 2)),
-            LineKind::Removed => ("-", ink(&theme, 9, 1)),
+            LineKind::Added => ("+", ink(&theme, Tone::Success)),
+            LineKind::Removed => ("-", ink(&theme, Tone::Error)),
             LineKind::Context => (" ", c.outline.into()),
         };
         let strong = match line.kind {
-            LineKind::Added => tint(&theme, 2, 0.34),
-            _ => tint(&theme, 1, 0.34),
+            LineKind::Added => tint(&theme, Tone::Success, 0.34),
+            _ => tint(&theme, Tone::Error, 0.34),
         };
         let mut text = line.text.clone();
         let mut marks: Vec<_> = line.inline.iter().map(|r| (r.clone(), HighlightStyle { background_color: Some(strong), ..HighlightStyle::default() })).collect();
@@ -738,19 +735,23 @@ impl ReviewView {
             marks.clear();
         }
         let anchor = anchor_of(line);
-        let gutter_bg: Option<Hsla> = if noted { Some(tint(&theme, 3, 0.28)) } else { None };
+        let gutter_bg: Option<Hsla> = if noted { Some(tint(&theme, Tone::Warning, 0.28)) } else { None };
         let hover = c.surface_4;
         let mut gutter = div()
-            .id(("review-gutter", ix))
+            .id(SharedString::from(format!(
+                "review-gutter-{}-{}",
+                line.old_line.map_or_else(String::new, |n| n.to_string()),
+                line.new_line.map_or_else(String::new, |n| n.to_string()),
+            )))
             .flex_none()
             .h_full()
             .flex()
             .flex_row()
             .items_center()
-            .text_color(if noted { ink(&theme, 11, 3) } else { c.outline.into() })
+            .text_color(if noted { ink(&theme, Tone::Warning) } else { c.outline.into() })
             .when_some(gutter_bg, |d, b| d.bg(b))
             // The 10 px note marker (a fixed slot, so numbers do not shift when a note appears).
-            .child(div().flex_none().w(px(16.0)).pl(px(4.0)).when(noted, |d| d.child(icon(Icon::Note, 10.0, ink(&theme, 11, 3)))))
+            .child(div().flex_none().w(px(16.0)).pl(px(4.0)).when(noted, |d| d.child(icon(Icon::Note, 10.0, ink(&theme, Tone::Warning)))))
             .child(self.number_cell(line.old_line, digits))
             .child(self.number_cell(line.new_line, digits));
         if let Some((side, n)) = anchor {
@@ -788,6 +789,7 @@ impl ReviewView {
     }
 
     fn hunk_row(&self, header: &str) -> AnyElement {
+        let ty = self.theme.typography;
         let c = self.theme.colors;
         div()
             .w_full()
@@ -797,7 +799,7 @@ impl ReviewView {
             .items_center()
             .bg(c.surface_1)
             .font_family(self.theme.typography.mono_family)
-            .text_size(px(12.0))
+            .text_size(px(ty.ui_size_sm))
             .text_color(c.outline)
             .child(SharedString::from(header.to_owned()))
             .into_any_element()
@@ -844,7 +846,7 @@ impl ReviewView {
             );
         div()
             .w_full()
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_2)
             .px(px(14.0))
             .py(px(10.0))
@@ -865,7 +867,7 @@ impl ReviewView {
                             .px(px(8.0))
                             .flex()
                             .items_center()
-                            .rounded(px(8.0))
+                            .rounded(px(Radius::CONTROL))
                             .bg(pill_bg)
                             .text_size(px(ty.ui_size_sm))
                             .font_weight(FontWeight::MEDIUM)
@@ -888,7 +890,7 @@ impl ReviewView {
                             div()
                                 .flex_none()
                                 .text_size(px(ty.ui_size_sm))
-                                .text_color(ink(&theme, 11, 3))
+                                .text_color(ink(&theme, Tone::Warning))
                                 .child("Las líneas cambiaron"),
                         )
                     })
@@ -907,7 +909,7 @@ impl ReviewView {
         let focused = ed.field.read(cx).focus_handle(cx).is_focused(window);
         div()
             .w_full()
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_2)
             .p(px(12.0))
             .flex()
@@ -918,7 +920,7 @@ impl ReviewView {
             .child(
                 div()
                     .w_full()
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .bg(c.surface_1)
                     .px(px(12.0))
                     .py(px(8.0))
@@ -1008,7 +1010,7 @@ impl ReviewView {
                         e.path == file.path
                             && anchor_of(l).is_some_and(|(side, n)| side == e.side && (e.start..=e.end).contains(&n))
                     });
-                    rows = rows.child(self.line_row(ix, l, digits, in_range, noted_rows.contains(&ix), cx));
+                    rows = rows.child(self.line_row(l, digits, in_range, noted_rows.contains(&ix), cx));
                 }
             }
             if let Some(notes) = under.get(&ix) {

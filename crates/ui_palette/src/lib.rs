@@ -41,13 +41,14 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod form;
-mod input;
 mod item;
 mod model;
 mod query;
 mod scorer;
 mod source;
 mod sources;
+#[cfg(test)]
+mod tests;
 mod view;
 
 pub use form::{FormSpec, FormState, FormSubmit};

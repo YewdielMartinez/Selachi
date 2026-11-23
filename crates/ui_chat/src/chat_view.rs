@@ -24,7 +24,6 @@ use theme::{Radius, Theme};
 use ui_kit::{Icon, Logo, Pill, Placement, Popover, Spinner, agent_icon, icon};
 
 use crate::composer::{Composer, ComposerEvent, ComposerState};
-use crate::field::{ChatField, FieldEvent};
 use crate::hub::ChatHub;
 use crate::options::{agent_mark, model_label};
 use crate::rows::{ChatRow, RowCache, RowKey, build_rows, diff_rows, keys_of};
@@ -108,7 +107,7 @@ pub struct ChatView {
     dirty: bool,
     snap_bottom: bool,
     cstate_dirty: bool,
-    title_edit: Option<Entity<ChatField>>,
+    title_edit: Option<Entity<ui_kit::TextField>>,
     title_subs: Vec<Subscription>,
     branch: Option<String>,
     pending_perm: Option<PermissionMode>,
@@ -262,7 +261,10 @@ impl ChatView {
     pub(crate) fn column_max(&self) -> Option<f32> {
         match self.reading_width {
             Some(w) => w,
-            None if self.window_w >= XL_FROM => Some(READING_WIDTH_XL),
+            // A deliberate window-level decision (docs/DESIGN.md, `WindowClass::Xl`): on a very wide
+            // monitor lines are capped no matter how the zones are split. Everything else here uses
+            // the measured width of the chat column.
+            None if ui_kit::WindowClass::from_width(self.window_w) == ui_kit::WindowClass::Xl => Some(READING_WIDTH_XL),
             None => None,
         }
     }
@@ -633,16 +635,15 @@ impl ChatView {
         let title = rec.display_title().to_string();
         let theme = self.theme;
         let field = cx.new(|cx| {
-            let mut f = ChatField::new(theme, "Título del hilo", false, cx);
-            f.set_font_size(15.0);
+            let mut f = ui_kit::TextField::new(theme, cx).bare().placeholder("Título del hilo").font_size(theme.typography.ui_size_lg);
             f.set_text(&title, cx);
             f
         });
         let focus = field.read(cx).focus_handle(cx);
         self.title_subs = vec![
-            cx.subscribe(&field, |this, f, ev: &FieldEvent, cx| match ev {
-                FieldEvent::Submit => this.commit_rename(f.read(cx).text().to_string(), cx),
-                FieldEvent::Cancel => this.cancel_rename(cx),
+            cx.subscribe(&field, |this, f, ev: &ui_kit::TextFieldEvent, cx| match ev {
+                ui_kit::TextFieldEvent::Submit => this.commit_rename(f.read(cx).text().to_string(), cx),
+                ui_kit::TextFieldEvent::Cancel => this.cancel_rename(cx),
                 _ => {}
             }),
             cx.on_focus_out(&focus, window, |this, _e, _w, cx| {
@@ -692,13 +693,13 @@ impl ChatView {
         let ty = t.typography;
         let rec = self.record.clone();
         let title: AnyElement = match (&self.title_edit, &rec) {
-            (Some(f), _) => div().w(px(380.0)).max_w_full().px(px(8.0)).py(px(3.0)).rounded(px(8.0)).bg(c.surface_2).child(f.clone()).into_any_element(),
+            (Some(f), _) => div().w(px(380.0)).max_w_full().px(px(8.0)).py(px(3.0)).rounded(px(Radius::CONTROL)).bg(c.surface_2).child(f.clone()).into_any_element(),
             (None, Some(r)) => div()
                 .id("chat-title")
                 .max_w(px(520.0))
                 .px(px(8.0))
                 .py(px(3.0))
-                .rounded(px(8.0))
+                .rounded(px(Radius::CONTROL))
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
@@ -787,7 +788,7 @@ impl ChatView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.0))
+                        .rounded(px(Radius::CHIP))
                         .cursor_pointer()
                         .hover(move |s| s.bg(c.surface_3))
                         .child(icon(Icon::Close, 10.0, c.muted))
@@ -801,6 +802,7 @@ impl ChatView {
     }
 
     fn render_thread(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let ty = self.theme.typography;
         self.sync(cx);
         let t = self.theme;
         let c = t.colors;
@@ -811,7 +813,7 @@ impl ChatView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(13.0))
+                .text_size(px(ty.ui_size_md))
                 .text_color(c.muted)
                 .child("Escribe un mensaje para empezar.")
                 .into_any_element()
@@ -989,7 +991,7 @@ impl Render for ChatView {
                 .items_center()
                 .justify_center()
                 .gap(px(10.0))
-                .text_size(px(13.0))
+                .text_size(px(ty.ui_size_md))
                 .text_color(c.muted)
                 .child(Spinner::new(c.accent))
                 .child("Abriendo el hilo…")

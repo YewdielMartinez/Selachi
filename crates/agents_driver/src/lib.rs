@@ -15,12 +15,14 @@
 //!
 //! Backends: Claude Code (`stream-json`, [`claude`]), Codex (`app-server`
 //! JSON-RPC, [`codex`]), and any Agent Client Protocol agent ([`acp`]): OpenCode
-//! (`opencode acp`, [`opencode`]) and, with `AgentKind::Acp { command }`, Gemini CLI
+//! (`opencode acp`, [`opencode`]), the Antigravity CLI (`agy acp`, preset
+//! [`AgentKind::antigravity`], [`antigravity`]) and, with `AgentKind::Acp { command }`, Gemini CLI
 //! and friends. No API keys: they use the user's own CLI login. Plan reference:
 //! `docs/PLAN.md` section 14.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod acp;
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod coalesce;
@@ -67,11 +69,19 @@ pub fn spawn_with(
 /// Which models does this agent offer? Starts the agent (no prompt is ever sent), waits for its
 /// [`AgentEvent::Models`] (Codex `model/list`, ACP `session/new`) for at most `timeout` and shuts it
 /// down. Blocking: call it from a background thread. Claude Code has no such call (its aliases are
-/// documented), so it returns `Unsupported`.
+/// documented), so it returns `Unsupported`. The Antigravity CLI is answered by `agy models` (no session
+/// is opened), falling back to the ACP handshake.
 pub fn probe_models(kind: AgentKind, cwd: impl Into<std::path::PathBuf>, timeout: std::time::Duration) -> Result<Vec<ModelInfo>> {
     use futures::StreamExt;
     if kind == AgentKind::ClaudeCode {
         return Err(DriverError::Unsupported("Claude Code does not list models".into()));
+    }
+    if let AgentKind::Acp { command } = &kind {
+        if is_antigravity(command) {
+            if let Ok(models) = antigravity::list_models(timeout) {
+                return Ok(models);
+            }
+        }
     }
     let (mut driver, mut rx) = spawn(kind, &ThreadConfig::new(cwd))?;
     let (tx, out) = std::sync::mpsc::channel();

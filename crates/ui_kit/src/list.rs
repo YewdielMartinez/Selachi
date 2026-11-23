@@ -12,9 +12,10 @@ use gpui::{
     SharedString, StyleRefinement, Styled, Window, WindowId, canvas, div, fill, point, prelude::*,
     px, size, uniform_list,
 };
-use theme::{Rgba, Theme, rgb};
+use theme::{Radius, Rgba, Theme, rgb};
 
 use crate::button::ClickFn;
+use crate::focus;
 use crate::icon::{Icon, icon};
 use crate::motion::reduced_motion;
 
@@ -270,6 +271,7 @@ pub struct ListRow {
     status: Option<RowStatus>,
     selected: bool,
     glass: bool,
+    focusable: bool,
     on_click: Option<ClickFn>,
     on_hover: Option<HoverFn>,
 }
@@ -290,9 +292,17 @@ impl ListRow {
             status: None,
             selected: false,
             glass: false,
+            focusable: true,
             on_click: None,
             on_hover: None,
         }
+    }
+
+    /// Keyboard focus (tab stop + ring; `Enter` / `Space` click it). On by default; a row
+    /// without `on_click` is never focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
     }
 
     /// The pointer entered (`true`) or left (`false`) the row. Drive hover-only affordances from
@@ -354,7 +364,7 @@ impl ListRow {
 }
 
 impl RenderOnce for ListRow {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let theme = self.theme;
@@ -364,8 +374,10 @@ impl RenderOnce for ListRow {
             (None, None, Some(i)) => Some(icon(i, 16.0, c.muted).into_any_element()),
             (None, None, None) => None,
         };
+        let focus = (self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &self.id));
+        let id = self.id;
         let mut el = div()
-            .id(self.id)
+            .id(id.clone())
             .occlude()
             .w_full()
             .h(px(Self::HEIGHT - 4.0))
@@ -375,7 +387,7 @@ impl RenderOnce for ListRow {
             .flex_row()
             .items_center()
             .gap(px(10.0))
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .font_family(ty.ui_family)
             .when(self.selected, |d| {
                 d.bg(if self.glass { crate::glass_selected(&theme) } else { c.surface_3.into() })
@@ -427,7 +439,7 @@ impl RenderOnce for ListRow {
         if let Some(f) = self.on_click {
             el = el.cursor_pointer().on_click(move |e, w, cx| f(e, w, cx));
         }
-        el
+        focus::wire(el, focus, &id, Radius::PILL, c.accent)
     }
 }
 

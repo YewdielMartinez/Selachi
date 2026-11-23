@@ -17,7 +17,7 @@ use crate::chat_view::ChatView;
 use crate::md::render_md;
 use crate::rows::{ChatRow, RowKey, RowKind, approval_outcome};
 use crate::util::{file_name, format_cost, format_duration_ms, format_tokens};
-use crate::widgets::{amber, file_chip, file_glyph, green, red, tool_line, working_bars};
+use crate::widgets::{file_chip, file_glyph, tool_line, working_bars};
 
 pub(crate) fn row_id(key: &RowKey) -> usize {
     let mut h = DefaultHasher::new();
@@ -136,10 +136,10 @@ impl ChatView {
                                 .my(px(4.0))
                                 .px(px(14.0))
                                 .py(px(10.0))
-                                .rounded(px(12.0))
+                                .rounded(px(Radius::SM))
                                 .bg(c.surface_1)
                                 .font_family(ty.ui_family)
-                                .text_size(px(13.0))
+                                .text_size(px(ty.ui_size_md))
                                 .line_height(relative(1.55))
                                 .text_color(c.muted)
                                 .child(SharedString::from(text.clone())),
@@ -180,7 +180,7 @@ impl ChatView {
                 let (verb, lead): (&str, AnyElement) = match status {
                     ToolStatus::Running => ("Running", Spinner::new(c.accent).into_any_element()),
                     ToolStatus::Ok => ("Ran", icon(Icon::Terminal, 16.0, c.muted).into_any_element()),
-                    ToolStatus::Failed => ("Failed", icon(Icon::Terminal, 16.0, red(&t)).into_any_element()),
+                    ToolStatus::Failed => ("Failed", icon(Icon::Terminal, 16.0, t.colors.error).into_any_element()),
                     ToolStatus::Cancelled => ("Cancelled", icon(Icon::Terminal, 16.0, c.muted).into_any_element()),
                 };
                 let label = div()
@@ -188,16 +188,16 @@ impl ChatView {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .child(div().flex_none().text_color(if *status == ToolStatus::Failed { red(&t) } else { c.muted }).child(verb))
+                    .child(div().flex_none().text_color(if *status == ToolStatus::Failed { t.colors.error } else { c.muted }).child(verb))
                     .child(
                         div()
                             .max_w(px(560.0))
                             .px(px(7.0))
                             .py(px(1.0))
-                            .rounded(px(6.0))
+                            .rounded(px(Radius::CHIP))
                             .bg(c.surface_2)
                             .font_family(ty.mono_family)
-                            .text_size(px(12.0))
+                            .text_size(px(ty.ui_size_sm))
                             .text_color(c.text)
                             .overflow_hidden()
                             .text_ellipsis()
@@ -205,7 +205,7 @@ impl ChatView {
                             .child(SharedString::from(cmd.lines().next().unwrap_or("").to_string())),
                     )
                     .into_any_element();
-                let meta = duration_ms.map(|d| div().flex_none().text_size(px(12.0)).text_color(c.outline).child(format_duration_ms(d)).into_any_element());
+                let meta = duration_ms.map(|d| div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.outline).child(format_duration_ms(d)).into_any_element());
                 let line = tool_line(("cmd", id), &t, lead, label, meta, Some(expanded), handler(cx));
                 let thread = self.thread_id();
                 let cwd = self.cwd();
@@ -220,7 +220,7 @@ impl ChatView {
                             div()
                                 .my(px(4.0))
                                 .ml(px(24.0))
-                                .rounded(px(12.0))
+                                .rounded(px(Radius::SM))
                                 .bg(c.surface_1)
                                 .flex()
                                 .flex_col()
@@ -233,7 +233,7 @@ impl ChatView {
                                         .pt(px(10.0))
                                         .pb(px(6.0))
                                         .font_family(ty.mono_family)
-                                        .text_size(px(12.0))
+                                        .text_size(px(ty.ui_size_sm))
                                         .line_height(relative(1.45))
                                         .text_color(c.muted)
                                         .child(SharedString::from(
@@ -266,7 +266,7 @@ impl ChatView {
                 let name = file_name(&shown).to_string();
                 let lead: AnyElement = match status {
                     ToolStatus::Running => Spinner::new(c.accent).into_any_element(),
-                    ToolStatus::Failed => icon(Icon::Alert, 16.0, red(&t)).into_any_element(),
+                    ToolStatus::Failed => icon(Icon::Alert, 16.0, t.colors.error).into_any_element(),
                     _ => icon(Icon::Edit, 16.0, c.muted).into_any_element(),
                 };
                 let opens = path.clone();
@@ -290,8 +290,8 @@ impl ChatView {
                     .gap(px(8.0))
                     .child(div().flex_none().child(*verb))
                     .child(chip)
-                    .when_some(*adds, |d, a| d.child(div().flex_none().text_size(px(12.0)).text_color(green(&t)).child(format!("+{a}"))))
-                    .when_some(*dels, |d, x| d.child(div().flex_none().text_size(px(12.0)).text_color(red(&t)).child(format!("−{x}"))))
+                    .when_some(*adds, |d, a| d.child(div().flex_none().text_size(px(ty.ui_size_sm)).text_color(t.colors.success).child(format!("+{a}"))))
+                    .when_some(*dels, |d, x| d.child(div().flex_none().text_size(px(ty.ui_size_sm)).text_color(t.colors.error).child(format!("−{x}"))))
                     .into_any_element();
                 let expandable = summary.is_some();
                 let line = tool_line(("edit", id), &t, lead, label, None, expandable.then_some(expanded), if expandable { handler(cx) } else { None });
@@ -307,10 +307,10 @@ impl ChatView {
                                 .ml(px(24.0))
                                 .px(px(14.0))
                                 .py(px(10.0))
-                                .rounded(px(12.0))
+                                .rounded(px(Radius::SM))
                                 .bg(c.surface_1)
                                 .font_family(ty.mono_family)
-                                .text_size(px(12.0))
+                                .text_size(px(ty.ui_size_sm))
                                 .text_color(c.muted)
                                 .child(SharedString::from(summary.clone().unwrap_or_default())),
                         )
@@ -320,7 +320,7 @@ impl ChatView {
             RowKind::Tool { title, class, status, duration_ms, summary } => {
                 let lead: AnyElement = match status {
                     ToolStatus::Running => Spinner::new(c.accent).into_any_element(),
-                    ToolStatus::Failed => icon(Icon::Alert, 16.0, red(&t)).into_any_element(),
+                    ToolStatus::Failed => icon(Icon::Alert, 16.0, t.colors.error).into_any_element(),
                     _ => icon(
                         match class {
                             ToolClass::Web => Icon::Search,
@@ -332,7 +332,7 @@ impl ChatView {
                     )
                     .into_any_element(),
                 };
-                let meta = duration_ms.map(|d| div().flex_none().text_size(px(12.0)).text_color(c.outline).child(format_duration_ms(d)).into_any_element());
+                let meta = duration_ms.map(|d| div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.outline).child(format_duration_ms(d)).into_any_element());
                 let expandable = summary.is_some();
                 let line = tool_line(
                     ("tool", id),
@@ -355,7 +355,7 @@ impl ChatView {
                                 .ml(px(24.0))
                                 .px(px(14.0))
                                 .py(px(10.0))
-                                .rounded(px(12.0))
+                                .rounded(px(Radius::SM))
                                 .bg(c.surface_1)
                                 .text_size(px(12.5))
                                 .text_color(c.muted)
@@ -385,7 +385,7 @@ impl ChatView {
                                 .text_size(px(13.5))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(c.text)
-                                .child(icon(Icon::Alert, 16.0, amber(&t)))
+                                .child(icon(Icon::Alert, 16.0, t.colors.warning))
                                 .child(SharedString::from(format!("El agente pide permiso: {tool}"))),
                         )
                         .when(!detail.trim().is_empty(), |d| {
@@ -395,10 +395,10 @@ impl ChatView {
                                     .overflow_hidden()
                                     .px(px(12.0))
                                     .py(px(8.0))
-                                    .rounded(px(10.0))
+                                    .rounded(px(Radius::PILL))
                                     .bg(c.surface_2)
                                     .font_family(ty.mono_family)
-                                    .text_size(px(12.0))
+                                    .text_size(px(ty.ui_size_sm))
                                     .text_color(c.muted)
                                     .child(SharedString::from(detail.clone())),
                             )
@@ -431,9 +431,9 @@ impl ChatView {
                         .flex_row()
                         .items_center()
                         .gap(px(8.0))
-                        .text_size(px(13.0))
+                        .text_size(px(ty.ui_size_md))
                         .text_color(c.muted)
-                        .child(icon(if ok { Icon::Check } else { Icon::Close }, 16.0, if ok { green(&t) } else { c.muted }))
+                        .child(icon(if ok { Icon::Check } else { Icon::Close }, 16.0, if ok { t.colors.success } else { c.muted }))
                         .child(
                             div()
                                 .min_w_0()
@@ -497,7 +497,7 @@ impl ChatView {
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .text_size(px(13.0))
+                .text_size(px(ty.ui_size_md))
                 .text_color(c.muted)
                 .child(working_bars(&t))
                 .child("Working…")
@@ -513,7 +513,7 @@ impl ChatView {
                 .flex_row()
                 .items_start()
                 .gap(px(10.0))
-                .text_size(px(13.0))
+                .text_size(px(ty.ui_size_md))
                 .line_height(relative(1.5))
                 .text_color(c.error)
                 .child(div().pt(px(1.0)).child(icon(Icon::Alert, 16.0, c.error)))

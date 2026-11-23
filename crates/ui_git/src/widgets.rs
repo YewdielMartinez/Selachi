@@ -9,7 +9,7 @@ use gpui::{
     prelude::*, px,
 };
 use theme::{Radius, Theme, rgb};
-use ui_kit::{Button, GhostButton, Icon, Spinner, Tooltip, VirtualList, icon};
+use ui_kit::{Button, FileIcon, GhostButton, Icon, Spinner, Tooltip, VirtualList, file_icon, icon};
 use viewer_svc::{HighlightKind, LineKind};
 
 use crate::data::DiffTarget;
@@ -28,7 +28,8 @@ const REVIEW_MAX: usize = 6;
 
 pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-pub fn ansi(theme: &Theme, i: usize) -> Rgba {
+/// A terminal palette slot: only for syntax colors; status colors are theme roles.
+fn ansi(theme: &Theme, i: usize) -> Rgba {
     rgb(theme.terminal.ansi[i])
 }
 
@@ -43,8 +44,8 @@ pub fn diff_tint(theme: &Theme, kind: LineKind) -> Option<Rgba> {
         _ => 0.13,
     };
     match kind {
-        LineKind::Added => Some(alpha(ansi(theme, 2), a)),
-        LineKind::Removed => Some(alpha(ansi(theme, 1), a)),
+        LineKind::Added => Some(alpha(theme.colors.success, a)),
+        LineKind::Removed => Some(alpha(theme.colors.error, a)),
         LineKind::Context => None,
     }
 }
@@ -67,10 +68,10 @@ fn syntax_color(theme: &Theme, kind: HighlightKind) -> Option<Hsla> {
 /// Color of the status letter of a file row.
 pub fn letter_color(theme: &Theme, letter: char) -> Rgba {
     match letter {
-        'M' => ansi(theme, 3),
-        'A' | 'U' => ansi(theme, 2),
-        'D' => ansi(theme, 1),
-        'R' => ansi(theme, 4),
+        'M' => theme.colors.warning,
+        'A' | 'U' => theme.colors.success,
+        'D' => theme.colors.error,
+        'R' => theme.colors.info,
         'C' => ansi(theme, 6),
         'T' => ansi(theme, 5),
         '!' => theme.colors.error,
@@ -86,10 +87,10 @@ pub fn letter_pill(theme: &Theme, letter: char) -> impl IntoElement + use<> {
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(6.0))
+        .rounded(px(Radius::CHIP))
         .bg(alpha(color, 0.16))
         .text_color(color)
-        .text_size(px(11.0))
+        .text_size(px(theme.typography.ui_size_xs))
         .font_weight(FontWeight::MEDIUM)
         .child(letter.to_string())
 }
@@ -103,9 +104,9 @@ pub fn tag(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
         .px(px(8.0))
         .flex()
         .items_center()
-        .rounded(px(9.0))
+        .rounded(px(Radius::PILL))
         .bg(c.surface_3)
-        .text_size(px(11.0))
+        .text_size(px(theme.typography.ui_size_xs))
         .text_color(c.muted)
         .child(text.into())
 }
@@ -128,8 +129,8 @@ pub fn mini_button(
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(7.0))
-        .text_size(px(15.0))
+        .rounded(px(Radius::CHIP))
+        .text_size(px(theme.typography.ui_size_lg))
         .text_color(c.muted)
         .cursor_pointer()
         .hover(move |s| s.bg(c.surface_3).text_color(c.text))
@@ -161,7 +162,7 @@ pub fn section_header(
         .gap(px(4.0))
         .cursor_pointer()
         .child(icon(if collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, 16.0, c.muted))
-        .child(div().text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(title.to_string()))
+        .child(div().text_size(px(theme.typography.ui_size_sm)).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(title.to_string()))
         .when_some(count, |d, n| {
             d.child(
                 div()
@@ -169,9 +170,9 @@ pub fn section_header(
                     .h(px(16.0))
                     .flex()
                     .items_center()
-                    .rounded(px(8.0))
+                    .rounded(px(Radius::CONTROL))
                     .bg(c.surface_3)
-                    .text_size(px(10.0))
+                    .text_size(px(theme.typography.ui_size_xs))
                     .text_color(c.muted)
                     .child(n.to_string()),
             )
@@ -208,12 +209,12 @@ fn counts_text(theme: &Theme, row: &FileRow) -> Option<AnyElement> {
                 .flex_row()
                 .gap(px(6.0))
                 .font_family(mono)
-                .text_size(px(11.0))
-                .child(div().text_color(ansi(theme, 2)).child(format!("+{a}")))
-                .child(div().text_color(ansi(theme, 1)).child(format!("−{d}")))
+                .text_size(px(theme.typography.ui_size_xs))
+                .child(div().text_color(theme.colors.success).child(format!("+{a}")))
+                .child(div().text_color(theme.colors.error).child(format!("−{d}")))
                 .into_any_element(),
         ),
-        (None, true) => Some(div().flex_none().text_size(px(11.0)).text_color(theme.colors.muted).child("bin").into_any_element()),
+        (None, true) => Some(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(theme.colors.muted).child("bin").into_any_element()),
         (None, false) => None,
     }
 }
@@ -243,6 +244,7 @@ pub fn file_row(
         .gap(px(8.0))
         .cursor_pointer()
         .child(letter_pill(theme, row.letter))
+        .when(!compact, |d| d.child(file_icon(FileIcon::for_path(&row.path), 16.0, c.muted)))
         .child(path_text(theme, &row.text, budget))
         .when(!compact, |d| d.when_some(counts_text(theme, row), |d, t| d.child(t)))
         .on_click(move |e, w, cx| on_open(e, w, cx));
@@ -256,7 +258,7 @@ pub fn file_row(
         .gap(px(4.0))
         .pl(px(6.0))
         .pr(px(2.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .when(selected, |d| d.bg(c.surface_3))
         .when(!selected, |d| d.hover(move |s| s.bg(c.surface_2)))
         .child(main)
@@ -270,12 +272,12 @@ pub fn file_row(
 fn diff_line(theme: &Theme, row: &DiffRow) -> AnyElement {
     let c = theme.colors;
     let mono = theme.typography.mono_family;
-    let base = div().w_full().h(px(DIFF_ROW_H)).flex().flex_row().items_center().font_family(mono).text_size(px(12.0));
+    let base = div().w_full().h(px(DIFF_ROW_H)).flex().flex_row().items_center().font_family(mono).text_size(px(theme.typography.ui_size_sm));
     match row {
-        DiffRow::Hunk(h) => base.px(px(8.0)).text_size(px(11.0)).text_color(c.muted).child(h.clone()).into_any_element(),
+        DiffRow::Hunk(h) => base.px(px(8.0)).text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(h.clone()).into_any_element(),
         DiffRow::More(n) => base
             .px(px(8.0))
-            .text_size(px(11.0))
+            .text_size(px(theme.typography.ui_size_xs))
             .text_color(c.muted)
             .child(format!("… {n} líneas más (usa «Ampliar»)"))
             .into_any_element(),
@@ -295,7 +297,7 @@ fn diff_line(theme: &Theme, row: &DiffRow) -> AnyElement {
                         .pr(px(8.0))
                         .flex()
                         .justify_end()
-                        .text_size(px(10.0))
+                        .text_size(px(theme.typography.ui_size_xs))
                         .text_color(alpha(c.muted, 0.7))
                         .child(num.map_or_else(String::new, |n| n.to_string())),
                 )
@@ -316,8 +318,8 @@ fn diff_line(theme: &Theme, row: &DiffRow) -> AnyElement {
 /// The inline diff of the selected file, with "Abrir", "Ampliar" and "Agente".
 pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<GitModel>) -> AnyElement {
     let c = theme.colors;
-    let shell = div().w_full().flex_none().flex().flex_col().gap(px(6.0)).p(px(8.0)).rounded(px(10.0)).bg(c.surface_0);
-    let note = |text: String| div().px(px(6.0)).py(px(4.0)).text_size(px(12.0)).text_color(c.muted).child(text);
+    let shell = div().w_full().flex_none().flex().flex_col().gap(px(6.0)).p(px(8.0)).rounded(px(Radius::PILL)).bg(c.surface_0);
+    let note = |text: String| div().px(px(6.0)).py(px(4.0)).text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(text);
     let preview = match &slot.state {
         DiffState::Loading => return shell.child(note("Cargando diff…".into())).into_any_element(),
         DiffState::Failed(e) => return shell.child(note(format!("No se pudo leer el diff: {e}"))).into_any_element(),
@@ -344,9 +346,9 @@ pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<G
                     .flex_row()
                     .gap(px(8.0))
                     .font_family(theme.typography.mono_family)
-                    .text_size(px(11.0))
-                    .child(div().text_color(ansi(theme, 2)).child(format!("+{}", preview.added)))
-                    .child(div().text_color(ansi(theme, 1)).child(format!("−{}", preview.removed))),
+                    .text_size(px(theme.typography.ui_size_xs))
+                    .child(div().text_color(c.success).child(format!("+{}", preview.added)))
+                    .child(div().text_color(c.error).child(format!("−{}", preview.removed))),
             )
             .child(GhostButton::new("diff-open", theme, "Abrir").on_click(move |_, _, cx| {
                 m1.update(cx, |m, cx| m.open_file(&p1, line, cx));
@@ -377,7 +379,7 @@ pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<G
     })
     .w_full()
     .h(px(visible as f32 * DIFF_ROW_H))
-    .rounded(px(6.0))
+    .rounded(px(Radius::CHIP))
     .overflow_hidden();
     shell.child(header).child(list).into_any_element()
 }
@@ -388,11 +390,11 @@ pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<G
 
 fn kind_label(theme: &Theme, kind: ReviewKind) -> (&'static str, Rgba) {
     match kind {
-        ReviewKind::Create => ("recrea", ansi(theme, 2)),
-        ReviewKind::Overwrite => ("sobrescribe", ansi(theme, 3)),
-        ReviewKind::Delete => ("elimina", ansi(theme, 1)),
+        ReviewKind::Create => ("recrea", theme.colors.success),
+        ReviewKind::Overwrite => ("sobrescribe", theme.colors.warning),
+        ReviewKind::Delete => ("elimina", theme.colors.error),
         ReviewKind::Skip => ("omite", theme.colors.muted),
-        ReviewKind::Warn => ("", ansi(theme, 3)),
+        ReviewKind::Warn => ("", theme.colors.warning),
         ReviewKind::Info => ("", theme.colors.muted),
     }
 }
@@ -412,7 +414,7 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
         let of_kind: Vec<_> = review.lines.iter().filter(|l| l.kind == kind).collect();
         let (label, color) = kind_label(theme, kind);
         for l in of_kind.iter().take(REVIEW_MAX) {
-            let row = div().w_full().flex().flex_row().items_start().gap(px(8.0)).text_size(px(12.0));
+            let row = div().w_full().flex().flex_row().items_start().gap(px(8.0)).text_size(px(theme.typography.ui_size_sm));
             let row = match kind {
                 ReviewKind::Warn => row
                     .text_color(c.text)
@@ -428,7 +430,7 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .font_family(theme.typography.mono_family)
-                            .text_size(px(11.0))
+                            .text_size(px(theme.typography.ui_size_xs))
                             .text_color(c.text)
                             .child(l.text.clone()),
                     ),
@@ -439,7 +441,7 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
             out.push(
                 div()
                     .pl(px(if matches!(kind, ReviewKind::Warn | ReviewKind::Info) { 24.0 } else { 78.0 }))
-                    .text_size(px(11.0))
+                    .text_size(px(theme.typography.ui_size_xs))
                     .text_color(c.muted)
                     .child(format!("… y {} más", of_kind.len() - REVIEW_MAX))
                     .into_any_element(),
@@ -459,7 +461,7 @@ fn card_shell(theme: &Theme, danger: bool) -> gpui::Div {
 /// operation in `gate`, when it belongs in `slot`.
 pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Entity<GitModel>) -> Option<AnyElement> {
     let c = theme.colors;
-    let title = |text: String| div().text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.text).child(text);
+    let title = |text: String| div().text_size(px(theme.typography.ui_size_md)).font_weight(FontWeight::SEMIBOLD).text_color(c.text).child(text);
     match gate {
         Gate::Idle => None,
         Gate::Preflighting { op, .. } if op.slot() == slot => Some(
@@ -471,7 +473,7 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                         .items_center()
                         .gap(px(8.0))
                         .child(Spinner::new(c.accent))
-                        .child(div().text_size(px(12.0)).text_color(c.muted).child(format!("Comprobando {}…", op.title().to_lowercase()))),
+                        .child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(format!("Comprobando {}…", op.title().to_lowercase()))),
                 )
                 .into_any_element(),
         ),
@@ -484,7 +486,7 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                         .items_center()
                         .gap(px(8.0))
                         .child(Spinner::new(c.accent))
-                        .child(div().text_size(px(12.0)).text_color(c.muted).child(format!("{}…", op.title()))),
+                        .child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(format!("{}…", op.title()))),
                 )
                 .into_any_element(),
         ),
@@ -500,17 +502,17 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                     div()
                         .w_full()
                         .p(px(8.0))
-                        .rounded(px(8.0))
+                        .rounded(px(Radius::CONTROL))
                         .bg(c.surface_0)
                         .overflow_hidden()
                         .font_family(theme.typography.mono_family)
-                        .text_size(px(11.0))
+                        .text_size(px(theme.typography.ui_size_xs))
                         .text_color(c.muted)
                         .child(if more > 0 { format!("{shown}\n… y {more} líneas más") } else { shown }),
                 );
             }
             if let Some(why) = blocked.clone() {
-                card = card.child(div().text_size(px(12.0)).text_color(c.error).child(why));
+                card = card.child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.error).child(why));
             }
             let confirm = Button::primary("gate-confirm", theme, review.confirm_label.clone())
                 .disabled(blocked.is_some())
@@ -520,7 +522,7 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
         }
         Gate::Done { op, outcome } if op.slot() == slot => {
             let (m_close, m_retry) = (model.clone(), model.clone());
-            let color = if outcome.ok { ansi(theme, 2) } else { c.error };
+            let color = if outcome.ok { c.success } else { c.error };
             let mut card = card_shell(theme, false).child(
                 div()
                     .flex()
@@ -528,7 +530,7 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                     .items_start()
                     .gap(px(8.0))
                     .child(div().pt(px(1.0)).flex_none().child(icon(if outcome.ok { Icon::Check } else { Icon::Alert }, 16.0, color)))
-                    .child(div().flex_1().min_w_0().text_size(px(12.0)).text_color(c.text).child(outcome.summary.clone())),
+                    .child(div().flex_1().min_w_0().text_size(px(theme.typography.ui_size_sm)).text_color(c.text).child(outcome.summary.clone())),
             );
             if !outcome.detail.is_empty() {
                 card = card.child(
@@ -537,7 +539,7 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                         .max_h(px(110.0))
                         .overflow_hidden()
                         .font_family(theme.typography.mono_family)
-                        .text_size(px(11.0))
+                        .text_size(px(theme.typography.ui_size_xs))
                         .text_color(c.muted)
                         .child(outcome.detail.clone()),
                 );
@@ -578,7 +580,7 @@ pub fn quiet_error_card(theme: &Theme, text: &str, model: &Entity<GitModel>) -> 
                 .items_start()
                 .gap(px(8.0))
                 .child(div().pt(px(1.0)).flex_none().child(icon(Icon::Alert, 16.0, c.error)))
-                .child(div().flex_1().min_w_0().text_size(px(12.0)).text_color(c.text).child(text.to_string()))
+                .child(div().flex_1().min_w_0().text_size(px(theme.typography.ui_size_sm)).text_color(c.text).child(text.to_string()))
                 .child(mini_button("quiet-close", theme, "×", "Cerrar", move |_, _, cx| m.update(cx, |m, cx| m.dismiss(cx)))),
         )
         .into_any_element()
@@ -596,7 +598,7 @@ pub fn empty_state(theme: &Theme, title: &str, hint: &str) -> AnyElement {
         .items_center()
         .gap(px(4.0))
         .child(div().text_size(px(theme.typography.ui_size_md)).text_color(c.text).child(title.to_string()))
-        .child(div().px(px(12.0)).text_size(px(12.0)).text_color(c.muted).child(hint.to_string()))
+        .child(div().px(px(12.0)).text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(hint.to_string()))
         .into_any_element()
 }
 

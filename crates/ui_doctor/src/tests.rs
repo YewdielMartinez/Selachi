@@ -96,7 +96,7 @@ async fn the_panel_paints_in_both_widths_and_starts_sampling(cx: &mut TestAppCon
         cx.text_system().add_fonts(theme::fonts::embedded()).ok();
     });
     let (model, src) = new_model(cx);
-    let ctx = |w| PanelCtx { zone: PanelZone::Right, width_class: w, cwd: None, project_root: None, theme: Theme::light() };
+    let ctx = |w| PanelCtx::new(PanelZone::Right, w, Theme::light());
     let (panel, vcx) = {
         let m = model.clone();
         cx.add_window_view(move |_, cx| DoctorPanel::new(ctx(WidthClass::Regular), m, "0.0.1".into(), cx))
@@ -106,4 +106,24 @@ async fn the_panel_paints_in_both_widths_and_starts_sampling(cx: &mut TestAppCon
     panel.update(vcx, |p, cx| p.retarget(ctx(WidthClass::Compact), cx));
     vcx.run_until_parked();
     assert!(panel.read_with(vcx, |p, _| p.is_compact()));
+}
+
+#[gpui::test]
+async fn the_copy_button_puts_the_markdown_diagnosis_on_the_clipboard(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.text_system().add_fonts(theme::fonts::embedded()).ok();
+    });
+    let (model, _src) = new_model(cx);
+    let (panel, vcx) = {
+        let m = model;
+        ui_kit::testing::open_window(cx, move |_, cx| {
+            DoctorPanel::new(PanelCtx::new(PanelZone::Right, WidthClass::Regular, Theme::dark()), m, "9.9".into(), cx)
+        })
+    };
+    vcx.run_until_parked();
+    assert!(vcx.read_from_clipboard().is_none(), "nothing is copied until the button is pressed");
+    ui_kit::testing::click_id(vcx, "doctor-copy");
+    let copied = vcx.read_from_clipboard().and_then(|c| c.text()).expect("the diagnosis is on the clipboard");
+    assert!(copied.contains("(9.9)"), "{copied}");
+    assert!(panel.read_with(vcx, |p, _| p.is_copied()), "the button says it copied");
 }

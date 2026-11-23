@@ -19,7 +19,6 @@ use viewer_svc::GitBase;
 use crate::event::ViewerEvent;
 use crate::file_icon::FileGlyph;
 use crate::format::{display_path, find_repo_root, format_tokens};
-use crate::rows::tint;
 
 /// One file write recorded for the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -289,7 +288,7 @@ impl AgentTouchesView {
             .px(px(9.0))
             .flex()
             .items_center()
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .bg(c.surface_3)
             .text_size(px(self.theme.typography.ui_size_sm))
             .text_color(c.muted)
@@ -301,9 +300,7 @@ impl AgentTouchesView {
         let c = theme.colors;
         let ty = theme.typography;
         let g = FileGlyph::of(&e.name);
-        let light = theme.mode == theme::Mode::Light;
-        let green = tint(&theme, if light { 2 } else { 10 }, 1.0);
-        let red = tint(&theme, if light { 1 } else { 9 }, 1.0);
+        let (green, red) = (c.success, c.error);
         let stat: AnyElement = match &e.stat {
             DiffStat::Pending => Spinner::new(c.accent).into_any_element(),
             DiffStat::Changed { added, removed } => div()
@@ -311,7 +308,7 @@ impl AgentTouchesView {
                 .flex_row()
                 .gap(px(8.0))
                 .font_family(ty.mono_family)
-                .text_size(px(12.0))
+                .text_size(px(ty.ui_size_sm))
                 .child(div().text_color(green).child(SharedString::from(format!("+{added}"))))
                 .child(div().text_color(red).child(SharedString::from(format!("-{removed}"))))
                 .into_any_element(),
@@ -321,7 +318,7 @@ impl AgentTouchesView {
         let tools = e.tools.join(" + ");
         let this = this.clone();
         div()
-            .id(("touch-row", ix))
+            .id(SharedString::from(format!("touch-row-{}", e.path.display())))
             .w_full()
             .h(px(ROW_H - 4.0))
             .my(px(2.0))
@@ -330,7 +327,7 @@ impl AgentTouchesView {
             .flex_row()
             .items_center()
             .gap(px(12.0))
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
             .child(ui_kit::file_icon(ui_kit::FileIcon::for_name(&e.name), 16.0, g.tint(&theme)))
@@ -378,10 +375,9 @@ impl Render for AgentTouchesView {
         chips = chips.child(self.chip(format!("{} archivos", self.entries.len())));
         chips = chips.child(self.chip(format!("vs {}", self.session.base_label())));
         if added + removed > 0 {
-            let light = theme.mode == theme::Mode::Light;
             chips = chips
-                .child(self.chip(format!("+{added}")).text_color(tint(&theme, if light { 2 } else { 10 }, 1.0)))
-                .child(self.chip(format!("-{removed}")).text_color(tint(&theme, if light { 1 } else { 9 }, 1.0)));
+                .child(self.chip(format!("+{added}")).text_color(theme.colors.success))
+                .child(self.chip(format!("-{removed}")).text_color(theme.colors.error));
         }
         if let Some(t) = self.session.tokens {
             chips = chips.child(self.chip(format!("{} tokens", format_tokens(t))));

@@ -248,13 +248,7 @@ fn main() {
             WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
             move |window, cx| {
                 let provider = ProcsPanelProvider::new(model_for_window.clone());
-                let ctx = PanelCtx {
-                    zone,
-                    width_class: WidthClass::from_width(if zone == PanelZone::Bottom { w } else { panel_width }),
-                    cwd: None,
-                    project_root: None,
-                    theme,
-                };
+                let ctx = PanelCtx::new(zone, WidthClass::from_width(if zone == PanelZone::Bottom { w } else { panel_width }), theme);
                 let panel = provider.build(ctx, window, cx);
                 if ports && let Ok(p) = panel.clone().downcast::<ProcsPanel>() {
                     p.update(cx, |p, cx| p.select_ports(true, cx));

@@ -1,6 +1,7 @@
 //! Keyboard section: the action list, chord capture, conflict prompt and reset.
 
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px};
+use theme::Radius;
 use ui_kit::{Button, GhostButton};
 
 use crate::keys::{self, ChordError};
@@ -123,6 +124,7 @@ impl SettingsView {
     pub(crate) fn keyboard(&mut self, _narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let reset_all = GhostButton::new("keys-reset-all", &t, "Restablecer todo")
             .on_click(cx.listener(|s, _, _, cx| s.reset_all_bindings(cx)));
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -139,11 +141,11 @@ impl SettingsView {
                     .px(px(10.0))
                     .flex()
                     .items_center()
-                    .rounded(px(8.0))
+                    .rounded(px(Radius::CONTROL))
                     .border_2()
                     .border_color(c.accent)
                     .bg(c.surface_2)
-                    .text_size(px(12.0))
+                    .text_size(px(ty.ui_size_sm))
                     .text_color(c.text)
                     .child("Pulsa el atajo…  (Esc cancela)")
                     .into_any_element(),
@@ -168,7 +170,7 @@ impl SettingsView {
             let mut message: Option<AnyElement> = None;
             if let Some(cap) = &capturing {
                 if let Some(e) = &cap.error {
-                    message = Some(div().text_size(px(12.0)).text_color(c.error).child(SharedString::from(e.clone())).into_any_element());
+                    message = Some(div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(SharedString::from(e.clone())).into_any_element());
                 }
                 if let Some((chord, other)) = &cap.conflict {
                     let other_label = catalog.iter().find(|x| &x.id == other).map_or(other.clone(), |x| x.label.clone());
@@ -180,7 +182,7 @@ impl SettingsView {
                             .items_center()
                             .gap(px(10.0))
                             .child(
-                                div().text_size(px(12.0)).text_color(c.error).child(SharedString::from(format!(
+                                div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(SharedString::from(format!(
                                     "{} ya es el atajo de «{other_label}».",
                                     keys::display_chord(chord)
                                 ))),
@@ -218,7 +220,7 @@ impl SettingsView {
                                 div()
                                     .flex_1()
                                     .min_w(px(0.0))
-                                    .text_size(px(13.0))
+                                    .text_size(px(ty.ui_size_md))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(SharedString::from(a.label.clone())),
                             )

@@ -107,6 +107,11 @@ impl DoctorPanel {
     pub fn is_compact(&self) -> bool {
         self.ctx.width_class == WidthClass::Compact
     }
+
+    /// The button shows "Copiado" (until the next sample).
+    pub fn is_copied(&self) -> bool {
+        self.copied
+    }
 }
 
 /// Dither sparkline: one column per sample, solid top cell, checkerboard below. `max` is the
@@ -154,12 +159,12 @@ fn tile(theme: &Theme, label: &'static str) -> gpui::Div {
         .gap(px(4.0))
         .rounded(px(Radius::SM))
         .bg(c.surface_2)
-        .child(div().text_size(px(11.0)).text_color(c.muted).child(label))
+        .child(div().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(label))
 }
 
 fn big(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
     div()
-        .text_size(px(22.0))
+        .text_size(px(theme.typography.ui_size_xl))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.colors.text)
         .child(text.into())
@@ -178,14 +183,14 @@ fn children_list(theme: &Theme, children: &[ChildProc]) -> impl IntoElement + us
                 .flex()
                 .flex_row()
                 .gap(px(8.0))
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(ch.name.clone()))
                 .child(format_bytes(ch.working_set)),
         );
     }
     if children.len() > 4 {
-        col = col.child(div().text_size(px(11.0)).text_color(c.muted).child(format!("… y {} más", children.len() - 4)));
+        col = col.child(div().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(format!("… y {} más", children.len() - 4)));
     }
     col
 }

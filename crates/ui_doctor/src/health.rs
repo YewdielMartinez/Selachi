@@ -116,6 +116,34 @@ pub struct AppStats {
     pub tree_tracked: usize,
 }
 
+impl AppStats {
+    /// No counts yet; fill what the host knows with the `with_*` builders (a new field then does
+    /// not break the caller the way a struct literal would).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_shells(mut self, shells: usize) -> Self {
+        self.shells = Some(shells);
+        self
+    }
+
+    pub fn with_agents(mut self, agents: usize) -> Self {
+        self.agents = Some(agents);
+        self
+    }
+
+    pub fn with_grammars(mut self, grammars: Vec<String>) -> Self {
+        self.grammars = grammars;
+        self
+    }
+
+    pub fn with_tree_tracked(mut self, tracked: usize) -> Self {
+        self.tree_tracked = tracked;
+        self
+    }
+}
+
 /// DB files to size, in display order.
 pub type DbPaths = Vec<(String, PathBuf)>;
 

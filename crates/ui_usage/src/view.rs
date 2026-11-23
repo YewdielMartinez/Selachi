@@ -173,7 +173,7 @@ fn headline(theme: &Theme, snap: &UsageSnapshot, range: UsageRange) -> AnyElemen
         .flex_col()
         .child(
             div()
-                .text_size(px(28.0))
+                .text_size(px(theme.typography.ui_size_display))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.colors.text)
                 .child(compact_tokens(snap.total_billable())),
@@ -182,11 +182,11 @@ fn headline(theme: &Theme, snap: &UsageSnapshot, range: UsageRange) -> AnyElemen
         .into_any_element()
 }
 
-fn agent_card(theme: &Theme, i: usize, t: &AgentTotals) -> AnyElement {
+fn agent_card(theme: &Theme, t: &AgentTotals) -> AnyElement {
     let c = theme.colors;
     let ty = theme.typography;
     div()
-        .id(("usage-agent", i))
+        .id(SharedString::from(format!("usage-agent-{}", t.agent.as_str())))
         .tooltip(Tooltip::text(theme, breakdown_tooltip(t)))
         .child(
             card(theme)
@@ -201,7 +201,7 @@ fn agent_card(theme: &Theme, i: usize, t: &AgentTotals) -> AnyElement {
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(px(20.0))
+                                .text_size(px(theme.typography.ui_size_xl))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(compact_tokens(t.billable())),
                         ),
@@ -375,12 +375,12 @@ fn branches_block(
             .into_any_element();
     }
     let shown = if expanded { BRANCHES_MAX } else { BRANCHES_COLLAPSED };
-    let rows = branches.iter().take(shown).enumerate().map(|(i, b)| {
+    let rows = branches.iter().take(shown).map(|b| {
         let name = b.git_branch.clone().unwrap_or_else(|| "sin rama".to_string());
         let billable = b.input + b.output + b.cache_create;
         let partial = !b.cost_complete;
-        let mut row = div().id(("usage-branch", i)).child(
-            ListRow::new(("usage-branch-row", i), theme)
+        let mut row = div().id(SharedString::from(format!("usage-branch-{name}"))).child(
+            ListRow::new(SharedString::from(format!("usage-branch-row-{name}")), theme)
                 .icon(Icon::GitBranch)
                 .title(name)
                 .subtitle(format!("{} tokens · {}", compact_tokens(billable), events_label(b.events)))
@@ -407,6 +407,16 @@ fn branches_block(
 // Chart
 // ---------------------------------------------------------------------------------------------
 
+/// The agents with tokens in `days`, with their stack slot, in [`AGENT_ORDER`] order.
+pub(crate) fn legend_agents(days: &[crate::data::DayUsage]) -> Vec<(usize, agents_svc::Agent)> {
+    AGENT_ORDER
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(slot, _)| days.iter().any(|d| d.per_agent[*slot] > 0))
+        .collect()
+}
+
 fn chart_block(theme: &Theme, snap: &UsageSnapshot, tall: bool) -> Option<AnyElement> {
     if snap.days.is_empty() {
         return None;
@@ -415,10 +425,8 @@ fn chart_block(theme: &Theme, snap: &UsageSnapshot, tall: bool) -> Option<AnyEle
     let ty = theme.typography;
     let today = snap.days.last().map(|d| d.date)?;
     let chart = bar_chart(theme, &snap.days, today, if tall { 120.0 } else { 88.0 }, true);
-    let legend = AGENT_ORDER
-        .iter()
-        .enumerate()
-        .filter(|(slot, _)| snap.days.iter().any(|d| d.per_agent[*slot] > 0))
+    let legend = legend_agents(&snap.days)
+        .into_iter()
         .map(|(slot, agent)| {
             div()
                 .flex()
@@ -426,7 +434,7 @@ fn chart_block(theme: &Theme, snap: &UsageSnapshot, tall: bool) -> Option<AnyEle
                 .items_center()
                 .gap(px(5.0))
                 .child(div().size(px(8.0)).rounded(px(2.0)).bg(slot_tone(theme, slot, false)))
-                .child(muted_text(theme, ty.ui_size_sm, agent_name(*agent)))
+                .child(muted_text(theme, ty.ui_size_sm, agent_name(agent)))
         });
     let total: u64 = snap.days.iter().map(|d| d.total()).sum();
     Some(
@@ -496,7 +504,7 @@ impl Render for UsagePanel {
                 // The snapshot's range, not the selector's, labels the numbers until the new one lands.
                 left.push(headline(&theme, snap, snap.query.range));
                 if !compact {
-                    left.extend(snap.agents.iter().enumerate().map(|(i, t)| agent_card(&theme, i, t)));
+                    left.extend(snap.agents.iter().map(|t| agent_card(&theme, t)));
                 }
                 left.extend(limits_block(&theme, snap, now, compact));
                 if !compact {

@@ -50,6 +50,25 @@ pub struct Colors {
     /// Label/icon color on `accent_strong` (`#FFFFFF`).
     pub on_accent_strong: Rgba,
     pub error: Rgba,
+    /// Success / "ok" / done. Legible as text on `bg` and `surface_0..=surface_2` (>= 4.5:1) and as
+    /// an indicator (dots, glyphs, >= 3:1). Replaces borrowing `terminal.ansi[2]`.
+    pub success: Rgba,
+    /// Ink on a `success` fill (>= 4.5:1).
+    pub on_success: Rgba,
+    /// Warning / "waiting" / dirty. Same legibility guarantees as `success`.
+    pub warning: Rgba,
+    /// Ink on a `warning` fill (>= 4.5:1).
+    pub on_warning: Rgba,
+    /// Neutral information (hints, "new", links that are not the accent). Same guarantees.
+    pub info: Rgba,
+    /// Ink on an `info` fill (>= 4.5:1).
+    pub on_info: Rgba,
+    /// Translucent overlay painted behind drawers, sheets and dialogs. Straight alpha (not
+    /// pre-multiplied); `Rgba` -> `Hsla` keeps the alpha.
+    pub scrim: Rgba,
+    /// Base tint of the frosted-glass zones (sidebar, right panel, drawers); `ui_kit::glass_tint`
+    /// applies the user's translucency to it.
+    pub glass: Rgba,
 }
 
 /// Terminal palette; all values are `0xRRGGBB`.
@@ -68,9 +87,20 @@ pub struct Typography {
     pub mono_family: &'static str,
     pub mono_size: f32,
     pub mono_line_height: f32,
+    /// Micro labels and section headers (11).
+    pub ui_size_xs: f32,
+    /// Secondary text, chips, meta (12).
     pub ui_size_sm: f32,
+    /// Default UI text (13).
     pub ui_size_md: f32,
+    /// Body text of chat / action buttons (14).
+    pub ui_size_body: f32,
+    /// Panel titles (15).
     pub ui_size_lg: f32,
+    /// Large titles, onboarding (20).
+    pub ui_size_xl: f32,
+    /// Display numbers and hero titles (28).
+    pub ui_size_display: f32,
 }
 
 impl Typography {
@@ -80,9 +110,13 @@ impl Typography {
             mono_family: fonts::MONO_FAMILY,
             mono_size: 13.0,
             mono_line_height: 1.35,
+            ui_size_xs: 11.0,
             ui_size_sm: 12.0,
             ui_size_md: 13.0,
+            ui_size_body: 14.0,
             ui_size_lg: 15.0,
+            ui_size_xl: 20.0,
+            ui_size_display: 28.0,
         }
     }
 }
@@ -109,9 +143,18 @@ impl Spacing {
 }
 
 /// Corner radii. `R4XL` (also exported as `XXXXL`) is the floating-island radius.
+///
+/// Component radii: [`Radius::PILL`] (active tab, rail button, list row), [`Radius::CONTROL`]
+/// (inputs, status chips, segmented items) and [`Radius::CHIP`] (small tags, kbd hints).
 pub struct Radius;
 
 impl Radius {
+    /// Active-state pill (docs/DESIGN.md rule 4): rail buttons, tabs, list rows.
+    pub const PILL: f32 = 10.0;
+    /// Inputs, selects, compact chips.
+    pub const CONTROL: f32 = 8.0;
+    /// Small tags and badges.
+    pub const CHIP: f32 = 6.0;
     pub const XS: f32 = 8.0;
     pub const SM: f32 = 12.0;
     pub const MD: f32 = 16.0;
@@ -136,6 +179,13 @@ const ACCENT_STRONG_HOVER: u32 = 0x1A72FF;
 const ACCENT_STRONG_PRESS: u32 = 0x0052CC;
 const ACCENT_STRONG_GRADIENT_TOP: u32 = 0x1A72FF;
 const ON_ACCENT_STRONG: u32 = 0xFFFFFF;
+
+/// Window-close button on hover (docs/DESIGN.md titlebar), `0xRRGGBB`.
+pub const CLOSE_HOVER: u32 = 0xC42B1C;
+/// Window-close button while pressed.
+pub const CLOSE_PRESS: u32 = 0x9E2216;
+/// Glyph on the close button in both states.
+pub const ON_CLOSE: u32 = 0xFFFFFF;
 
 /// Dark ANSI palette, shared by the dark and OLED themes. Restrained,
 /// slightly desaturated hues tuned for the cool neutral surfaces; blue is
@@ -203,6 +253,14 @@ impl Theme {
                 accent_strong_gradient_top: rgb(ACCENT_STRONG_GRADIENT_TOP),
                 on_accent_strong: rgb(ON_ACCENT_STRONG),
                 error: rgb(0xFFB4AB),
+                success: rgb(0x7FCB8F),
+                on_success: rgb(0x0B2A14),
+                warning: rgb(0xE0B96A),
+                on_warning: rgb(0x2B2000),
+                info: rgb(0x5CC0FF),
+                on_info: rgb(0x00263A),
+                scrim: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.45 },
+                glass: rgb(0x2A2A2E),
             },
             terminal: TerminalColors {
                 ansi: ANSI_DARK,
@@ -237,6 +295,14 @@ impl Theme {
                 accent_strong_gradient_top: rgb(ACCENT_STRONG_GRADIENT_TOP),
                 on_accent_strong: rgb(ON_ACCENT_STRONG),
                 error: rgb(0xBA1A1A),
+                success: rgb(0x17742F),
+                on_success: rgb(0xFFFFFF),
+                warning: rgb(0x8A5F00),
+                on_warning: rgb(0xFFFFFF),
+                info: rgb(0x0067B3),
+                on_info: rgb(0xFFFFFF),
+                scrim: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.32 },
+                glass: rgb(0xFFFFFF),
             },
             terminal: TerminalColors {
                 ansi: ANSI_LIGHT,
@@ -271,6 +337,14 @@ impl Theme {
                 accent_strong_gradient_top: rgb(ACCENT_STRONG_GRADIENT_TOP),
                 on_accent_strong: rgb(ON_ACCENT_STRONG),
                 error: rgb(0xFFB4AB),
+                success: rgb(0x7FCB8F),
+                on_success: rgb(0x0B2A14),
+                warning: rgb(0xE0B96A),
+                on_warning: rgb(0x2B2000),
+                info: rgb(0x5CC0FF),
+                on_info: rgb(0x00263A),
+                scrim: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.6 },
+                glass: rgb(0x121214),
             },
             terminal: TerminalColors {
                 ansi: ANSI_DARK,
@@ -761,5 +835,125 @@ mod tests {
         assert_eq!(Spacing::S16, 64.0);
         assert_eq!(Radius::XXXXL, Radius::R4XL);
         assert_eq!(Radius::XS, 8.0);
+    }
+
+    /// Alpha-composites `fg` (straight alpha) over an opaque `base`.
+    fn over(fg: Rgba, base: u32) -> u32 {
+        blend(hex_of(fg), base, f64::from(fg.a))
+    }
+
+    #[test]
+    fn semantic_roles_read_as_text_on_every_surface() {
+        for t in all() {
+            let c = t.colors;
+            for (name, role) in [("success", c.success), ("warning", c.warning), ("info", c.info)] {
+                for (sname, surface) in
+                    [("bg", c.bg), ("surface_0", c.surface_0), ("surface_1", c.surface_1), ("surface_2", c.surface_2)]
+                {
+                    let r = contrast(hex_of(role), hex_of(surface));
+                    assert!(r >= 4.5, "{:?} {name} on {sname}: {r:.2}", t.mode);
+                }
+                // Also fine as an indicator (>= 3:1) on the highest tone in use.
+                let r = contrast(hex_of(role), hex_of(c.surface_4));
+                assert!(r >= 3.0, "{:?} {name} indicator on surface_4: {r:.2}", t.mode);
+            }
+            assert!(contrast(hex_of(c.error), hex_of(c.surface_2)) >= 4.5, "{:?} error on surface_2", t.mode);
+        }
+    }
+
+    #[test]
+    fn semantic_fills_carry_a_legible_ink() {
+        for t in all() {
+            let c = t.colors;
+            for (name, fill, ink) in [
+                ("success", c.success, c.on_success),
+                ("warning", c.warning, c.on_warning),
+                ("info", c.info, c.on_info),
+            ] {
+                let r = contrast(hex_of(fill), hex_of(ink));
+                assert!(r >= 4.5, "{:?} on_{name}: {r:.2}", t.mode);
+            }
+        }
+    }
+
+    #[test]
+    fn semantic_roles_are_distinct_from_each_other_and_from_error() {
+        for t in all() {
+            let c = t.colors;
+            let all = [c.success, c.warning, c.info, c.error, c.accent];
+            for i in 0..all.len() {
+                for j in (i + 1)..all.len() {
+                    assert_ne!(hex_of(all[i]), hex_of(all[j]), "{:?} {i} == {j}", t.mode);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dark_roles_keep_the_literals_they_replace() {
+        // ui_chat / ui_onboarding / unified_sidebar borrowed ansi[2] and ansi[3]: no visual change.
+        let d = Theme::dark();
+        assert_eq!(hex_of(d.colors.success), d.terminal.ansi[2]);
+        assert_eq!(hex_of(d.colors.warning), d.terminal.ansi[3]);
+        assert!((d.colors.scrim.a - 0.45).abs() < 1e-6, "thread_list scrim was black at 0.45");
+        assert_eq!(hex_of(d.colors.scrim), 0x000000);
+    }
+
+    #[test]
+    fn scrim_dims_the_background_in_every_mode() {
+        for t in all() {
+            let s = t.colors.scrim;
+            assert!(s.a > 0.2 && s.a < 0.8, "{:?} alpha {}", t.mode, s.a);
+            let dimmed = over(s, hex_of(t.colors.bg));
+            assert!(luminance(dimmed) < luminance(hex_of(t.colors.bg)) || hex_of(t.colors.bg) == 0, "{:?}", t.mode);
+            // What sits on top of the scrim (a surface_2 popover) stays distinguishable from it.
+            // (OLED is black on black: the popover's own tone is what separates it there.)
+            if t.mode != Mode::Oled {
+                assert!(contrast(hex_of(t.colors.surface_2), dimmed) >= 1.2, "{:?} popover vs dimmed bg", t.mode);
+            }
+        }
+    }
+
+    #[test]
+    fn glass_base_keeps_the_values_surface_rs_hardcoded() {
+        assert_eq!(hex_of(Theme::dark().colors.glass), 0x2A2A2E);
+        assert_eq!(hex_of(Theme::oled().colors.glass), 0x121214);
+        assert_eq!(hex_of(Theme::light().colors.glass), 0xFFFFFF);
+    }
+
+    #[test]
+    fn custom_accent_leaves_the_semantic_roles_alone() {
+        for base in all() {
+            let t = base.with_accent(0x7FCB8F);
+            assert_eq!(t.colors.success, base.colors.success);
+            assert_eq!(t.colors.warning, base.colors.warning);
+            assert_eq!(t.colors.info, base.colors.info);
+            assert_eq!(t.colors.scrim, base.colors.scrim);
+        }
+    }
+
+    #[test]
+    fn close_button_tokens_read_with_a_white_glyph() {
+        assert_eq!(CLOSE_HOVER, 0xC42B1C);
+        assert_eq!(CLOSE_PRESS, 0x9E2216);
+        for bg in [CLOSE_HOVER, CLOSE_PRESS] {
+            assert!(contrast(ON_CLOSE, bg) >= 4.5, "{bg:06X}");
+        }
+    }
+
+    #[test]
+    fn component_radii_follow_design_md() {
+        assert_eq!((Radius::PILL, Radius::CONTROL, Radius::CHIP), (10.0, 8.0, 6.0));
+        const { assert!(Radius::CHIP < Radius::CONTROL && Radius::CONTROL < Radius::PILL && Radius::PILL < Radius::SM) };
+    }
+
+    #[test]
+    fn type_scale_is_strictly_ascending_and_keeps_old_steps() {
+        let ty = Typography::new();
+        let steps =
+            [ty.ui_size_xs, ty.ui_size_sm, ty.ui_size_md, ty.ui_size_body, ty.ui_size_lg, ty.ui_size_xl, ty.ui_size_display];
+        assert!(steps.windows(2).all(|w| w[0] < w[1]), "{steps:?}");
+        assert_eq!((ty.ui_size_sm, ty.ui_size_md, ty.ui_size_lg), (12.0, 13.0, 15.0));
+        assert_eq!(ty.ui_size_xs, 11.0);
     }
 }

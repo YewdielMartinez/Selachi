@@ -18,3 +18,4 @@ ui_kit = { version = "0.1.0", path = "../ui_kit" }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+ui_kit = { version = "0.1.0", path = "../ui_kit", features = ["test-support"] }

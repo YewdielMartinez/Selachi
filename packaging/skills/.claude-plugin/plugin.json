@@ -1,0 +1,10 @@
+{
+  "name": "selachi-delegation",
+  "version": "0.1.0",
+  "description": "When and how to delegate subtasks to other coding agents (Codex, Gemini, OpenCode, Claude, Antigravity) through Selachi's MCP tools. Register the MCP server first with: claude mcp add selachi -- selachi-agent.exe mcp",
+  "author": {
+    "name": "Selachi"
+  },
+  "skills": "./",
+  "license": "MIT"
+}

@@ -12,12 +12,13 @@
 //! At most one per view; the secondary actions are `Button::tonal` / `ghost`.
 
 use gpui::{
-    App, BoxShadow, ClickEvent, Div, FontWeight, IntoElement, RenderOnce, SharedString, Stateful,
+    App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, IntoElement, RenderOnce, SharedString, Stateful,
     Window, div, linear_color_stop, linear_gradient, point, prelude::*, px,
 };
 use theme::Theme;
 
 use crate::button::{Button, ClickFn};
+use crate::focus;
 use crate::icon::{Icon, icon};
 use crate::tooltip::Tooltip;
 
@@ -54,6 +55,7 @@ pub struct ActionButton {
     icon: Option<Icon>,
     size: ActionSize,
     disabled: bool,
+    focusable: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
 }
@@ -68,6 +70,7 @@ impl ActionButton {
             icon: Some(Icon::Plus),
             size: ActionSize::Md,
             disabled: false,
+            focusable: true,
             tooltip: None,
             on_click: None,
         }
@@ -90,9 +93,15 @@ impl ActionButton {
         self
     }
 
-    /// `surface_3` fill, `muted` label, no shadow, inert.
+    /// `surface_3` fill, `muted` label, no shadow, inert and not focusable.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Keyboard focus (tab stop + ring); on by default.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
         self
     }
 
@@ -129,14 +138,17 @@ fn action_shadow(strong: gpui::Rgba) -> Vec<BoxShadow> {
 }
 
 impl RenderOnce for ActionButton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let enabled = !self.disabled;
+        let id = ElementId::from(self.id.clone());
+        let focus = (enabled && self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
+        let ring_radius = self.size.height() / 2.0;
         let fg = if enabled { c.on_accent_strong } else { c.muted };
         let (hover, press) = (c.accent_strong_hover, c.accent_strong_press);
 
-        let base: Stateful<Div> = div().id(self.id);
+        let base: Stateful<Div> = div().id(id.clone());
         let mut el = base
             .occlude()
             .h(px(self.size.height()))
@@ -149,7 +161,7 @@ impl RenderOnce for ActionButton {
             .gap(px(8.0))
             .rounded_full()
             .font_family(ty.ui_family)
-            .text_size(px(14.0))
+            .text_size(px(ty.ui_size_body))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(fg)
             .when(enabled, |d| {
@@ -172,6 +184,6 @@ impl RenderOnce for ActionButton {
         if let Some(t) = self.tooltip {
             el = el.tooltip(Tooltip::text(&self.theme, t));
         }
-        el
+        focus::wire(el, focus, &id, ring_radius, c.accent)
     }
 }

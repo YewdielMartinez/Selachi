@@ -10,15 +10,19 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, WeakEntity, Window, div, prelude::*, px,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, IntoElement, KeyBinding,
+    MouseButton, ParentElement as _, Render, ScrollStrategy, SharedString, Styled as _, Subscription, WeakEntity,
+    Window, actions, div, prelude::*, px, transparent_black,
 };
 use panel_api::{PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
-use theme::{Theme, rgb};
-use ui_kit::{Icon, UniformListScrollHandle, VirtualList, icon};
+use theme::{Radius, Theme};
+use ui_kit::text_field::act as text_act;
+use ui_kit::{
+    FocusNext, FocusPrev, Icon, InputModality, TextField, TextFieldEvent, UniformListScrollHandle, VirtualList, icon,
+    input_modality,
+};
 
 use crate::event::ViewerEvent;
-use crate::field::{TextField, TextFieldEvent};
 use crate::file_icon::FileGlyph;
 use crate::tree_model::{
     FileTree, FilterHit, GitMark, Toggle, dirty_dirs, filter_files, list_dir, normalize_marks,
@@ -29,6 +33,44 @@ pub const PANEL_ID: &str = "files";
 
 /// Fixed row height of the tree (px).
 pub const ROW_H: f32 = 28.0;
+
+actions!(
+    ui_viewer_tree,
+    [
+        /// Cursor up one row.
+        TreeUp,
+        /// Cursor down one row.
+        TreeDown,
+        /// Collapse the folder under the cursor, or go to its parent.
+        TreeLeft,
+        /// Expand the folder under the cursor, or go to its first child.
+        TreeRight,
+        /// Open the file (or toggle the folder) under the cursor.
+        TreeOpen,
+        /// Cursor to the first row.
+        TreeFirst,
+        /// Cursor to the last row.
+        TreeLast,
+    ]
+);
+
+/// Key context of the tree / hit list (its bindings live in [`bind_keys`]).
+pub const TREE_CONTEXT: &str = "FileTree";
+
+/// Binds the keyboard navigation of the tree (called by `ui_viewer::bind_keys`).
+pub fn bind_keys(cx: &mut App) {
+    let c = Some(TREE_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("up", TreeUp, c),
+        KeyBinding::new("down", TreeDown, c),
+        KeyBinding::new("left", TreeLeft, c),
+        KeyBinding::new("right", TreeRight, c),
+        KeyBinding::new("enter", TreeOpen, c),
+        KeyBinding::new("space", TreeOpen, c),
+        KeyBinding::new("home", TreeFirst, c),
+        KeyBinding::new("end", TreeLast, c),
+    ]);
+}
 
 type EventHandler = Rc<dyn Fn(&ViewerEvent, &mut App)>;
 
@@ -145,6 +187,9 @@ pub struct FileTreePanel {
     dirty: HashSet<PathBuf>,
     selected: Option<PathBuf>,
     scroll: UniformListScrollHandle,
+    hit_scroll: UniformListScrollHandle,
+    /// Focus of the tree / hit list (one tab stop); the filter field has its own.
+    focus: FocusHandle,
     filter: Entity<TextField>,
     mode: Mode,
     filter_epoch: u64,
@@ -158,17 +203,19 @@ impl EventEmitter<ViewerEvent> for FileTreePanel {}
 impl FileTreePanel {
     pub fn new(ctx: PanelCtx, cx: &mut Context<Self>) -> Self {
         let theme = ctx.theme;
-        let filter = cx.new(|cx| TextField::new(theme, "Filtrar archivos", cx));
+        // The header draws the box around the field: the field is bare.
+        let filter = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Filtrar archivos"));
         let sub = cx.subscribe(&filter, |this, field, ev: &TextFieldEvent, cx| match ev {
             TextFieldEvent::Changed => {
                 let q = field.read(cx).text().to_owned();
                 this.run_filter(&q, cx);
             }
-            TextFieldEvent::Submit { .. } => this.open_first_hit(cx),
+            TextFieldEvent::Submit => this.open_cursor(cx),
             TextFieldEvent::Cancel => {
                 field.update(cx, |f, cx| f.set_text("", cx));
                 this.run_filter("", cx);
             }
+            TextFieldEvent::SubmitReverse | TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
         });
         let mut panel = Self {
             ctx,
@@ -178,6 +225,8 @@ impl FileTreePanel {
             dirty: HashSet::new(),
             selected: None,
             scroll: UniformListScrollHandle::new(),
+            hit_scroll: UniformListScrollHandle::new(),
+            focus: cx.focus_handle().tab_stop(true),
             filter,
             mode: Mode::Tree,
             filter_epoch: 0,
@@ -195,7 +244,7 @@ impl FileTreePanel {
         self.ctx = ctx;
         if theme_changed {
             let theme = self.ctx.theme;
-            self.filter.update(cx, |f, _| f.set_theme(theme));
+            self.filter.update(cx, |f, cx| f.set_theme(theme, cx));
         }
         if root.as_deref() != self.tree.as_ref().map(FileTree::root) {
             self.set_root(root, cx);
@@ -307,6 +356,10 @@ impl FileTreePanel {
             let hits = cx.background_executor().spawn(async move { filter_files(&root, &query, respect) }).await;
             this.update(cx, |this, cx| {
                 if this.filter_epoch == epoch {
+                    // The first hit is what Enter opens: show it as selected.
+                    if let Some(first) = hits.first() {
+                        this.selected = Some(first.path.clone());
+                    }
                     this.mode = Mode::Filter { hits, searching: false };
                     cx.notify();
                 }
@@ -317,13 +370,120 @@ impl FileTreePanel {
         cx.notify();
     }
 
-    fn open_first_hit(&mut self, cx: &mut Context<Self>) {
-        let first = match &self.mode {
-            Mode::Filter { hits, .. } => hits.first().map(|h| h.path.clone()),
-            Mode::Tree => None,
+    // ---- keyboard ----------------------------------------------------------------------------
+
+    /// Number of rows of what is showing (tree rows, or filter hits).
+    fn row_count(&self) -> usize {
+        match &self.mode {
+            Mode::Tree => self.tree.as_ref().map_or(0, FileTree::len),
+            Mode::Filter { hits, .. } => hits.len(),
+        }
+    }
+
+    /// The path of row `row` of what is showing.
+    fn row_path(&self, row: usize) -> Option<PathBuf> {
+        match &self.mode {
+            Mode::Tree => {
+                let tree = self.tree.as_ref()?;
+                Some(tree.node(*tree.rows().get(row)?)?.path.clone())
+            }
+            Mode::Filter { hits, .. } => hits.get(row).map(|h| h.path.clone()),
+        }
+    }
+
+    /// The row the keyboard acts on: the selected one, else the first.
+    fn cursor(&self) -> Option<usize> {
+        let n = self.row_count();
+        if n == 0 {
+            return None;
+        }
+        let at = self.selected.as_deref().and_then(|sel| (0..n).find(|&i| self.row_path(i).as_deref() == Some(sel)));
+        Some(at.unwrap_or(0))
+    }
+
+    /// Selects row `row` and brings it into view (`down` = the cursor moved down).
+    fn select_row(&mut self, row: usize, down: bool, cx: &mut Context<Self>) {
+        let Some(path) = self.row_path(row) else { return };
+        self.selected = Some(path);
+        let handle = match self.mode {
+            Mode::Tree => &self.scroll,
+            Mode::Filter { .. } => &self.hit_scroll,
         };
-        if let Some(path) = first {
-            self.activate_file(path, cx);
+        handle.scroll_to_item(row, if down { ScrollStrategy::Bottom } else { ScrollStrategy::Top });
+        cx.notify();
+    }
+
+    fn move_cursor(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(cur) = self.cursor() else { return };
+        let last = self.row_count().saturating_sub(1);
+        let next = cur.saturating_add_signed(delta).min(last);
+        self.select_row(next, delta > 0, cx);
+    }
+
+    fn cursor_to(&mut self, last: bool, cx: &mut Context<Self>) {
+        let n = self.row_count();
+        if n > 0 {
+            self.select_row(if last { n - 1 } else { 0 }, last, cx);
+        }
+    }
+
+    /// `Right`: expands the folder under the cursor; on an open one, goes to its first child.
+    fn cursor_right(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.mode, Mode::Tree) {
+            return;
+        }
+        let Some(row) = self.cursor() else { return };
+        let Some(tree) = &mut self.tree else { return };
+        let Some(&idx) = tree.rows().get(row) else { return };
+        let Some(node) = tree.node(idx) else { return };
+        if !node.is_dir {
+            return;
+        }
+        if node.expanded {
+            let first_child =
+                tree.rows().get(row + 1).and_then(|&c| tree.node(c)).is_some_and(|c| c.parent == Some(idx));
+            if first_child {
+                self.select_row(row + 1, true, cx);
+            }
+        } else {
+            self.selected = Some(node.path.clone());
+            if let Toggle::Load { .. } = tree.toggle(idx) {
+                self.start_listing(idx, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// `Left`: collapses the open folder under the cursor; otherwise goes to the parent folder.
+    fn cursor_left(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.mode, Mode::Tree) {
+            return;
+        }
+        let Some(row) = self.cursor() else { return };
+        let Some(tree) = &mut self.tree else { return };
+        let Some(&idx) = tree.rows().get(row) else { return };
+        let Some(node) = tree.node(idx) else { return };
+        if node.is_dir && node.expanded {
+            self.selected = Some(node.path.clone());
+            tree.toggle(idx);
+            cx.notify();
+        } else if let Some(parent) = node.parent
+            && let Some(prow) = tree.rows().iter().position(|&n| n == parent)
+        {
+            self.select_row(prow, false, cx);
+        }
+    }
+
+    /// `Enter`: opens the file (or toggles the folder) under the cursor.
+    fn open_cursor(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.cursor() else { return };
+        match &self.mode {
+            Mode::Tree => self.click_row(row, cx),
+            Mode::Filter { hits, .. } => {
+                if let Some(path) = hits.get(row).map(|h| h.path.clone()) {
+                    self.activate_file(path, cx);
+                }
+            }
         }
     }
 
@@ -376,17 +536,17 @@ impl FileTreePanel {
     // ---- painting ----------------------------------------------------------------------------
 
     fn mark_color(theme: &Theme, mark: GitMark) -> gpui::Rgba {
-        let a = |i: usize| rgb(theme.terminal.ansi[i]);
+        let c = theme.colors;
         match mark {
-            GitMark::Modified => a(3),
-            GitMark::Added => a(2),
-            GitMark::Untracked => a(6),
-            GitMark::Deleted => a(1),
-            GitMark::Conflict => theme.colors.error,
+            GitMark::Modified => c.warning,
+            GitMark::Added => c.success,
+            GitMark::Untracked => c.info,
+            GitMark::Deleted | GitMark::Conflict => c.error,
         }
     }
 
-    fn tree_row(&self, row: usize, this: &Entity<Self>) -> Option<AnyElement> {
+    /// `ring`: the keyboard cursor is on this row and the tree has keyboard focus.
+    fn tree_row(&self, row: usize, ring: bool, this: &Entity<Self>) -> Option<AnyElement> {
         let tree = self.tree.as_ref()?;
         let node = tree.node(*tree.rows().get(row)?)?;
         let theme = self.ctx.theme;
@@ -416,16 +576,19 @@ impl FileTreePanel {
         let this = this.clone();
         Some(
             div()
-                .id(("tree-row", row))
+                // Keyed by path: expanding a folder above does not hand this row's hover to another.
+                .id(SharedString::from(format!("tree-row-{}", node.path.display())))
                 .w_full()
                 .h(px(ROW_H))
-                .pl(px(6.0 + f32::from(node.depth) * indent))
-                .pr(px(8.0))
+                .pl(px(4.0 + f32::from(node.depth) * indent))
+                .pr(px(6.0))
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .rounded(px(8.0))
+                .rounded(px(Radius::CONTROL))
+                .border_2()
+                .border_color(if ring { c.accent.into() } else { transparent_black() })
                 .cursor_pointer()
                 .when(selected, |d| d.bg(c.surface_3))
                 .when(!selected, |d| d.hover(move |s| s.bg(c.surface_2)))
@@ -447,7 +610,7 @@ impl FileTreePanel {
                         div()
                             .flex_none()
                             .w(px(12.0))
-                            .text_size(px(11.0))
+                            .text_size(px(theme.typography.ui_size_xs))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(Self::mark_color(&theme, m))
                             .child(m.letter()),
@@ -461,7 +624,7 @@ impl FileTreePanel {
         )
     }
 
-    fn hit_row(&self, ix: usize, hit: &FilterHit, this: &Entity<Self>) -> AnyElement {
+    fn hit_row(&self, hit: &FilterHit, ring: bool, this: &Entity<Self>) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let compact = self.ctx.width_class == WidthClass::Compact;
@@ -476,15 +639,17 @@ impl FileTreePanel {
         let path = hit.path.clone();
         let this = this.clone();
         div()
-            .id(("hit-row", ix))
+            .id(SharedString::from(format!("hit-row-{}", hit.path.display())))
             .w_full()
             .h(px(ROW_H))
-            .px(px(8.0))
+            .px(px(6.0))
             .flex()
             .flex_row()
             .items_center()
             .gap(px(8.0))
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
+            .border_2()
+            .border_color(if ring { c.accent.into() } else { transparent_black() })
             .cursor_pointer()
             .when(selected, |d| d.bg(c.surface_3))
             .when(!selected, |d| d.hover(move |s| s.bg(c.surface_2)))
@@ -534,11 +699,15 @@ impl FileTreePanel {
 }
 
 impl Render for FileTreePanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let ty = theme.typography;
         let this = cx.entity();
+        // The ring marks the keyboard cursor, only while the list has focus from the keyboard.
+        let ring_row = (self.focus.is_focused(window) && input_modality() == InputModality::Keyboard)
+            .then(|| self.cursor())
+            .flatten();
 
         let header = div()
             .flex_none()
@@ -575,11 +744,24 @@ impl Render for FileTreePanel {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .bg(c.surface_2)
                     .child(icon(Icon::Search, 14.0, c.muted))
                     .child(self.filter.clone()),
-            );
+            )
+            // Up / Down in the filter field walk the hits (the field itself has no rows).
+            .capture_action(cx.listener(|this, _: &text_act::Up, _, cx| {
+                if matches!(this.mode, Mode::Filter { .. }) {
+                    this.move_cursor(-1, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &text_act::Down, _, cx| {
+                if matches!(this.mode, Mode::Filter { .. }) {
+                    this.move_cursor(1, cx);
+                    cx.stop_propagation();
+                }
+            }));
 
         let body: AnyElement = match (&self.tree, &self.mode) {
             (None, _) => self.message("Abre una carpeta de proyecto para ver sus archivos"),
@@ -591,8 +773,9 @@ impl Render for FileTreePanel {
                     VirtualList::new("hit-list", n, ROW_H, move |range, _, cx| {
                         let me = this.read(cx);
                         let Mode::Filter { hits, .. } = &me.mode else { return Vec::new() };
-                        range.filter_map(|i| hits.get(i).map(|h| me.hit_row(i, h, &this))).collect()
+                        range.filter_map(|i| hits.get(i).map(|h| me.hit_row(h, ring_row == Some(i), &this))).collect()
                     })
+                    .track_scroll(self.hit_scroll.clone())
                     .flex_1()
                     .px(px(6.0))
                     .into_any_element()
@@ -606,7 +789,7 @@ impl Render for FileTreePanel {
                     let n = tree.len();
                     VirtualList::new("tree-list", n, ROW_H, move |range, _, cx| {
                         let me = this.read(cx);
-                        range.filter_map(|i| me.tree_row(i, &this)).collect()
+                        range.filter_map(|i| me.tree_row(i, ring_row == Some(i), &this)).collect()
                     })
                     .track_scroll(self.scroll.clone())
                     .flex_1()
@@ -616,6 +799,27 @@ impl Render for FileTreePanel {
             }
         };
 
+        // The list (tree or hits) is one tab stop with arrow-key navigation; a click focuses it.
+        let list = div()
+            .id("file-tree-list")
+            .key_context(TREE_CONTEXT)
+            .track_focus(&self.focus)
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _| window.focus(&this.focus)))
+            .on_action(cx.listener(|this, _: &TreeUp, _, cx| this.move_cursor(-1, cx)))
+            .on_action(cx.listener(|this, _: &TreeDown, _, cx| this.move_cursor(1, cx)))
+            .on_action(cx.listener(|this, _: &TreeLeft, _, cx| this.cursor_left(cx)))
+            .on_action(cx.listener(|this, _: &TreeRight, _, cx| this.cursor_right(cx)))
+            .on_action(cx.listener(|this, _: &TreeOpen, _, cx| this.open_cursor(cx)))
+            .on_action(cx.listener(|this, _: &TreeFirst, _, cx| this.cursor_to(false, cx)))
+            .on_action(cx.listener(|this, _: &TreeLast, _, cx| this.cursor_to(true, cx)))
+            .on_action(|_: &FocusNext, window, _| window.focus_next())
+            .on_action(|_: &FocusPrev, window, _| window.focus_prev())
+            .child(body);
+
         div()
             .size_full()
             .min_h_0()
@@ -624,7 +828,7 @@ impl Render for FileTreePanel {
             .font_family(ty.ui_family)
             .text_color(c.text)
             .child(header)
-            .child(body)
+            .child(list)
     }
 }
 
@@ -690,6 +894,103 @@ mod tests {
         assert_eq!(hits, ["src/main.rs"]);
         panel.update(cx, |p, cx| p.run_filter("", cx));
         assert!(panel.read_with(cx, |p, _| matches!(p.mode, Mode::Tree)));
+    }
+
+    /// The panel in a (test) window with the tree focused: keys go through the real keymap.
+    fn window_panel<'a>(
+        cx: &'a mut TestAppContext,
+        root: &Path,
+    ) -> (Entity<FileTreePanel>, &'a mut gpui::VisualTestContext, Rc<RefCell<Vec<ViewerEvent>>>) {
+        cx.update(crate::viewer::bind_keys);
+        let c = ctx(root);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        let (panel, vcx) = ui_kit::testing::open_window(cx, move |_, cx| FileTreePanel::new(c, cx));
+        let _sub = vcx.update(|_, cx| cx.subscribe(&panel, move |_, ev: &ViewerEvent, _| sink.borrow_mut().push(ev.clone())));
+        std::mem::forget(_sub);
+        vcx.run_until_parked();
+        panel.update_in(vcx, |p, window, _| window.focus(&p.focus));
+        (panel, vcx, events)
+    }
+
+    fn selected(panel: &Entity<FileTreePanel>, vcx: &gpui::VisualTestContext) -> Option<PathBuf> {
+        panel.read_with(vcx, |p, _| p.selected.clone())
+    }
+
+    fn rows(panel: &Entity<FileTreePanel>, vcx: &gpui::VisualTestContext) -> usize {
+        panel.read_with(vcx, |p, _| p.row_count())
+    }
+
+    #[gpui::test]
+    async fn arrow_keys_walk_expand_collapse_and_open(cx: &mut TestAppContext) {
+        use ui_kit::testing::press;
+        let p = project();
+        let root = p.path().to_path_buf();
+        let (panel, vcx, events) = window_panel(cx, &root);
+        assert_eq!(rows(&panel, vcx), 2, "src and README.md");
+
+        // The cursor starts on the first row (src): Right expands it.
+        press(vcx, "right");
+        vcx.run_until_parked();
+        assert_eq!(rows(&panel, vcx), 3);
+        assert_eq!(selected(&panel, vcx), Some(root.join("src")));
+        // Right on an open folder goes into it; Down / Up move one row.
+        press(vcx, "right");
+        assert_eq!(selected(&panel, vcx), Some(root.join("src/main.rs")));
+        press(vcx, "down");
+        assert_eq!(selected(&panel, vcx), Some(root.join("README.md")));
+        press(vcx, "down");
+        assert_eq!(selected(&panel, vcx), Some(root.join("README.md")), "stops at the last row");
+        press(vcx, "up up");
+        assert_eq!(selected(&panel, vcx), Some(root.join("src")));
+        press(vcx, "end");
+        assert_eq!(selected(&panel, vcx), Some(root.join("README.md")));
+        press(vcx, "home");
+        assert_eq!(selected(&panel, vcx), Some(root.join("src")));
+
+        // Left on a file goes to its folder; Left on an open folder collapses it.
+        press(vcx, "down left");
+        assert_eq!(selected(&panel, vcx), Some(root.join("src")));
+        press(vcx, "left");
+        vcx.run_until_parked();
+        assert_eq!(rows(&panel, vcx), 2, "collapsed");
+
+        // Enter toggles a folder and opens a file.
+        press(vcx, "enter");
+        vcx.run_until_parked();
+        assert_eq!(rows(&panel, vcx), 3, "Enter on a folder expands it");
+        assert!(events.borrow().is_empty(), "folders emit nothing");
+        press(vcx, "down enter");
+        assert_eq!(events.borrow().as_slice(), [ViewerEvent::OpenFile { path: root.join("src/main.rs") }]);
+    }
+
+    #[gpui::test]
+    async fn tab_enters_the_tree_and_the_filter_arrows_pick_a_hit(cx: &mut TestAppContext) {
+        use ui_kit::testing::{press, type_text};
+        let p = project();
+        let root = p.path().to_path_buf();
+        let (panel, vcx, events) = window_panel(cx, &root);
+        panel.update_in(vcx, |p, window, cx| p.filter.read(cx).focus(window));
+        type_text(vcx, "r");
+        vcx.run_until_parked();
+        let hits = panel.read_with(vcx, |p, _| match &p.mode {
+            Mode::Filter { hits, .. } => hits.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
+            Mode::Tree => Vec::new(),
+        });
+        assert!(hits.len() >= 2, "{hits:?}");
+        assert_eq!(selected(&panel, vcx), Some(hits[0].clone()), "the first hit is selected");
+        // Down in the field walks the hits without leaving the field; Enter opens the selected one.
+        press(vcx, "down");
+        assert_eq!(selected(&panel, vcx), Some(hits[1].clone()));
+        press(vcx, "enter");
+        assert_eq!(events.borrow().as_slice(), [ViewerEvent::OpenFile { path: hits[1].clone() }]);
+        // Typing still goes to the field.
+        type_text(vcx, "e");
+        assert_eq!(panel.read_with(vcx, |p, cx| p.filter.read(cx).text().to_string()), "re");
+        // Tab leaves the field for the list (one tab stop).
+        press(vcx, "tab");
+        let list = panel.read_with(vcx, |p, _| p.focus.clone());
+        assert!(ui_kit::testing::is_focused(vcx, &list), "Tab moved focus from the field to the list");
     }
 
     #[gpui::test]

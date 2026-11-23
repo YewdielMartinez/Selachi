@@ -8,9 +8,11 @@
 //! * `session/new {cwd, mcpServers:[]}`; with [`ThreadConfig::resume_session`]: `session/resume`
 //!   when the agent advertises `sessionCapabilities.resume`, else `session/load` (the replayed
 //!   history is swallowed), else a fresh session.
-//! * Model / mode selection right after the session exists, one request at a time:
-//!   `session/set_config_option` (`model`, `mode`) when the agent lists such config options,
-//!   else `session/set_model` / `session/set_mode`. `ReadOnly` selects the agent mode `plan`.
+//! * Model / effort / mode selection right after the session exists, one request at a time:
+//!   `session/set_config_option` (`model`, `thought_level`, `mode`) when the agent lists such config
+//!   options, else `session/set_model` / `session/set_mode`. `ReadOnly` selects the agent mode `plan`,
+//!   `AcceptEdits` the mode `accept-edits` when offered. The effort goes to the `thought_level` option
+//!   (Antigravity; see [`crate::antigravity`]), clamped to the levels of the selected model.
 //! * `session/prompt` (text content block), one prompt in flight; further `send`s queue and are
 //!   dispatched when the previous prompt returns.
 //! * `session/update` -> [`AgentEvent`]: `agent_message_chunk` -> `Text` delta,
@@ -135,7 +137,10 @@ pub fn tool_kind(kind: &str) -> ToolKind {
 /// Split a command line into program and arguments. Double quotes group (and are removed);
 /// there is no escaping, which is enough for Windows paths.
 /// The models of a `session/new` result: `models.availableModels` (`modelId`, `name`) or the
-/// `model` config option (`options[]` with `value`, `name`).
+/// `model` config option (`options[]` with `value`, `name`). When the agent also offers a
+/// `thought_level` option (Antigravity), the list is the `model` option's base ids with each
+/// model's efforts: those `availableModels` ids that are `<base>-<effort>`, or every
+/// `thought_level` value when no per-model information exists.
 pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
     let plain = |id: &str, label: Option<&str>| ModelInfo {
         id: id.to_string(),
@@ -143,18 +148,61 @@ pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
         efforts: Vec::new(),
         default_effort: None,
     };
-    if let Some(a) = result.pointer("/models/availableModels").and_then(Value::as_array) {
-        let v: Vec<ModelInfo> = a.iter().filter_map(|m| s(m, "modelId").map(|id| plain(id, s(m, "name")))).collect();
+    let opts = result.get("configOptions").and_then(Value::as_array);
+    let option = |id: &str| opts.and_then(|o| o.iter().find(|o| s(o, "id") == Some(id)));
+    let values = |o: &Value| -> Vec<(String, Option<String>)> {
+        o.get("options")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|m| s(m, "value").map(|v| (v.to_string(), s(m, "name").map(str::to_string)))).collect())
+            .unwrap_or_default()
+    };
+    let available: Vec<String> = result
+        .pointer("/models/availableModels")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|m| s(m, "modelId").map(str::to_string)).collect())
+        .unwrap_or_default();
+    if let (Some(model_opt), Some(thought)) = (option("model"), option("thought_level")) {
+        let levels: Vec<String> = values(thought).into_iter().map(|(v, _)| v).collect();
+        let default = s(thought, "currentValue").map(str::to_string);
+        let v: Vec<ModelInfo> = values(model_opt)
+            .into_iter()
+            .map(|(id, name)| {
+                let mut efforts: Vec<String> = available
+                    .iter()
+                    .filter_map(|a| crate::antigravity::split_effort_suffix(a))
+                    .filter(|(base, _)| *base == id)
+                    .map(|(_, e)| e.to_string())
+                    .collect();
+                if efforts.is_empty() && available.is_empty() {
+                    efforts = levels.clone();
+                }
+                efforts.sort_by_key(|e| EFFORT_LEVELS.iter().position(|l| l == e).unwrap_or(usize::MAX));
+                let default_effort = default.clone().filter(|d| efforts.contains(d));
+                ModelInfo { efforts, default_effort, ..plain(&id, name.as_deref()) }
+            })
+            .collect();
         if !v.is_empty() {
             return v;
         }
     }
-    result
-        .get("configOptions")
+    if !available.is_empty() {
+        let names: Vec<Option<&str>> = result
+            .pointer("/models/availableModels")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter(|m| s(m, "modelId").is_some()).map(|m| s(m, "name")).collect())
+            .unwrap_or_default();
+        return available.iter().zip(names).map(|(id, n)| plain(id, n)).collect();
+    }
+    option("model")
+        .map(|o| values(o).into_iter().map(|(id, name)| plain(&id, name.as_deref())).collect())
+        .unwrap_or_default()
+}
+
+/// Values of a select config option (`options[].value`).
+fn option_values(o: &Value) -> Vec<String> {
+    o.get("options")
         .and_then(Value::as_array)
-        .and_then(|opts| opts.iter().find(|o| s(o, "id") == Some("model")))
-        .and_then(|o| o.get("options").and_then(Value::as_array))
-        .map(|a| a.iter().filter_map(|m| s(m, "value").map(|id| plain(id, s(m, "name")))).collect())
+        .map(|a| a.iter().filter_map(|m| s(m, "value").map(str::to_string)).collect())
         .unwrap_or_default()
 }
 
@@ -216,6 +264,7 @@ pub struct AcpSession {
     cwd: PathBuf,
     cwd_canon: PathBuf,
     model: Option<String>,
+    effort: Option<String>,
     mode: PermissionMode,
     resume: Option<String>,
     next_id: i64,
@@ -233,6 +282,10 @@ pub struct AcpSession {
     has_model_option: bool,
     has_models: bool,
     has_mode_option: bool,
+    /// `thought_level` config option (Antigravity): its values and current value.
+    thought_levels: Option<Vec<String>>,
+    current_thought: Option<String>,
+    model_values: Vec<String>,
     modes: Vec<String>,
     current_mode: Option<String>,
     setup: VecDeque<(&'static str, Value)>,
@@ -255,6 +308,7 @@ impl AcpSession {
             cwd: cfg.cwd.clone(),
             cwd_canon,
             model: cfg.model.clone(),
+            effort: cfg.effort.clone(),
             mode: cfg.permission_mode,
             resume: cfg.resume_session.clone(),
             next_id: 0,
@@ -270,6 +324,9 @@ impl AcpSession {
             has_model_option: false,
             has_models: false,
             has_mode_option: false,
+            thought_levels: None,
+            current_thought: None,
+            model_values: Vec::new(),
             modes: Vec::new(),
             current_mode: None,
             setup: VecDeque::new(),
@@ -551,8 +608,13 @@ impl AcpSession {
                         if let Some(c) = s(o, "currentValue") {
                             self.current_model = Some(c.to_string());
                         }
+                        self.model_values = option_values(o);
                     }
                     Some("mode") => self.has_mode_option = true,
+                    Some("thought_level") => {
+                        self.thought_levels = Some(option_values(o));
+                        self.current_thought = s(o, "currentValue").map(str::to_string);
+                    }
                     _ => {}
                 }
             }
@@ -570,11 +632,35 @@ impl AcpSession {
             model: self.current_model.clone(),
         });
         let models = parse_models(result);
+
+        let (want_model, mut want_effort) = (self.model.clone(), self.effort.clone());
+        // An agent with a separate thinking level lists base models: `<base>-<effort>` ids (what
+        // `agy models` prints) are split into the model and the effort.
+        let (want_model, want_effort) = match want_model {
+            Some(m) if self.thought_levels.is_some() && !self.model_values.contains(&m) => {
+                match crate::antigravity::split_effort_suffix(&m) {
+                    Some((base, eff)) if self.model_values.iter().any(|v| v == base) => {
+                        want_effort = want_effort.or_else(|| Some(eff.to_string()));
+                        (Some(base.to_string()), want_effort)
+                    }
+                    _ => (Some(m), want_effort),
+                }
+            }
+            other => (other, want_effort),
+        };
+        let want_model = want_model.filter(|m| Some(m) != self.current_model.as_ref());
+        let model_changes = want_model.is_some();
+        // Efforts of the model the session will run: the agent lists them per model when they differ.
+        let target = want_model.clone().or_else(|| self.current_model.clone());
+        let target_efforts = models
+            .iter()
+            .find(|m| Some(&m.id) == target.as_ref())
+            .filter(|m| !m.efforts.is_empty())
+            .map(|m| m.efforts.clone());
         if !models.is_empty() {
             step.events.push(AgentEvent::Models { models, current: self.current_model.clone() });
         }
-
-        if let Some(want) = self.model.clone().filter(|m| Some(m) != self.current_model.as_ref()) {
+        if let Some(want) = want_model {
             if self.has_model_option {
                 self.setup.push_back((
                     "session/set_config_option",
@@ -587,18 +673,39 @@ impl AcpSession {
                 log::warn!("acp: agent offers no model selection; ignoring model {want}");
             }
         }
-        if self.mode == PermissionMode::ReadOnly
-            && self.modes.iter().any(|m| m == "plan")
-            && self.current_mode.as_deref() != Some("plan")
-        {
-            if self.has_mode_option {
-                self.setup.push_back((
-                    "session/set_config_option",
-                    json!({ "sessionId": sid, "configId": "mode", "value": "plan" }),
-                ));
-            } else {
-                self.setup
-                    .push_back(("session/set_mode", json!({ "sessionId": sid, "modeId": "plan" })));
+        // After the model: changing the model may reset the thinking level.
+        if let (Some(all_levels), Some(want)) = (&self.thought_levels, want_effort) {
+            // Per-model levels when the agent lists them (Claude models on agy stop at `high`).
+            let levels = target_efforts.as_ref().unwrap_or(all_levels);
+            match crate::antigravity::thought_level_for(&want, levels) {
+                Some(level) if self.current_thought.as_deref() != Some(level) || model_changes => {
+                    self.setup.push_back((
+                        "session/set_config_option",
+                        json!({ "sessionId": sid, "configId": "thought_level", "value": level }),
+                    ));
+                }
+                Some(_) => {}
+                None => log::warn!("acp: agent offers no thinking level for effort {want}"),
+            }
+        }
+        // `plan` for read-only threads, the agent's own `accept-edits` when it has one (the client
+        // also auto-allows edits, so agents without it behave the same).
+        let want_mode = match self.mode {
+            PermissionMode::ReadOnly => Some("plan"),
+            PermissionMode::AcceptEdits => Some("accept-edits"),
+            _ => None,
+        };
+        if let Some(want) = want_mode {
+            if self.modes.iter().any(|m| m == want) && self.current_mode.as_deref() != Some(want) {
+                if self.has_mode_option {
+                    self.setup.push_back((
+                        "session/set_config_option",
+                        json!({ "sessionId": sid, "configId": "mode", "value": want }),
+                    ));
+                } else {
+                    self.setup
+                        .push_back(("session/set_mode", json!({ "sessionId": sid, "modeId": want })));
+                }
             }
         }
         self.next_setup(step);
@@ -1063,20 +1170,25 @@ impl AcpCommand {
         Ok(Self { label: "opencode".into(), ..Self::new(exe, opencode::acp_args(cfg)) })
     }
 
-    /// From a command line (`[AgentKind::Acp]`): program is looked up on PATH, `cfg.extra_args`
-    /// are appended.
+    /// From a command line (`[AgentKind::Acp]`): program is looked up on PATH (the Antigravity
+    /// CLI also in `%LOCALAPPDATA%gyin`), `cfg.extra_args` are appended. For `agy` the
+    /// arguments go through [`crate::antigravity::finalize_args`] (`acp`, `--disable-telemetry`,
+    /// the skip-permissions flag only in `Full`); its effort is a session option, not a flag.
     pub fn from_command_line(command: &str, cfg: &ThreadConfig) -> Result<Self> {
         let mut parts = split_command(command);
         if parts.is_empty() {
             return Err(DriverError::NotFound("(empty ACP command)".into()));
         }
         let prog = parts.remove(0);
-        let exe = proc::resolve_executable(&prog).ok_or(DriverError::NotFound(prog))?;
-        parts.extend(cfg.extra_args.iter().cloned());
-        // The Antigravity CLI takes the effort as a flag (`agy --effort high`).
-        if let Some(e) = cfg.effort.as_deref().filter(|e| EFFORT_LEVELS.contains(e) && is_antigravity(command)) {
-            parts.extend(["--effort".to_string(), e.to_string()]);
+        let agy = is_antigravity(command);
+        let exe = proc::resolve_executable(&prog)
+            .or_else(|| agy.then(crate::antigravity::resolve).flatten())
+            .ok_or(DriverError::NotFound(prog))?;
+        if agy {
+            let label = "agy".to_string();
+            return Ok(Self { label, ..Self::new(exe, crate::antigravity::finalize_args(parts, cfg)) });
         }
+        parts.extend(cfg.extra_args.iter().cloned());
         Ok(Self::new(exe, parts))
     }
 }
@@ -1741,7 +1853,7 @@ mod tests {
     }
 
     #[test]
-    fn session_new_models_are_listed_and_agy_gets_an_effort_flag() {
+    fn session_new_models_are_listed_and_effort_support_is_per_agent() {
         let line = include_str!("../tests/fixtures/opencode_acp_handshake.jsonl").lines().nth(1).unwrap();
         let v: Value = serde_json::from_str(line).unwrap();
         let models = parse_models(&v["result"]);
@@ -1760,5 +1872,116 @@ mod tests {
         assert!(crate::supports_effort(&AgentKind::Codex));
         assert!(!crate::supports_effort(&AgentKind::OpenCode));
         assert!(!crate::supports_effort(&AgentKind::Acp { command: "gemini --acp".into() }));
+    }
+
+    // -- Antigravity (agy) ----------------------------------------------------
+
+    /// Replay the recorded `agy acp` handshake for `cfg`; returns the events of `session/new`
+    /// and every setup request the client sent afterwards, in order.
+    fn agy_replay(cfg: &ThreadConfig) -> (AcpSession, Vec<AgentEvent>, Vec<(String, Value)>) {
+        let msgs = fixture("antigravity_acp_handshake.jsonl");
+        let mut sess = AcpSession::new(cfg);
+        sess.start();
+        let a = sess.on_message(&msgs[0]);
+        assert_eq!(a.outgoing[0]["method"], "session/new");
+        let mut step = sess.on_message(&msgs[1]);
+        let events = std::mem::take(&mut step.events);
+        let mut sent = Vec::new();
+        while let Some(m) = step.outgoing.pop() {
+            sent.push((m["method"].as_str().unwrap().to_string(), m["params"].clone()));
+            step = sess.on_message(&json!({"jsonrpc":"2.0","id":m["id"],"result":{}}));
+        }
+        // the informational notifications that follow are ignored without a trace
+        for m in &msgs[2..] {
+            assert!(sess.on_message(m).events.is_empty());
+        }
+        (sess, events, sent)
+    }
+
+    #[test]
+    fn recorded_antigravity_handshake_lists_models_with_efforts() {
+        let (sess, ev, sent) = agy_replay(&cfg());
+        assert!(sent.is_empty(), "defaults need no setup request: {sent:?}");
+        assert_eq!(sess.session_id(), Some("00000000-0000-4000-8000-000000000001"));
+        assert_eq!(sess.modes, vec!["default", "accept-edits", "auto", "plan"]);
+        assert_eq!(sess.auth_methods, vec!["oauth-personal", "oauth-business", "gemini-api-key", "agent-platform"]);
+        assert!(sess.can_load && sess.can_resume);
+        assert_eq!(sess.context_size, Some(1_048_576));
+        assert_eq!(
+            ev[0],
+            AgentEvent::SessionStarted {
+                session_id: "00000000-0000-4000-8000-000000000001".into(),
+                model: Some("gemini-4-neon".into())
+            }
+        );
+        let AgentEvent::Models { models, current } = &ev[1] else { panic!("no Models: {ev:?}") };
+        assert_eq!(current.as_deref(), Some("gemini-4-neon"));
+        assert_eq!(models.len(), 9);
+        assert_eq!(models[0].id, "gemini-4-neon");
+        assert_eq!(models[0].label, "Gemini 4 Neon");
+        assert_eq!(models[0].efforts, ["low", "medium", "high", "xhigh"]);
+        assert_eq!(models[0].default_effort.as_deref(), Some("high"));
+        let opus = models.iter().find(|m| m.id == "claude-opus-5-5").unwrap();
+        assert_eq!(opus.efforts, ["low", "medium", "high"], "only the variants the agent lists");
+        assert_eq!(opus.default_effort.as_deref(), Some("high"));
+        let oss = models.iter().find(|m| m.id == "gpt-oss-120b-medium").unwrap();
+        assert!(oss.efforts.is_empty());
+        let orch = models.iter().find(|m| m.id == "gemini-pro-orchestrator-neon").unwrap();
+        assert!(orch.efforts.is_empty());
+    }
+
+    #[test]
+    fn antigravity_model_effort_and_modes_are_session_options() {
+        // `<base>-<effort>` (the `agy models` spelling) splits into model + thinking level
+        let mut c = cfg();
+        c.model = Some("claude-opus-5-5-medium".into());
+        let (_, _, sent) = agy_replay(&c);
+        let calls: Vec<_> = sent.iter().map(|(m, p)| (m.as_str(), p["configId"].as_str().unwrap(), p["value"].as_str().unwrap())).collect();
+        assert_eq!(
+            calls,
+            [("session/set_config_option", "model", "claude-opus-5-5"), ("session/set_config_option", "thought_level", "medium")]
+        );
+        // explicit effort wins over the suffix; `max` maps to the agent's top level
+        c.effort = Some("max".into());
+        let (_, _, sent) = agy_replay(&c);
+        assert_eq!(sent[1].1["value"], "high", "opus lists no `xhigh` variant, so `max` stops at `high`");
+        c.model = Some("gemini-4-argon".into());
+        let (_, _, sent) = agy_replay(&c);
+        assert_eq!(sent[1].1["value"], "high", "argon lists low/medium/high only");
+        c.model = Some("gemini-4-hydrogen".into());
+        let (_, _, sent) = agy_replay(&c);
+        assert_eq!(sent[1].1["value"], "xhigh", "hydrogen has an xhigh variant");
+        // no model change: only the thinking level is set (`high` is already current -> nothing)
+        c.model = None;
+        c.effort = Some("high".into());
+        assert!(agy_replay(&c).2.is_empty());
+        c.effort = Some("low".into());
+        assert_eq!(agy_replay(&c).2[0].1["value"], "low");
+    }
+
+    #[test]
+    fn antigravity_permission_modes_map_to_agent_modes() {
+        let calls = |mode| {
+            let mut c = cfg();
+            c.permission_mode = mode;
+            agy_replay(&c).2.iter().map(|(m, p)| (m.clone(), p["configId"].as_str().unwrap_or("").to_string(), p["value"].as_str().unwrap_or("").to_string())).collect::<Vec<_>>()
+        };
+        let set = |v: &str| vec![("session/set_config_option".to_string(), "mode".to_string(), v.to_string())];
+        assert_eq!(calls(PermissionMode::Ask), vec![]);
+        assert_eq!(calls(PermissionMode::Full), vec![]);
+        assert_eq!(calls(PermissionMode::AcceptEdits), set("accept-edits"));
+        assert_eq!(calls(PermissionMode::ReadOnly), set("plan"));
+    }
+
+    #[test]
+    fn antigravity_effort_is_not_a_cli_flag() {
+        // `agy acp` rejects --effort (verified), so the command line never carries it.
+        let Some(exe) = crate::antigravity::resolve() else { return };
+        let mut c = cfg();
+        c.effort = Some("high".into());
+        let line = crate::antigravity::acp_command_line(&exe, None, &[]);
+        let cmd = AcpCommand::from_command_line(&line, &c).unwrap();
+        assert_eq!(cmd.args, ["acp", "--disable-telemetry"]);
+        assert_eq!(cmd.label, "agy");
     }
 }

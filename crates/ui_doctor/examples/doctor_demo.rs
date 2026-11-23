@@ -140,13 +140,7 @@ fn main() {
             WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
             move |window, cx| {
                 let provider = DoctorPanelProvider::new(model, "0.0.1");
-                let ctx = PanelCtx {
-                    zone,
-                    width_class: WidthClass::from_width(panel_width),
-                    cwd: None,
-                    project_root: None,
-                    theme,
-                };
+                let ctx = PanelCtx::new(zone, WidthClass::from_width(panel_width), theme);
                 let panel = provider.build(ctx, window, cx);
                 cx.new(|_| Host { theme, zone, panel, panel_width, stats, _children: children })
             },

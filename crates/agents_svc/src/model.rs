@@ -8,6 +8,8 @@ pub enum Agent {
     Claude,
     Codex,
     OpenCode,
+    /// Google Antigravity (`agy` CLI and IDE), tokens only: see [`crate::antigravity`].
+    Antigravity,
 }
 
 impl Agent {
@@ -16,6 +18,7 @@ impl Agent {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
             Agent::OpenCode => "opencode",
+            Agent::Antigravity => "antigravity",
         }
     }
 
@@ -24,6 +27,7 @@ impl Agent {
             "claude" => Some(Agent::Claude),
             "codex" => Some(Agent::Codex),
             "opencode" => Some(Agent::OpenCode),
+            "antigravity" => Some(Agent::Antigravity),
             _ => None,
         }
     }

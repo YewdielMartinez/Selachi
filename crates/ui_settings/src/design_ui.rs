@@ -6,7 +6,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::*, px,
 };
 use store::config::ThemeMode;
-use theme::Theme;
+use theme::{Radius, Theme};
 use ui_kit::{Icon, WirePreset, Wireframe, icon};
 
 use crate::ui::{self, PillTone, note, plain_row, row, status_pill};
@@ -50,6 +50,7 @@ impl SettingsView {
     pub(crate) fn theme_cards(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let current = self.cfg.appearance.mode;
         let cards: [(ThemeMode, &'static str, &'static str); 4] = [
             (ThemeMode::System, "Sistema", "Sigue a Windows"),
@@ -96,17 +97,20 @@ impl SettingsView {
                 div()
                     .id(ElementId::Name(SharedString::from(format!("theme-card-{label}"))))
                     .occlude()
+                    // A tab stop: Enter / Space run the click; `Tab` is moved by the view root.
+                    .tab_index(0)
+                    .focus(move |s| s.border_color(c.accent))
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
                     .p(px(8.0))
-                    .rounded(px(14.0))
+                    .rounded(px(Radius::SM))
                     .cursor_pointer()
                     .border_2()
                     .border_color(if selected { c.accent_strong } else { c.surface_1 })
                     .bg(c.surface_2)
                     .hover(move |s| s.bg(c.surface_3))
-                    .child(div().rounded(px(10.0)).overflow_hidden().bg(backdrop).child(tile))
+                    .child(div().rounded(px(Radius::PILL)).overflow_hidden().bg(backdrop).child(tile))
                     .child(
                         div()
                             .flex()
@@ -120,13 +124,13 @@ impl SettingsView {
                                     .flex_col()
                                     .child(
                                         div()
-                                            .text_size(px(13.0))
+                                            .text_size(px(ty.ui_size_md))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(c.text)
                                             .child(label),
                                     )
                                     .when(!hint.is_empty(), |d| {
-                                        d.child(div().text_size(px(11.0)).text_color(c.muted).child(hint))
+                                        d.child(div().text_size(px(ty.ui_size_xs)).text_color(c.muted).child(hint))
                                     }),
                             )
                             .when(selected, |d| d.child(icon(Icon::Check, 14.0, c.text))),
@@ -142,6 +146,7 @@ impl SettingsView {
     pub(crate) fn palettes_group(&self, narrow: bool) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let chips = FUTURE_PALETTES.iter().enumerate().map(|(i, name)| {
             let base = i == 0;
             div()
@@ -149,9 +154,9 @@ impl SettingsView {
                 .px(px(12.0))
                 .flex()
                 .items_center()
-                .rounded(px(9.0))
+                .rounded(px(Radius::CONTROL))
                 .bg(c.surface_2)
-                .text_size(px(12.0))
+                .text_size(px(ty.ui_size_sm))
                 .text_color(if base { c.text } else { c.outline })
                 .when(!base, |d| d.opacity(0.7))
                 .child(if base { "black (base)".to_string() } else { (*name).to_string() })
@@ -178,6 +183,7 @@ impl SettingsView {
     pub(crate) fn design(&mut self, _narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
 
         // ----- the embedded layout panel -----
         let panel = match &self.layout_panel {
@@ -207,7 +213,7 @@ impl SettingsView {
             .child(
                 div()
                     .px(px(4.0))
-                    .text_size(px(11.0))
+                    .text_size(px(ty.ui_size_xs))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(c.muted)
                     .child("Layout"),

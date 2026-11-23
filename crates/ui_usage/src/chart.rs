@@ -5,7 +5,7 @@
 use chrono::NaiveDate;
 use gpui::{
     Bounds, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, StatefulInteractiveElement,
-    Styled, Window, canvas, div, fill, point, px, size,
+    SharedString, Styled, Window, canvas, div, fill, point, px, size,
 };
 use theme::Theme;
 use ui_kit::Tooltip;
@@ -17,13 +17,17 @@ const CELL_H: f32 = 4.0;
 const PITCH: f32 = CELL_H + 1.0;
 /// Widest bar, in px (columns are narrower in a thin panel).
 const MAX_BAR_W: f32 = 18.0;
-/// Opacity of each stack slot (Claude, Codex, OpenCode): muted tones of one hue.
-const SLOT_OPACITY: [f32; 3] = [1.0, 0.62, 0.36];
+/// Stack slots: one per agent of [`AGENT_ORDER`], so a new agent can never be hidden by an array
+/// that forgot to grow.
+const SLOTS: usize = AGENT_ORDER.len();
+/// Opacity of each stack slot (Claude, Codex, OpenCode, Antigravity): muted tones of one hue.
+/// The last step stays above the baseline tone (`surface_4`) so a thin Antigravity cell reads.
+const SLOT_OPACITY: [f32; SLOTS] = [1.0, 0.62, 0.40, 0.24];
 
 /// The tone of stack `slot`: muted for past days, accent for today.
 pub fn slot_tone(theme: &Theme, slot: usize, today: bool) -> Hsla {
     let base: Hsla = if today { theme.colors.accent.into() } else { theme.colors.muted.into() };
-    base.opacity(SLOT_OPACITY.get(slot).copied().unwrap_or(0.36))
+    base.opacity(SLOT_OPACITY.get(slot).copied().unwrap_or(SLOT_OPACITY[SLOTS - 1]))
 }
 
 /// Geometry of one bar inside a column of `col_w` x `col_h`: `(bar_w, rows)`.
@@ -43,19 +47,17 @@ pub fn bar_chart(
 ) -> impl IntoElement + use<> {
     let c = theme.colors;
     let max_total = days.iter().map(DayUsage::total).max().unwrap_or(0);
-    let tones: Vec<[Hsla; 3]> = [false, true]
-        .into_iter()
-        .map(|t| [slot_tone(theme, 0, t), slot_tone(theme, 1, t), slot_tone(theme, 2, t)])
-        .collect();
+    let tones: Vec<[Hsla; SLOTS]> =
+        [false, true].into_iter().map(|today| std::array::from_fn(|slot| slot_tone(theme, slot, today))).collect();
     let baseline = c.surface_4;
 
-    let columns = days.iter().enumerate().map(|(i, day)| {
+    let columns = days.iter().map(|day| {
         let is_today = day.date == today;
         let tip = day_tooltip(day, today);
         let values = day.per_agent;
         let tone = tones[usize::from(is_today)];
         div()
-            .id(("usage-day", i))
+            .id(SharedString::from(format!("usage-day-{}", day.date)))
             .flex_1()
             .min_w_0()
             .h_full()
@@ -79,7 +81,7 @@ pub fn bar_chart(
                 .min_w_0()
                 .flex()
                 .justify_center()
-                .text_size(px(10.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(color)
                 .child(chrono::Datelike::day(&day.date).to_string())
         }))
@@ -98,7 +100,7 @@ fn paint_bar(
     bounds: Bounds<Pixels>,
     values: &[u64; AGENT_ORDER.len()],
     max_total: u64,
-    tone: [Hsla; 3],
+    tone: [Hsla; SLOTS],
     baseline: theme::Rgba,
 ) {
     let (col_w, col_h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));

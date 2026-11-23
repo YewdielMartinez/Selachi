@@ -11,7 +11,7 @@
 //! # Integration
 //!
 //! ```ignore
-//! ui_viewer::bind_keys(cx);                                    // once: Ctrl+F, Ctrl+G, page keys, text fields
+//! ui_viewer::bind_keys(cx);                                    // once: Ctrl+F, Ctrl+G, page keys, tree arrows, text fields
 //! let files = FileTreeProvider::new().on_event(|ev, cx| shell.on_viewer_event(ev, cx));
 //! registry.register(files.clone());                            // PanelProvider "files"
 //! files.set_git_status(marks, cx);                             // optional M / A / ? markers
@@ -29,7 +29,6 @@
 mod data_tree;
 mod diff_rows;
 mod event;
-mod field;
 mod file_icon;
 mod format;
 mod image_info;
@@ -51,7 +50,6 @@ mod viewer;
 pub use data_tree::{DataRow, DataTree};
 pub use diff_rows::{SplitRow, UnifiedRow, split_rows, unified_rows};
 pub use event::ViewerEvent;
-pub use field::{TextBuf, TextField, TextFieldEvent};
 pub use file_icon::{FileGlyph, needed_svgs};
 pub use format::{display_path, find_repo_root, format_bytes};
 pub use image_info::image_dimensions;

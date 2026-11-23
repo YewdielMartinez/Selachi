@@ -14,10 +14,11 @@ use gpui::{
     Window, div, prelude::*, px,
 };
 use panel_api::{PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
-use theme::{Mode, Radius, Theme, rgb};
+use theme::{Radius, Theme};
 use ui_kit::{AgentMark, Icon, IconButton, SectionLabel, agent_icon, icon};
 
 use crate::attention::{AttentionItem, AttentionKind, AttentionModel, format_wait};
+use crate::tone::{Tone, ink};
 
 /// Panel id (what `layout.right_panel` stores).
 pub const PANEL_ID: &str = "attention";
@@ -39,10 +40,6 @@ pub struct AttentionView {
     task: Option<Task<()>>,
     ticks: usize,
     _observe: Subscription,
-}
-
-fn ink(theme: &Theme, dark: usize, light: usize) -> Hsla {
-    rgb(theme.terminal.ansi[if theme.mode == Mode::Light { light } else { dark }]).into()
 }
 
 impl AttentionView {
@@ -117,7 +114,7 @@ impl AttentionView {
         true
     }
 
-    fn row(&self, ix: usize, item: &AttentionItem, cx: &mut Context<Self>) -> AnyElement {
+    fn row(&self, item: &AttentionItem, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let c = theme.colors;
         let ty = theme.typography;
@@ -128,16 +125,16 @@ impl AttentionView {
             (None, _) => icon(Icon::Terminal, 16.0, c.muted).into_any_element(),
         };
         let kind_color: Hsla = match &item.kind {
-            AttentionKind::Approval { .. } => ink(&theme, 11, 3),
-            AttentionKind::WaitingInput => ink(&theme, 12, 4),
+            AttentionKind::Approval { .. } => ink(&theme, Tone::Warning),
+            AttentionKind::WaitingInput => ink(&theme, Tone::Info),
             AttentionKind::Failed { .. } | AttentionKind::AgentError => c.error.into(),
-            AttentionKind::LongCommandDone => ink(&theme, 10, 2),
+            AttentionKind::LongCommandDone => ink(&theme, Tone::Success),
         };
         let id = item.id.clone();
         let dismiss_id = item.id.clone();
         let elapsed = SharedString::from(format_wait(item.since.elapsed().as_secs()));
         div()
-            .id(("attention-row", ix))
+            .id(SharedString::from(format!("attention-row-{}", item.id)))
             .w_full()
             .min_h(px(if compact { 44.0 } else { 52.0 }))
             .px(px(10.0))
@@ -146,7 +143,7 @@ impl AttentionView {
             .flex_row()
             .items_center()
             .gap(px(10.0))
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -192,7 +189,7 @@ impl AttentionView {
             )
             .child(div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(elapsed))
             .child(
-                IconButton::new(format!("attention-x-{ix}"), &theme, Icon::Close)
+                IconButton::new(format!("attention-x-{}", item.id), &theme, Icon::Close)
                     .size(24.0)
                     .icon_size(12.0)
                     .tooltip("Descartar")
@@ -229,8 +226,8 @@ impl Render for AttentionView {
                     .child("Nadie te está esperando"),
             );
         }
-        for (ix, item) in items.iter().enumerate() {
-            list = list.child(self.row(ix, item, cx));
+        for item in &items {
+            list = list.child(self.row(item, cx));
         }
 
         div()
@@ -264,7 +261,7 @@ impl Render for AttentionView {
                                     .justify_center()
                                     .rounded(px(9.0))
                                     .bg(c.surface_3)
-                                    .text_size(px(11.0))
+                                    .text_size(px(ty.ui_size_xs))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(c.text)
                                     .child(SharedString::from(items.len().to_string())),

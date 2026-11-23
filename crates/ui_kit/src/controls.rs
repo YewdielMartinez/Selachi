@@ -7,10 +7,11 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ElementId, Empty, IntoElement, Pixels, RenderOnce, Rgba, SharedString, Window,
-    canvas, div, prelude::*, px,
+    actions, canvas, div, prelude::*, px,
 };
-use theme::Theme;
+use theme::{Radius, Theme};
 
+use crate::focus;
 use crate::icon::{Icon, icon};
 
 type IndexFn = Rc<dyn Fn(usize, &mut Window, &mut App) + 'static>;
@@ -54,6 +55,7 @@ pub struct SegmentedControl {
     segments: Vec<Segment>,
     selected: usize,
     track: Option<Rgba>,
+    focusable: bool,
     on_change: Option<IndexFn>,
 }
 
@@ -69,8 +71,16 @@ impl SegmentedControl {
             segments: segments.into_iter().map(Into::into).collect(),
             selected: 0,
             track: None,
+            focusable: true,
             on_change: None,
         }
+    }
+
+    /// Keyboard focus: every segment is a tab stop (`Enter` / `Space` select it) and shows the
+    /// ring. On by default; `false` for decorative use.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
     }
 
     pub fn selected(mut self, ix: usize) -> Self {
@@ -110,7 +120,7 @@ impl From<SharedString> for Segment {
 }
 
 impl RenderOnce for SegmentedControl {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let track = self.track.unwrap_or(c.surface_1);
@@ -118,23 +128,19 @@ impl RenderOnce for SegmentedControl {
         let pill = if track == c.surface_2 { c.surface_4 } else { c.surface_3 };
         let on_change = self.on_change;
         let id = self.id;
-        div()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .gap(px(2.0))
-            .p(px(3.0))
-            .rounded(px(12.0))
-            .bg(track)
-            .font_family(ty.ui_family)
-            .text_size(px(ty.ui_size_md))
-            .children(self.segments.into_iter().enumerate().map(move |(ix, seg)| {
+        let focusable = self.focusable && on_change.is_some();
+        let items: Vec<_> = self
+            .segments
+            .into_iter()
+            .enumerate()
+            .map(|(ix, seg)| {
                 let selected = ix == self.selected;
                 let fg = if selected { c.text } else { c.muted };
                 let on_change = on_change.clone();
-                div()
-                    .id(ElementId::NamedInteger(id.clone(), ix as u64))
+                let seg_id = ElementId::NamedInteger(id.clone(), ix as u64);
+                let focus = focusable.then(|| focus::handle(window, cx, &seg_id));
+                let el = div()
+                    .id(seg_id.clone())
                     .occlude()
                     .h(px(28.0))
                     .px(px(14.0))
@@ -154,8 +160,22 @@ impl RenderOnce for SegmentedControl {
                         if let Some(f) = &on_change {
                             f(ix, window, cx);
                         }
-                    })
-            }))
+                    });
+                focus::wire(el, focus, &seg_id, 9.0, c.accent)
+            })
+            .collect();
+        div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .items_center()
+            .gap(px(2.0))
+            .p(px(3.0))
+            .rounded(px(Radius::SM))
+            .bg(track)
+            .font_family(ty.ui_family)
+            .text_size(px(ty.ui_size_md))
+            .children(items)
     }
 }
 
@@ -173,12 +193,20 @@ pub struct Toggle {
     id: SharedString,
     theme: Theme,
     on: bool,
+    focusable: bool,
     on_change: Option<Box<BoolFn>>,
 }
 
 impl Toggle {
     pub fn new(id: impl Into<SharedString>, theme: &Theme) -> Self {
-        Self { id: id.into(), theme: *theme, on: false, on_change: None }
+        Self { id: id.into(), theme: *theme, on: false, focusable: true, on_change: None }
+    }
+
+    /// Keyboard focus (tab stop + ring; `Space` / `Enter` flip it). On by default; a toggle
+    /// without `on_change` is never focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
     }
 
     pub fn on(mut self, on: bool) -> Self {
@@ -194,12 +222,14 @@ impl Toggle {
 }
 
 impl RenderOnce for Toggle {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let on = self.on;
+        let id = ElementId::from(self.id.clone());
+        let focus = (self.focusable && self.on_change.is_some()).then(|| focus::handle(window, cx, &id));
         let knob = if on { Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 } } else { c.outline };
         let mut el = div()
-            .id(self.id)
+            .id(id.clone())
             .occlude()
             .w(px(36.0))
             .h(px(20.0))
@@ -216,13 +246,59 @@ impl RenderOnce for Toggle {
         if let Some(f) = self.on_change {
             el = el.on_click(move |_, w, cx| f(!on, w, cx));
         }
-        el
+        focus::wire(el, focus, &id, 10.0, c.accent)
     }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Slider
 // ---------------------------------------------------------------------------------------------
+
+actions!(
+    ui_kit_slider,
+    [
+        /// One step down (`Left` / `Down`).
+        SliderDecrease,
+        /// One step up (`Right` / `Up`).
+        SliderIncrease,
+        /// A tenth of the range down (`PageDown`).
+        SliderPageDown,
+        /// A tenth of the range up (`PageUp`).
+        SliderPageUp,
+        /// The minimum (`Home`).
+        SliderMin,
+        /// The maximum (`End`).
+        SliderMax,
+    ]
+);
+
+/// Key context of a focused slider.
+pub(crate) const SLIDER_CONTEXT: &str = "SelachiSlider";
+
+pub(crate) fn bind_slider_keys(cx: &mut App) {
+    use gpui::KeyBinding;
+    cx.bind_keys([
+        KeyBinding::new("left", SliderDecrease, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("down", SliderDecrease, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("right", SliderIncrease, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("up", SliderIncrease, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("pagedown", SliderPageDown, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("pageup", SliderPageUp, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("home", SliderMin, Some(SLIDER_CONTEXT)),
+        KeyBinding::new("end", SliderMax, Some(SLIDER_CONTEXT)),
+    ]);
+}
+
+/// A keyboard move of `delta` units (`step` when set, else 5 % of the range per unit), clamped to
+/// the range and rounded to `step`. Pure, so it is unit tested.
+pub(crate) fn slider_key_value(value: f32, min: f32, max: f32, step: Option<f32>, delta: f32) -> f32 {
+    let unit = step.filter(|s| *s > 0.0).unwrap_or((max - min) * 0.05);
+    let mut v = (value + delta * unit).clamp(min, max);
+    if let Some(step) = step.filter(|s| *s > 0.0) {
+        v = (min + ((v - min) / step).round() * step).clamp(min, max);
+    }
+    v
+}
 
 /// Payload of a slider drag; identifies which slider owns it.
 struct SliderDrag(SharedString);
@@ -247,6 +323,7 @@ pub struct Slider {
     default: Option<f32>,
     step: Option<f32>,
     width: f32,
+    focusable: bool,
     on_change: Option<Rc<FloatFn>>,
 }
 
@@ -261,8 +338,16 @@ impl Slider {
             default: None,
             step: None,
             width: 200.0,
+            focusable: true,
             on_change: None,
         }
+    }
+
+    /// Keyboard focus: tab stop, ring, and `Left` / `Right` (`Up` / `Down`), `PageUp` / `PageDown`,
+    /// `Home` / `End`. On by default; a slider without `on_change` is never focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
     }
 
     pub fn range(mut self, min: f32, max: f32) -> Self {
@@ -337,7 +422,7 @@ impl gpui::Render for DragGhost {
 }
 
 impl RenderOnce for Slider {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         const KNOB: f32 = 14.0;
         const TRACK_H: f32 = 4.0;
         let c = self.theme.colors;
@@ -347,7 +432,20 @@ impl RenderOnce for Slider {
             (self.min, self.max, self.step, self.default, self.width);
         let id = self.id.clone();
         let drag_id = self.id.clone();
+        let el_id = ElementId::from(self.id.clone());
+        let focus = (self.focusable && self.on_change.is_some()).then(|| focus::handle(window, cx, &el_id));
         let on_change = self.on_change;
+        let value = self.value;
+        let key = {
+            let on_change = on_change.clone();
+            move |delta: f32, to: Option<f32>, window: &mut Window, cx: &mut App| {
+                if let Some(f) = &on_change {
+                    f(to.unwrap_or_else(|| slider_key_value(value, min, max, step, delta)), window, cx);
+                }
+            }
+        };
+        let (k_dec, k_inc, k_pgd, k_pgu, k_min, k_max) =
+            (key.clone(), key.clone(), key.clone(), key.clone(), key.clone(), key);
         let set = {
             let on_change = on_change.clone();
             move |x: f32, left: f32, w: f32, window: &mut Window, cx: &mut App| {
@@ -364,8 +462,15 @@ impl RenderOnce for Slider {
         let down_bounds = bounds_cell.clone();
         let inner_w = width - KNOB; // the knob center travels `inner_w`
 
-        div()
-            .id(self.id)
+        let el = div()
+            .id(el_id.clone())
+            .key_context(SLIDER_CONTEXT)
+            .on_action(move |_: &SliderDecrease, w, cx| k_dec(-1.0, None, w, cx))
+            .on_action(move |_: &SliderIncrease, w, cx| k_inc(1.0, None, w, cx))
+            .on_action(move |_: &SliderPageDown, w, cx| k_pgd(-10.0, None, w, cx))
+            .on_action(move |_: &SliderPageUp, w, cx| k_pgu(10.0, None, w, cx))
+            .on_action(move |_: &SliderMin, w, cx| k_min(0.0, Some(min), w, cx))
+            .on_action(move |_: &SliderMax, w, cx| k_max(0.0, Some(max), w, cx))
             .occlude()
             .w(px(width))
             .h(px(20.0))
@@ -442,7 +547,8 @@ impl RenderOnce for Slider {
                         cx,
                     );
                 }
-            })
+            });
+        focus::wire(el, focus, &el_id, 10.0, c.accent)
     }
 }
 
@@ -463,6 +569,7 @@ pub struct SwatchRow {
     theme: Theme,
     colors: Vec<Rgba>,
     selected: Option<usize>,
+    focusable: bool,
     on_select: Option<IndexFn>,
 }
 
@@ -477,8 +584,16 @@ impl SwatchRow {
             theme: *theme,
             colors: colors.into_iter().collect(),
             selected: None,
+            focusable: true,
             on_select: None,
         }
+    }
+
+    /// Keyboard focus: every swatch is a tab stop (`Enter` / `Space` pick it) and shows the ring.
+    /// On by default.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
     }
 
     pub fn selected(mut self, selected: Option<usize>) -> Self {
@@ -493,17 +608,23 @@ impl SwatchRow {
 }
 
 impl RenderOnce for SwatchRow {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let id = self.id;
         let on_select = self.on_select;
         let selected = self.selected;
-        div().flex().flex_row().items_center().gap(px(6.0)).children(
-            self.colors.into_iter().enumerate().map(move |(ix, color)| {
+        let focusable = self.focusable && on_select.is_some();
+        let items: Vec<_> = self
+            .colors
+            .into_iter()
+            .enumerate()
+            .map(|(ix, color)| {
                 let on_select = on_select.clone();
                 let is_sel = selected == Some(ix);
-                div()
-                    .id(ElementId::NamedInteger(id.clone(), ix as u64))
+                let sw_id = ElementId::NamedInteger(id.clone(), ix as u64);
+                let focus = focusable.then(|| focus::handle(window, cx, &sw_id));
+                let el = div()
+                    .id(sw_id.clone())
                     .occlude()
                     .size(px(24.0))
                     .flex_none()
@@ -518,9 +639,11 @@ impl RenderOnce for SwatchRow {
                         if let Some(f) = &on_select {
                             f(ix, window, cx);
                         }
-                    })
-            }),
-        )
+                    });
+                focus::wire(el, focus, &sw_id, 12.0, c.accent)
+            })
+            .collect();
+        div().flex().flex_row().items_center().gap(px(6.0)).children(items)
     }
 }
 
@@ -536,6 +659,17 @@ mod tests {
         assert_eq!(v(200.0), 5.0);
         assert_eq!(v(0.0), 0.0, "clamped left");
         assert_eq!(v(999.0), 10.0, "clamped right");
+    }
+
+    #[test]
+    fn slider_keys_step_clamp_and_round() {
+        // Free slider: 5 % of the range per key press.
+        assert_eq!(slider_key_value(50.0, 0.0, 100.0, None, 1.0), 55.0);
+        assert_eq!(slider_key_value(50.0, 0.0, 100.0, None, -10.0), 0.0, "page down clamps");
+        assert_eq!(slider_key_value(98.0, 0.0, 100.0, None, 1.0), 100.0, "clamps at the end");
+        // Stepped slider: exactly one step, on the grid.
+        assert_eq!(slider_key_value(20.0, 0.0, 100.0, Some(10.0), 1.0), 30.0);
+        assert_eq!(slider_key_value(23.0, 0.0, 100.0, Some(10.0), -1.0), 10.0);
     }
 
     #[test]

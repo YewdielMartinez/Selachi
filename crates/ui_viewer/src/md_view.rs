@@ -9,7 +9,7 @@ use gpui::{
     AnyElement, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _,
     SharedString, StrikethroughStyle, Styled as _, StyledText, div, img, prelude::*, px, relative,
 };
-use theme::{Theme, rgb};
+use theme::{Radius, Theme};
 use ui_kit::{Icon, icon};
 use viewer_svc::{MdAlign, MdBlock, MdInline, MdListItem, MdTable};
 
@@ -79,7 +79,7 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(std::ops::Range<usize
             }
             if s.code {
                 h.background_color = Some(c.surface_3.into());
-                h.color = Some(rgb(theme.terminal.ansi[if theme.mode == theme::Mode::Light { 1 } else { 9 }]).into());
+                h.color = Some(c.error.into());
             }
             if s.link {
                 h.color = Some(c.accent.into());
@@ -133,7 +133,7 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .into_any_element(),
         MdBlock::Paragraph(inlines) => div()
             .my(px(5.0))
-            .text_size(px(15.0))
+            .text_size(px(r.theme.typography.ui_size_lg))
             .line_height(relative(1.6))
             .text_color(c.text)
             .child(inline_el(inlines, r))
@@ -151,7 +151,7 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .my(px(8.0))
             .px(px(16.0))
             .py(px(6.0))
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_1)
             .text_color(c.muted)
             .flex()
@@ -170,7 +170,7 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
         MdBlock::Html(h) => div()
             .my(px(6.0))
             .font_family(theme.typography.mono_family)
-            .text_size(px(12.0))
+            .text_size(px(r.theme.typography.ui_size_sm))
             .text_color(c.outline)
             .child(SharedString::from(h.trim_end().to_owned()))
             .into_any_element(),
@@ -212,7 +212,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
     div()
         .my(px(8.0))
         .p(px(14.0))
-        .rounded(px(12.0))
+        .rounded(px(Radius::SM))
         .bg(c.surface_1)
         .flex()
         .flex_col()
@@ -221,7 +221,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
             d.child(
                 div()
                     .mb(px(4.0))
-                    .text_size(px(11.0))
+                    .text_size(px(r.theme.typography.ui_size_xs))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(c.outline)
                     .child(SharedString::from(l.to_owned())),
@@ -231,7 +231,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
             div()
                 .overflow_hidden()
                 .font_family(theme.typography.mono_family)
-                .text_size(px(12.5))
+                .text_size(px(r.theme.typography.mono_size))
                 .text_color(c.text)
                 .flex()
                 .flex_col()
@@ -247,7 +247,7 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
             .mt(px(4.0))
             .size(px(16.0))
             .flex_none()
-            .rounded(px(5.0))
+            .rounded(px(Radius::CHIP))
             .bg(c.surface_3)
             .flex()
             .items_center()
@@ -257,7 +257,7 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
         None if ordered => div()
             .flex_none()
             .w(px(22.0))
-            .text_size(px(15.0))
+            .text_size(px(r.theme.typography.ui_size_lg))
             .line_height(relative(1.6))
             .text_color(c.muted)
             .child(SharedString::from(format!("{number}.")))
@@ -288,7 +288,7 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
             .px(px(12.0))
             .py(px(8.0))
             .flex()
-            .text_size(px(14.0))
+            .text_size(px(r.theme.typography.ui_size_body))
             .when(header, |d| d.font_weight(FontWeight::MEDIUM))
             .text_color(if header { c.text } else { c.muted });
         let d = match align {
@@ -309,7 +309,7 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
     });
     div()
         .my(px(8.0))
-        .rounded(px(12.0))
+        .rounded(px(Radius::SM))
         .bg(c.surface_1)
         .overflow_hidden()
         .flex()
@@ -331,11 +331,11 @@ fn image_block(src: &str, alt: &str, r: &MdRender<'_>) -> AnyElement {
     match local {
         Some(path) => div()
             .my(px(8.0))
-            .child(img(path).max_w_full().max_h(px(420.0)).rounded(px(8.0)))
+            .child(img(path).max_w_full().max_h(px(420.0)).rounded(px(Radius::CONTROL)))
             .into_any_element(),
         None => div()
             .my(px(6.0))
-            .text_size(px(13.0))
+            .text_size(px(r.theme.typography.ui_size_md))
             .text_color(c.outline)
             .child(SharedString::from(format!("[imagen: {alt}]")))
             .into_any_element(),

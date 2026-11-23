@@ -707,3 +707,90 @@ fn delete_preview_and_delete_with_worktree() {
     assert!(store.get_thread(rec.id).unwrap().is_none());
     assert!(matches!(store.open(rec.id), Err(ChatError::NotFound(_))));
 }
+
+// ---------------------------------------------------------------------------
+// Delegation lineage (PLAN section 20)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delegation_links_children_and_survive_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = done_script();
+    let store = store_at(dir.path(), &factory, None);
+
+    let parent = store.create_thread(spec(dir.path(), AgentKind::ClaudeCode)).unwrap();
+    assert_eq!(store.thread_link(parent.id).unwrap(), Some(chat_core::ThreadLink::default()));
+    assert!(store.thread_link(chat_core::ThreadId(9999)).unwrap().is_none());
+
+    let mut child_spec = spec(dir.path(), AgentKind::Codex);
+    child_spec.link = Some(chat_core::ThreadLink {
+        parent_thread_id: Some(parent.id),
+        parent_tab: Some("tab-7".into()),
+        depth: 1,
+        delegated_by: Some("cli".into()),
+    });
+    let child = store.create_thread(child_spec.clone()).unwrap();
+    // A delegation started from a terminal: no parent thread, still delegated.
+    child_spec.link = Some(chat_core::ThreadLink {
+        parent_thread_id: None,
+        parent_tab: None,
+        depth: 1,
+        delegated_by: Some("mcp".into()),
+    });
+    let orphan = store.create_thread(child_spec).unwrap();
+
+    let kids = store.children(parent.id).unwrap();
+    assert_eq!(kids.iter().map(|t| t.id).collect::<Vec<_>>(), vec![child.id]);
+    let link = store.thread_link(child.id).unwrap().unwrap();
+    assert_eq!(link.parent_thread_id, Some(parent.id));
+    assert_eq!((link.parent_tab.as_deref(), link.depth, link.delegated_by.as_deref()), (Some("tab-7"), 1, Some("cli")));
+
+    let delegated = store.delegated_threads().unwrap();
+    let ids: Vec<_> = delegated.iter().map(|(t, _)| t.id).collect();
+    assert!(ids.contains(&child.id) && ids.contains(&orphan.id) && !ids.contains(&parent.id));
+    store.flush().unwrap();
+    drop(store);
+
+    let store = store_at(dir.path(), &factory, None);
+    assert_eq!(store.children(parent.id).unwrap().len(), 1);
+    assert_eq!(store.thread_link(orphan.id).unwrap().unwrap().delegated_by.as_deref(), Some("mcp"));
+
+    // Deleting the parent keeps the child (the link is cleared, the depth stays).
+    store.delete_thread(parent.id, DeleteOptions::default()).unwrap();
+    let link = store.thread_link(child.id).unwrap().unwrap();
+    assert_eq!((link.parent_thread_id, link.depth), (None, 1));
+}
+
+#[test]
+fn schema_v3_migrates_an_existing_v2_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat.db");
+    // Build a v2 database by hand (what shipped before the delegation columns).
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', project_root TEXT NOT NULL, \
+             worktree_path TEXT, agent_kind TEXT NOT NULL, model TEXT, permission_mode TEXT NOT NULL DEFAULT 'ask', \
+             status TEXT NOT NULL DEFAULT 'idle', created INTEGER NOT NULL, updated INTEGER NOT NULL, \
+             agent_session_id TEXT, archived INTEGER NOT NULL DEFAULT 0, checkpoint_before_turn INTEGER NOT NULL DEFAULT 0, \
+             effort TEXT);\
+             INSERT INTO threads(title, project_root, agent_kind, created, updated) VALUES ('viejo', 'C:/p', 'claude', 1, 1);\
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+        // The remaining v1 tables are created by the migration only for fresh databases, so give the
+        // old file the ones the store touches.
+        conn.execute_batch(
+            "CREATE TABLE messages(id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE, \
+             seq INTEGER NOT NULL, role TEXT NOT NULL, created INTEGER NOT NULL, content_json TEXT NOT NULL, usage_json TEXT, \
+             cost_usd REAL, cost_source TEXT, UNIQUE(thread_id, seq));",
+        )
+        .unwrap();
+    }
+    let db = ChatDb::open(&path).unwrap();
+    assert_eq!(db.schema_version().unwrap(), chat_core::latest_version());
+    let t = db.list_threads().unwrap();
+    assert_eq!(t.len(), 1);
+    let link = db.get_link(t[0].id).unwrap().unwrap();
+    assert_eq!((link.parent_thread_id, link.depth, link.delegated_by), (None, 0, None));
+}

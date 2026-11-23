@@ -335,3 +335,132 @@ fn flush_writes_immediately(cx: &mut TestAppContext) {
     });
     assert!(disk(&f).contains("confirm_sensitive = false"));
 }
+
+// ----- keyboard and pointer contracts (ui_kit::testing: no real input is injected) ---------------
+
+mod ui {
+    use gpui::{TestAppContext, VisualTestContext, px, size};
+    use store::config::{PredictionSource, TEMPLATE};
+    use ui_kit::testing;
+
+    use super::*;
+
+    /// A settings view as the root of a test window, plus what keeps its config dir alive.
+    struct Win {
+        _dir: tempfile::TempDir,
+        view: Entity<SettingsView>,
+    }
+
+    fn open(cx: &mut TestAppContext) -> (Win, &mut VisualTestContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, TEMPLATE).unwrap();
+        let config = Config::load_from(&path).unwrap().config;
+        let options = SettingsOptions {
+            registry: Some(Arc::new(GrammarRegistry::new(dir.path().join("plugins")))),
+            fetcher: Some(Arc::new(LocalFetcher { archives_dir: dist() })),
+            ..SettingsOptions::new(path, "0.0.1")
+        };
+        let (view, vcx) = testing::open_window(cx, |_, cx| SettingsView::new(config, Theme::dark(), options, cx));
+        (Win { _dir: dir, view }, vcx)
+    }
+
+    /// A 600 px window: the section list folds into a drop-down and rows stack their control under
+    /// the text (the test text system is wider than a real font, so a side-by-side control would
+    /// sit outside the window).
+    fn shrink(vcx: &mut VisualTestContext) {
+        vcx.simulate_resize(size(px(600.0), px(800.0)));
+        // The probe measures the new width while painting; the next frame acts on it.
+        for _ in 0..3 {
+            vcx.update(|window, _| window.refresh());
+            vcx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
+    fn clicking_a_setting_row_toggle_edits_the_config(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        shrink(vcx);
+        w.view.update(vcx, |v, cx| v.set_section(Section::Git, cx));
+        vcx.run_until_parked();
+        let before = w.view.read_with(vcx, |v, _| v.config().git.confirm_sensitive);
+        testing::click_id(vcx, "git-confirm");
+        let after = w.view.read_with(vcx, |v, _| v.config().git.confirm_sensitive);
+        assert_eq!(after, !before, "the click reached the toggle and the config");
+        testing::click_id(vcx, "git-confirm");
+        assert_eq!(w.view.read_with(vcx, |v, _| v.config().git.confirm_sensitive), before);
+    }
+
+    #[gpui::test]
+    fn tab_walks_the_section_list_and_then_the_controls(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        // General: 10 section pills, then the language select, then the first toggle.
+        let stops = Section::ALL.len() + 1;
+        for _ in 0..stops {
+            testing::press(vcx, "tab");
+        }
+        assert_eq!(w.view.read_with(vcx, |v, _| v.section()), Section::General, "tab alone never changes section");
+        let before = w.view.read_with(vcx, |v, _| v.config().session.restore);
+        testing::press(vcx, "tab enter");
+        assert_eq!(w.view.read_with(vcx, |v, _| v.config().session.restore), !before, "Enter on the first toggle");
+        // Shift+Tab goes back to the select; Enter opens it instead of toggling anything.
+        testing::press(vcx, "shift-tab enter");
+        let open = w.view.read_with(vcx, |v, cx| v.selects["general-lang"].entity.read(cx).is_open());
+        assert!(open, "shift-tab came back to the language select and Enter opened it");
+    }
+
+    #[gpui::test]
+    fn a_section_pill_changes_section_from_the_keyboard(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        // Tab to the second pill ("Apariencia") and activate it.
+        testing::press(vcx, "tab tab enter");
+        assert_eq!(w.view.read_with(vcx, |v, _| v.section()), Section::Appearance);
+    }
+
+    #[gpui::test]
+    fn typing_into_a_text_field_updates_the_config(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        w.view.update(vcx, |v, cx| v.set_section(Section::Terminal, cx));
+        vcx.run_until_parked();
+        let field = w.view.read_with(vcx, |v, _| v.fields["scrollback"].clone());
+        vcx.update(|window, cx| field.read(cx).focus(window));
+        testing::press(vcx, "ctrl-a");
+        testing::type_text(vcx, "20 000");
+        assert_eq!(w.view.read_with(vcx, |v, _| v.config().terminal.scrollback), 20_000);
+        // Invalid text is not applied and the field shows the error.
+        testing::press(vcx, "ctrl-a");
+        testing::type_text(vcx, "muchas");
+        assert_eq!(w.view.read_with(vcx, |v, _| v.config().terminal.scrollback), 20_000);
+        vcx.run_until_parked();
+        assert!(field.read_with(vcx, |f, _| f.error().is_some()), "the field is flagged");
+    }
+
+    #[gpui::test]
+    fn a_select_changes_value_from_the_keyboard(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        w.view.update(vcx, |v, cx| v.set_section(Section::Terminal, cx));
+        vcx.run_until_parked();
+        let select = w.view.read_with(vcx, |v, _| v.selects["prediction"].entity.clone());
+        vcx.update(|window, cx| select.read(cx).focus(window));
+        assert_eq!(w.view.read_with(vcx, |v, _| v.config().terminal.completion.prediction), PredictionSource::History);
+        testing::press(vcx, "down down enter");
+        assert_eq!(
+            w.view.read_with(vcx, |v, _| v.config().terminal.completion.prediction),
+            PredictionSource::HistoryAndPlugin
+        );
+        assert!(!select.read_with(vcx, |s, _| s.is_open()));
+    }
+
+    #[gpui::test]
+    fn a_narrow_zone_swaps_the_section_list_for_a_drop_down(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        assert!(w.view.read_with(vcx, |v, _| !v.selects.contains_key("settings-section")), "wide: the list is shown");
+        shrink(vcx);
+        assert!(w.view.read_with(vcx, |v, _| v.selects.contains_key("settings-section")), "narrow: a drop-down");
+        let select = w.view.read_with(vcx, |v, _| v.selects["settings-section"].entity.clone());
+        vcx.update(|window, cx| select.read(cx).focus(window));
+        // The first Down opens the list on the current section, the second moves to the next.
+        testing::press(vcx, "down down enter");
+        assert_eq!(w.view.read_with(vcx, |v, _| v.section()), Section::Appearance);
+    }
+}

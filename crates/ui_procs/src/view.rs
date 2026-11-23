@@ -9,7 +9,7 @@ use gpui::{
     Styled, Subscription, Window, div, px, svg,
 };
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
-use theme::{Radius, Theme, rgb};
+use theme::{Radius, Theme};
 use ui_kit::{
     Button, GhostButton, IconButton, Segment, SegmentedControl, Spinner, Tooltip, WireFill, WireRect, Wireframe, icon,
 };
@@ -173,7 +173,7 @@ fn text_ellipsis_box() -> gpui::Div {
 fn state_color(theme: &Theme, state: RowState) -> gpui::Rgba {
     match state {
         RowState::Active => theme.colors.accent,
-        RowState::Orphan => rgb(theme.terminal.ansi[3]),
+        RowState::Orphan => theme.colors.warning,
         RowState::PortZombie => theme.colors.error,
     }
 }
@@ -189,9 +189,9 @@ fn badge(theme: &Theme, state: RowState) -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .rounded(px(9.0))
+        .rounded_full()
         .bg(c.surface_3)
-        .text_size(px(11.0))
+        .text_size(px(theme.typography.ui_size_xs))
         .text_color(if state == RowState::Active { c.muted } else { color })
         .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
         .child(state.label())
@@ -205,9 +205,9 @@ fn tag(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
         .px(px(8.0))
         .flex()
         .items_center()
-        .rounded(px(9.0))
+        .rounded_full()
         .bg(c.surface_2)
-        .text_size(px(11.0))
+        .text_size(px(theme.typography.ui_size_xs))
         .text_color(c.muted)
         .child(text.into())
 }
@@ -229,10 +229,10 @@ fn port_pill(theme: &Theme, pid: u32, pill: PortPill) -> impl IntoElement + use<
         .flex_row()
         .items_center()
         .gap(px(4.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .bg(c.surface_2)
         .font_family(theme.typography.mono_family)
-        .text_size(px(11.0));
+        .text_size(px(theme.typography.ui_size_xs));
     match pill.url() {
         Some(url) => {
             let tip = if pill.exposed {
@@ -340,7 +340,7 @@ fn summary_line(theme: &Theme, snap: &Snapshot, compact: bool) -> impl IntoEleme
     if snap.summary.count > 0 {
         line = line.child("·").child(
             div()
-                .text_color(rgb(theme.terminal.ansi[3]))
+                .text_color(theme.colors.warning)
                 .child(plural(snap.summary.count, "huérfano", "huérfanos")),
         );
     }
@@ -437,7 +437,7 @@ impl ProcsPanel {
             .flex_row()
             .items_center()
             .gap(px(8.0))
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
             .on_click(move |_, _, cx| view.update(cx, |p, cx| p.toggle(k.clone(), cx)))
@@ -449,7 +449,7 @@ impl ProcsPanel {
                     .font_weight(FontWeight::MEDIUM)
                     .child(agent.name.clone()),
             )
-            .child(div().flex_none().text_size(px(11.0)).text_color(c.muted).child(meta))
+            .child(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(meta))
             .into_any_element()
     }
 
@@ -469,7 +469,7 @@ impl ProcsPanel {
             .flex_row()
             .items_center()
             .gap(px(6.0))
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
             .on_click(move |_, _, cx| view.update(cx, |p, cx| p.toggle(k.clone(), cx)))
@@ -485,7 +485,7 @@ impl ProcsPanel {
             Some(detail) if !(compact && owner.probable) => {
                 el = el.child(
                     text_ellipsis_box()
-                        .text_size(px(11.0))
+                        .text_size(px(theme.typography.ui_size_xs))
                         .text_color(c.muted)
                         .child(clip(detail, if compact { 12 } else { 28 })),
                 );
@@ -504,8 +504,8 @@ impl ProcsPanel {
             el = el.child(
                 div()
                     .flex_none()
-                    .text_size(px(11.0))
-                    .text_color(rgb(theme.terminal.ansi[3]))
+                    .text_size(px(theme.typography.ui_size_xs))
+                    .text_color(theme.colors.warning)
                     .child(plural(orphans, "huérfano", "huérfanos")),
             );
         }
@@ -529,7 +529,7 @@ impl ProcsPanel {
             return div()
                 .id(ElementId::from(SharedString::from(format!("denied-{id}"))))
                 .flex_none()
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .tooltip(Tooltip::text(&theme, denied_hint))
                 .child(denied_label)
@@ -596,7 +596,7 @@ impl ProcsPanel {
         let l2 = l2.child(div().flex_1()).child(
             div()
                 .flex_none()
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .child(metrics_text(r.ram, r.cpu, r.uptime, compact)),
         );
@@ -611,7 +611,7 @@ impl ProcsPanel {
             .flex()
             .flex_col()
             .gap(px(3.0))
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .hover(move |s| s.bg(c.surface_2))
             .tooltip(Tooltip::text(&theme, format!("{full}\npid {pid}")))
             .child(l1)
@@ -648,7 +648,7 @@ impl ProcsPanel {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .rounded(px(8.0))
+                    .rounded(px(Radius::CONTROL))
                     .cursor_pointer()
                     .hover(move |s| s.bg(c.surface_2))
                     .on_click(move |_, _, cx| {
@@ -706,7 +706,7 @@ impl ProcsPanel {
         let mut l2 = div().flex().flex_row().items_center().gap(px(6.0)).pl(px(2.0));
         l2 = l2.child(runtime_icon(&theme, p.runtime)).child(
             text_ellipsis_box()
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .child(clip(&p.origin.label(), if compact && p.state.is_some_and(|s| s.is_orphan()) { 9 } else if compact { 16 } else { 30 })),
         );
@@ -720,7 +720,7 @@ impl ProcsPanel {
             l2 = l2.child(tag(&theme, "expuesto"));
         }
         if p.ram > 0 {
-            l2 = l2.child(div().flex_none().text_size(px(11.0)).text_color(c.muted).child(format_bytes(p.ram)));
+            l2 = l2.child(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(format_bytes(p.ram)));
         }
 
         div()
@@ -731,7 +731,7 @@ impl ProcsPanel {
             .flex()
             .flex_col()
             .gap(px(3.0))
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .hover(move |s| s.bg(c.surface_2))
             .tooltip(Tooltip::text(&theme, format!("{}\npid {pid}", p.command)))
             .child(l1)
@@ -859,7 +859,7 @@ fn plan_list(theme: &Theme, plan: &StopPlan, compact: bool) -> impl IntoElement 
         list = list.child(
             div()
                 .pl(px(24.0))
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .child(format!("… y {} más", plan.items.len() - PREVIEW_ROWS)),
         );
@@ -884,14 +884,14 @@ fn plan_row(theme: &Theme, item: &PlanItem, compact: bool) -> impl IntoElement +
             div()
                 .flex_none()
                 .font_family(theme.typography.mono_family)
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .child(p.label())
         }))
         .child(
             div()
                 .flex_none()
-                .text_size(px(11.0))
+                .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
                 .child(if compact { format_bytes(item.ram) } else { format!("pid {} · {}", item.pid, format_bytes(item.ram)) }),
         )

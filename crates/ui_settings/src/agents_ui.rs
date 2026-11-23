@@ -41,6 +41,7 @@ impl SettingsView {
     pub(crate) fn agents_section(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
 
         let recheck = GhostButton::new("agents-recheck", &t, "Volver a comprobar")
             .on_click(cx.listener(|s, _, _, cx| s.ensure_agents(true, cx)));
@@ -62,7 +63,7 @@ impl SettingsView {
                 );
             }
             AgentsState::Done(rows) => {
-                for (i, r) in rows.iter().enumerate() {
+                for r in rows {
                     let tone = match r.status {
                         AgentStatus::Ready => PillTone::Ok,
                         AgentStatus::Installed => PillTone::Neutral,
@@ -77,7 +78,7 @@ impl SettingsView {
                     };
                     list.push(
                         div()
-                            .id(SharedString::from(format!("agent-{i}")))
+                            .id(SharedString::from(format!("agent-{}", r.name)))
                             .flex()
                             .flex_row()
                             .items_center()
@@ -95,14 +96,14 @@ impl SettingsView {
                                     .gap(px(1.0))
                                     .child(
                                         div()
-                                            .text_size(px(13.0))
+                                            .text_size(px(ty.ui_size_md))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(if muted_out { c.muted } else { c.text })
                                             .child(SharedString::from(r.name.clone())),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.0))
+                                            .text_size(px(ty.ui_size_sm))
                                             .text_color(c.muted)
                                             .overflow_hidden()
                                             .text_ellipsis()

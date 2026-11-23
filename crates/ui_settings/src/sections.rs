@@ -4,7 +4,7 @@ use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled
 use store::config::AutoStop;
 use store::Density;
 use theme::{Rgba, rgb};
-use ui_kit::{Button, GhostButton, Slider};
+use ui_kit::{Button, GhostButton, Slider, SwatchRow};
 
 use crate::keys;
 use crate::ui::{self, PillTone, decimal, note, row, status_pill, value_label};
@@ -102,7 +102,7 @@ impl SettingsView {
             store::config::parse_hex_color(&a.accent).is_some_and(|(r, g, b)| (u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) == *h)
         });
         let this = cx.entity();
-        let swatches = accent_swatches(&t, colors, selected, move |ix, _, cx| {
+        let swatches = SwatchRow::new("accent", &t, colors).selected(selected).on_select(move |ix, _, cx| {
             this.update(cx, |s, cx| {
                 let hex = format!("#{:06X}", ACCENTS[ix.min(ACCENTS.len() - 1)]);
                 s.errors.remove("accent_hex");
@@ -121,7 +121,7 @@ impl SettingsView {
             .gap(px(14.0))
             .flex_wrap()
             .child(swatches)
-            .child(self.input(cx, "accent_hex", "#00AAFF", 104.0, true));
+            .child(self.input(cx, "accent_hex", "#00AAFF", 132.0, true));
 
         let ui_font = self.input(cx, "ui_font", "DM Sans", 200.0, false);
         let mono_font = self.input(cx, "mono_font", "Geist Mono", 200.0, false);
@@ -254,7 +254,7 @@ impl SettingsView {
                         "Color de acento",
                         Some("Cursor, foco, progreso y medidores. El azul de las acciones no cambia.".into()),
                         accent_control,
-                        self.error_for("accent_hex"),
+                        None, // the field shows its own error
                     )
                     .into_any_element(),
                 ],
@@ -265,8 +265,8 @@ impl SettingsView {
                 &t,
                 Some("Tipografía"),
                 vec![
-                    row(&t, narrow, "Fuente de la interfaz", None, ui_font, self.error_for("ui_font")).into_any_element(),
-                    row(&t, narrow, "Fuente de la terminal", None, mono_font, self.error_for("mono_font"))
+                    row(&t, narrow, "Fuente de la interfaz", None, ui_font, None).into_any_element(),
+                    row(&t, narrow, "Fuente de la terminal", None, mono_font, None)
                         .into_any_element(),
                     row(&t, narrow, "Tamaño de la terminal", None, size, self.error_for("appearance.mono_size"))
                         .into_any_element(),
@@ -323,7 +323,7 @@ impl SettingsView {
                         "Editor externo",
                         Some("Comando para «Abrir en el editor». Vacío = la aplicación predeterminada de Windows.".into()),
                         editor,
-                        self.error_for("external_editor"),
+                        None,
                     )
                     .into_any_element(),
                 ],
@@ -369,12 +369,13 @@ impl SettingsView {
     pub(crate) fn about(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let dir = self.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let db = store::paths::state_db_path_in(&dir);
         let path_text = |p: &std::path::Path| {
             div()
                 .max_w(px(460.0))
-                .text_size(px(12.0))
+                .text_size(px(ty.ui_size_sm))
                 .font_family(t.typography.mono_family)
                 .text_color(c.muted)
                 .child(SharedString::from(p.display().to_string()))
@@ -433,48 +434,4 @@ fn open_folder(dir: &std::path::Path) {
     if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
         eprintln!("ui_settings: could not open {}: {e}", dir.display());
     }
-}
-
-/// Perceived brightness above which a swatch needs a ring to stay visible on a light surface.
-const RING_LUMA: f32 = 0.85;
-
-fn luma(c: Rgba) -> f32 {
-    0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
-}
-
-/// The accent swatches. Same look as `ui_kit::SwatchRow`, plus an `outline_soft` ring on the
-/// near-white ones (`#ECEEF2`): on the light theme they melt into the card otherwise.
-fn accent_swatches(
-    theme: &theme::Theme,
-    colors: Vec<Rgba>,
-    selected: Option<usize>,
-    on_select: impl Fn(usize, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> impl IntoElement {
-    use gpui::{ElementId, InteractiveElement, StatefulInteractiveElement, prelude::FluentBuilder};
-    let c = theme.colors;
-    let on_select = std::rc::Rc::new(on_select);
-    div().flex().flex_row().items_center().gap(px(6.0)).children(colors.into_iter().enumerate().map(move |(ix, color)| {
-        let on_select = on_select.clone();
-        let is_sel = selected == Some(ix);
-        let ringed = luma(color) > RING_LUMA;
-        div()
-            .id(ElementId::NamedInteger("accent".into(), ix as u64))
-            .occlude()
-            .size(px(24.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .cursor_pointer()
-            .when(is_sel, |d| d.border_2().border_color(c.text))
-            .child(
-                div()
-                    .size(px(if is_sel { 12.0 } else { 18.0 }))
-                    .rounded_full()
-                    .bg(color)
-                    .when(ringed, |d| d.border_1().border_color(c.outline_soft)),
-            )
-            .on_click(move |_, window, cx| on_select(ix, window, cx))
-    }))
 }

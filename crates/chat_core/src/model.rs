@@ -173,6 +173,24 @@ pub struct ThreadSpec {
     pub use_worktree: bool,
     /// Take a git checkpoint before every turn in Full / AcceptEdits mode (A10).
     pub checkpoint_before_turn: bool,
+    /// `Some` when this thread is a delegation (a child of another thread / a CLI or MCP run).
+    pub link: Option<ThreadLink>,
+}
+
+/// Delegation lineage of a thread (PLAN section 20): who started it and how deep the chain is.
+/// Stored next to the thread (`threads.parent_thread_id`, `parent_tab`, `depth`, `delegated_by`);
+/// threads that are not delegations have no link (`depth` 0, nothing else).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadLink {
+    /// The thread that delegated this one, when it is a Selachi chat thread.
+    pub parent_thread_id: Option<ThreadId>,
+    /// Opaque id of the terminal tab that delegated this one (a tab of the shell, not a thread).
+    pub parent_tab: Option<String>,
+    /// Hops from the top-level session (1 = delegated by a top-level session).
+    pub depth: u32,
+    /// Who made the delegation: `cli`, `mcp`, ... A thread with this set is a delegation even
+    /// when it has no parent thread (the delegating session was a terminal).
+    pub delegated_by: Option<String>,
 }
 
 impl ThreadSpec {
@@ -186,6 +204,7 @@ impl ThreadSpec {
             permission: PermissionMode::Ask,
             use_worktree: false,
             checkpoint_before_turn: false,
+            link: None,
         }
     }
 }

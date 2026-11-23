@@ -175,6 +175,69 @@ fn at_sign_opens_the_file_picker_and_enter_inserts_the_path(cx: &mut TestAppCont
     assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
 }
 
+#[gpui::test]
+fn the_mention_popover_takes_up_down_and_tab_instead_of_the_text_field(cx: &mut TestAppContext) {
+    use ui_kit::testing::{press, type_text};
+    let e = env(cx, FakeFactory::silent());
+    let (c, vcx, events) = composer(cx, &e);
+    let root = e.project();
+    c.update(vcx, |c, cx| {
+        c.set_state(ComposerState { project_root: Some(root.clone()), ..ComposerState::default() }, cx);
+    });
+    type_text(vcx, "@");
+    settle(vcx, "two files listed", |vcx| c.read_with(vcx, |c, _| c.mention_state().is_some_and(|(items, _)| items.len() == 2)));
+    let items = c.read_with(vcx, |c, _| c.mention_state().unwrap().0.to_vec());
+    assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 0);
+    press(vcx, "down");
+    assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 1);
+    press(vcx, "down");
+    assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 0, "the highlight wraps around");
+    press(vcx, "up");
+    assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 1, "up goes back (and wraps)");
+    // Tab accepts the highlighted entry; it does not move focus and nothing is sent.
+    press(vcx, "tab");
+    assert_eq!(c.read_with(vcx, |c, cx| c.text(cx)), format!("@{} ", items[1]));
+    assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
+    assert!(events.borrow().is_empty());
+    // With the popover closed, Up / Down are caret motion again: no navigation is captured.
+    press(vcx, "up");
+    assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
+}
+
+#[gpui::test]
+fn escape_closes_the_mention_popover_without_stopping_anything(cx: &mut TestAppContext) {
+    use ui_kit::testing::{press, type_text};
+    let e = env(cx, FakeFactory::silent());
+    let (c, vcx, events) = composer(cx, &e);
+    let root = e.project();
+    c.update(vcx, |c, cx| {
+        c.set_state(ComposerState { project_root: Some(root.clone()), working: true, ..ComposerState::default() }, cx);
+    });
+    type_text(vcx, "@");
+    settle(vcx, "popover open", |vcx| c.read_with(vcx, |c, _| c.is_mention_open()));
+    press(vcx, "escape");
+    assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
+    assert!(events.borrow().is_empty(), "the first Esc only closes the picker");
+    press(vcx, "escape");
+    assert_eq!(*events.borrow(), vec![ComposerEvent::Stop], "the second one stops the turn");
+}
+
+#[gpui::test]
+fn ctrl_enter_also_sends_and_attachments_are_removed_by_path(cx: &mut TestAppContext) {
+    use ui_kit::testing::{press, type_text};
+    let e = env(cx, FakeFactory::silent());
+    let (c, vcx, events) = composer(cx, &e);
+    let (a, b) = (e.project().join("README.md"), e.project().join("src").join("main.rs"));
+    c.update(vcx, |c, cx| c.add_attachments([a.clone(), b.clone()], cx));
+    vcx.run_until_parked();
+    // Clicking the x of the first chip removes that path, not "whatever is at index 0 now".
+    ui_kit::testing::click_id(vcx, &format!("attach-x-{}", b.display()));
+    assert_eq!(c.read_with(vcx, |c, _| c.attachments().to_vec()), vec![a.clone()]);
+    type_text(vcx, "mira");
+    press(vcx, "ctrl-enter");
+    assert_eq!(*events.borrow(), vec![ComposerEvent::Send { text: "mira".into(), attachments: vec![a] }]);
+}
+
 // ---------------------------------------------------------------------------------------------
 // View + thread
 // ---------------------------------------------------------------------------------------------

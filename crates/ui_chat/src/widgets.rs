@@ -4,25 +4,10 @@ use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, IntoElement, ParentElement as _, SharedString, Stateful, Styled as _,
     Window, div, prelude::*, px,
 };
-use theme::{Rgba, Theme, rgb};
+use theme::{Radius, Rgba, Theme};
 use ui_kit::{FileIcon, Icon, Spinner, file_icon, icon};
 
 pub type Handler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
-
-/// ANSI green of the theme (additions, success).
-pub fn green(theme: &Theme) -> Rgba {
-    rgb(theme.terminal.ansi[2])
-}
-
-/// ANSI red of the theme (removals).
-pub fn red(theme: &Theme) -> Rgba {
-    rgb(theme.terminal.ansi[1])
-}
-
-/// Amber of the theme (waiting, warnings).
-pub fn amber(theme: &Theme) -> Rgba {
-    rgb(theme.terminal.ansi[3])
-}
 
 /// A row of a popover menu: label, optional hint line, check when selected.
 pub fn menu_row(
@@ -49,7 +34,7 @@ pub fn menu_row(
         .flex_row()
         .items_center()
         .gap(px(10.0))
-        .rounded(px(10.0))
+        .rounded(px(Radius::PILL))
         .font_family(ty.ui_family)
         .text_size(px(ty.ui_size_md))
         .text_color(if enabled { c.text } else { c.muted })
@@ -82,6 +67,7 @@ pub fn file_glyph(name: &str, color: Rgba) -> AnyElement {
 /// A small chip: file icon + name (attachments, edited files).
 pub fn file_chip(theme: &Theme, name: &str, color: Rgba) -> Div {
     let c = theme.colors;
+    let ty = theme.typography;
     div()
         .h(px(24.0))
         .px(px(8.0))
@@ -89,9 +75,9 @@ pub fn file_chip(theme: &Theme, name: &str, color: Rgba) -> Div {
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .bg(c.surface_3)
-        .text_size(px(12.0))
+        .text_size(px(ty.ui_size_sm))
         .text_color(color)
         .child(file_glyph(name, color))
         .child(div().max_w(px(260.0)).overflow_hidden().text_ellipsis().whitespace_nowrap().child(SharedString::from(name.to_string())))
@@ -120,7 +106,7 @@ pub fn tool_line(
         .items_center()
         .gap(px(8.0))
         .font_family(ty.ui_family)
-        .text_size(px(13.0))
+        .text_size(px(ty.ui_size_md))
         .text_color(muted)
         .child(lead)
         .child(div().min_w_0().flex_shrink().overflow_hidden().whitespace_nowrap().child(label))
@@ -137,17 +123,4 @@ pub fn tool_line(
 /// The bars spinner as an element (accent: it is progress).
 pub fn working_bars(theme: &Theme) -> AnyElement {
     Spinner::new(theme.colors.accent).into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn status_colors_come_from_the_palette() {
-        let t = Theme::dark();
-        assert_eq!(green(&t), rgb(t.terminal.ansi[2]));
-        assert_ne!(red(&t), green(&t));
-        assert_ne!(amber(&t), green(&t));
-    }
 }

@@ -1,0 +1,84 @@
+# Release (Wave 6c.1): on a `v*` tag, build the release exe and the grammar plugins and attach them to a
+# DRAFT GitHub release. Nothing is published automatically: review the draft and publish it by hand.
+#
+# Assets: selachi.exe, SHA256SUMS.txt, <lang>-<version>.zip (grammar plugins), grammars.toml (the plugin
+# index the app downloads; `plugins.index_url` points at it).
+#
+# TODO(signing): the exe is NOT code-signed. This needs the user's code-signing certificate. Plan:
+#   1. Export the certificate as .pfx, base64 it and store it as the repository secrets
+#      WINDOWS_CERT_PFX_BASE64 and WINDOWS_CERT_PASSWORD (or use Azure Trusted Signing / a cloud HSM).
+#   2. Add a step before "Checksums" that decodes the secret to a temp file, runs
+#        signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx /p <password> target\release\selachi.exe
+#      and deletes the file afterwards (never echo the secrets).
+#   3. Sign the grammar DLLs too if the plugin loader ever requires it.
+# Until then SmartScreen warns on first run.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Least privilege by default; only the release job gets write access (to create the draft release).
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release:
+    name: build and draft release
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable)
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      # No cargo cache on purpose: a cache saved from a tag ref is not readable by other refs and the
+      # release must be a clean build anyway. Two independent cargo workspaces: the app and packaging/grammars.
+      - name: Build selachi.exe (release)
+        run: cargo build --release -p selachi
+
+      - name: Build grammar plugins
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          ./packaging/grammars/build.ps1 -BaseUrl "https://github.com/$env:REPO/releases/download/$env:TAG"
+          Get-ChildItem packaging/grammars/dist -File | Format-Table Name, Length
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item target/release/selachi.exe release-assets/
+          Copy-Item packaging/grammars/dist/*.zip release-assets/
+          Copy-Item packaging/grammars/dist/grammars.toml release-assets/
+          Get-ChildItem release-assets -File |
+            ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name } |
+            Set-Content -Encoding ascii release-assets/SHA256SUMS.txt
+          Get-Content release-assets/SHA256SUMS.txt
+
+      # Draft only. The tag reaches the script through an env var (never interpolated into the script text).
+      - name: Create or update the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $files = Get-ChildItem release-assets -File | ForEach-Object FullName
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG @files --clobber
+          } else {
+            gh release create $env:TAG @files --draft --verify-tag --title "Selachi $env:TAG" --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'gh release failed' }

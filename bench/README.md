@@ -13,6 +13,7 @@ Requirements: Windows 10/11, PowerShell 7 (`pwsh`). No other dependencies. Run f
 | `bench/flood.ps1` | Output throughput test. Run it *inside* the terminal under test. |
 | `bench/threads.ps1` | Per-thread CPU of a process over N seconds (thread names via `GetThreadDescription`). Answers "which thread burns CPU at idle?". |
 | `bench/bursts.ps1` | Time-resolved per-thread CPU: prints every sampling interval in which a thread burned CPU (and whether the window was focused). Tells periodic work (timers, scans) from one-off bursts. |
+| `bench/check-baseline.ps1` | Regression gate: seeded data dir (wizard skipped) -> `measure.ps1` -> compares startup and private app MB against `bench/baseline.json`, fails if more than 15 % worse. Used by CI (manual job `perf`) and runnable locally. |
 | `bench/vmregions.ps1` | VMMap-style breakdown of a process' committed memory (private / image / mapped, biggest private regions). Answers "where do the Private Bytes come from?". |
 | `bench/shot.ps1` | Launches an exe, optionally types keys into it, saves a PNG of its window (visual check after render-path changes). |
 | `bench/patches/gpui-selachi.patch` | Patch for gpui 0.2.2 (demand-driven vsync thread + lazy path textures); see the perf notes below. |
@@ -140,6 +141,31 @@ order-of-magnitude expectations as "a medir"). Procedure:
    stalls. If GPUI misses by a wide margin on Windows, trigger plan B; otherwise record GPUI as confirmed.
 
 The same scripts are the basis for the CI bench of Fase 1 (flood and idle thresholds as regressions).
+
+## CI performance gate (`check-baseline.ps1`, `bench/baseline.json`)
+
+```powershell
+cargo build --release
+pwsh -File bench/check-baseline.ps1 -Exe target/release/selachi.exe -Profile local            # compare (exit 1 if > 15 % worse)
+pwsh -File bench/check-baseline.ps1 -Exe target/release/selachi.exe -Profile local -Update    # refresh the baseline
+```
+
+* **Seeded data dir.** The script creates a temp `SELACHI_DATA_DIR` containing the legacy `onboarding.done` marker.
+  `ui_onboarding::needs_onboarding` treats it as "done" and migrates it into `state.db`'s `meta` table
+  (`onboarding.done`), so the animated first-run wizard never shows and does not skew startup or memory.
+  If that mechanism changes, update the seed in the script. `SELACHI_BENCH_USAGE_ACTIVE` is *not* set (the usage scan
+  needs a focused window and the machine's real agent logs; both differ between machines).
+* **Gated metrics:** `startup_ms` and `private_mb_app` (medians of 3 runs, 10 s idle, 5 s settle). Idle CPU is printed only.
+* **Profiles.** Absolute numbers depend on the hardware, so `baseline.json` has one profile per machine class: `local`
+  (the developer machine; CPU/GPU/OS/commit recorded inside) and `ci` (GitHub-hosted `windows-latest`). A missing profile
+  is not a failure: the run reports "no baseline" and uploads `measured.json`; paste its `data` object into
+  `profiles.ci` to seed the CI baseline. Do not compare a runner against the `local` profile.
+* **Threshold:** 15 % (`-Threshold 0.15`). Refresh a baseline (`-Update`) only for an intended change, in the same commit.
+* **In CI the job is manual** (`workflow_dispatch` of `.github/workflows/ci.yml`, input `perf`). GitHub-hosted runners have no
+  GPU; gpui enumerates the DXGI adapters and uses the first one with D3D11 + compute shaders, which should be the
+  "Microsoft Basic Render Driver" (WARP), but a window on a shared VM was never proven to start there and its timings are
+  noisy. Run the job once by hand; if the window appears, seed `profiles.ci` and consider making it a scheduled/nightly run
+  rather than a per-PR gate.
 
 ## Known limitations
 

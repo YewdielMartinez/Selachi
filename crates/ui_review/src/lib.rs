@@ -50,7 +50,6 @@
 mod attention;
 mod attention_view;
 mod diff;
-mod field;
 mod markdown;
 mod note;
 mod review;
@@ -58,13 +57,13 @@ mod review;
 mod review_tests;
 mod store;
 mod tab;
+mod tone;
 
 pub use attention::{
     AttentionEvent, AttentionId, AttentionItem, AttentionKind, AttentionModel, FocusTarget, agent_label, format_wait,
 };
 pub use attention_view::{AttentionPanelProvider, AttentionView, PANEL_ID as ATTENTION_PANEL_ID};
 pub use diff::{DiffRow, FileBody, FileDiff, FileStatus, ReviewSource, load_source};
-pub use field::{NoteField, NoteFieldEvent, TextBuf};
 pub use markdown::{ReviewMessage, build_markdown, fence_language};
 pub use note::{
     EXCERPT_RADIUS, Note, NoteId, NoteRef, NoteSet, NoteState, Reanchor, SEARCH_WINDOW, Side, SideLines, excerpt, line_hash,
@@ -75,9 +74,9 @@ pub use store::{DraftKey, ReviewStore, draft_key, root_key};
 pub use tab::{ReviewTab, open_review_tab};
 pub use viewer_svc::GitBase;
 
-/// Registers the key bindings of the note editor. Call once at startup.
+/// Registers the key bindings of the shared text field (`ui_kit::init`). Idempotent; call once at startup.
 pub fn init(cx: &mut gpui::App) {
-    field::bind_keys(cx);
+    ui_kit::init(cx);
 }
 
 /// SVGs this crate still wants. None: review, attention, send, note, trash and edit exist.

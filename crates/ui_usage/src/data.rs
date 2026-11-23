@@ -22,13 +22,14 @@ pub const ESTIMATED: &str = "estimado";
 pub const LIMIT_AGENTS: [Agent; 2] = [Agent::Claude, Agent::Codex];
 
 /// Display order of agents everywhere (cards, chart stack, legend).
-pub const AGENT_ORDER: [Agent; 3] = [Agent::Claude, Agent::Codex, Agent::OpenCode];
+pub const AGENT_ORDER: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::OpenCode, Agent::Antigravity];
 
 pub fn agent_name(agent: Agent) -> &'static str {
     match agent {
         Agent::Claude => "Claude",
         Agent::Codex => "Codex",
         Agent::OpenCode => "OpenCode",
+        Agent::Antigravity => "Antigravity",
     }
 }
 
@@ -37,6 +38,7 @@ pub fn agent_mark(agent: Agent) -> ui_kit::AgentMark {
         Agent::Claude => ui_kit::AgentMark::Claude,
         Agent::Codex => ui_kit::AgentMark::Codex,
         Agent::OpenCode => ui_kit::AgentMark::OpenCode,
+        Agent::Antigravity => ui_kit::AgentMark::Antigravity,
     }
 }
 

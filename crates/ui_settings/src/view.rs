@@ -14,7 +14,7 @@ use std::sync::Arc;
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Task, actions, point, px};
 use store::Config;
 use theme::Theme;
-use ui_kit::Icon;
+use ui_kit::{Icon, Select, TextField, TextFieldEvent};
 use viewer_svc::grammars::GrammarRegistry;
 
 use crate::agents::AgentsState;
@@ -22,7 +22,6 @@ use crate::keys::{self, KeyAction};
 use crate::net::{Fetcher, HttpFetcher};
 use crate::plugins::{PluginsEvent, PluginsModel};
 use crate::save::{SAVE_DEBOUNCE, SaveGate, merge_external};
-use crate::text_field::{TextField, TextFieldEvent};
 use crate::validate::{FieldError, first_error};
 
 actions!(ui_settings, [FocusNextField, FocusPrevField]);
@@ -182,6 +181,13 @@ pub(crate) struct ProfileEditor {
     pub env: Vec<(String, String)>,
 }
 
+/// A drop-down of the view and what it was last synced with.
+pub(crate) struct SelectSlot {
+    pub entity: Entity<Select>,
+    pub options: Vec<(String, String)>,
+    pub _sub: Subscription,
+}
+
 pub struct SettingsView {
     pub(crate) theme: Theme,
     pub(crate) cfg: Config,
@@ -198,8 +204,8 @@ pub struct SettingsView {
     pub(crate) fields: HashMap<String, Entity<TextField>>,
     field_subs: HashMap<String, Subscription>,
     pub(crate) errors: HashMap<String, String>,
-    pub(crate) open_select: Option<&'static str>,
-    nav_open: bool,
+    /// Drop-downs by their stable id (created on first use, re-synced every render).
+    pub(crate) selects: HashMap<&'static str, SelectSlot>,
     pub(crate) profile_editor: Option<ProfileEditor>,
     pub(crate) plugins: Entity<PluginsModel>,
     /// The embedded layout panel (created the first time Diseño is shown).
@@ -234,7 +240,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("tab", FocusNextField, Some(CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevField, Some(CONTEXT)),
     ]);
-    crate::text_field::bind_keys(cx);
+    ui_kit::init(cx);
     ui_layout::init(cx);
 }
 
@@ -283,8 +289,7 @@ impl SettingsView {
             fields: HashMap::new(),
             field_subs: HashMap::new(),
             errors: HashMap::new(),
-            open_select: None,
-            nav_open: false,
+            selects: HashMap::new(),
             profile_editor: None,
             plugins,
             layout_panel: None,
@@ -327,10 +332,10 @@ impl SettingsView {
         if self.theme != theme {
             self.theme = theme;
             for f in self.fields.values() {
-                f.update(cx, |f, cx| {
-                    f.set_theme(theme);
-                    cx.notify();
-                });
+                f.update(cx, |f, cx| f.set_theme(theme, cx));
+            }
+            for slot in self.selects.values() {
+                slot.entity.update(cx, |s, cx| s.set_theme(theme, cx));
             }
             if let Some(p) = &self.layout_panel {
                 p.update(cx, |p, cx| p.set_theme(theme, cx));
@@ -376,9 +381,8 @@ impl SettingsView {
     pub fn set_section(&mut self, section: Section, cx: &mut Context<Self>) {
         if self.section != section {
             self.section = section;
-            self.open_select = None;
+            self.close_selects(cx);
             self.confirm = None;
-            self.nav_open = false;
             self.cancel_capture();
             self.scroll.set_offset(point(px(0.0), px(0.0)));
         }
@@ -574,18 +578,6 @@ impl SettingsView {
         self.field_subs.retain(|k, _| keep(k));
     }
 
-    pub(crate) fn nav_open_flag(&self) -> bool {
-        self.nav_open
-    }
-
-    pub(crate) fn toggle_nav(&mut self) {
-        self.nav_open = !self.nav_open;
-    }
-
-    pub(crate) fn close_nav(&mut self) {
-        self.nav_open = false;
-    }
-
     pub(crate) fn focus_handle_ref(&self) -> FocusHandle {
         self.focus.clone()
     }
@@ -629,11 +621,12 @@ impl SettingsView {
         let text = initial(self);
         let theme = self.theme;
         let placeholder = placeholder.to_string();
-        let f = cx.new(|cx| TextField::new(theme, placeholder, cx).with_text(&text).monospace(mono));
+        let f = cx.new(|cx| TextField::new(theme, cx).placeholder(placeholder).with_text(&text).monospace(mono));
         let this_key = key.to_string();
-        let sub = cx.subscribe(&f, move |this, _, ev: &TextFieldEvent, cx| match ev {
-            TextFieldEvent::Change => this.on_field_change(&this_key, cx),
-            TextFieldEvent::Submit => {}
+        let sub = cx.subscribe(&f, move |this, _, ev: &TextFieldEvent, cx| {
+            if matches!(ev, TextFieldEvent::Changed) {
+                this.on_field_change(&this_key, cx);
+            }
         });
         self.field_subs.insert(key.to_string(), sub);
         self.fields.insert(key.to_string(), f.clone());
@@ -643,8 +636,8 @@ impl SettingsView {
     /// Mark fields with an error in red.
     pub(crate) fn sync_invalid(&mut self, cx: &mut Context<Self>) {
         for (k, f) in &self.fields {
-            let bad = self.errors.contains_key(k);
-            f.update(cx, |f, cx| f.set_invalid(bad, cx));
+            let message = self.errors.get(k).cloned();
+            f.update(cx, |f, cx| f.set_error(message, cx));
         }
     }
 

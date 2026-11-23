@@ -2,10 +2,12 @@
 //! (primary / tonal / ghost, like the white pills in the references).
 
 use gpui::{
-    App, ClickEvent, Div, IntoElement, RenderOnce, SharedString, Stateful, Window, div,
+    App, ClickEvent, Div, ElementId, IntoElement, RenderOnce, SharedString, Stateful, Window, div,
     prelude::*, px,
 };
-use theme::Theme;
+use theme::{Radius, Theme};
+
+use crate::focus;
 
 use crate::icon::{Icon, icon};
 use crate::tooltip::Tooltip;
@@ -33,6 +35,7 @@ pub struct IconButton {
     emphasize_on_hover: bool,
     glass: bool,
     passthrough: bool,
+    focusable: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
 }
@@ -49,9 +52,17 @@ impl IconButton {
             emphasize_on_hover: false,
             glass: false,
             passthrough: false,
+            focusable: true,
             tooltip: None,
             on_click: None,
         }
+    }
+
+    /// Keyboard focus (tab stop + ring). On by default; `false` for decorative use. A button
+    /// without `on_click` is never focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
     }
 
     /// Do not occlude the hitboxes behind: a hovered ancestor stays hovered while the pointer is
@@ -104,18 +115,27 @@ impl IconButton {
 }
 
 impl RenderOnce for IconButton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let fg = if self.active { c.text } else { c.muted };
-        let group = self.id.clone();
-        let group_name = self.id.clone();
+        let id = ElementId::from(self.id.clone());
         let emphasize = self.emphasize_on_hover;
         let text = c.text;
         let glyph = icon(self.icon, self.icon_size, fg);
-        let glyph = if emphasize && !self.active {
-            glyph.group_hover(group_name, move |s| s.text_color(text))
-        } else {
-            glyph
+        // The "+" brightens through a hover *group*. The group name must be unique per instance,
+        // not the element id: the shell paints two zones during a layout transition, and a repeated
+        // id would otherwise address the wrong hitbox. The keyed state's entity id is unique per
+        // element-id path and lives exactly as long as the button is rendered.
+        let group: Option<SharedString> = (emphasize && !self.active).then(|| {
+            let uid = window
+                .use_keyed_state(ElementId::NamedChild(Box::new(id.clone()), "ib-group".into()), cx, |_, _| ())
+                .entity_id()
+                .as_u64();
+            SharedString::from(format!("icon-button-{uid}"))
+        });
+        let glyph = match group.clone() {
+            Some(g) => glyph.group_hover(g, move |s| s.text_color(text)),
+            None => glyph,
         };
         let theme = self.theme;
         let (bg_active, bg_hover, bg_press): (gpui::Hsla, gpui::Hsla, gpui::Hsla) = if self.glass {
@@ -123,16 +143,17 @@ impl RenderOnce for IconButton {
         } else {
             (c.surface_3.into(), c.surface_2.into(), c.surface_3.into())
         };
+        let focus = (self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
         let mut el = div()
-            .id(self.id)
-            .group(group)
+            .id(id.clone())
+            .when_some(group, |d, g| d.group(g))
             .when(!self.passthrough, |d| d.occlude())
             .size(px(self.size))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .cursor_pointer()
             .when(self.active, |d| d.bg(bg_active))
             .when(!self.active && !emphasize, |d| {
@@ -148,7 +169,7 @@ impl RenderOnce for IconButton {
         if let Some(t) = self.tooltip {
             el = el.tooltip(Tooltip::text(&self.theme, t));
         }
-        el
+        focus::wire(el, focus, &id, Radius::PILL, c.accent)
     }
 }
 
@@ -166,7 +187,7 @@ impl GhostButton {
     pub fn new(id: impl Into<SharedString>, theme: &Theme, label: impl Into<SharedString>) -> Self {
         let mut inner = Button::new(id, theme, label, ButtonKind::Ghost);
         inner.height = 28.0;
-        inner.radius = Some(10.0);
+        inner.radius = Some(Radius::PILL);
         Self { inner }
     }
 
@@ -177,6 +198,12 @@ impl GhostButton {
 
     pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
         self.inner.tooltip = Some(text.into());
+        self
+    }
+
+    /// Keyboard focus (tab stop + ring); on by default.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.inner.focusable = focusable;
         self
     }
 
@@ -220,6 +247,7 @@ pub struct Button {
     height: f32,
     radius: Option<f32>,
     disabled: bool,
+    focusable: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
 }
@@ -240,6 +268,7 @@ impl Button {
             height: 32.0,
             radius: None,
             disabled: false,
+            focusable: true,
             tooltip: None,
             on_click: None,
         }
@@ -262,9 +291,15 @@ impl Button {
         self
     }
 
-    /// Dimmed and inert.
+    /// Dimmed, inert and not focusable.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Keyboard focus (tab stop + ring); on by default. `false` for decorative use.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
         self
     }
 
@@ -280,7 +315,7 @@ impl Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let (bg, fg) = match self.kind {
@@ -290,7 +325,10 @@ impl RenderOnce for Button {
         };
         let kind = self.kind;
         let enabled = !self.disabled;
-        let base: Stateful<Div> = div().id(self.id);
+        let id = ElementId::from(self.id.clone());
+        let focus = (enabled && self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
+        let ring_radius = self.radius.unwrap_or(self.height / 2.0);
+        let base: Stateful<Div> = div().id(id.clone());
         let mut el = base
             .occlude()
             .h(px(self.height))
@@ -324,6 +362,6 @@ impl RenderOnce for Button {
         if let Some(t) = self.tooltip {
             el = el.tooltip(Tooltip::text(&self.theme, t));
         }
-        el
+        focus::wire(el, focus, &id, ring_radius, c.accent)
     }
 }

@@ -42,7 +42,8 @@ pub use hooks::{
 };
 pub use model::{
     agent_label, group_by_project, now_ms, should_checkpoint, ApprovalDecision, Archived, CostSource, Role,
-    ThreadFilter, ThreadGroup, ThreadGroups, ThreadId, ThreadRecord, ThreadSpec, ThreadStatus, UNTITLED,
+    ThreadFilter, ThreadGroup, ThreadGroups, ThreadId, ThreadLink, ThreadRecord, ThreadSpec, ThreadStatus,
+    UNTITLED,
 };
 pub use runtime::{ThreadHandle, ThreadRuntime, ThreadUpdate, MIN_UPDATE_INTERVAL};
 pub use state::{

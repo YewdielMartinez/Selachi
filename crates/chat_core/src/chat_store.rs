@@ -13,7 +13,8 @@ use crate::db::{default_db_path, ChatDb, NewThread};
 use crate::error::{ChatError, Result};
 use crate::hooks::{DefaultDriverFactory, DriverFactory, ProcessHooks};
 use crate::model::{
-    now_ms, path_key, Archived, ThreadFilter, ThreadGroups, ThreadId, ThreadRecord, ThreadSpec, ThreadStatus,
+    now_ms, path_key, Archived, ThreadFilter, ThreadGroups, ThreadId, ThreadLink, ThreadRecord, ThreadSpec,
+    ThreadStatus,
 };
 use crate::runtime::{Shared, ThreadRuntime, ThreadUpdate};
 use crate::state::{Changed, CostPolicy};
@@ -26,6 +27,7 @@ pub struct ChatStoreBuilder {
     hooks: Option<Arc<dyn ProcessHooks>>,
     pricing: Option<PricingTable>,
     policy: CostPolicy,
+    keep_busy: bool,
 }
 
 impl ChatStoreBuilder {
@@ -58,12 +60,20 @@ impl ChatStoreBuilder {
         self
     }
 
+    /// Do not reset threads that look busy (`working` / `waiting`) to `idle` when opening. For a
+    /// second process that shares `chat.db` with the app (the agent harness CLI): the default
+    /// reset assumes this process is the only one running agents.
+    pub fn keep_busy_status(mut self) -> Self {
+        self.keep_busy = true;
+        self
+    }
+
     pub fn open(self) -> Result<ChatStore> {
         let path = match self.path {
             Some(p) => p,
             None => default_db_path()?,
         };
-        let db = ChatDb::open(&path)?;
+        let db = ChatDb::open_with(&path, !self.keep_busy)?;
         let factory = self.factory.unwrap_or_else(|| Arc::new(DefaultDriverFactory));
         let pricing = Arc::new(self.pricing.unwrap_or_else(PricingTable::embedded));
         Ok(ChatStore {
@@ -201,6 +211,37 @@ impl ChatStore {
             .ok_or_else(|| ChatError::NotFound(format!("thread {id}")))?;
         self.announce(id, rec.status);
         Ok(rec)
+    }
+
+    // ----- delegation lineage ----------------------------------------------
+
+    /// Delegation lineage of a thread (`None`: unknown thread). See [`ThreadLink`].
+    pub fn thread_link(&self, id: ThreadId) -> Result<Option<ThreadLink>> {
+        self.inner.shared.db.get_link(id)
+    }
+
+    /// Direct children of `parent` (the threads it delegated), newest first, with live status.
+    pub fn children(&self, parent: ThreadId) -> Result<Vec<ThreadRecord>> {
+        let ids = self.inner.shared.db.list_children(parent)?;
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(t) = self.get_thread(id)? {
+                out.push(t);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every delegated thread (archived included) with its lineage, newest first.
+    pub fn delegated_threads(&self) -> Result<Vec<(ThreadRecord, ThreadLink)>> {
+        let rows = self.inner.shared.db.list_delegated()?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (id, link) in rows {
+            if let Some(t) = self.get_thread(id)? {
+                out.push((t, link));
+            }
+        }
+        Ok(out)
     }
 
     // ----- read ------------------------------------------------------------

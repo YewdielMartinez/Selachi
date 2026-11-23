@@ -186,13 +186,7 @@ fn main() {
                     (cx.new(|_| gpui::Empty).into(), Some(v))
                 } else {
                     let provider = AttentionPanelProvider::new(model.clone());
-                    let ctx = PanelCtx {
-                        zone: zone.unwrap_or(PanelZone::Right),
-                        width_class,
-                        cwd: None,
-                        project_root: None,
-                        theme,
-                    };
+                    let ctx = PanelCtx::new(zone.unwrap_or(PanelZone::Right), width_class, theme);
                     (provider.build(ctx, window, cx), None)
                 };
                 let host = cx.new(|cx| {

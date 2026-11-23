@@ -435,3 +435,93 @@ async fn every_state_paints_without_panicking(cx: &mut TestAppContext) {
     }
     assert_eq!(panel.read_with(vcx, |p, cx| p.message(cx)), "feat: hola\n\ncuerpo");
 }
+
+// ---- the commit box through the keyboard (a real window, no desktop input) -----------------------
+
+/// A panel over a repo with `a.txt` staged (or only modified), painted and loaded.
+fn commit_window(
+    cx: &mut TestAppContext,
+    stage: bool,
+) -> (tempfile::TempDir, Entity<GitModel>, Entity<GitPanel>, &mut VisualTestContext) {
+    let dir = temp_repo();
+    std::fs::write(dir.path().join("a.txt"), "changed
+").unwrap();
+    if stage {
+        git(dir.path(), &["add", "a.txt"]);
+    }
+    let model = cx.new(|_| GitModel::new());
+    let (m, c) = (model.clone(), ctx(WidthClass::Regular, dir.path()));
+    let (panel, vcx) = ui_kit::testing::open_window(cx, move |_, cx| {
+        m.update(cx, |m, cx| m.set_root(c.cwd.clone(), cx));
+        GitPanel::new(c, m, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(model.read_with(vcx, |m, _| m.load_state().clone()), Load::Ready);
+    (dir, model, panel, vcx)
+}
+
+fn gate(model: &Entity<GitModel>, vcx: &VisualTestContext) -> Gate {
+    model.read_with(vcx, |m, _| m.gate().clone())
+}
+
+#[gpui::test]
+async fn enter_in_the_subject_opens_the_review_and_commits_only_after_confirm(cx: &mut TestAppContext) {
+    let (dir, model, panel, vcx) = commit_window(cx, true);
+    panel.update_in(vcx, |p, window, cx| p.focus_field(false, window, cx));
+    ui_kit::testing::type_text(vcx, "feat: from the keyboard");
+    ui_kit::testing::press(vcx, "enter");
+    vcx.run_until_parked();
+    assert!(matches!(gate(&model, vcx), Gate::Confirm { .. }), "Enter shows the review card: {:?}", gate(&model, vcx));
+    assert_eq!(commit_count(dir.path()), 1, "Enter alone never commits");
+    // Pressing Enter again with the card open does not run it either.
+    ui_kit::testing::press(vcx, "enter");
+    vcx.run_until_parked();
+    assert_eq!(commit_count(dir.path()), 1);
+    ui_kit::testing::click_id(vcx, "gate-confirm");
+    vcx.run_until_parked();
+    assert_eq!(commit_count(dir.path()), 2, "the confirm button ran it");
+    assert_eq!(panel.read_with(vcx, |p, cx| p.message(cx)), "", "the box is cleared after a commit");
+}
+
+#[gpui::test]
+async fn commit_needs_a_subject_and_staged_files(cx: &mut TestAppContext) {
+    // A subject but nothing staged.
+    let (dir, model, panel, vcx) = commit_window(cx, false);
+    panel.update_in(vcx, |p, window, cx| p.focus_field(false, window, cx));
+    ui_kit::testing::type_text(vcx, "feat: x");
+    ui_kit::testing::press(vcx, "enter");
+    vcx.run_until_parked();
+    assert_eq!(gate(&model, vcx), Gate::Idle, "nothing staged: no review card");
+    assert_eq!(commit_count(dir.path()), 1);
+}
+
+#[gpui::test]
+async fn empty_subject_does_not_open_the_review(cx: &mut TestAppContext) {
+    let (_dir, model, panel, vcx) = commit_window(cx, true);
+    panel.update_in(vcx, |p, window, cx| p.focus_field(false, window, cx));
+    ui_kit::testing::type_text(vcx, "   ");
+    ui_kit::testing::press(vcx, "enter");
+    vcx.run_until_parked();
+    assert_eq!(gate(&model, vcx), Gate::Idle);
+}
+
+#[gpui::test]
+async fn description_is_multiline_and_ctrl_enter_starts_the_commit(cx: &mut TestAppContext) {
+    let (dir, model, panel, vcx) = commit_window(cx, true);
+    panel.update(vcx, |p, cx| p.set_message("feat: x", "", cx));
+    vcx.run_until_parked();
+    panel.update_in(vcx, |p, window, cx| p.focus_field(true, window, cx));
+    ui_kit::testing::type_text(vcx, "linea uno");
+    ui_kit::testing::press(vcx, "enter");
+    ui_kit::testing::type_text(vcx, "linea dos");
+    vcx.run_until_parked();
+    assert_eq!(gate(&model, vcx), Gate::Idle, "Enter in the description is a newline");
+    assert_eq!(panel.read_with(vcx, |p, cx| p.message(cx)), "feat: x
+
+linea uno
+linea dos");
+    ui_kit::testing::press(vcx, "ctrl-enter");
+    vcx.run_until_parked();
+    assert!(matches!(gate(&model, vcx), Gate::Confirm { .. }));
+    assert_eq!(commit_count(dir.path()), 1);
+}

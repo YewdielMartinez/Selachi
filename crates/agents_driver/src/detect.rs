@@ -1,4 +1,5 @@
-//! Detect installed agent CLIs (`claude`, `codex`, `opencode`, `gemini`) on PATH.
+//! Detect installed agent CLIs (`claude`, `codex`, `opencode`, `gemini`, `agy`) on PATH (and, for
+//! `opencode` / `agy`, in their installers' default directories).
 //!
 //! Login status is a *cheap, offline* heuristic: we only check that a credential
 //! file exists (or an API-key env var is set). File contents are never read.
@@ -9,6 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::antigravity;
 use crate::opencode;
 use crate::proc;
 use crate::types::AgentKind;
@@ -54,6 +56,8 @@ fn credential_files(name: &str, home: Option<&Path>) -> Vec<PathBuf> {
         // Legacy file only; v2 installs keep credentials in OpenCode's SQLite database, which
         // is never opened, so a missing file means "unknown", not "logged out".
         "opencode" => opencode::auth_file().into_iter().collect(),
+        // Existence hints only (agy keeps no documented credential file; see `antigravity`).
+        "agy" => antigravity::login_files(home),
         _ => Vec::new(),
     }
 }
@@ -64,6 +68,7 @@ fn credential_env(name: &str) -> &'static [&'static str] {
         "codex" => &["OPENAI_API_KEY", "CODEX_API_KEY"],
         "gemini" => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         "opencode" => opencode::CREDENTIAL_ENV,
+        "agy" => antigravity::CREDENTIAL_ENV,
         _ => &[],
     }
 }
@@ -73,6 +78,8 @@ fn kind_for(name: &str, path: &Path) -> AgentKind {
         "claude" => AgentKind::ClaudeCode,
         "codex" => AgentKind::Codex,
         "opencode" => AgentKind::OpenCode,
+        // Antigravity speaks ACP through `agy acp`; the preset carries the stable flags.
+        "agy" => AgentKind::antigravity(path, None, &[]),
         // Gemini CLI speaks ACP, but the flag that switches it into ACP mode depends on the
         // installed version, so the caller adds it (`AgentKind::Acp { command }` accepts
         // `"<path>" --flag`); the path is quoted so spaces survive `split_command`.
@@ -83,10 +90,10 @@ fn kind_for(name: &str, path: &Path) -> AgentKind {
 }
 
 fn probe(name: &'static str) -> Option<DetectedAgent> {
-    let path = if name == "opencode" {
-        opencode::resolve()?
-    } else {
-        proc::resolve_executable(name)?
+    let path = match name {
+        "opencode" => opencode::resolve()?,
+        "agy" => antigravity::resolve()?,
+        _ => proc::resolve_executable(name)?,
     };
     let mut cmd = proc::command_for(&path);
     cmd.arg("--version");
@@ -107,7 +114,7 @@ fn probe(name: &'static str) -> Option<DetectedAgent> {
 /// parallel (hidden windows, 5 s timeout each); blocking, call it off the UI thread.
 pub fn detect() -> Vec<DetectedAgent> {
     // Array `map` is eager: every probe thread starts before the first join.
-    let handles = ["claude", "codex", "opencode", "gemini"].map(|n| std::thread::spawn(move || probe(n)));
+    let handles = ["claude", "codex", "opencode", "gemini", "agy"].map(|n| std::thread::spawn(move || probe(n)));
     handles
         .into_iter()
         .filter_map(|h| h.join().ok().flatten())
@@ -138,6 +145,23 @@ mod tests {
             kind_for("gemini", &p),
             AgentKind::Acp { command: "\"C:/x y/gemini.cmd\"".into() }
         );
+    }
+
+    #[test]
+    fn agy_is_an_acp_preset_with_its_login_hints() {
+        let p = PathBuf::from("C:/x y/agy.exe");
+        assert_eq!(
+            kind_for("agy", &p),
+            AgentKind::Acp { command: "\"C:/x y/agy.exe\" acp --disable-telemetry".into() }
+        );
+        assert!(crate::is_antigravity(&match kind_for("agy", &p) {
+            AgentKind::Acp { command } => command,
+            _ => unreachable!(),
+        }));
+        let files = credential_files("agy", Some(Path::new("H")));
+        assert!(files.iter().any(|f| f.ends_with("oauth_creds.json")));
+        assert!(credential_env("agy").contains(&"GEMINI_API_KEY"));
+        assert_eq!(logged_in_from(&[PathBuf::from("Z:/no/such/oauth_creds.json")], &[]), None);
     }
 
     #[test]

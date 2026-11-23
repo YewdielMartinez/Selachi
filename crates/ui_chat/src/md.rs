@@ -8,10 +8,10 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, ClipboardItem, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _,
+    AnyElement, ClipboardItem, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _,
     SharedString, StrikethroughStyle, Styled as _, StyledText, TextRun, div, prelude::*, px, relative,
 };
-use theme::{Mode, Rgba, Theme, rgb};
+use theme::{Mode, Radius, Rgba, Theme, rgb};
 use ui_kit::{Icon, icon};
 use viewer_svc::{HighlightKind, Lang, MdAlign, MdBlock, MdInline, MdListItem, MdTable, highlight_text, markdown_blocks};
 
@@ -214,10 +214,12 @@ impl<'a> MdRender<'a> {
         Self { theme, parsed, id_base, next_id: Cell::new(0), next_code: Cell::new(0), in_list: Cell::new(false) }
     }
 
-    fn id(&self) -> usize {
+    /// A fresh element id: `(kind, row id_base)` plus the ordinal of the node in the row. A tuple,
+    /// never an arithmetic mix of the two, so two rows can not collide however many nodes they have.
+    fn id(&self, kind: &'static str) -> ElementId {
         let i = self.next_id.get();
         self.next_id.set(i + 1);
-        self.id_base.wrapping_mul(997).wrapping_add(i)
+        ElementId::NamedChild(Box::new(ElementId::named_usize(kind, self.id_base)), SharedString::from(i.to_string()))
     }
 }
 
@@ -310,7 +312,7 @@ fn inline_el(inlines: &[MdInline], r: &MdRender<'_>, weight: FontWeight, color: 
         return text.into_any_element();
     }
     let (ranges, urls): (Vec<_>, Vec<_>) = flat.links.into_iter().unzip();
-    InteractiveText::new(("md-text", r.id()), text)
+    InteractiveText::new(r.id("md-text"), text)
         .on_click(ranges, move |ix, _, cx| {
             if let Some(url) = urls.get(ix).filter(|u| is_openable(u)) {
                 cx.open_url(url);
@@ -331,6 +333,7 @@ fn heading_size(level: u8) -> f32 {
 const BODY_SIZE: f32 = 14.5;
 
 fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
+    let ty = r.theme.typography;
     let theme = r.theme;
     let c = theme.colors;
     match block {
@@ -360,7 +363,7 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .my(px(6.0))
             .px(px(14.0))
             .py(px(4.0))
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_1)
             .text_color(c.muted)
             .flex()
@@ -377,14 +380,14 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
         MdBlock::Table(t) => table(t, r),
         MdBlock::Image { alt, .. } => div()
             .my(px(4.0))
-            .text_size(px(13.0))
+            .text_size(px(ty.ui_size_md))
             .text_color(c.outline)
             .child(SharedString::from(format!("[imagen: {alt}]")))
             .into_any_element(),
         MdBlock::Html(h) => div()
             .my(px(4.0))
             .font_family(theme.typography.mono_family)
-            .text_size(px(12.0))
+            .text_size(px(ty.ui_size_sm))
             .text_color(c.outline)
             .child(SharedString::from(h.trim_end().to_owned()))
             .into_any_element(),
@@ -392,6 +395,7 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
 }
 
 fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
+    let ty = r.theme.typography;
     let theme = r.theme;
     let c = theme.colors;
     let ordinal = r.next_code.get();
@@ -426,7 +430,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .collect();
     let copy_text = body.to_string();
     let copy = div()
-        .id(("md-copy", r.id()))
+        .id(r.id("md-copy"))
         .occlude()
         .flex_none()
         .h(px(22.0))
@@ -434,9 +438,9 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .flex()
         .items_center()
         .gap(px(4.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .cursor_pointer()
-        .text_size(px(11.0))
+        .text_size(px(ty.ui_size_xs))
         .text_color(c.muted)
         .hover(move |s| s.bg(c.surface_3).text_color(c.text))
         .tooltip(ui_kit::Tooltip::text(&theme, "Copiar código"))
@@ -445,7 +449,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())));
     div()
         .my(px(6.0))
-        .rounded(px(12.0))
+        .rounded(px(Radius::SM))
         .bg(c.surface_1)
         .overflow_hidden()
         .flex()
@@ -461,7 +465,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(px(ty.ui_size_xs))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.outline)
                         .child(SharedString::from(lang.filter(|l| !l.is_empty()).unwrap_or("texto").to_owned())),
@@ -557,7 +561,7 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
         .rows
         .iter()
         .map(|row| div().flex().flex_row().children(row.iter().enumerate().map(|(i, h)| cell(h, align(i), false))));
-    div().my(px(6.0)).rounded(px(12.0)).bg(c.surface_1).overflow_hidden().flex().flex_col().child(header).children(rows).into_any_element()
+    div().my(px(6.0)).rounded(px(Radius::SM)).bg(c.surface_1).overflow_hidden().flex().flex_col().child(header).children(rows).into_any_element()
 }
 
 #[cfg(test)]
@@ -593,6 +597,18 @@ mod tests {
         let f = flatten(&[Text("ver ".into()), Link { url: "https://x.dev".into(), children: vec![Text("docs".into())] }, SoftBreak]);
         assert_eq!(f.text, "ver docs ");
         assert_eq!(f.links, vec![(4..8, "https://x.dev".to_string())]);
+    }
+
+    #[test]
+    fn element_ids_of_two_rows_never_collide() {
+        // The old `id_base * 997 + i` gave (base 1, i = 997) the same id as (base 2, i = 0).
+        let parsed = parse_markdown("x");
+        let (a, b) = (MdRender::new(Theme::dark(), &parsed, 1), MdRender::new(Theme::dark(), &parsed, 2));
+        let ids_a: Vec<_> = (0..1500).map(|_| a.id("md-text")).collect();
+        let ids_b: Vec<_> = (0..1500).map(|_| b.id("md-text")).collect();
+        let all: std::collections::HashSet<_> = ids_a.iter().chain(ids_b.iter()).collect();
+        assert_eq!(all.len(), 3000);
+        assert_ne!(a.id("md-text"), a.id("md-copy"), "the ordinal advances for every kind");
     }
 
     #[test]

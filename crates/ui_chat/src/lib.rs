@@ -48,7 +48,6 @@
 
 mod chat_view;
 mod composer;
-mod field;
 mod hub;
 mod md;
 mod mentions;
@@ -67,7 +66,6 @@ mod tests;
 
 pub use chat_view::{ChatView, ChatViewEvent, DraftSpec, READING_WIDTH_XL, ViewMode, XL_FROM};
 pub use composer::{ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode};
-pub use field::{ChatField, FieldEvent, Nav, TextBuf};
 pub use hub::{ChatEvent, ChatHub, FilesReady, ModelsReady};
 pub use md::{MdBody, ParsedMd, parse_markdown};
 pub use mentions::{MentionQuery, filter_files, mention_at, walk_files};
@@ -82,9 +80,9 @@ pub use thread_list::{
 };
 pub use util::{format_cost, format_duration_ms, format_tokens, read_branch};
 
-/// Registers the key bindings of the chat text field. Call once at startup.
+/// Registers the key bindings of the shared text field (`ui_kit::init`). Idempotent; call once at startup.
 pub fn init(cx: &mut gpui::App) {
-    field::bind_keys(cx);
+    ui_kit::init(cx);
 }
 
 /// SVGs this crate wants from the user (`assets/icons/<file>`, 16x16 grid, white fill or

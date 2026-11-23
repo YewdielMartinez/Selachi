@@ -2,6 +2,7 @@
 
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px};
 use store::config::{CursorStyle, PredictionSource, PredictionView, Profile, TabMode};
+use theme::Radius;
 use ui_kit::{Button, GhostButton};
 
 use crate::fields::commit_env;
@@ -110,7 +111,7 @@ impl SettingsView {
                         "Líneas de historial (scrollback)",
                         Some("Se guardan en memoria, nunca en disco. Máximo 1 000 000.".into()),
                         scrollback,
-                        self.error_for("scrollback").or_else(|| self.error_for("terminal.scrollback")),
+                        self.error_for("terminal.scrollback"),
                     )
                     .into_any_element(),
                     row(&t, narrow, "Cursor", None, cursor, None).into_any_element(),
@@ -150,8 +151,7 @@ impl SettingsView {
                         "Aceptar una palabra",
                         Some("Tecla que acepta la siguiente palabra de la sugerencia. «native» deja la del shell.".into()),
                         accept,
-                        self.error_for("accept_word_key")
-                            .or_else(|| self.error_for("terminal.completion.accept_word_key")),
+                        self.error_for("terminal.completion.accept_word_key"),
                     )
                     .into_any_element(),
                     ui::plain_row(note(&t, "Los cambios de completado se aplican a las pestañas nuevas.")).into_any_element(),
@@ -209,6 +209,7 @@ impl SettingsView {
     fn profile_editor_card(&mut self, i: usize, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let p: Profile = self.cfg.profiles[i].clone();
         let key = |k: &str| format!("profile.{i}.{k}");
         let name = self.profile_input(cx, &key("name"), &p.name, "Mi perfil", 260.0, false);
@@ -222,9 +223,6 @@ impl SettingsView {
         for (j, (k, v)) in env_rows.iter().enumerate() {
             let kf = self.profile_input(cx, &format!("profile.{i}.env.{j}.k"), k, "NOMBRE", 150.0, true);
             let vf = self.profile_input(cx, &format!("profile.{i}.env.{j}.v"), v, "valor", 220.0, true);
-            let err = self
-                .error_for(&format!("profile.{i}.env.{j}.k"))
-                .or_else(|| self.error_for(&format!("profile.{i}.env.{j}.v")));
             env_elems.push(
                 div()
                     .flex()
@@ -243,7 +241,6 @@ impl SettingsView {
                                 cx.listener(move |s, _, _, cx| s.remove_env(i, j, cx)),
                             )),
                     )
-                    .when_some(err, |d, e| d.child(div().text_size(px(12.0)).text_color(c.error).child(e)))
                     .into_any_element(),
             );
         }
@@ -264,9 +261,9 @@ impl SettingsView {
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(div().text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(label))
+                .child(div().text_size(px(ty.ui_size_sm)).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(label))
                 .child(control)
-                .when_some(err, |d, e| d.child(div().text_size(px(12.0)).text_color(c.error).child(e)))
+                .when_some(err, |d, e| d.child(div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(e)))
         };
         div()
             .mx(px(12.0))
@@ -275,12 +272,12 @@ impl SettingsView {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_2)
-            .child(field_row("Nombre", name, self.error_for(&key("name"))))
-            .child(field_row("Programa", program, self.error_for(&key("program"))))
-            .child(field_row("Argumentos", args, self.error_for(&key("args"))))
-            .child(field_row("Carpeta inicial (opcional)", cwd, self.error_for(&key("cwd"))))
+            .child(field_row("Nombre", name, None))
+            .child(field_row("Programa", program, None))
+            .child(field_row("Argumentos", args, None))
+            .child(field_row("Carpeta inicial (opcional)", cwd, None))
             .child(field_row("Variables de entorno", env_block.into_any_element(), self.error_for(&format!("profile.{i}"))))
             .when(narrow, |d| d)
             .into_any_element()
@@ -297,8 +294,8 @@ impl SettingsView {
     ) -> AnyElement {
         let initial = initial.to_string();
         let field = self.field(key, move |_| initial, placeholder, mono, cx);
-        let bad = self.errors.contains_key(key);
-        field.update(cx, |f, cx| f.set_invalid(bad, cx));
+        let message = self.errors.get(key).cloned();
+        field.update(cx, |f, cx| f.set_error(message, cx));
         div().w(px(width)).max_w_full().flex().child(field).into_any_element()
     }
 

@@ -1,4 +1,4 @@
-//! Incremental ingestion of Claude Code, Codex and OpenCode session logs into the store.
+//! Incremental ingestion of Claude Code, Codex, OpenCode and Antigravity session logs into the store.
 //!
 //! * Plain `.jsonl`: per-file `(size, mtime, byte offset, parser ctx)`; a re-scan only reads bytes
 //!   after the last complete line. A shrunk file restarts from 0.
@@ -9,7 +9,11 @@
 //!   (stored in `ingest_offsets.ctx`; the database+WAL size/mtime fingerprint skips unchanged
 //!   databases), legacy `storage/message/*/*.json` files by `(size, mtime)` per file. Rows are
 //!   deduplicated by message id (last write wins). See [`crate::opencode`].
+//! * Antigravity: every `conversations/<uuid>.db` is opened READ-ONLY and its `gen_metadata` rows are
+//!   read from the next generation index (stored in `ingest_offsets.ctx`; the database+WAL size/mtime
+//!   fingerprint skips unchanged ones). See [`crate::antigravity`].
 
+use crate::antigravity;
 use crate::claude;
 use crate::codex::{self, CodexCtx, CodexItem};
 use crate::db::{OffsetRow, Store, UpsertOutcome};
@@ -30,6 +34,9 @@ pub struct IngestConfig {
     pub codex_sessions: Option<PathBuf>,
     /// OpenCode data directory (`~/.local/share/opencode`): `opencode.db` and legacy `storage/`.
     pub opencode_data: Option<PathBuf>,
+    /// Gemini directory (`~/.gemini`) holding Antigravity's `antigravity-cli/` and `antigravity/`
+    /// app dirs with their `conversations/*.db`.
+    pub antigravity_data: Option<PathBuf>,
 }
 
 impl IngestConfig {
@@ -48,6 +55,7 @@ impl IngestConfig {
             claude_projects: claude,
             codex_sessions: codex,
             opencode_data: opencode::default_data_dir(),
+            antigravity_data: antigravity::default_gemini_dir(),
         }
     }
 }
@@ -63,6 +71,8 @@ pub enum SourceKind {
     OpenCodeDb,
     /// A legacy OpenCode `storage/message/*/*.json` file.
     OpenCodeJson,
+    /// An Antigravity `conversations/<uuid>.db` (or its `-wal` / `-shm` companions).
+    AntigravityDb,
 }
 
 impl IngestConfig {
@@ -83,6 +93,10 @@ impl IngestConfig {
             if legacy.is_dir() {
                 v.push((legacy, true));
             }
+        }
+        if let Some(g) = &self.antigravity_data {
+            // Shallow: the databases sit directly in `conversations/`.
+            v.extend(antigravity::conversation_dirs(g).into_iter().map(|d| (d, false)));
         }
         v
     }
@@ -112,6 +126,11 @@ impl IngestConfig {
                 return (db && path.parent() == Some(root.as_path())).then_some(SourceKind::OpenCodeDb);
             }
         }
+        if let Some(root) = &self.antigravity_data {
+            if path.starts_with(root) && antigravity::is_conversation_db(root, path) {
+                return Some(SourceKind::AntigravityDb);
+            }
+        }
         None
     }
 }
@@ -132,6 +151,8 @@ pub struct ScanReport {
     pub codex_files: usize,
     /// OpenCode databases + legacy JSON message files seen.
     pub opencode_files: usize,
+    /// Antigravity conversation databases seen.
+    pub antigravity_files: usize,
     /// Decoded bytes read (for `.zst`, the decompressed size).
     pub bytes_read: u64,
     pub lines: u64,
@@ -239,7 +260,7 @@ impl Ingestor {
             match f.agent {
                 Agent::Claude => rep.claude_files += 1,
                 Agent::Codex => rep.codex_files += 1,
-                Agent::OpenCode => {}
+                Agent::OpenCode | Agent::Antigravity => {}
             }
             match self.scan_file(&f, &mut rep) {
                 Ok(()) => {}
@@ -252,6 +273,7 @@ impl Ingestor {
             }
         }
         self.scan_opencode(&mut rep)?;
+        self.scan_antigravity(&mut rep)?;
         Ok(rep)
     }
 
@@ -263,6 +285,7 @@ impl Ingestor {
     pub fn scan_paths(&mut self, paths: &[PathBuf]) -> Result<ScanReport> {
         let mut rep = ScanReport::default();
         let mut oc_dbs: Vec<PathBuf> = vec![];
+        let mut agy_dbs: Vec<PathBuf> = vec![];
         for p in paths {
             let Some(kind) = self.cfg.classify(p) else { continue };
             match kind {
@@ -299,6 +322,14 @@ impl Ingestor {
                         oc_dbs.push(db);
                     }
                 }
+                SourceKind::AntigravityDb => {
+                    let s = p.to_string_lossy();
+                    let base = s.strip_suffix("-wal").or_else(|| s.strip_suffix("-shm")).unwrap_or(&s);
+                    let db = PathBuf::from(base);
+                    if db.is_file() && !agy_dbs.contains(&db) {
+                        agy_dbs.push(db);
+                    }
+                }
                 SourceKind::OpenCodeJson => {
                     if !p.is_file() {
                         continue;
@@ -322,7 +353,82 @@ impl Ingestor {
                 Err(OcError::Source(m)) => rep.errors.push(format!("{}: {m}", db.display())),
             }
         }
+        for db in agy_dbs {
+            rep.files_seen += 1;
+            rep.antigravity_files += 1;
+            match self.scan_antigravity_db(&db, &mut rep) {
+                Ok(()) => {}
+                Err(OcError::Store(e)) => return Err(e),
+                Err(OcError::Source(m)) => rep.errors.push(format!("{}: {m}", db.display())),
+            }
+        }
         Ok(rep)
+    }
+
+    /// Antigravity: every conversation database under the Gemini dir (generation cursor).
+    fn scan_antigravity(&mut self, rep: &mut ScanReport) -> Result<()> {
+        let Some(root) = self.cfg.antigravity_data.clone() else {
+            return Ok(());
+        };
+        for dir in antigravity::conversation_dirs(&root) {
+            for db in antigravity::find_dbs(&dir) {
+                rep.files_seen += 1;
+                rep.antigravity_files += 1;
+                match self.scan_antigravity_db(&db, rep) {
+                    Ok(()) => {}
+                    Err(OcError::Store(e)) => return Err(e),
+                    Err(OcError::Source(m)) => rep.errors.push(format!("{}: {m}", db.display())),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_antigravity_db(&mut self, db: &Path, rep: &mut ScanReport) -> std::result::Result<(), OcError> {
+        let (size, mtime_ms) = db_fingerprint(db).map_err(|e| OcError::Source(format!("stat: {e}")))?;
+        let key = db.to_string_lossy().to_string();
+        let stored = self.store.get_offset(&key).map_err(OcError::Store)?;
+        let mut cursor = stored
+            .as_ref()
+            .and_then(|s| s.ctx.as_deref())
+            .and_then(|c| serde_json::from_str::<AgyCursor>(c).ok())
+            .unwrap_or_default();
+        if let Some(s) = &stored {
+            if s.size == size && s.mtime_ms == mtime_ms {
+                rep.files_unchanged += 1;
+                return Ok(());
+            }
+            if size < s.size {
+                cursor = AgyCursor::default(); // database replaced / vacuumed: start over (idempotent)
+            }
+        }
+        rep.files_scanned += 1;
+        // Re-read the last generation seen (rewritten in place while a turn streams): idempotent.
+        let from = cursor.next.saturating_sub(1).max(0);
+        let read = antigravity::read_conversation(db, from, mtime_ms).map_err(OcError::Source)?;
+        rep.bytes_read += read.bytes;
+        rep.synthetic_skipped += read.skipped;
+        let tx = self.store.conn.unchecked_transaction().map_err(|e| OcError::Store(e.into()))?;
+        for (e, x) in &read.events {
+            rep.lines += 1;
+            let out = self.store.upsert_usage_replace(e, x).map_err(OcError::Store)?;
+            count_upsert(out, rep);
+        }
+        self.store
+            .put_offset(
+                &key,
+                Agent::Antigravity,
+                &OffsetRow {
+                    size,
+                    mtime_ms,
+                    byte_offset: 0,
+                    ctx: Some(serde_json::to_string(&AgyCursor { next: read.next_idx }).unwrap_or_default()),
+                },
+                now_ms(),
+            )
+            .map_err(OcError::Store)?;
+        tx.commit().map_err(|e| OcError::Store(e.into()))?;
+        Ok(())
     }
 
     /// OpenCode: SQLite databases (cursor) and legacy JSON messages (per-file fingerprint).
@@ -624,7 +730,7 @@ fn process_line(
                 }
             }
         },
-        Agent::OpenCode => {} // not line-based: see `Ingestor::scan_opencode`
+        Agent::OpenCode | Agent::Antigravity => {} // not line-based: see `scan_opencode` / `scan_antigravity`
         Agent::Codex => match codex::parse_line(ctx, line, fallback_session) {
             Err(_) => rep.malformed_lines += 1,
             Ok(items) => {
@@ -663,6 +769,13 @@ struct OcCursor {
     t: i64,
     /// `message.id` of the last row read ("" = start of that millisecond).
     id: String,
+}
+
+/// Per-database cursor of an Antigravity conversation.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct AgyCursor {
+    /// First `gen_metadata.idx` not ingested yet.
+    next: i64,
 }
 
 struct OcRow {

@@ -1,12 +1,13 @@
 //! `Pill`: the tab / chip primitive. Active = grey pill, never a colored line (DESIGN.md rule 4).
 
 use gpui::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window,
+    AnyElement, App, ClickEvent, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, Window,
     div, prelude::*, px,
 };
-use theme::Theme;
+use theme::{Radius, Theme};
 
 use crate::button::ClickFn;
+use crate::focus;
 use crate::agent_mark::{AgentMark, agent_icon};
 use crate::icon::{Icon, icon};
 use crate::tooltip::Tooltip;
@@ -39,6 +40,7 @@ pub struct Pill {
     agent: Option<AgentMark>,
     label: Option<SharedString>,
     active: bool,
+    focusable: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
     children: Vec<AnyElement>,
@@ -54,6 +56,7 @@ impl Pill {
             agent: None,
             label: None,
             active: false,
+            focusable: true,
             tooltip: None,
             on_click: None,
             children: Vec::new(),
@@ -93,6 +96,13 @@ impl Pill {
         self
     }
 
+    /// Keyboard focus (tab stop + ring) for a clickable pill; on by default. A pill without
+    /// `on_click` is a plain label and never focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
     /// Hover hint (multi-line allowed).
     pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
         self.tooltip = Some(text.into());
@@ -113,14 +123,16 @@ impl ParentElement for Pill {
 }
 
 impl RenderOnce for Pill {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let clickable = self.on_click.is_some();
         let (h, radius, px_x, gap, text_size) = match self.size {
-            PillSize::Tab => (28.0, 10.0, 12.0, 8.0, ty.ui_size_md),
-            PillSize::Compact => (20.0, 8.0, 8.0, 6.0, ty.ui_size_sm),
+            PillSize::Tab => (28.0, Radius::PILL, 12.0, 8.0, ty.ui_size_md),
+            PillSize::Compact => (20.0, Radius::CONTROL, 8.0, 6.0, ty.ui_size_sm),
         };
+        let id = ElementId::from(self.id.clone());
+        let focus = (clickable && self.focusable).then(|| focus::handle(window, cx, &id));
         let fg = if self.active { c.text } else { c.muted };
         let rest_bg = match (self.size, self.active) {
             (_, true) => Some(c.surface_3),
@@ -130,7 +142,7 @@ impl RenderOnce for Pill {
         let hover_bg = c.surface_2;
 
         let mut el = div()
-            .id(self.id)
+            .id(id.clone())
             // Pills often live in the drag area of the titlebar: they must not be part of it.
             .occlude()
             .h(px(h))
@@ -157,6 +169,6 @@ impl RenderOnce for Pill {
         if let Some(t) = self.tooltip {
             el = el.tooltip(Tooltip::text(&self.theme, t));
         }
-        el
+        focus::wire(el, focus, &id, radius, c.accent)
     }
 }

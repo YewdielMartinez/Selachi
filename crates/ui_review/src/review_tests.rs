@@ -293,3 +293,44 @@ fn the_tab_reports_itself(cx: &mut TestAppContext) {
     let json = tab.read_with(cx, |t, cx| t.export_notes(cx));
     assert!(json.contains("una nota"));
 }
+
+#[gpui::test]
+fn the_note_editor_takes_enter_as_a_newline_and_ctrl_enter_saves(cx: &mut TestAppContext) {
+    use ui_kit::testing::{press, type_text};
+    let dir = repo();
+    let (view, vcx, events) = open(cx, dir.path());
+    view.update(vcx, |v, cx| v.select_path("src.txt", cx));
+    view.update_in(vcx, |v, window, cx| v.begin_note(Side::New, 10, false, window, cx));
+    vcx.run_until_parked();
+    type_text(vcx, "primera");
+    press(vcx, "enter");
+    type_text(vcx, "segunda");
+    // Enter only added a line: the editor is still open and nothing was saved.
+    view.read_with(vcx, |v, cx| {
+        assert!(v.is_editing());
+        assert_eq!(v.editor_text(cx).as_deref(), Some("primera\nsegunda"));
+        assert_eq!(v.counts(), (0, 0));
+    });
+    press(vcx, "ctrl-enter");
+    view.read_with(vcx, |v, _| {
+        assert!(!v.is_editing(), "Ctrl+Enter saves and closes");
+        assert_eq!(v.notes().notes()[0].text, "primera\nsegunda");
+    });
+    assert!(events.borrow().contains(&ReviewEvent::NotesChanged { total: 1, drafts: 1 }));
+}
+
+#[gpui::test]
+fn escape_discards_the_note_being_written(cx: &mut TestAppContext) {
+    use ui_kit::testing::{press, type_text};
+    let dir = repo();
+    let (view, vcx, _) = open(cx, dir.path());
+    view.update(vcx, |v, cx| v.select_path("src.txt", cx));
+    view.update_in(vcx, |v, window, cx| v.begin_note(Side::New, 10, false, window, cx));
+    vcx.run_until_parked();
+    type_text(vcx, "no la quiero");
+    press(vcx, "escape");
+    view.read_with(vcx, |v, _| {
+        assert!(!v.is_editing());
+        assert_eq!(v.counts(), (0, 0));
+    });
+}

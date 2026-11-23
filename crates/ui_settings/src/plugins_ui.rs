@@ -1,6 +1,7 @@
 //! Plugins section: language grammars from the verified index (install / update / remove).
 
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px};
+use theme::Radius;
 use ui_kit::{Button, DitherMeter, GhostButton, Icon, Placement, Popover, Spinner};
 
 use crate::fmt;
@@ -12,6 +13,7 @@ impl SettingsView {
     pub(crate) fn plugins_section(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let (rows, state, needs_restart) = {
             let m = self.plugins.read(cx);
             (m.rows(), m.index_state().clone(), m.needs_restart())
@@ -57,7 +59,7 @@ impl SettingsView {
                         .items_center()
                         .gap(px(10.0))
                         .px(px(4.0))
-                        .text_size(px(12.0))
+                        .text_size(px(ty.ui_size_sm))
                         .text_color(c.muted)
                         .child(Spinner::new(c.accent))
                         .child("Consultando el índice de plugins…")
@@ -106,7 +108,7 @@ impl SettingsView {
                         "URL del índice",
                         Some("Solo https://. Vacío = el índice oficial de Selachi.".into()),
                         url,
-                        self.error_for("index_url"),
+                        None,
                     )
                     .into_any_element(),
                 ],
@@ -119,6 +121,7 @@ impl SettingsView {
     fn plugin_row(&mut self, r: &PluginRow, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let highlighted = self.plugin_focus.as_deref() == Some(r.id.as_str());
         let failed = matches!(r.op, Some(Op::Failed(_))) || matches!(r.state, PluginState::Broken(_));
         let id = r.id.clone();
@@ -162,14 +165,14 @@ impl SettingsView {
                     .gap(px(8.0))
                     .child(
                         div()
-                            .text_size(px(13.0))
+                            .text_size(px(ty.ui_size_md))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(c.text)
                             .child(SharedString::from(r.name.clone())),
                     )
                     .children(version)
                     .when(!exts.is_empty(), |d| {
-                        d.child(div().text_size(px(11.0)).text_color(c.outline).child(SharedString::from(exts)))
+                        d.child(div().text_size(px(ty.ui_size_xs)).text_color(c.outline).child(SharedString::from(exts)))
                     }),
             )
             .child(
@@ -178,7 +181,7 @@ impl SettingsView {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .text_size(px(12.0))
+                    .text_size(px(ty.ui_size_sm))
                     .text_color(label_color)
                     .child(SharedString::from(r.label()))
                     .when(r.size > 0 && r.group() != Group::Builtin, |d| {
@@ -194,7 +197,7 @@ impl SettingsView {
             .px(px(10.0))
             .py(px(10.0))
             .gap(px(12.0))
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .when(narrow, |d| d.flex_col())
             .when(!narrow, |d| d.flex_row().items_center())
             .when(highlighted, |d| d.bg(c.surface_3))
@@ -236,6 +239,7 @@ impl SettingsView {
     fn confirm_button(&mut self, r: &PluginRow, kind: ConfirmKind, label: &'static str, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let id = r.id.clone();
         let open = self.confirm.as_ref().is_some_and(|(cid, k)| *cid == r.id && *k == kind);
         let this = cx.entity();
@@ -333,8 +337,8 @@ impl SettingsView {
                     .flex()
                     .flex_col()
                     .gap(px(10.0))
-                    .child(div().text_size(px(14.0)).font_weight(FontWeight::MEDIUM).text_color(c.text).child(SharedString::from(title)))
-                    .child(div().text_size(px(12.0)).text_color(c.muted).child(SharedString::from(body)))
+                    .child(div().text_size(px(ty.ui_size_body)).font_weight(FontWeight::MEDIUM).text_color(c.text).child(SharedString::from(title)))
+                    .child(div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(SharedString::from(body)))
                     .child(div().flex().flex_row().justify_end().gap(px(8.0)).child(cancel).child(go)),
             )
             .into_any_element()

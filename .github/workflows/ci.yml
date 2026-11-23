@@ -1,0 +1,131 @@
+# Selachi CI (Wave 6c.1). Windows only: the app targets Windows (GPUI + DirectX, ConPTY, Job Objects).
+#
+#   fmt   cargo fmt --check            (non-blocking until the one-time `cargo fmt --all` commit; see below)
+#   build clippy -D warnings, tests, release build, exe uploaded as an artifact
+#   perf  startup + private-memory regression gate vs bench/baseline.json (MANUAL: workflow_dispatch only)
+#
+# Pinned actions: full commit SHAs (the version is in the trailing comment).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      perf:
+        description: "Also run the performance gate (needs a desktop session; see bench/README.md)"
+        type: boolean
+        default: true
+
+# Least privilege: the jobs only read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: windows-latest
+    timeout-minutes: 10
+    # The repository is NOT rustfmt-clean today (264 files at the time this was written, also at HEAD).
+    # Until someone runs `cargo fmt --all` once and commits it, a failure here is reported but does not
+    # turn the run red. After that commit, set the repository variable SELACHI_FMT_ENFORCE=true
+    # (Settings > Secrets and variables > Actions > Variables) or delete the `continue-on-error` line.
+    continue-on-error: ${{ vars.SELACHI_FMT_ENFORCE != 'true' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Rust (stable, rustfmt)
+        run: rustup toolchain install stable --profile minimal --component rustfmt --no-self-update
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  build:
+    name: clippy, test, release build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      # No git submodules in this repository (vendor/gpui is a regular directory tracked in git).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive # no-op today; keeps the job correct if one is ever added
+
+      - name: Install Rust (stable, clippy)
+        run: rustup toolchain install stable --profile minimal --component clippy --no-self-update
+
+      # The cache key includes a hash of the patched gpui fork, so changing vendor/gpui (or the patch it
+      # carries) starts a fresh cache. Only main saves the cache; PRs restore it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: gpui-${{ hashFiles('vendor/gpui/**', 'bench/patches/gpui-selachi.patch') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # #[ignore] tests are skipped by default (live-agent / network ones). State goes to a temp dir and the
+      # chat host uses its scripted agent (no processes, no model calls).
+      - name: cargo test
+        env:
+          SELACHI_DATA_DIR: ${{ runner.temp }}\selachi-test-data
+          SELACHI_CHAT_FAKE: "1"
+        run: cargo test --workspace --no-fail-fast
+
+      - name: cargo build --release
+        run: cargo build --release -p selachi
+
+      - name: Upload selachi.exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: selachi-windows-x64
+          path: target/release/selachi.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  # Manual: GitHub-hosted runners have no GPU. gpui walks the DXGI adapters and takes the first one that
+  # supports D3D11 + compute shaders, so the "Microsoft Basic Render Driver" (WARP) should work, but a
+  # window on a shared VM makes startup/CPU numbers noisy and hardware-dependent. This job has NOT been
+  # proven on a runner yet, hence it is dispatch-only. See bench/README.md ("CI performance gate").
+  perf:
+    name: performance gate (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.perf
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: selachi-windows-x64
+          path: perf-exe
+
+      - name: Gate startup and private memory (more than 15 percent worse than the baseline fails)
+        shell: pwsh
+        run: >
+          pwsh -File bench/check-baseline.ps1
+          -Exe perf-exe/selachi.exe
+          -Profile ci
+          -Runs 3 -IdleSeconds 10 -StartupTimeoutSeconds 60
+          -SummaryFile $env:GITHUB_STEP_SUMMARY
+
+      # measured.json is what to paste into bench/baseline.json (profiles.ci) to seed/refresh the CI baseline.
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-results
+          path: |
+            bench/results/measured.json
+            bench/results/check-baseline.csv
+          if-no-files-found: warn
+          retention-days: 30

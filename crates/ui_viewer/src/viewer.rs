@@ -21,14 +21,14 @@ use gpui::{
 };
 use theme::{Radius, Theme};
 use ui_kit::{
-    GhostButton, Icon, Pill, Segment, SegmentedControl, Spinner, UniformListScrollHandle, VirtualList, icon,
+    GhostButton, Icon, Pill, Segment, SegmentedControl, Spinner, TextField, TextFieldEvent, UniformListScrollHandle,
+    VirtualList, icon,
 };
 use viewer_svc::{Document, FileKind, GitBase, Hunk, Limits, MdBlock};
 
 use crate::data_tree::DataTree;
 use crate::diff_rows::{self, SplitRow, UnifiedRow};
 use crate::event::ViewerEvent;
-use crate::field::{TextField, TextFieldEvent};
 use crate::format::{breadcrumb, display_path, find_repo_root, format_bytes};
 use crate::image_info::image_dimensions;
 use crate::md_view::{self, MdRender};
@@ -49,9 +49,11 @@ actions!(
 /// Key context of the viewer (its bindings live in [`bind_keys`]).
 pub const CONTEXT: &str = "FileViewer";
 
-/// Installs the viewer's key bindings (and the text field's). Call once at startup.
+/// Installs the viewer's key bindings, the file tree's arrow keys and the kit's (text fields, Tab).
+/// Call once at startup.
 pub fn bind_keys(cx: &mut App) {
-    crate::field::bind_keys(cx);
+    ui_kit::init(cx);
+    crate::tree_panel::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-f", OpenFind, Some(CONTEXT)),
         KeyBinding::new("ctrl-g", OpenGoto, Some(CONTEXT)),
@@ -209,24 +211,28 @@ impl Focusable for FileViewer {
 impl FileViewer {
     /// Starts opening `path`; the view shows a spinner until the document is ready.
     pub fn new(path: PathBuf, cfg: ViewerConfig, theme: Theme, cx: &mut Context<Self>) -> Self {
-        let find_field = cx.new(|cx| TextField::new(theme, "Buscar en el archivo", cx));
-        let goto_field = cx.new(|cx| TextField::new(theme, "Ir a la linea (42 o 42:7)", cx));
+        // The bars draw their own box (`bar`): the fields are bare.
+        let find_field = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Buscar en el archivo"));
+        let goto_field = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Ir a la linea (42 o 42:7)"));
         let subs = vec![
             cx.subscribe(&find_field, |this, field, ev: &TextFieldEvent, cx| match ev {
                 TextFieldEvent::Changed => {
                     let q = field.read(cx).text().to_owned();
                     this.run_find(&q, cx);
                 }
-                TextFieldEvent::Submit { reverse } => this.step_find(*reverse, cx),
+                // Enter = next match, Shift+Enter = previous.
+                TextFieldEvent::Submit => this.step_find(false, cx),
+                TextFieldEvent::SubmitReverse => this.step_find(true, cx),
                 TextFieldEvent::Cancel => this.close_bars(cx),
+                TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
             }),
             cx.subscribe(&goto_field, |this, field, ev: &TextFieldEvent, cx| match ev {
-                TextFieldEvent::Submit { .. } => {
+                TextFieldEvent::Submit | TextFieldEvent::SubmitReverse => {
                     let text = field.read(cx).text().to_owned();
                     this.goto_text(&text, cx);
                 }
                 TextFieldEvent::Cancel => this.close_bars(cx),
-                TextFieldEvent::Changed => {}
+                TextFieldEvent::Changed | TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
             }),
         ];
         let root = cfg.project_root.clone().or_else(|| find_repo_root(&path));
@@ -245,7 +251,7 @@ impl FileViewer {
             data_scroll: UniformListScrollHandle::new(),
             md_scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
-            measured: ui_kit::MeasuredWidth::new(720.0),
+            measured: ui_kit::MeasuredWidth::with_breaks(&[720.0, crate::state::XL_FROM_PX]),
             find: FindState::default(),
             find_open: false,
             find_field,
@@ -332,8 +338,8 @@ impl FileViewer {
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
-        self.find_field.update(cx, |f, _| f.set_theme(theme));
-        self.goto_field.update(cx, |f, _| f.set_theme(theme));
+        self.find_field.update(cx, |f, cx| f.set_theme(theme, cx));
+        self.goto_field.update(cx, |f, cx| f.set_theme(theme, cx));
         cx.notify();
     }
 
@@ -750,7 +756,7 @@ impl FileViewer {
             .px(px(9.0))
             .flex()
             .items_center()
-            .rounded(px(8.0))
+            .rounded(px(Radius::CONTROL))
             .bg(c.surface_3)
             .text_size(px(self.theme.typography.ui_size_sm))
             .text_color(c.muted)
@@ -813,11 +819,9 @@ impl FileViewer {
         if self.body == Body::Diff {
             chips = chips.child(self.chip(format!("vs {}", self.base_label())));
             if let DiffState::Ready(d) = &self.diff {
-                let a = rows::tint(&theme, if theme.mode == theme::Mode::Light { 2 } else { 10 }, 1.0);
-                let r = rows::tint(&theme, if theme.mode == theme::Mode::Light { 1 } else { 9 }, 1.0);
                 chips = chips
-                    .child(self.chip(format!("+{}", d.added)).text_color(a))
-                    .child(self.chip(format!("-{}", d.removed)).text_color(r));
+                    .child(self.chip(format!("+{}", d.added)).text_color(theme.colors.success))
+                    .child(self.chip(format!("-{}", d.removed)).text_color(theme.colors.error));
             }
         }
 
@@ -922,7 +926,7 @@ impl FileViewer {
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .rounded(px(10.0))
+                .rounded(px(Radius::PILL))
                 .bg(c.surface_1)
                 .text_size(px(theme.typography.ui_size_sm))
                 .text_color(if hint.failed { c.error } else { c.muted })
@@ -962,7 +966,7 @@ impl FileViewer {
             .flex_row()
             .items_center()
             .gap(px(8.0))
-            .rounded(px(12.0))
+            .rounded(px(Radius::SM))
             .bg(c.surface_2)
             .border_1()
             .border_color(c.outline_soft)
@@ -1122,13 +1126,19 @@ impl FileViewer {
                     let DataState::Ready(t) = &me.data else { return Vec::new() };
                     range
                         .filter_map(|i| t.rows().get(i).map(|r| (i, r.clone())))
-                        .map(|(i, row)| {
+                        .map(|(_, row)| {
                             let path = row.path.clone();
+                            // A row is its path in the document ("0.2.1"), plus the "more" marker.
+                            let path_key = format!(
+                                "{}{}",
+                                path.iter().map(usize::to_string).collect::<Vec<_>>().join("."),
+                                if row.more.is_some() { "+" } else { "" }
+                            );
                             let more = row.more.is_some();
                             let expandable = row.expandable;
                             let handle = this.clone();
                             rows::data_row(&theme, &row)
-                                .id(("data-row", i))
+                                .id(SharedString::from(format!("data-row-{}", path_key)))
                                 .when(expandable || more, |d| d.cursor_pointer())
                                 .hover(|s| s.bg(theme.colors.surface_1))
                                 .on_click(move |_, _, cx| {
@@ -1216,7 +1226,7 @@ impl FileViewer {
                     .mb(px(4.0))
                     .px(px(12.0))
                     .py(px(6.0))
-                    .rounded(px(10.0))
+                    .rounded(px(Radius::PILL))
                     .bg(c.surface_1)
                     .text_size(px(theme.typography.ui_size_sm))
                     .text_color(c.muted)
@@ -1313,14 +1323,15 @@ impl Render for FileViewer {
         let theme = self.theme;
         let c = theme.colors;
         let this = cx.entity();
-        let window_w = f32::from(window.viewport_size().width);
+        // The width of this pane's zone (a sidebar or a right panel make it narrower than the window).
+        let zone_w = self.measured.width().unwrap_or_else(|| f32::from(window.viewport_size().width));
 
         let body: AnyElement = match &self.load {
             Load::Loading => self.loading_view(),
             Load::Failed(e) => self.message_view(Icon::Alert, e.clone()),
             Load::Ready => {
                 let inner = self.body_view(&this);
-                let capped = match reading_cap(window_w, self.body) {
+                let capped = match reading_cap(zone_w, self.body) {
                     Some(cap) => div()
                         .size_full()
                         .flex()
@@ -1489,6 +1500,66 @@ mod tests {
         v.update(cx, |v, cx| v.run_find("zzz-not-there", cx));
         cx.executor().run_until_parked();
         assert_eq!(v.read_with(cx, |v, _| v.find_state().status()), "sin resultados");
+    }
+
+    /// A viewer in a (test) window, focused, with the viewer's and the kit's key bindings.
+    fn window_viewer<'a>(
+        cx: &'a mut TestAppContext,
+        path: &Path,
+    ) -> (Entity<FileViewer>, &'a mut gpui::VisualTestContext) {
+        cx.update(bind_keys);
+        let path = path.to_path_buf();
+        let (v, vcx) = ui_kit::testing::open_window(cx, move |_, cx| {
+            FileViewer::new(path, ViewerConfig::default(), Theme::dark(), cx)
+        });
+        vcx.run_until_parked();
+        v.update_in(vcx, |v, window, _| window.focus(&v.focus));
+        (v, vcx)
+    }
+
+    #[gpui::test]
+    async fn find_bar_keys_enter_next_shift_enter_previous_escape_closes(cx: &mut TestAppContext) {
+        use ui_kit::testing::{press, type_text};
+        let dir = tempfile::tempdir().unwrap();
+        let path = numbered(dir.path(), "a.txt", 1_000);
+        let (v, vcx) = window_viewer(cx, &path);
+
+        press(vcx, "ctrl-f");
+        assert!(v.read_with(vcx, |v, _| v.find_open), "Ctrl+F opens the find bar");
+        type_text(vcx, "needle");
+        vcx.run_until_parked();
+        assert_eq!(v.read_with(vcx, |v, _| v.find_state().status()), "1 / 10");
+        let line = |vcx: &gpui::VisualTestContext| v.read_with(vcx, |v, _| v.find_state().current_line());
+        assert_eq!(line(vcx), Some(99));
+
+        press(vcx, "enter");
+        assert_eq!(line(vcx), Some(199), "Enter goes to the next match");
+        press(vcx, "enter");
+        assert_eq!(line(vcx), Some(299));
+        press(vcx, "shift-enter");
+        assert_eq!(line(vcx), Some(199), "Shift+Enter goes back");
+        press(vcx, "shift-enter shift-enter");
+        assert_eq!(line(vcx), Some(999), "and wraps");
+
+        press(vcx, "escape");
+        assert!(!v.read_with(vcx, |v, _| v.find_open), "Esc closes the bar");
+    }
+
+    #[gpui::test]
+    async fn goto_bar_enter_jumps_to_the_line(cx: &mut TestAppContext) {
+        use ui_kit::testing::{press, type_text};
+        let dir = tempfile::tempdir().unwrap();
+        let path = numbered(dir.path(), "a.txt", 1_000);
+        let (v, vcx) = window_viewer(cx, &path);
+        press(vcx, "ctrl-g");
+        assert!(v.read_with(vcx, |v, _| v.goto_open));
+        type_text(vcx, "250");
+        press(vcx, "enter");
+        assert!(!v.read_with(vcx, |v, _| v.goto_open), "the bar closes after jumping");
+        vcx.run_until_parked();
+        // The window drew a frame: line 250 (index 249) is centred, so the top line is a bit above it.
+        let top = v.read_with(vcx, |v, _| v.top_line());
+        assert!((150..249).contains(&top), "scrolled to line 250, top line is {top}");
     }
 
     #[gpui::test]

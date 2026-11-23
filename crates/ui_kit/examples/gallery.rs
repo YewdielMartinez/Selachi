@@ -1,11 +1,15 @@
 //! Gallery of every ui_kit component.
 //!
 //! ```text
-//! cargo run -p ui_kit --example gallery --release -- [dark|light|oled] [--closed]
+//! cargo run -p ui_kit --example gallery --release -- [dark|light|oled] [--closed] [--rings] [--select-open]
 //! ```
 //!
 //! The popover starts open (so screenshots show it); `--closed` starts it closed. Click the
 //! "Ajustes" pill to toggle it, Esc or a click outside closes it.
+//!
+//! Screenshot flags (no input injection needed): `--rings` forces the keyboard focus ring on a
+//! sample of controls and focuses the first text field; `--select-open` opens the select.
+//! Everything is also reachable with the keyboard: Tab / Shift+Tab, Enter / Space, arrows.
 
 use gpui::{
     App, Application, Bounds, Context, Entity, IntoElement, Render, SharedString, Window,
@@ -13,9 +17,10 @@ use gpui::{
 };
 use theme::{Mode, Theme, rgb};
 use ui_kit::{
-    ActionSize, Assets, Button, Card, CardTone, DitherMeter, GhostButton, Icon, IconButton, ListRow, Logo,
-    Pill, Placement, Popover, RowStatus, SectionLabel, SegmentedControl, Slider, Spinner,
-    SwatchRow, Toggle, Tooltip, UniformListScrollHandle, VirtualList, WirePreset, Wireframe,
+    ActionSize, Assets, Button, Card, CardTone, Checkbox, DitherMeter, GhostButton, Icon, IconButton, ListRow, Logo,
+    Pill, Placement, Popover, RadioGroup, RowStatus, SectionLabel, SegmentedControl, Select, SelectOption, Slider,
+    Spinner, SwatchRow, TextArea, TextField, Toggle, Tooltip, UniformListScrollHandle, VirtualList, WirePreset,
+    Wireframe,
 };
 
 struct Gallery {
@@ -29,11 +34,70 @@ struct Gallery {
     row_sel: usize,
     active_rail: usize,
     scroll: UniformListScrollHandle,
+    name: Entity<TextField>,
+    long_path: Entity<TextField>,
+    invalid: Entity<TextField>,
+    secret: Entity<TextField>,
+    frozen: Entity<TextField>,
+    notes: Entity<TextArea>,
+    select: Entity<Select>,
+    select_long: Entity<Select>,
+    agreed: bool,
+    density: usize,
 }
 
 impl Gallery {
-    fn new(mode: Mode, popover_open: bool) -> Self {
+    fn new(mode: Mode, popover_open: bool, cx: &mut Context<Self>) -> Self {
+        let t = Theme::for_mode(mode);
+        let name = cx.new(|cx| TextField::new(t, cx).placeholder("Nombre del preset").with_text("Orquestador"));
+        let long_path = cx.new(|cx| {
+            TextField::new(t, cx)
+                .monospace(true)
+                .with_text("C:\\Users\\venta\\Desktop\\Terminal\\crates\\ui_kit\\src\\text_field\\element.rs")
+        });
+        let invalid = cx.new(|cx| TextField::new(t, cx).with_text("feat/ui kit"));
+        invalid.update(cx, |f, cx| f.set_error(Some("Los nombres de rama no llevan espacios"), cx));
+        let secret = cx.new(|cx| TextField::new(t, cx).password(true).with_text("hunter2"));
+        let frozen = cx.new(|cx| TextField::new(t, cx).read_only(true).with_text("selachi.toml (solo lectura)"));
+        let notes = cx.new(|cx| {
+            TextArea::area(t, cx)
+                .placeholder("Nota para el agente")
+                .with_text("Revisar el borrado de presets.\nSi falla, abrir un issue.")
+                .lines(2, 5)
+        });
+        let select = cx.new(|cx| {
+            Select::new("gal-select", t, cx)
+                .options([
+                    SelectOption::new("system", "Sistema"),
+                    SelectOption::new("dark", "Oscuro").detail("recomendado"),
+                    SelectOption::new("light", "Claro"),
+                    SelectOption::new("oled", "OLED").disabled(true),
+                ])
+                .with_value("dark")
+                .width(220.0)
+        });
+        let select_long = cx.new(|cx| {
+            Select::new("gal-select-long", t, cx)
+                .options((0..120).map(|i| {
+                    SelectOption::new(
+                        format!("font-{i}"),
+                        format!("Una familia tipografica con un nombre absurdamente largo numero {i}"),
+                    )
+                }))
+                .with_value("font-7")
+                .max_w(260.0)
+        });
         Self {
+            name,
+            long_path,
+            invalid,
+            secret,
+            frozen,
+            notes,
+            select,
+            select_long,
+            agreed: true,
+            density: 1,
             theme: Theme::for_mode(mode),
             mode_ix: match mode {
                 Mode::Dark => 1,
@@ -81,6 +145,13 @@ impl Render for Gallery {
         let t = self.theme;
         let c = t.colors;
         let this = cx.entity();
+        for f in [&self.name, &self.long_path, &self.invalid, &self.secret, &self.frozen] {
+            f.update(cx, |f, cx| f.set_theme(t, cx));
+        }
+        self.notes.update(cx, |f, cx| f.set_theme(t, cx));
+        for s in [&self.select, &self.select_long] {
+            s.update(cx, |s, cx| s.set_theme(t, cx));
+        }
 
         // --- column 1: actions + feedback -------------------------------------------------
         let tabs = div()
@@ -206,7 +277,7 @@ impl Render for Gallery {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .w(px(380.0))
+            .w(px(360.0))
             .child(SectionLabel::new(&t, "Pills · pestañas"))
             .child(tabs)
             .child(SectionLabel::new(&t, "Pills · barra de estado"))
@@ -374,7 +445,7 @@ impl Render for Gallery {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .w(px(420.0))
+            .w(px(380.0))
             .child(SectionLabel::new(&t, "SegmentedControl · Toggle · Slider · Swatch"))
             .child(settings)
             .child(SectionLabel::new(&t, "Popover (origen físico, Esc / clic fuera)"))
@@ -436,7 +507,7 @@ impl Render for Gallery {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .w(px(400.0))
+            .w(px(340.0))
             .child(SectionLabel::new(&t, "VirtualList · ListRow (10 000 filas)"))
             .child(Card::new(&t).p(px(6.0)).child(list))
             .child(SectionLabel::new(&t, "Wireframe · presets de layout"))
@@ -461,6 +532,63 @@ impl Render for Gallery {
                 ),
             );
 
+        // --- column 4: inputs + keyboard focus -----------------------------------------------
+        let col4 = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .w(px(340.0))
+            .child(SectionLabel::new(&t, "TextField · foco, valor, ellipsis, error"))
+            .child(self.name.clone())
+            .child(self.long_path.clone())
+            .child(self.invalid.clone())
+            .child(self.secret.clone())
+            .child(self.frozen.clone())
+            .child(SectionLabel::new(&t, "TextArea"))
+            .child(self.notes.clone())
+            .child(SectionLabel::new(&t, "Select · max_w + ellipsis · >50 virtualizado"))
+            .child(self.select.clone())
+            .child(self.select_long.clone())
+            .child(SectionLabel::new(&t, "Checkbox · RadioGroup"))
+            .child(
+                Checkbox::new("gal-ck", &t).label("Enviar diagnósticos").checked(self.agreed).on_change({
+                    let this = this.clone();
+                    move |v, _, cx| {
+                        this.update(cx, |g, cx| {
+                            g.agreed = v;
+                            cx.notify();
+                        });
+                    }
+                }),
+            )
+            .child(
+                RadioGroup::new("gal-rg", &t, ["Compacta", "Cómoda", "Amplia"])
+                    .selected(Some(self.density))
+                    .horizontal(true)
+                    .on_change({
+                        move |ix, _, cx| {
+                            this.update(cx, |g, cx| {
+                                g.density = ix;
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
+            .child(SectionLabel::new(&t, "Foco de teclado (Tab) · anillo accent a 2 px"))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(14.0))
+                    .child(Button::tonal("f-btn", &t, "Button").on_click(|_, _, _| {}))
+                    .child(IconButton::new("f-icon", &t, Icon::Settings).on_click(|_, _, _| {}))
+                    .child(Pill::new("f-pill", &t).label("Pill").active(true).on_click(|_, _, _| {}))
+                    .child(Toggle::new("f-toggle", &t).on(true).on_change(|_, _, _| {}))
+                    .child(Button::tonal("f-off", &t, "focusable(false)").focusable(false).on_click(|_, _, _| {})),
+            );
+
         div()
             .size_full()
             .bg(c.bg)
@@ -480,7 +608,7 @@ impl Render for Gallery {
                     .child(div().text_size(px(15.0)).font_weight(gpui::FontWeight::MEDIUM).child("Selachi · ui_kit"))
                     .child(div().text_size(px(12.0)).text_color(c.muted).child(format!("{:?}", t.mode))),
             )
-            .child(div().flex().flex_row().gap(px(32.0)).child(col1).child(col2).child(col3))
+            .child(div().flex().flex_row().gap(px(28.0)).child(col1).child(col2).child(col3).child(col4))
     }
 }
 
@@ -494,6 +622,8 @@ fn main() {
         Mode::Dark
     };
     let open = !args.iter().any(|a| a == "--closed");
+    let rings = args.iter().any(|a| a == "--rings");
+    let select_open = args.iter().any(|a| a == "--select-open");
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
@@ -505,20 +635,30 @@ fn main() {
             }
         })
         .detach();
-        let bounds = Bounds::centered(None, size(px(1280.0), px(780.0)), cx);
-        let _: Entity<Gallery> = match cx.open_window(
+        ui_kit::init(cx);
+        if rings {
+            // The ring shows after keyboard focus; forcing it lets a screenshot show it without input.
+            ui_kit::debug_force_focus_ring(&[
+                "f-btn", "f-icon", "f-pill", "f-toggle", "gal-ck", "gal-rg-1", "gal-select-trigger", "b1", "rail2", "crumb", "alpha",
+            ]);
+        }
+        let bounds = Bounds::centered(None, size(px(1640.0), px(940.0)), cx);
+        let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Gallery::new(mode, open)),
-        ) {
-            Ok(w) => match w.entity(cx) {
-                Ok(e) => e,
-                Err(_) => return,
-            },
-            Err(_) => return,
-        };
+            |_, cx| cx.new(|cx| Gallery::new(mode, open, cx)),
+        );
+        let Ok(handle) = opened else { return };
+        let _ = handle.update(cx, |g, window, cx| {
+            if rings {
+                g.name.read(cx).focus(window);
+            }
+            if select_open {
+                g.select.update(cx, |s, cx| s.open(cx));
+            }
+        });
         cx.activate(true);
     });
 }

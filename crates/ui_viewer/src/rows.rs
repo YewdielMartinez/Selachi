@@ -5,7 +5,7 @@ use gpui::{
     AnyElement, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement as _, SharedString, Styled as _,
     StyledText, div, prelude::*, px,
 };
-use theme::{Theme, rgb};
+use theme::Theme;
 use ui_kit::{Icon, icon};
 use viewer_svc::{DiffLine, HexLine, HighlightKind, LineKind, NodeKind};
 
@@ -20,11 +20,9 @@ pub const DATA_ROW_H: f32 = 24.0;
 /// Approximate advance of one mono column at 13 px (gutter sizing).
 const CH: f32 = 7.9;
 
-/// `ansi[i]` of the theme at `alpha`.
-pub fn tint(theme: &Theme, ansi: usize, alpha: f32) -> Hsla {
-    let mut c = rgb(theme.terminal.ansi[ansi]);
-    c.a = alpha;
-    c.into()
+/// A theme color (a role such as `success`) at `alpha`.
+pub fn tint(color: gpui::Rgba, alpha: f32) -> Hsla {
+    gpui::Rgba { a: alpha, ..color }.into()
 }
 
 /// Width of a line-number gutter for `digits` digits.
@@ -39,7 +37,7 @@ fn number_cell(theme: &Theme, n: Option<usize>, digits: usize) -> AnyElement {
         .pr(px(10.0))
         .flex()
         .justify_end()
-        .text_size(px(12.0))
+        .text_size(px(theme.typography.ui_size_sm))
         .text_color(theme.colors.outline)
         .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
         .into_any_element()
@@ -70,7 +68,7 @@ pub fn code_row(
 ) -> AnyElement {
     let c = theme.colors;
     let found: Vec<_> = query.map(|q| find_ranges(text, q)).unwrap_or_default().into_iter().map(|r| (r, ())).collect();
-    let match_bg = tint(theme, 3, if current { 0.55 } else { 0.32 });
+    let match_bg = tint(theme.colors.warning, if current { 0.55 } else { 0.32 });
     let segments = overlay(spans, &found, text.len());
     let styles: Vec<_> = segments
         .into_iter()
@@ -111,8 +109,8 @@ pub fn code_row(
 
 fn line_bg(theme: &Theme, kind: LineKind) -> Option<Hsla> {
     match kind {
-        LineKind::Added => Some(tint(theme, 2, 0.13)),
-        LineKind::Removed => Some(tint(theme, 1, 0.13)),
+        LineKind::Added => Some(tint(theme.colors.success, 0.13)),
+        LineKind::Removed => Some(tint(theme.colors.error, 0.13)),
         LineKind::Context => None,
     }
 }
@@ -120,8 +118,8 @@ fn line_bg(theme: &Theme, kind: LineKind) -> Option<Hsla> {
 fn diff_text(theme: &Theme, line: &DiffLine) -> AnyElement {
     let prepared = crate::spans::prepare_line(&line.text, &[], crate::spans::MAX_LINE_BYTES);
     let strong = match line.kind {
-        LineKind::Added => tint(theme, 2, 0.34),
-        _ => tint(theme, 1, 0.34),
+        LineKind::Added => tint(theme.colors.success, 0.34),
+        _ => tint(theme.colors.error, 0.34),
     };
     // Inline ranges refer to the original text; tabs/truncation shift them, so only trust them when
     // the text was not rewritten.
@@ -161,7 +159,7 @@ pub fn hunk_row(theme: &Theme, header: &str) -> AnyElement {
     row_base(theme)
         .bg(c.surface_1)
         .px(px(12.0))
-        .text_size(px(12.0))
+        .text_size(px(theme.typography.ui_size_sm))
         .text_color(c.outline)
         .child(SharedString::from(header.to_owned()))
         .into_any_element()
@@ -169,8 +167,8 @@ pub fn hunk_row(theme: &Theme, header: &str) -> AnyElement {
 
 fn sign(theme: &Theme, kind: LineKind) -> AnyElement {
     let (s, color) = match kind {
-        LineKind::Added => ("+", rgb(theme.terminal.ansi[if theme.mode == theme::Mode::Light { 2 } else { 10 }])),
-        LineKind::Removed => ("-", rgb(theme.terminal.ansi[if theme.mode == theme::Mode::Light { 1 } else { 9 }])),
+        LineKind::Added => ("+", theme.colors.success),
+        LineKind::Removed => ("-", theme.colors.error),
         LineKind::Context => (" ", theme.colors.outline),
     };
     div().flex_none().w(px(14.0)).text_color(color).child(s).into_any_element()
@@ -223,9 +221,9 @@ pub fn hex_row(theme: &Theme, line: &HexLine) -> AnyElement {
     row_base(theme)
         .px(px(16.0))
         .gap(px(16.0))
-        .text_size(px(12.5))
+        .text_size(px(theme.typography.mono_size))
         .child(div().flex_none().text_color(c.outline).child(SharedString::from(format!("{:08x}", line.offset))))
-        .child(div().flex_none().w(px(CH * 12.5 / 13.0 * 49.0)).whitespace_nowrap().child(SharedString::from(hex)))
+        .child(div().flex_none().w(px(CH * 49.0)).whitespace_nowrap().child(SharedString::from(hex)))
         .child(div().flex_none().text_color(c.muted).child(SharedString::from(line.ascii.clone())))
         .into_any_element()
 }
@@ -263,7 +261,7 @@ pub fn data_row(theme: &Theme, row: &DataRow) -> gpui::Div {
         .items_center()
         .gap(px(6.0))
         .font_family(theme.typography.mono_family)
-        .text_size(px(12.5))
+        .text_size(px(theme.typography.mono_size))
         .text_color(c.text);
     if row.more.is_some() {
         return base
@@ -289,7 +287,7 @@ pub fn data_row(theme: &Theme, row: &DataRow) -> gpui::Div {
                 .text_ellipsis()
                 .whitespace_nowrap()
                 .text_color(value_color(theme, row.kind).unwrap_or(c.text))
-                .when(is_container, |d| d.text_size(px(12.0)))
+                .when(is_container, |d| d.text_size(px(theme.typography.ui_size_sm)))
                 .child(SharedString::from(row.preview.clone())),
         )
 }
@@ -307,7 +305,7 @@ mod tests {
     #[test]
     fn tint_applies_alpha() {
         let t = Theme::dark();
-        let c = tint(&t, 2, 0.13);
+        let c = tint(t.colors.success, 0.13);
         assert!((c.a - 0.13).abs() < 1e-6);
     }
 }

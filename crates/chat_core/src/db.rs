@@ -20,8 +20,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::{ChatError, Result};
 use crate::model::{
-    agent_from_db, agent_to_db, now_ms, permission_from_db, permission_to_db, Role, ThreadId, ThreadRecord,
-    ThreadSpec, ThreadStatus,
+    agent_from_db, agent_to_db, now_ms, permission_from_db, permission_to_db, Role, ThreadId, ThreadLink,
+    ThreadRecord, ThreadSpec, ThreadStatus,
 };
 use crate::state::{ApprovalWrite, MessageWrite};
 
@@ -96,6 +96,15 @@ CREATE TABLE plans(
 "#,
     // v2: reasoning effort per thread
     "ALTER TABLE threads ADD COLUMN effort TEXT;",
+    // v3: delegation lineage (PLAN section 20). A delegated thread has `delegated_by` set; its
+    // parent is a chat thread (`parent_thread_id`) and/or a terminal tab (`parent_tab`).
+    r#"
+ALTER TABLE threads ADD COLUMN parent_thread_id INTEGER REFERENCES threads(id) ON DELETE SET NULL;
+ALTER TABLE threads ADD COLUMN parent_tab TEXT;
+ALTER TABLE threads ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN delegated_by TEXT;
+CREATE INDEX idx_threads_parent ON threads(parent_thread_id);
+"#,
 ];
 
 /// Latest schema version this build knows.
@@ -213,6 +222,13 @@ impl ChatDb {
     /// Open (creating and migrating if needed) the database at `path`. Threads that were busy
     /// when the previous process died are reset to `idle`.
     pub fn open(path: &Path) -> Result<ChatDb> {
+        Self::open_with(path, true)
+    }
+
+    /// [`ChatDb::open`] that can leave the `working` / `waiting` status of threads alone
+    /// (`reset_busy = false`). A process that shares `chat.db` with the running app (the agent
+    /// harness CLI) must not reset threads the app is still running.
+    pub fn open_with(path: &Path, reset_busy: bool) -> Result<ChatDb> {
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
                 std::fs::create_dir_all(dir)?;
@@ -224,7 +240,9 @@ impl ChatDb {
         writer.pragma_update(None, "synchronous", "NORMAL")?;
         writer.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut writer)?;
-        writer.execute("UPDATE threads SET status = 'idle' WHERE status IN ('working', 'waiting')", [])?;
+        if reset_busy {
+            writer.execute("UPDATE threads SET status = 'idle' WHERE status IN ('working', 'waiting')", [])?;
+        }
 
         let reader = Connection::open(path)?;
         reader.busy_timeout(Duration::from_secs(5))?;
@@ -315,10 +333,12 @@ impl ChatDb {
     pub fn insert_thread(&self, new: NewThread) -> Result<ThreadId> {
         self.exec_sync(move |c| {
             let now = now_ms();
+            let link = new.spec.link.clone().unwrap_or_default();
             c.execute(
                 "INSERT INTO threads(title, project_root, worktree_path, agent_kind, model, permission_mode, \
-                 status, created, updated, archived, checkpoint_before_turn, effort) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'idle', ?7, ?7, 0, ?8, ?9)",
+                 status, created, updated, archived, checkpoint_before_turn, effort, \
+                 parent_thread_id, parent_tab, depth, delegated_by) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'idle', ?7, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     new.title,
                     new.spec.project_root.to_string_lossy(),
@@ -329,9 +349,57 @@ impl ChatDb {
                     now,
                     new.spec.checkpoint_before_turn,
                     new.spec.effort,
+                    link.parent_thread_id.map(|p| p.0),
+                    link.parent_tab,
+                    link.depth,
+                    link.delegated_by,
                 ],
             )?;
             Ok(ThreadId(c.last_insert_rowid()))
+        })
+    }
+
+    /// Delegation lineage of a thread (`None`: no such thread). A thread that was not delegated
+    /// returns the default link (`depth` 0, nothing else).
+    pub fn get_link(&self, id: ThreadId) -> Result<Option<ThreadLink>> {
+        self.read(|c| {
+            Ok(c.query_row(
+                &format!("SELECT {LINK_COLS} FROM threads WHERE id = ?1"),
+                [id.0],
+                link_from_row,
+            )
+            .optional()?)
+        })
+    }
+
+    /// Direct children (threads whose `parent_thread_id` is `parent`), newest first.
+    pub fn list_children(&self, parent: ThreadId) -> Result<Vec<ThreadId>> {
+        self.read(|c| {
+            let mut st =
+                c.prepare("SELECT id FROM threads WHERE parent_thread_id = ?1 ORDER BY updated DESC, id DESC")?;
+            let rows = st.query_map([parent.0], |r| Ok(ThreadId(r.get(0)?)))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Every delegated thread (`delegated_by` set) with its link, newest first.
+    pub fn list_delegated(&self) -> Result<Vec<(ThreadId, ThreadLink)>> {
+        self.read(|c| {
+            let mut st = c.prepare(&format!(
+                "SELECT id, {LINK_COLS} FROM threads WHERE delegated_by IS NOT NULL ORDER BY updated DESC, id DESC"
+            ))?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    ThreadId(r.get(0)?),
+                    ThreadLink {
+                        parent_thread_id: r.get::<_, Option<i64>>(1)?.map(ThreadId),
+                        parent_tab: r.get(2)?,
+                        depth: r.get(3)?,
+                        delegated_by: r.get(4)?,
+                    },
+                ))
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
     }
 
@@ -587,6 +655,17 @@ impl ChatDb {
 
 const THREAD_SELECT: &str = "SELECT id, title, project_root, worktree_path, agent_kind, model, permission_mode, status, \
      created, updated, agent_session_id, archived, checkpoint_before_turn, effort FROM threads";
+
+const LINK_COLS: &str = "parent_thread_id, parent_tab, depth, delegated_by";
+
+fn link_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadLink> {
+    Ok(ThreadLink {
+        parent_thread_id: r.get::<_, Option<i64>>(0)?.map(ThreadId),
+        parent_tab: r.get(1)?,
+        depth: r.get(2)?,
+        delegated_by: r.get(3)?,
+    })
+}
 
 fn thread_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadRecord> {
     Ok(ThreadRecord {

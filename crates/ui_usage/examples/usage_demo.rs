@@ -5,7 +5,7 @@
 //!     [--size WxH] [--range session|today|week|7d] [--no-project] [--real]
 //! ```
 //!
-//! * Default: a temp database with invented events for Claude, Codex and OpenCode across 14 days,
+//! * Default: a temp database with invented events for Claude, Codex, OpenCode and Antigravity across 14 days,
 //!   four branches, and rate-limit snapshots (Claude fresh, Codex 5 h stale, Codex 7 days fresh).
 //!   Nothing private is involved: use this one for screenshots.
 //! * `--real`: copies `%APPDATA%\Selachi\selachi.db` (+ `-wal` / `-shm`) into a temp folder and
@@ -160,6 +160,11 @@ fn seed(path: &Path) -> anyhow::Result<()> {
             let ts = now - (13 - day) * 24 * H - 10 * H;
             put(&store, Agent::Codex, "gpt-6.1-sol", format!("x-{day}"), ts, TokenCounts { input: 150_000 + day as u64 * 20_000, output: 60_000, cache_create: 0, cache_create_1h: 0, cache_read: 900_000 }, None, DEMO_ROOT);
         }
+        if day % 4 == 3 {
+            // Antigravity: tokens only, no price.
+            let ts = now - (13 - day) * 24 * H - 12 * H;
+            put(&store, Agent::Antigravity, "gemini-4-neon", format!("g-{day}"), ts, TokenCounts { input: 110_000, output: 40_000, cache_create: 0, cache_create_1h: 0, cache_read: 0 }, Some("main"), DEMO_ROOT);
+        }
         if day % 5 == 2 {
             let ts = now - (13 - day) * 24 * H - 11 * H;
             put(&store, Agent::OpenCode, "deepseek-v4", format!("o-{day}"), ts, TokenCounts { input: 200_000, output: 80_000, cache_create: 0, cache_create_1h: 0, cache_read: 0 }, Some("main"), DEMO_ROOT);
@@ -183,6 +188,7 @@ fn seed(path: &Path) -> anyhow::Result<()> {
     for (i, ago) in [100 * MIN, 35 * MIN].into_iter().enumerate() {
         put(&store, Agent::Codex, "gpt-6.1-sol", format!("xr-{i}"), now - ago, TokenCounts { input: 160_000, output: 70_000, cache_create: 0, cache_create_1h: 0, cache_read: 700_000 }, None, DEMO_ROOT);
     }
+    put(&store, Agent::Antigravity, "gemini-4-neon", "gr-0".into(), now - 55 * MIN, TokenCounts { input: 90_000, output: 30_000, cache_create: 0, cache_create_1h: 0, cache_read: 0 }, Some("main"), DEMO_ROOT);
     put(&store, Agent::OpenCode, "deepseek-v4", "or-0".into(), now - 70 * MIN, TokenCounts { input: 250_000, output: 90_000, cache_create: 0, cache_create_1h: 0, cache_read: 0 }, Some("main"), DEMO_ROOT);
 
     let snap = |agent, window: &str, ago: i64, pct: f64, resets: i64, source: &str| RateLimitSnapshot {
@@ -300,13 +306,10 @@ fn main() {
             WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
             move |window, cx| {
                 let provider = UsagePanelProvider::new(model);
-                let ctx = PanelCtx {
-                    zone,
-                    width_class: WidthClass::from_width(panel_width),
-                    cwd: project_root.clone(),
-                    project_root,
-                    theme,
-                };
+                let mut ctx = PanelCtx::new(zone, WidthClass::from_width(panel_width), theme);
+                if let Some(root) = project_root {
+                    ctx = ctx.with_cwd(root.clone()).with_project_root(root);
+                }
                 let panel = provider.build(ctx, window, cx);
                 cx.new(|_| Host { theme, zone, panel, panel_width })
             },
