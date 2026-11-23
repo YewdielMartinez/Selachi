@@ -124,9 +124,9 @@ mod tests {
         SessionState {
             v: VERSION,
             tabs: vec![
-                SavedTab { kind: TabKind::Terminal, cwd: Some(PathBuf::from("C:\\proj\\a")), title: None },
-                SavedTab { kind: TabKind::Terminal, cwd: None, title: Some("build".into()) },
-                SavedTab { kind: TabKind::Terminal, cwd: Some(PathBuf::from("C:\\proj\\c")), title: None },
+                SavedTab::terminal(Some(PathBuf::from("C:\\proj\\a"))),
+                SavedTab { title: Some("build".into()), ..SavedTab::terminal(None) },
+                SavedTab::chat(7, Some(PathBuf::from("C:\\proj\\c"))),
             ],
             panes: vec![Some(1), Some(0)],
             focused: 1,
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn sessions_saved_before_chat_still_load() {
-        let old = r#"{"v":1,"tabs":[{"kind":"terminal","cwd":"C:"}],"panes":[0],"focused":0,"ratio_x":0.5,"ratio_y":0.5,"sidebar_w":null,"right_w":null}"#;
+        let old = r#"{"v":1,"tabs":[{"kind":"terminal","cwd":"C:/a"}],"panes":[0],"focused":0,"ratio_x":0.5,"ratio_y":0.5,"sidebar_w":null,"right_w":null}"#;
         let s = SessionState::from_json(old).unwrap();
         assert!(!s.sidebar_collapsed);
         assert_eq!(s.tabs[0].thread, None);

@@ -341,6 +341,26 @@ fn hsla(c: theme::Rgba) -> Hsla {
     c.into()
 }
 
+/// The theme mode of a configured one (a "System" theme is dark until the OS is followed).
+pub(crate) fn mode_of(mode: ThemeMode) -> Mode {
+    match mode {
+        ThemeMode::Light => Mode::Light,
+        ThemeMode::Oled => Mode::Oled,
+        ThemeMode::Dark | ThemeMode::System => Mode::Dark,
+    }
+}
+
+/// The theme of a configuration: its mode, with its `[appearance] accent`.
+pub(crate) fn theme_for(config: &Config) -> Theme {
+    themed(mode_of(config.appearance.mode), config)
+}
+
+/// `mode` with the configured accent (the Ctrl+Shift+T cycle and the wizard's preview keep the
+/// accent while the mode changes).
+pub(crate) fn themed(mode: Mode, config: &Config) -> Theme {
+    Theme::for_mode(mode).with_accent_str(&config.appearance.accent)
+}
+
 /// [`adapt_layout`] plus what only the shell knows: Ctrl+B folds a docked sidebar to its icon
 /// column, and the unified sidebar (whose footer carries the usage meter) gets the compact bottom
 /// bar, never the per-agent one that would show the usage a second time.
@@ -1139,12 +1159,13 @@ impl AppShell {
             Mode::Light => Mode::Oled,
             Mode::Oled => Mode::Dark,
         };
-        self.set_theme(Theme::for_mode(next), cx);
+        self.set_theme(themed(next, &self.config), cx);
     }
 
     /// Re-themes every part of the window.
     fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
-        if self.theme.mode == theme.mode {
+        // Mode or accent: anything that differs is applied to every live view.
+        if self.theme == theme {
             return;
         }
         self.theme = theme;
@@ -1170,20 +1191,16 @@ impl AppShell {
     /// theme follow it. Nothing happens for what did not change.
     fn adopt_config(&mut self, config: Arc<Config>, cx: &mut Context<Self>) {
         let layout_moved = layout_changed(&self.config, &config);
-        let mode_moved = self.config.appearance.mode != config.appearance.mode;
+        let theme_moved =
+            self.config.appearance.mode != config.appearance.mode || self.config.appearance.accent != config.appearance.accent;
         let completion_moved = self.config.terminal.completion != config.terminal.completion;
         let panel_config = config.layout.clone();
         self.config = config;
         if completion_moved {
             cx.set_global(TermEnv(self.config.completion_env()));
         }
-        if mode_moved {
-            let mode = match self.config.appearance.mode {
-                ThemeMode::Light => Mode::Light,
-                ThemeMode::Oled => Mode::Oled,
-                ThemeMode::Dark | ThemeMode::System => Mode::Dark,
-            };
-            self.set_theme(Theme::for_mode(mode), cx);
+        if theme_moved {
+            self.set_theme(theme_for(&self.config), cx);
         }
         if layout_moved {
             self.recompute_layout(true, cx);
@@ -3377,12 +3394,7 @@ impl AppShell {
                 self.end_onboarding(window, cx);
                 // The wizard already saved config.toml; adopt it (a "System" theme is dark here).
                 self.adopt_config(Arc::new(config.clone()), cx);
-                let mode = match config.appearance.mode {
-                    ThemeMode::Light => Mode::Light,
-                    ThemeMode::Oled => Mode::Oled,
-                    ThemeMode::Dark | ThemeMode::System => Mode::Dark,
-                };
-                self.set_theme(Theme::for_mode(mode), cx);
+                self.set_theme(theme_for(&config), cx);
                 if let Some(settings) = self.settings.clone() {
                     settings.update(cx, |s, cx| s.set_config(config, cx));
                 }
@@ -3395,7 +3407,7 @@ impl AppShell {
                 self.type_in_active(&command, true, cx);
             },
             // A live preview: the window follows the choice, the config is untouched.
-            E::ThemePreview(mode) => self.set_theme(Theme::for_mode(mode), cx),
+            E::ThemePreview(mode) => self.set_theme(themed(mode, &self.config), cx),
         }
     }
 

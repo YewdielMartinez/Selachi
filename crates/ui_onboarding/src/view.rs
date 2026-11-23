@@ -282,11 +282,7 @@ impl OnboardingView {
 
     /// The theme of the current theme and accent choices.
     pub(crate) fn preview_theme(&self) -> Theme {
-        let mut t = Theme::for_mode(self.draft.theme.resolve(self.system_dark));
-        if let Some((r, g, b)) = store::config::parse_hex_color(&self.draft.accent) {
-            t.colors.accent = theme::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b));
-        }
-        t
+        Theme::for_mode(self.draft.theme.resolve(self.system_dark)).with_accent_str(&self.draft.accent)
     }
 
     pub(crate) fn restyle(&mut self, cx: &mut Context<Self>) {

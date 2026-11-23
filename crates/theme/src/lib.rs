@@ -298,6 +298,172 @@ impl Default for Theme {
     }
 }
 
+/// Parses `#RRGGBB` (the `#` is optional) into `0xRRGGBB`.
+pub fn parse_hex(s: &str) -> Option<u32> {
+    let h = s.trim().trim_start_matches('#');
+    (h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit())).then(|| u32::from_str_radix(h, 16).ok()).flatten()
+}
+
+fn linear(c: u32) -> f64 {
+    let c = f64::from(c) / 255.0;
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+fn luminance(hex: u32) -> f64 {
+    0.2126 * linear((hex >> 16) & 0xFF) + 0.7152 * linear((hex >> 8) & 0xFF) + 0.0722 * linear(hex & 0xFF)
+}
+
+/// WCAG contrast ratio of two `0xRRGGBB` colours (1.0 ..= 21.0).
+pub fn contrast_ratio(a: u32, b: u32) -> f64 {
+    let (la, lb) = (luminance(a), luminance(b));
+    let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// `hex` blended over `base` at `alpha` (0.0 ..= 1.0), per channel.
+fn blend(hex: u32, base: u32, alpha: f64) -> u32 {
+    let ch = |shift: u32| {
+        let (a, b) = (f64::from((hex >> shift) & 0xFF), f64::from((base >> shift) & 0xFF));
+        ((a * alpha + b * (1.0 - alpha)).round() as u32).min(255) << shift
+    };
+    ch(16) | ch(8) | ch(0)
+}
+
+fn hex_of(c: Rgba) -> u32 {
+    let q = |v: f32| (v * 255.0).round() as u32;
+    (q(c.r) << 16) | (q(c.g) << 8) | q(c.b)
+}
+
+/// Text on the accent fill: the brand's dark ink, else white, whichever reads (WCAG >= 4.5).
+fn on_accent_for(accent: u32) -> u32 {
+    const LIGHT: u32 = 0xFFFFFF;
+    if contrast_ratio(accent, ON_ACCENT) >= 4.5 {
+        ON_ACCENT
+    } else if contrast_ratio(accent, LIGHT) >= 4.5 {
+        LIGHT
+    } else if contrast_ratio(accent, ON_ACCENT) >= contrast_ratio(accent, LIGHT) {
+        ON_ACCENT
+    } else {
+        LIGHT
+    }
+}
+
+/// Saturation below which an accent counts as gray/white (`#ECEEF2`).
+const GRAY_SATURATION: f64 = 0.10;
+/// Saturation of the derived action colour.
+const STRONG_SATURATION: f64 = 0.90;
+/// WCAG contrast the label on the action colour must reach.
+const LABEL_CONTRAST: f64 = 4.5;
+/// Same for the hover / press tones, which are only shown for a moment.
+const HOVER_CONTRAST: f64 = 3.0;
+
+/// `0xRRGGBB` to `(hue 0..360, saturation 0..1, lightness 0..1)`.
+fn to_hsl(hex: u32) -> (f64, f64, f64) {
+    let c = |shift: u32| f64::from((hex >> shift) & 0xFF) / 255.0;
+    let (r, g, b) = (c(16), c(8), c(0));
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d < 1e-9 {
+        return (0.0, 0.0, l);
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = if (max - r).abs() < 1e-9 {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if (max - g).abs() < 1e-9 {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h * 60.0, s, l)
+}
+
+/// Inverse of [`to_hsl`].
+fn from_hsl(h: f64, s: f64, l: f64) -> u32 {
+    let (s, l) = (s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h.rem_euclid(360.0) / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let q = |v: f64| (((v + m) * 255.0).round() as u32).min(255);
+    (q(r) << 16) | (q(g) << 8) | q(b)
+}
+
+/// The action-button colours derived from an accent: `(rest, hover = gradient top, press, label)`.
+/// Same hue, high saturation, lightness lowered until a white label reads (>= 4.5); hover +8 %,
+/// press -6 % lightness. A gray / white accent gives the inverted-text button of the mode.
+fn strong_for(accent: u32, mode: Mode, text: u32, bg: u32) -> (u32, u32, u32, u32) {
+    let (h, _, _) = to_hsl(accent);
+    // HSV saturation: a near-white tone like #ECEEF2 is 2 % there (HSL would say 17 %).
+    let s = {
+        let c = |shift: u32| f64::from((accent >> shift) & 0xFF) / 255.0;
+        let max = c(16).max(c(8)).max(c(0));
+        if max < 1e-9 { 0.0 } else { (max - c(16).min(c(8)).min(c(0))) / max }
+    };
+    let shift = |hex: u32, dl: f64| {
+        let (h, s, l) = to_hsl(hex);
+        from_hsl(h, s, l + dl)
+    };
+    if s < GRAY_SATURATION {
+        // Ink button on light, light button on dark, with the other tone as its label.
+        let rest = text;
+        let label = if mode == Mode::Light { 0xFFFFFF } else { bg };
+        return (rest, shift(rest, 0.08), shift(rest, -0.06), label);
+    }
+    let mut l = 0.60;
+    let mut rest = from_hsl(h, STRONG_SATURATION, l);
+    // The rest tone reads (>= 4.5) and so does its +8 % hover (>= 3, it is only a moment).
+    while (contrast_ratio(rest, 0xFFFFFF) < LABEL_CONTRAST || contrast_ratio(shift(rest, 0.08), 0xFFFFFF) < HOVER_CONTRAST)
+        && l > 0.05
+    {
+        l -= 0.005;
+        rest = from_hsl(h, STRONG_SATURATION, l);
+    }
+    (rest, shift(rest, 0.08), shift(rest, -0.06), 0xFFFFFF)
+}
+
+impl Theme {
+    /// This theme with the user's accent (`#RRGGBB` of `[appearance] accent`): `colors.accent`,
+    /// the legible `on_accent`, the terminal cursor and the selection (accent at 25 % over the
+    /// background, the formula the base themes use). The action colours (`accent_strong` and its
+    /// hover / press / gradient / label) are derived from it (docs/DESIGN.md "Acento
+    /// personalizado"); the default accent keeps the design values exactly. The cursor keeps the mode's own colour when the accent would not be
+    /// visible on the terminal background (contrast < 3, such as `#ECEEF2` on white).
+    pub fn with_accent(mut self, hex: u32) -> Self {
+        let hex = hex & 0xFF_FFFF;
+        self.colors.accent = rgb(hex);
+        self.colors.on_accent = rgb(on_accent_for(hex));
+        if contrast_ratio(hex, self.terminal.background) >= 3.0 {
+            self.terminal.cursor = hex;
+        }
+        self.terminal.selection = blend(hex, hex_of(self.colors.bg), 0.25);
+        if hex != ACCENT {
+            let (rest, hover, press, label) = strong_for(hex, self.mode, hex_of(self.colors.text), hex_of(self.colors.bg));
+            self.colors.accent_strong = rgb(rest);
+            self.colors.accent_strong_hover = rgb(hover);
+            self.colors.accent_strong_gradient_top = rgb(hover);
+            self.colors.accent_strong_press = rgb(press);
+            self.colors.on_accent_strong = rgb(label);
+        }
+        self
+    }
+
+    /// [`Theme::with_accent`] from the config's string; an unparsable value leaves the theme as is.
+    pub fn with_accent_str(self, accent: &str) -> Self {
+        match parse_hex(accent) {
+            Some(hex) => self.with_accent(hex),
+            None => self,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +494,130 @@ mod tests {
 
     fn all() -> [Theme; 3] {
         [Theme::dark(), Theme::light(), Theme::oled()]
+    }
+
+    #[test]
+    fn parse_hex_reads_rrggbb() {
+        assert_eq!(parse_hex("#00AAFF"), Some(0x00AAFF));
+        assert_eq!(parse_hex(" 7fcb8f "), Some(0x7FCB8F));
+        assert_eq!(parse_hex("#ABC"), None);
+        assert_eq!(parse_hex("blue"), None);
+        assert_eq!(parse_hex("#GGGGGG"), None);
+        assert_eq!(parse_hex(""), None);
+    }
+
+    #[test]
+    fn the_default_accent_changes_nothing() {
+        for t in [Theme::dark(), Theme::oled()] {
+            assert_eq!(t.with_accent(ACCENT), t);
+        }
+        // Light keeps its darker cursor (the brand accent is too pale on white to be a cursor).
+        let l = Theme::light().with_accent(ACCENT);
+        assert_eq!(l.terminal.cursor, 0x0078D4);
+        assert_eq!(l.terminal.selection, Theme::light().terminal.selection);
+        assert_eq!(l.colors.on_accent, Theme::light().colors.on_accent);
+    }
+
+    #[test]
+    fn a_custom_accent_reaches_accent_cursor_selection_and_ink() {
+        for base in all() {
+            for hex in [0x7FCB8F, 0xE0B96A, 0xBC8CE8, 0xE8707B, 0x4FC9D6, 0xECEEF2, 0x112233] {
+                let t = base.with_accent(hex);
+                assert_eq!(hex_of(t.colors.accent), hex);
+                // Whichever ink reads better is chosen: never worse than the other candidate.
+                let ink = contrast_ratio(hex, hex_of(t.colors.on_accent));
+                assert!(ink >= contrast_ratio(hex, 0xFFFFFF).min(contrast_ratio(hex, ON_ACCENT)), "{hex:06X} ink {ink}");
+                assert_eq!(t.colors.error, base.colors.error);
+            }
+        }
+        let g = Theme::dark().with_accent(0x7FCB8F);
+        assert_eq!(g.terminal.cursor, 0x7FCB8F);
+        assert_eq!(g.terminal.selection, blend(0x7FCB8F, 0x131316, 0.25));
+        // The pale accent has no visible cursor on white: the mode's own stays.
+        let pale = Theme::light().with_accent(0xECEEF2);
+        assert_eq!(pale.terminal.cursor, 0x0078D4);
+        assert!(contrast_ratio(hex_of(pale.colors.accent), hex_of(pale.colors.on_accent)) >= 4.5);
+    }
+
+    #[test]
+    fn selection_is_the_accent_at_25_percent_over_the_background() {
+        // 0x7FCB8F over #131316: r = 0.25*127 + 0.75*19 = 46 ...
+        let t = Theme::dark().with_accent(0x7FCB8F);
+        assert_eq!(t.terminal.selection, blend(0x7FCB8F, 0x131316, 0.25));
+        assert_eq!((t.terminal.selection >> 16) & 0xFF, 46);
+    }
+
+    /// The swatches of Ajustes > Apariencia (`ui_settings::ACCENTS`).
+    const SWATCHES: [u32; 8] = [0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2];
+
+    #[test]
+    fn the_action_button_reads_on_every_swatch_and_mode() {
+        for base in all() {
+            for hex in SWATCHES {
+                let t = base.with_accent(hex);
+                let c = t.colors;
+                let label = contrast_ratio(hex_of(c.accent_strong), hex_of(c.on_accent_strong));
+                assert!(label >= 4.5, "{:?} {hex:06X}: label contrast {label}", base.mode);
+                // Hover and press are other tones of the same button, still readable.
+                for state in [c.accent_strong_hover, c.accent_strong_press] {
+                    let k = contrast_ratio(hex_of(state), hex_of(c.on_accent_strong));
+                    assert!(k >= 3.0, "{:?} {hex:06X}: state contrast {k}", base.mode);
+                }
+                assert_ne!(c.accent_strong_hover, c.accent_strong_press);
+                assert_eq!(c.accent_strong_hover, c.accent_strong_gradient_top);
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_accent_keeps_the_design_blues_exactly() {
+        for base in all() {
+            let c = base.with_accent(ACCENT).colors;
+            assert_eq!(hex_of(c.accent_strong), 0x005EEB);
+            assert_eq!(hex_of(c.accent_strong_hover), 0x1A72FF);
+            assert_eq!(hex_of(c.accent_strong_gradient_top), 0x1A72FF);
+            assert_eq!(hex_of(c.accent_strong_press), 0x0052CC);
+            assert_eq!(hex_of(c.on_accent_strong), 0xFFFFFF);
+        }
+    }
+
+    #[test]
+    fn a_colored_accent_gives_a_saturated_action_color_of_its_hue() {
+        let t = Theme::dark().with_accent(0x7FCB8F);
+        let (h_acc, _, _) = to_hsl(0x7FCB8F);
+        let (h, s, l) = to_hsl(hex_of(t.colors.accent_strong));
+        assert!((h - h_acc).abs() < 3.0, "hue {h} vs {h_acc}");
+        assert!(s > 0.8 && l < 0.45, "s {s} l {l}");
+        assert_ne!(t.colors.accent_strong, Theme::dark().colors.accent_strong);
+    }
+
+    #[test]
+    fn gray_accents_invert_the_text_tone() {
+        let light = Theme::light().with_accent(0xECEEF2).colors;
+        assert_eq!(hex_of(light.accent_strong), 0x1B1B1E, "ink button on light");
+        assert_eq!(hex_of(light.on_accent_strong), 0xFFFFFF);
+        let dark = Theme::dark().with_accent(0xECEEF2).colors;
+        assert_eq!(hex_of(dark.accent_strong), 0xE4E2E5, "light button on dark");
+        assert_eq!(hex_of(dark.on_accent_strong), 0x131316);
+    }
+
+    #[test]
+    fn hsl_round_trips() {
+        for hex in [0x7FCB8F, 0xE0B96A, 0x00AAFF, 0x336699, 0xFF0000, 0x808080] {
+            let (h, s, l) = to_hsl(hex);
+            let back = from_hsl(h, s, l);
+            for shift in [16u32, 8, 0] {
+                let d = ((hex >> shift) & 0xFF) as i32 - ((back >> shift) & 0xFF) as i32;
+                assert!(d.abs() <= 1, "{hex:06X} -> {back:06X}");
+            }
+        }
+    }
+
+    #[test]
+    fn bad_accent_strings_leave_the_theme_alone() {
+        let t = Theme::dark();
+        assert_eq!(t.with_accent_str("blue"), t);
+        assert_eq!(t.with_accent_str("#7FCB8F"), t.with_accent(0x7FCB8F));
     }
 
     #[test]

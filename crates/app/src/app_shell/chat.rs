@@ -63,7 +63,7 @@ impl AppShell {
         }));
         self._chat_subs.push(cx.subscribe(&hub, |this, _, u: &ThreadUpdate, cx| this.on_thread_update(u, cx)));
         // The hooks run on chat worker threads; what needs the UI thread arrives here.
-        let procs = services.procs.clone();
+        let procs = services.procs;
         self._chat_task = Some(cx.spawn(async move |this, cx| {
             while let Some(msg) = rx.next().await {
                 let done = this.update(cx, |shell, cx| match msg {
