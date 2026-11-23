@@ -446,7 +446,7 @@ impl OnboardingView {
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Err(e) = marked {
                     log::warn!("onboarding: cannot write the first-run flag: {e}");
-                    this.last_error = Some(e.to_string());
+                    this.last_error = Some(e);
                 }
                 this.shutdown(window);
                 cx.emit(OnboardingEvent::Skipped);

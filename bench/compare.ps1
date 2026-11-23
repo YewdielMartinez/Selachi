@@ -26,7 +26,7 @@
     Settle time between first window and idle sampling (default 5).
 
 .PARAMETER Skip
-    Targets to skip: selachi, wt, warp.
+    Targets to skip: selachi, wt, warp. Array or comma-separated: `-Skip warp,wt`.
 
 .PARAMETER SelachiExe
     Override the Selachi binary path.
@@ -45,6 +45,9 @@
 
 .EXAMPLE
     ./bench/compare.ps1 -Skip warp -Runs 1 -IdleSeconds 10
+
+.EXAMPLE
+    pwsh -File bench/compare.ps1 -Skip warp,wt
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
@@ -52,7 +55,9 @@ param(
     [ValidateRange(1, 3600)][int]$IdleSeconds = 30,
     [ValidateRange(1, 100)][int]$Runs = 3,
     [ValidateRange(0, 600)][int]$SettleSeconds = 5,
-    [ValidateSet('selachi', 'wt', 'warp')][string[]]$Skip = @(),
+    # Accepts `-Skip warp,wt` (array), `-Skip 'warp,wt'` and what `pwsh -File` passes (one comma-joined
+    # string). A ValidateSet here rejected the -File form, so the values are normalised and checked below.
+    [string[]]$Skip = @(),
     [string]$SelachiExe,
     [string]$WarpExe,
     [string]$OutCsv,
@@ -61,6 +66,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$Skip = @($Skip | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
+foreach ($name in $Skip) {
+    if ($name -notin 'selachi', 'wt', 'warp') { throw "Unknown -Skip target '$name' (use selachi, wt, warp)." }
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $measure = Join-Path $PSScriptRoot 'measure.ps1'

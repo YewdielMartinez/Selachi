@@ -1,7 +1,6 @@
 //! `SettingsView`: the settings screen (section list on the left, content on the right).
 //!
-//! The view owns a working copy of `store::Config` (plus the few keys the store does not model
-//! yet, see [`crate::extras`]). Every control edits that copy through [`SettingsView::edit`]:
+//! The view owns a working copy of `store::Config`. Every control edits that copy through [`SettingsView::edit`]:
 //! the candidate is validated with `Config::validate()`, an invalid value is *not* applied and
 //! shows an inline error, a valid one is applied at once (`SettingsEvent::ConfigChanged`, so the
 //! app reacts live) and written to `config.toml` after 400 ms of quiet, one write in flight at a
@@ -19,7 +18,6 @@ use ui_kit::Icon;
 use viewer_svc::grammars::GrammarRegistry;
 
 use crate::agents::AgentsState;
-use crate::extras::Extras;
 use crate::keys::{self, KeyAction};
 use crate::net::{Fetcher, HttpFetcher};
 use crate::plugins::{PluginsEvent, PluginsModel};
@@ -141,8 +139,6 @@ impl SettingsOptions {
 pub enum SettingsEvent {
     /// A valid edit was applied (before it is saved): apply theme, accent, fonts... live.
     ConfigChanged(Arc<Config>),
-    /// A key outside `store::Config` changed (language, confirm on close, editor, index URL).
-    ExtrasChanged(Extras),
     /// The debounced write finished.
     Saved,
     /// The write failed (message). The edit stays in memory and is retried on the next edit.
@@ -191,8 +187,6 @@ pub struct SettingsView {
     pub(crate) cfg: Config,
     /// Last config known to be on disk (base of the three-way merge).
     base: Config,
-    pub(crate) extras: Extras,
-    base_extras: Extras,
     pub(crate) path: PathBuf,
     pub(crate) version: String,
     pub(crate) section: Section,
@@ -249,7 +243,6 @@ pub fn settings_view(config: Config, theme: Theme, options: SettingsOptions, cx:
 
 impl SettingsView {
     pub fn new(config: Config, theme: Theme, options: SettingsOptions, cx: &mut Context<Self>) -> Self {
-        let extras = Extras::read(&options.config_path);
         let registry = options.registry.clone().unwrap_or_else(|| {
             viewer_svc::grammars::plugin_registry().unwrap_or_else(|| {
                 let dir = options
@@ -261,7 +254,7 @@ impl SettingsView {
             })
         });
         let fetcher: Arc<dyn Fetcher> = options.fetcher.clone().unwrap_or_else(|| Arc::new(HttpFetcher));
-        let index_url = extras.effective_index_url().to_string();
+        let index_url = config.plugins.effective_index_url().to_string();
         let plugins = cx.new(|_| PluginsModel::new(registry, fetcher, index_url));
         let mut subs = Vec::new();
         subs.push(cx.observe(&plugins, |_, _, cx| cx.notify()));
@@ -277,8 +270,6 @@ impl SettingsView {
             theme,
             base: config.clone(),
             cfg: config,
-            base_extras: extras.clone(),
-            extras,
             path: options.config_path,
             version: options.version,
             section: Section::General,
@@ -313,10 +304,6 @@ impl SettingsView {
 
     pub fn config(&self) -> &Config {
         &self.cfg
-    }
-
-    pub fn extras(&self) -> &Extras {
-        &self.extras
     }
 
     pub fn section(&self) -> Section {
@@ -428,6 +415,7 @@ impl SettingsView {
     pub fn set_config(&mut self, config: Config, cx: &mut Context<Self>) {
         let before = self.cfg.clone();
         let merged = merge_external(&self.base, &self.cfg, &config);
+        let old_url = self.cfg.plugins.effective_index_url().to_string();
         self.base = config;
         self.cfg = merged;
         if self.cfg != self.base && !self.gate.is_pending() {
@@ -436,22 +424,21 @@ impl SettingsView {
         }
         if self.cfg != before {
             self.sync_fields(&before, cx);
+            self.sync_index_url(&old_url, cx);
             self.sync_layout_panel(cx);
             self.errors.clear();
             cx.notify();
         }
-        self.reload_extras(cx);
     }
 
     /// Write pending edits now, on the calling thread (closing the window).
     pub fn flush(&mut self) {
         if self.gate.force() {
-            let result = write_all(&self.cfg, &self.extras, &self.path);
+            let result = self.cfg.save_to(&self.path).map_err(|e| e.to_string());
             self.gate.finish();
             match result {
                 Ok(()) => {
                     self.base = self.cfg.clone();
-                    self.base_extras = self.extras.clone();
                     self.save_error = None;
                 }
                 Err(e) => self.save_error = Some(e),
@@ -471,7 +458,9 @@ impl SettingsView {
         if let Some(e) = first_error(&candidate) {
             return Err(e);
         }
+        let old_url = self.cfg.plugins.effective_index_url().to_string();
         self.cfg = candidate;
+        self.sync_index_url(&old_url, cx);
         self.sync_layout_panel(cx);
         cx.emit(SettingsEvent::ConfigChanged(Arc::new(self.cfg.clone())));
         self.touch_save(cx);
@@ -501,33 +490,15 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Edit the extras (keys outside `store::Config`).
-    pub(crate) fn edit_extras(&mut self, key: &str, cx: &mut Context<Self>, f: impl FnOnce(&mut Extras)) {
-        let mut candidate = self.extras.clone();
-        f(&mut candidate);
-        if candidate == self.extras {
-            return;
-        }
-        if let Some((_, msg)) = candidate.validate().into_iter().next() {
-            self.errors.insert(key.to_string(), msg);
-            self.sync_invalid(cx);
-            cx.notify();
-            return;
-        }
-        self.errors.remove(key);
-        let url_changed = candidate.index_url != self.extras.index_url;
-        self.extras = candidate;
-        if url_changed {
-            let url = self.extras.effective_index_url().to_string();
+    /// The plugin manager follows `[plugins] index_url`.
+    fn sync_index_url(&mut self, old: &str, cx: &mut Context<Self>) {
+        let url = self.cfg.plugins.effective_index_url().to_string();
+        if url != old {
             self.plugins.update(cx, |m, cx| m.set_index_url(url, cx));
             if self.section == Section::Plugins {
                 self.plugins.update(cx, |m, cx| m.ensure_index(cx));
             }
         }
-        cx.emit(SettingsEvent::ExtrasChanged(self.extras.clone()));
-        self.touch_save(cx);
-        self.sync_invalid(cx);
-        cx.notify();
     }
 
     fn touch_save(&mut self, cx: &mut Context<Self>) {
@@ -549,22 +520,20 @@ impl SettingsView {
 
     fn start_write(&mut self, cx: &mut Context<Self>) {
         let cfg = self.cfg.clone();
-        let extras = self.extras.clone();
         let path = self.path.clone();
         cx.spawn(async move |this, cx| {
-            let (c, e, p) = (cfg.clone(), extras.clone(), path);
-            let result = cx.background_executor().spawn(async move { write_all(&c, &e, &p) }).await;
-            let _ = this.update(cx, |s, cx| s.write_done(cfg, extras, result, cx));
+            let (c, p) = (cfg.clone(), path);
+            let result = cx.background_executor().spawn(async move { c.save_to(&p).map_err(|e| e.to_string()) }).await;
+            let _ = this.update(cx, |s, cx| s.write_done(cfg, result, cx));
         })
         .detach();
         cx.notify();
     }
 
-    fn write_done(&mut self, cfg: Config, extras: Extras, result: Result<(), String>, cx: &mut Context<Self>) {
+    fn write_done(&mut self, cfg: Config, result: Result<(), String>, cx: &mut Context<Self>) {
         match result {
             Ok(()) => {
                 self.base = cfg;
-                self.base_extras = extras;
                 self.save_error = None;
                 cx.emit(SettingsEvent::Saved);
             }
@@ -577,54 +546,6 @@ impl SettingsView {
             self.start_write(cx);
         }
         cx.notify();
-    }
-
-    fn reload_extras(&mut self, cx: &mut Context<Self>) {
-        if self.gate.in_flight() {
-            return;
-        }
-        let path = self.path.clone();
-        cx.spawn(async move |this, cx| {
-            let fresh = cx.background_executor().spawn(async move { Extras::read(&path) }).await;
-            let _ = this.update(cx, |s, cx| s.adopt_extras(fresh, cx));
-        })
-        .detach();
-    }
-
-    fn adopt_extras(&mut self, fresh: Extras, cx: &mut Context<Self>) {
-        if self.gate.in_flight() || fresh == self.base_extras {
-            return;
-        }
-        let (b, o, t) = (&self.base_extras, &self.extras, &fresh);
-        let pick = |same: bool, ours: String, theirs: String| if same { theirs } else { ours };
-        let merged = Extras {
-            language: pick(o.language == b.language, o.language.clone(), t.language.clone()),
-            confirm_close_running: if o.confirm_close_running == b.confirm_close_running {
-                t.confirm_close_running
-            } else {
-                o.confirm_close_running
-            },
-            external_editor: pick(o.external_editor == b.external_editor, o.external_editor.clone(), t.external_editor.clone()),
-            index_url: pick(o.index_url == b.index_url, o.index_url.clone(), t.index_url.clone()),
-            sidebar: merge_sidebar(&b.sidebar, &o.sidebar, &t.sidebar),
-        };
-        self.base_extras = fresh;
-        if merged != self.extras {
-            let url_changed = merged.index_url != self.extras.index_url;
-            self.extras = merged;
-            if url_changed {
-                let url = self.extras.effective_index_url().to_string();
-                self.plugins.update(cx, |m, cx| m.set_index_url(url, cx));
-            }
-            for key in ["external_editor", "index_url"] {
-                let value = self.field_value(key);
-                if let (Some(f), Some(v)) = (self.fields.get(key), value) {
-                    f.update(cx, |f, cx| f.set_text(&v, cx));
-                }
-            }
-            cx.emit(SettingsEvent::ExtrasChanged(self.extras.clone()));
-            cx.notify();
-        }
     }
 
     // ----- small accessors used by the renderers -----------------------------------------------
@@ -670,13 +591,13 @@ impl SettingsView {
 
     /// The config-derived text of a plain field (`None` for profile fields).
     pub(crate) fn field_value(&self, key: &str) -> Option<String> {
-        config_field_value(&self.cfg, &self.extras, key)
+        config_field_value(&self.cfg, key)
     }
 
     /// After an external config change: refresh the fields whose value moved, drop profile fields.
     fn sync_fields(&mut self, before: &Config, cx: &mut Context<Self>) {
-        for key in ["ui_font", "mono_font", "accent_hex", "scrollback", "accept_word_key"] {
-            let (o, n) = (config_field_value(before, &self.extras, key), self.field_value(key));
+        for key in ["ui_font", "mono_font", "accent_hex", "scrollback", "accept_word_key", "external_editor", "index_url"] {
+            let (o, n) = (config_field_value(before, key), self.field_value(key));
             if o != n
                 && let (Some(f), Some(v)) = (self.fields.get(key), n)
             {
@@ -736,7 +657,7 @@ impl SettingsView {
 }
 
 /// Text of a plain field as derived from the config (see [`SettingsView::field_value`]).
-pub(crate) fn config_field_value(cfg: &Config, extras: &Extras, key: &str) -> Option<String> {
+pub(crate) fn config_field_value(cfg: &Config, key: &str) -> Option<String> {
     let a = &cfg.appearance;
     Some(match key {
         "ui_font" => a.ui_font.clone(),
@@ -744,35 +665,8 @@ pub(crate) fn config_field_value(cfg: &Config, extras: &Extras, key: &str) -> Op
         "accent_hex" => a.accent.clone(),
         "scrollback" => cfg.terminal.scrollback.to_string(),
         "accept_word_key" => cfg.terminal.completion.accept_word_key.clone(),
-        "external_editor" => extras.external_editor.clone(),
-        "index_url" => extras.index_url.clone(),
+        "external_editor" => cfg.git.external_editor.clone(),
+        "index_url" => cfg.plugins.index_url.clone(),
         _ => return None,
     })
-}
-
-fn write_all(cfg: &Config, extras: &Extras, path: &std::path::Path) -> Result<(), String> {
-    cfg.save_to(path).map_err(|e| e.to_string())?;
-    extras.write(path)
-}
-
-/// Per-field three-way merge of the sidebar options (ours wins where we changed it).
-fn merge_sidebar(
-    b: &crate::extras::SidebarPrefs,
-    o: &crate::extras::SidebarPrefs,
-    t: &crate::extras::SidebarPrefs,
-) -> crate::extras::SidebarPrefs {
-    let pick = |base: bool, ours: bool, theirs: bool| if ours == base { theirs } else { ours };
-    crate::extras::SidebarPrefs {
-        show_actions: pick(b.show_actions, o.show_actions, t.show_actions),
-        panel_icons: pick(b.panel_icons, o.panel_icons, t.panel_icons),
-        nested_tabs: pick(b.nested_tabs, o.nested_tabs, t.nested_tabs),
-        footer_usage: pick(b.footer_usage, o.footer_usage, t.footer_usage),
-        row_model: pick(b.row_model, o.row_model, t.row_model),
-        row_time: pick(b.row_time, o.row_time, t.row_time),
-        titlebar_panels: if o.titlebar_panels == b.titlebar_panels {
-            t.titlebar_panels.clone()
-        } else {
-            o.titlebar_panels.clone()
-        },
-    }
 }

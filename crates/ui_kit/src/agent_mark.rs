@@ -15,13 +15,14 @@ pub enum AgentMark {
     Cursor,
     Copilot,
     Windsurf,
+    Antigravity,
     /// Any other agent: the generic [`Icon::Agents`] mark.
     Unknown,
 }
 
 impl AgentMark {
     /// Every mark that has its own file.
-    pub const ALL: [AgentMark; 7] = [
+    pub const ALL: [AgentMark; 8] = [
         AgentMark::Claude,
         AgentMark::Codex,
         AgentMark::Gemini,
@@ -29,6 +30,7 @@ impl AgentMark {
         AgentMark::Cursor,
         AgentMark::Copilot,
         AgentMark::Windsurf,
+        AgentMark::Antigravity,
     ];
 
     /// Case-insensitive match on an agent's name or command: `"claude-code"` and
@@ -50,6 +52,8 @@ impl AgentMark {
             Self::Copilot
         } else if has("windsurf") {
             Self::Windsurf
+        } else if has("antigravity") {
+            Self::Antigravity
         } else {
             Self::Unknown
         }
@@ -65,6 +69,7 @@ impl AgentMark {
             Self::Cursor => Some("cursor"),
             Self::Copilot => Some("copilot"),
             Self::Windsurf => Some("windsurf"),
+            Self::Antigravity => Some("antigravity"),
             Self::Unknown => None,
         }
     }
@@ -101,6 +106,9 @@ mod tests {
         assert_eq!(AgentMark::from_name("cursor-agent"), AgentMark::Cursor);
         assert_eq!(AgentMark::from_name("GitHub Copilot"), AgentMark::Copilot);
         assert_eq!(AgentMark::from_name("windsurf"), AgentMark::Windsurf);
+        assert_eq!(AgentMark::from_name("Antigravity"), AgentMark::Antigravity);
+        assert_eq!(AgentMark::from_name("google-antigravity"), AgentMark::Antigravity);
+        assert_eq!(AgentMark::Antigravity.path(), "icons/agents/antigravity.svg");
         assert_eq!(AgentMark::from_name("aider"), AgentMark::Unknown);
         assert_eq!(AgentMark::from_name(""), AgentMark::Unknown);
     }

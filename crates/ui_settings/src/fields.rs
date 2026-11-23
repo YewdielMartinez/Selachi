@@ -41,8 +41,8 @@ pub(crate) fn apply(view: &mut SettingsView, key: &str, text: &str, cx: &mut Con
             }
             view.edit_field(key, cx, |c| c.terminal.completion.accept_word_key = trimmed);
         }
-        "external_editor" => view.edit_extras(key, cx, |e| e.external_editor = trimmed),
-        "index_url" => view.edit_extras(key, cx, |e| e.index_url = trimmed),
+        "external_editor" => view.edit_field(key, cx, |c| c.git.external_editor = trimmed),
+        "index_url" => view.edit_field(key, cx, |c| c.plugins.index_url = trimmed),
         k if k.starts_with("profile.") => profile_field(view, k, text, cx),
         _ => {}
     }

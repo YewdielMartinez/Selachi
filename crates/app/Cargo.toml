@@ -7,8 +7,10 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+agents_driver = { version = "0.1.0", path = "../agents_driver" }
 agents_svc = { version = "0.0.1", path = "../agents_svc" }
 anyhow.workspace = true
+chat_core = { version = "0.1.0", path = "../chat_core" }
 env_logger.workspace = true
 futures.workspace = true
 git_svc = { version = "0.1.0", path = "../git_svc" }
@@ -22,13 +24,16 @@ store = { version = "0.0.1", path = "../store" }
 term_core = { version = "0.1.0", path = "../term_core", features = ["block-events"] }
 theme = { version = "0.1.0", path = "../theme" }
 toml = "0.8"
+ui_chat = { version = "0.1.0", path = "../ui_chat" }
 ui_doctor = { path = "../ui_doctor" }
 ui_git = { path = "../ui_git" }
 ui_layout = { version = "0.1.0", path = "../ui_layout" }
+ui_onboarding = { path = "../ui_onboarding" }
 ui_palette = { version = "0.1.0", path = "../ui_palette" }
 ui_procs = { path = "../ui_procs" }
 ui_kit = { version = "0.1.0", path = "../ui_kit" }
 ui_review = { path = "../ui_review" }
+ui_settings = { path = "../ui_settings" }
 ui_usage = { path = "../ui_usage" }
 ui_viewer = { path = "../ui_viewer" }
 viewer_svc = { version = "0.1.0", path = "../viewer_svc" }

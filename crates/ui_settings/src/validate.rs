@@ -35,6 +35,10 @@ fn friendly(problem: &str) -> FieldError {
         "Máximo 1 000 000 de líneas.".to_string()
     } else if key.starts_with("terminal.completion.accept_word_key") {
         "Tecla no válida. Ejemplo: Ctrl+RightArrow.".to_string()
+    } else if known("plugins.index_url") {
+        "La URL del índice debe empezar por https://".to_string()
+    } else if known("git.external_editor") {
+        "El comando no puede tener saltos de línea.".to_string()
     } else if key.starts_with("profiles[") {
         "El perfil necesita un nombre y un programa.".to_string()
     } else {

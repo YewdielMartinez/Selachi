@@ -33,6 +33,9 @@ pub struct Collected {
     pub cpu: HashMap<u32, f32>,
     /// When the sample was taken.
     pub now: Option<SystemTime>,
+    /// Owners tracked by process tree because Windows would not put their shell in a Job Object
+    /// (`proc_svc::TrackingMode::TreeOnly`).
+    pub tree_owners: Vec<OwnerId>,
 }
 
 /// State badge of a row.
@@ -176,6 +179,8 @@ pub struct OwnerGroup {
     pub detail: Option<String>,
     /// Every row of the group is a heuristic attribution.
     pub probable: bool,
+    /// Tracked by process tree (no Job Object): `proc_svc::TrackingMode::TreeOnly`.
+    pub tree_tracked: bool,
     pub rows: Vec<ProcRow>,
 }
 
@@ -483,6 +488,7 @@ pub fn build_snapshot(c: &Collected) -> Snapshot {
             label,
             detail: dir_label(&rep.meta.cwd),
             probable: false,
+            tree_tracked: c.tree_owners.contains(&rep.owner),
             rows: order_tree(rows),
         });
     }
@@ -502,6 +508,7 @@ pub fn build_snapshot(c: &Collected) -> Snapshot {
             label: "Fuera de Selachi".to_string(),
             detail: Some(format!("{agent} · pid {agent_pid}")),
             probable: true,
+            tree_tracked: false,
             rows: order_tree(rows),
         });
     }
@@ -681,6 +688,7 @@ pub(crate) mod fixtures {
             procs: vec![shell, vite, dotnet, esbuild, ext_agent, ext_child, sys, other],
             cpu: HashMap::from([(101, 3.4), (102, 0.0)]),
             now: Some(now()),
+            tree_owners: Vec::new(),
         }
     }
 }

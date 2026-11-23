@@ -130,7 +130,7 @@ fn main() {
         model.update(cx, |m, cx| {
             m.set_db_paths(vec![("selachi.db".into(), a), ("state.db".into(), b)]);
             m.set_app_stats(
-                AppStats { shells: Some(2), agents: Some(1), grammars: vec!["rust".into(), "toml".into(), "markdown".into()] },
+                AppStats { shells: Some(2), agents: Some(1), grammars: vec!["rust".into(), "toml".into(), "markdown".into()], tree_tracked: 0 },
                 cx,
             );
         });

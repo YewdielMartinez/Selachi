@@ -104,17 +104,19 @@ impl ProcSource for TrackerSource {
         let procs = snapshot();
         let ports = listening_ports();
         let by_pid = ports_by_pid(&ports);
-        let (reports, tracked) = {
+        let (reports, tracked, tree_owners) = {
             let t = lock(&self.tracker);
             let reports = t.report_from(&procs, &by_pid);
             let tracked = t.owners().into_iter().filter_map(|o| t.job(o)).flat_map(|j| j.members()).collect();
-            (reports, tracked)
+            let tree_owners =
+                t.owners().into_iter().filter(|o| t.attachment_hint(*o) == proc_svc::TrackingMode::TreeOnly).collect();
+            (reports, tracked, tree_owners)
         };
         let names: Vec<&str> = self.agent_names.iter().map(String::as_str).collect();
         let untracked = heuristic_from(&procs, &by_pid, &tracked, &names, std::process::id());
         let cores = logical_cores() as f32;
         let cpu = lock(&self.cpu).sample(&procs).into_iter().map(|(pid, v)| (pid, v / cores)).collect();
-        Collected { reports, untracked, ports, procs, cpu, now: Some(SystemTime::now()) }
+        Collected { reports, untracked, ports, procs, cpu, now: Some(SystemTime::now()), tree_owners }
     }
 
     fn check_stop(&self, pid: u32) -> Result<(), String> {

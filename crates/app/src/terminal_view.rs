@@ -12,7 +12,7 @@ use gpui::{
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
     UTF16Selection, Window, div, font, prelude::*, px,
 };
-use term_core::{Block, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, SpawnOptions, encode_key};
+use term_core::{Block, JobAttachment, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, SpawnOptions, encode_key};
 use theme::{Radius, TerminalColors, Theme, Typography};
 
 use crate::app_shell::{RAIL_W, TAB_H, TERM_PAD};
@@ -131,8 +131,13 @@ pub struct TerminalView {
     /// A deferred session (restored tabs): spawned the first time the view is rendered, so tabs
     /// that are never shown cost no shell process.
     pending: Option<SessionConfig>,
-    /// Text sent to a deferred tab before its shell exists; written as soon as it starts.
+    /// Text sent to a tab before its shell exists; written as soon as it starts.
     queued: Vec<u8>,
+    /// The shell is being created on a background thread (see [`TerminalView::start_session`]).
+    starting: bool,
+    /// The view was shut down: a shell that finishes starting afterwards is dropped.
+    closed: bool,
+    _start: Option<Task<()>>,
     _pump: Option<Task<()>>,
     /// The job the shell is born in, if the app tracks processes.
     job: Option<JobCtx>,
@@ -236,6 +241,9 @@ impl TerminalView {
             marked: None,
             pending: None,
             queued: Vec::new(),
+            starting: false,
+            closed: false,
+            _start: None,
             _pump: None,
             job,
             block_ui: BlockUi::default(),
@@ -259,27 +267,60 @@ impl TerminalView {
         cfg.cell_height = f32::from(metrics.height) as u16;
         log::info!("[lazy] spawning deferred shell at {}", crate::mem::uptime_label());
         self.start_session(cfg, cx);
-        let queued = std::mem::take(&mut self.queued);
-        self.send(queued, cx);
     }
 
+    /// Creates the shell **off the UI thread**. `CreateProcessW` of an app-execution alias (the
+    /// Microsoft Store `pwsh`, `wt`...) waits inside COM with a nested message loop, which
+    /// dispatches `WM_PAINT` to our window while gpui still holds the `App` borrow of the entity
+    /// being built: gpui then logged "RefCell already borrowed" and skipped that frame (once at
+    /// startup, once per new tab). On a worker thread nothing of ours is re-entered.
     fn start_session(&mut self, cfg: SessionConfig, cx: &mut Context<Self>) {
-        let view = self;
         let program = cfg.program.clone();
         let (cols, rows) = (cfg.cols, cfg.rows);
         let env = cx.try_global::<TermEnv>().map(|e| e.0.clone()).unwrap_or_default();
-        log::debug!("spawning with job {:?}", view.job.as_ref().map(|j| (j.owner, j.handle)));
-        let options = SpawnOptions { env, job: view.job.as_ref().map(|j| j.handle) };
-        match Session::spawn_with_options(cfg, options) {
+        log::debug!("spawning with job {:?}", self.job.as_ref().map(|j| (j.owner, j.handle)));
+        let options = SpawnOptions { env, job: self.job.as_ref().map(|j| j.handle) };
+        self.starting = true;
+        let spawn = cx.background_executor().spawn(async move { Session::spawn_with_options(cfg, options) });
+        self._start = Some(cx.spawn(async move |this, cx| {
+            let result = spawn.await;
+            this.update(cx, |view, cx| view.finish_start(result, &program, (cols, rows), cx)).ok();
+        }));
+    }
+
+    /// The shell exists (or failed): wire it up, flush what was typed meanwhile, repaint.
+    fn finish_start(
+        &mut self,
+        result: Result<(Session, futures::channel::mpsc::UnboundedReceiver<SessionEvent>), term_core::TermError>,
+        program: &str,
+        (cols, rows): (u16, u16),
+        cx: &mut Context<Self>,
+    ) {
+        let view = self;
+        view.starting = false;
+        view._start = None;
+        if view.closed {
+            return; // the tab was closed while the shell started: dropping the session ends it
+        }
+        match result {
             Ok((session, mut rx)) => {
-                // The shell is in the job already: record it as the owner's root process.
+                // The shell is in the job already: record it as the owner's root process. When
+                // Windows refused the job (the Microsoft Store `pwsh`) the owner is tracked by
+                // process tree instead (`proc_svc::TrackingMode::TreeOnly`).
+                let attachment = session.job_attachment();
                 if let (Some(job), Some(pid)) = (&view.job, session.pid()) {
                     let mut tracker = job.tracker.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Err(e) = tracker.register_root(job.owner, pid) {
+                    let result = if matches!(attachment, JobAttachment::AssignFailed | JobAttachment::None) {
+                        log::info!("shell pid {pid} has no job ({attachment:?}): tracking its process tree");
+                        tracker.register_root_untracked_job(job.owner, pid)
+                    } else {
+                        tracker.register_root(job.owner, pid)
+                    };
+                    if let Err(e) = result {
                         log::warn!("could not register the shell (pid {pid}) as a root: {e}");
                     }
                 }
-                log::info!("shell job attachment: {:?}", session.job_attachment());
+                log::info!("shell job attachment: {attachment:?}");
                 log::info!(
                     "[startup] spawned {program} (pid {:?}) at {cols}x{rows}, {} since process start",
                     session.pid(),
@@ -294,10 +335,14 @@ impl TerminalView {
                         }
                     }
                 }));
+                let queued = std::mem::take(&mut view.queued);
+                view.send(queued, cx);
+                cx.notify();
             }
             Err(e) => {
                 log::error!("failed to spawn shell: {e}");
                 view.spawn_error = Some(format!("No se pudo iniciar {program}: {e}").into());
+                cx.notify();
             }
         }
     }
@@ -314,8 +359,10 @@ impl TerminalView {
 
     /// Drops the session (kills the shell, stops its threads). The view stays as an inert surface.
     pub fn shutdown(&mut self) {
+        self.closed = true;
         self.session = None;
         self._pump = None;
+        self._start = None;
     }
 
     /// Applies a new theme: the terminal palette is swapped in the session (re-resolved on the
@@ -395,7 +442,7 @@ impl TerminalView {
         if enter {
             bytes.push(b'\r');
         }
-        if self.session.is_none() && self.pending.is_some() {
+        if self.session.is_none() && (self.pending.is_some() || self.starting) {
             self.queued.extend(bytes);
             return;
         }

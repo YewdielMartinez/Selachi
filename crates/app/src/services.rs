@@ -35,6 +35,9 @@ pub struct Services {
     pub attention: Entity<AttentionModel>,
     /// The "files" panel provider (shared: the shell feeds it git markers).
     pub files: FileTreeProvider,
+    /// The chat hub (`chat.db` + threads). Created by the shell the first time chat is used, so a
+    /// session without chat never opens the database.
+    pub chat: Rc<RefCell<Option<Entity<ui_chat::ChatHub>>>>,
     /// Events of the file tree, taken once by the shell.
     pub viewer_events: Rc<RefCell<Option<UnboundedReceiver<ViewerEvent>>>>,
 }
@@ -61,7 +64,7 @@ impl Services {
         let files = FileTreeProvider::new().on_event(move |ev, _| {
             let _ = tx.unbounded_send(ev.clone());
         });
-        Self { tracker, procs, doctor, git, usage, attention, files, viewer_events: Rc::new(RefCell::new(Some(rx))) }
+        Self { tracker, procs, doctor, git, usage, attention, files, chat: Rc::new(RefCell::new(None)), viewer_events: Rc::new(RefCell::new(Some(rx))) }
     }
 }
 

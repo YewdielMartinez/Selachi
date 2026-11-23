@@ -35,7 +35,7 @@ pub fn visible_pieces(width: f32) -> (bool, bool, bool) {
 }
 
 /// How often the RAM reading is refreshed, only while the window is focused.
-const REFRESH: Duration = Duration::from_secs(2);
+const REFRESH: Duration = Duration::from_secs(5);
 
 /// Height of the bottom bar for a mode (0 when hidden).
 pub fn bar_height(mode: BottomBar) -> f32 {
@@ -76,6 +76,9 @@ pub struct StatusBar {
     git: Option<Entity<GitMonitor>>,
     git_sub: Option<Subscription>,
     usage: Entity<UsageMonitor>,
+    /// Unified sidebar: its footer already shows the usage meter, so the bar is the compact one
+    /// without the usage pill (branch, orphans, attention and RAM stay).
+    dedupe_usage: bool,
     /// RAM refresh loop; `Some` only while the window is focused (dropping it cancels the timer,
     /// so a background window has no wake-ups from here).
     ram_timer: Option<Task<()>>,
@@ -100,6 +103,7 @@ impl StatusBar {
             git: None,
             git_sub: None,
             usage,
+            dedupe_usage: false,
             ram_timer: None,
             _usage_sub: usage_sub,
         }
@@ -188,7 +192,15 @@ impl StatusBar {
         cx.notify();
     }
 
-    /// The window gained or lost focus. The RAM label is refreshed every 2 s only while focused,
+    /// The sidebar footer shows the usage meter: drop the bar's usage pill and per-agent blocks.
+    pub fn set_dedupe_usage(&mut self, dedupe: bool, cx: &mut Context<Self>) {
+        if self.dedupe_usage != dedupe {
+            self.dedupe_usage = dedupe;
+            cx.notify();
+        }
+    }
+
+    /// The window gained or lost focus. The RAM label is refreshed every 5 s only while focused,
     /// and only repainted when the displayed text actually changes.
     pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
         if !active {
@@ -343,7 +355,7 @@ impl Render for StatusBar {
         let attention_compact = self.attention_pill(cx);
         // The shell already asks for the compact bar when the window is narrow; this keeps the
         // contents consistent if it did not.
-        if self.mode == BottomBar::Full && full_fits {
+        if self.mode == BottomBar::Full && full_fits && !self.dedupe_usage {
             return div()
                 .h(px(STATUS_FULL_H))
                 .flex_none()
@@ -382,7 +394,7 @@ impl Render for StatusBar {
             .children(git.map(|g| self.git_pill(&g)))
             .children(orphans_compact)
             .children(attention_compact)
-            .children(usage.filter(|_| usage_fits).map(|u| self.usage_pill(&u)))
+            .children(usage.filter(|_| usage_fits && !self.dedupe_usage).map(|u| self.usage_pill(&u)))
             .child(div().flex_1())
             .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
             .into_any_element()

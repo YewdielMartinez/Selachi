@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, ClipboardItem, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _,
-    SharedString, StrikethroughStyle, Styled as _, StyledText, div, prelude::*, px, relative,
+    SharedString, StrikethroughStyle, Styled as _, StyledText, TextRun, div, prelude::*, px, relative,
 };
 use theme::{Mode, Rgba, Theme, rgb};
 use ui_kit::{Icon, icon};
@@ -243,8 +243,9 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(Range<usize>, Highlig
                 h.strikethrough = Some(StrikethroughStyle { thickness: px(1.0), color: Some(c.muted.into()) });
             }
             if s.code {
-                h.background_color = Some(c.surface_3.into());
-                h.color = Some(rgb(theme.terminal.ansi[if theme.mode == Mode::Light { 1 } else { 9 }]).into());
+                // Neutral, never the ANSI red (it read as an error): text on a tonal chip.
+                h.background_color = Some(c.surface_2.into());
+                h.color = Some(c.text.into());
             }
             if s.link {
                 h.color = Some(c.accent.into());
@@ -255,10 +256,56 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(Range<usize>, Highlig
         .collect()
 }
 
-fn inline_el(inlines: &[MdInline], r: &MdRender<'_>) -> AnyElement {
+/// Runs for text that contains inline code: `HighlightStyle` cannot switch the font family, so
+/// every span gets a full `TextRun` (UI font for prose, mono for code). `weight` / `color` are the
+/// block's own, since runs replace the parent's text style.
+fn code_runs(flat: &FlatInline, theme: &Theme, weight: FontWeight, color: Rgba) -> Vec<TextRun> {
+    let c = theme.colors;
+    let run = |range: Range<usize>, s: InlineStyle| {
+        let mut f = gpui::font(if s.code { theme.typography.mono_family } else { theme.typography.ui_family });
+        f.weight = if s.bold { FontWeight::SEMIBOLD } else { weight };
+        if s.italic {
+            f.style = FontStyle::Italic;
+        }
+        let (fg, bg) = match (s.code, s.link) {
+            (_, true) => (c.accent, None),
+            (true, false) => (c.text, Some(c.surface_2)),
+            (false, false) => (color, None),
+        };
+        TextRun {
+            len: range.len(),
+            font: f,
+            color: fg.into(),
+            background_color: bg.map(Into::into),
+            underline: s.link.then(|| gpui::UnderlineStyle { thickness: px(1.0), color: Some(c.accent.into()), wavy: false }),
+            strikethrough: s.strike.then(|| StrikethroughStyle { thickness: px(1.0), color: Some(c.muted.into()) }),
+        }
+    };
+    let mut out = Vec::new();
+    let mut at = 0;
+    for (range, style) in &flat.runs {
+        if range.start > at {
+            out.push(run(at..range.start, InlineStyle::default()));
+        }
+        out.push(run(range.clone(), *style));
+        at = range.end;
+    }
+    if at < flat.text.len() {
+        out.push(run(at..flat.text.len(), InlineStyle::default()));
+    }
+    out
+}
+
+fn inline_el(inlines: &[MdInline], r: &MdRender<'_>, weight: FontWeight, color: Rgba) -> AnyElement {
     let flat = flatten(inlines);
-    let styles = inline_styles(&flat, &r.theme);
-    let text = StyledText::new(SharedString::from(flat.text)).with_highlights(styles);
+    let has_code = flat.runs.iter().any(|(_, s)| s.code);
+    let text = if has_code {
+        let runs = code_runs(&flat, &r.theme, weight, color);
+        StyledText::new(SharedString::from(flat.text)).with_runs(runs)
+    } else {
+        let styles = inline_styles(&flat, &r.theme);
+        StyledText::new(SharedString::from(flat.text)).with_highlights(styles)
+    };
     if flat.links.is_empty() {
         return text.into_any_element();
     }
@@ -294,14 +341,14 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .font_weight(if *level <= 3 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
             .line_height(relative(1.35))
             .text_color(c.text)
-            .child(inline_el(inlines, r))
+            .child(inline_el(inlines, r, if *level <= 3 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }, c.text))
             .into_any_element(),
         MdBlock::Paragraph(inlines) => div()
             .my(px(if r.in_list.get() { 1.0 } else { 4.0 }))
             .text_size(px(BODY_SIZE))
             .line_height(relative(1.6))
             .text_color(c.text)
-            .child(inline_el(inlines, r))
+            .child(inline_el(inlines, r, FontWeight::NORMAL, c.text))
             .into_any_element(),
         MdBlock::CodeBlock { lang, text } => code_block(lang.as_deref(), text, r),
         MdBlock::List { ordered, start, items } => {
@@ -497,7 +544,8 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
             MdAlign::Center => d.justify_center(),
             _ => d,
         };
-        d.child(inline_el(inlines, r)).into_any_element()
+        let (weight, color) = if header { (FontWeight::MEDIUM, c.text) } else { (FontWeight::NORMAL, c.muted) };
+        d.child(inline_el(inlines, r, weight, color)).into_any_element()
     };
     let align = |i: usize| t.aligns.get(i).copied().unwrap_or(MdAlign::None);
     let header = div()

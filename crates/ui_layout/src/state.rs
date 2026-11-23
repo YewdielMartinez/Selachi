@@ -46,6 +46,7 @@ pub fn builtin_name(b: BuiltinPreset) -> &'static str {
         BuiltinPreset::Orquestador => "Orquestador",
         BuiltinPreset::Chat => "Chat",
         BuiltinPreset::Zen => "Zen",
+        BuiltinPreset::EspaciosUnificados => "Unificado",
     }
 }
 
@@ -56,6 +57,7 @@ pub fn builtin_description(b: BuiltinPreset) -> &'static str {
         BuiltinPreset::Orquestador => "Proyecto, worktree y agentes",
         BuiltinPreset::Chat => "Hilos y panel de contexto",
         BuiltinPreset::Zen => "Solo la terminal",
+        BuiltinPreset::EspaciosUnificados => "Sidebar con pestañas anidadas",
     }
 }
 

@@ -17,6 +17,14 @@ use agents_svc::{Agent, IngestConfig, Ingestor, Range};
 use gpui::{Context, Task};
 
 const SCAN_EVERY: Duration = Duration::from_secs(60);
+/// A scan that found nothing new doubles the wait up to this (a scan stats every agent log, so
+/// an idle machine should not pay for it every minute); any news resets it to [`SCAN_EVERY`].
+const SCAN_BACKOFF_MAX: Duration = Duration::from_secs(10 * 60);
+
+/// Wait until the next scan after `current`: doubled while scans find nothing, reset otherwise.
+fn next_interval(current: Duration, quiet: bool) -> Duration {
+    if quiet { (current * 2).min(SCAN_BACKOFF_MAX) } else { SCAN_EVERY }
+}
 
 /// A rate-limit percentage that Claude Code itself reported and that has not expired yet.
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +141,8 @@ struct ScanOutcome {
     /// Handed back so the next scan reuses the connection; `None` if it could not be opened.
     ingestor: Option<Ingestor>,
     info: Option<UsageInfo>,
+    /// No log changed since the previous scan.
+    quiet: bool,
 }
 
 /// Blocking: open (if needed), scan, query. Only call it off the UI thread.
@@ -143,15 +153,17 @@ fn scan_job(existing: Option<Ingestor>) -> ScanOutcome {
             Ok(i) => i,
             Err(e) => {
                 log::warn!("usage database unavailable: {e:#}");
-                return ScanOutcome { ingestor: None, info: None };
+                return ScanOutcome { ingestor: None, info: None, quiet: false };
             },
         },
     };
+    let mut quiet = false;
     let info = match ing.scan() {
         Ok(report) => {
             for e in &report.errors {
                 log::debug!("usage scan: {e}");
             }
+            quiet = report.files_scanned == 0 && report.events_inserted == 0 && report.events_updated == 0;
             summarize(&ing)
         },
         Err(e) => {
@@ -159,7 +171,7 @@ fn scan_job(existing: Option<Ingestor>) -> ScanOutcome {
             None
         },
     };
-    ScanOutcome { ingestor: Some(ing), info }
+    ScanOutcome { ingestor: Some(ing), info, quiet }
 }
 
 fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
@@ -202,6 +214,8 @@ pub struct UsageMonitor {
     in_flight: bool,
     active: bool,
     last_scan: Option<Instant>,
+    /// Wait between scans: grows while they find nothing (see [`next_interval`]).
+    interval: Duration,
     /// The usage panel's model: told after every successful scan (it re-reads only if visible).
     model: Option<gpui::Entity<ui_usage::UsageModel>>,
     _timer: Task<()>,
@@ -223,6 +237,7 @@ impl UsageMonitor {
             in_flight: false,
             active: false,
             last_scan: None,
+            interval: SCAN_EVERY,
             model: cx.try_global::<crate::services::Services>().map(|s| s.usage.clone()),
             _timer: timer,
         };
@@ -237,11 +252,15 @@ impl UsageMonitor {
     /// Window focus changed. Regaining focus after a pause refreshes the numbers.
     pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
         self.active = active;
+        if active {
+            // Back after a pause: news is likely, so the wait starts from the short interval.
+            self.interval = SCAN_EVERY;
+        }
         self.scan_if_due(cx);
     }
 
     fn scan_if_due(&mut self, cx: &mut Context<Self>) {
-        let due = self.last_scan.is_none_or(|t| t.elapsed() >= SCAN_EVERY);
+        let due = self.last_scan.is_none_or(|t| t.elapsed() >= self.interval);
         if self.active && due {
             self.scan(cx);
         }
@@ -259,6 +278,7 @@ impl UsageMonitor {
             let _ = this.update(cx, |m, cx| {
                 m.in_flight = false;
                 m.last_scan = Some(Instant::now());
+                m.interval = next_interval(m.interval, out.quiet);
                 let scanned = out.ingestor.is_some();
                 m.ingestor = out.ingestor;
                 if scanned && let Some(model) = &m.model {
@@ -277,6 +297,18 @@ impl UsageMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_scans_back_off_and_news_resets() {
+        let mut d = SCAN_EVERY;
+        d = next_interval(d, true);
+        assert_eq!(d, Duration::from_secs(120));
+        for _ in 0..10 {
+            d = next_interval(d, true);
+        }
+        assert_eq!(d, SCAN_BACKOFF_MAX);
+        assert_eq!(next_interval(d, false), SCAN_EVERY);
+    }
 
     #[test]
     fn compact_formatting() {

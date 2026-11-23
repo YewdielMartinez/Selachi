@@ -93,7 +93,7 @@ impl SettingsView {
         let refresh = GhostButton::new("plugins-refresh", &t, "Actualizar lista").on_click(cx.listener(|s, _, _, cx| {
             s.plugins.update(cx, |m, cx| m.refresh(cx));
         }));
-        let url = self.input(cx, "index_url", crate::extras::DEFAULT_INDEX_URL, 360.0, true);
+        let url = self.input(cx, "index_url", store::config::DEFAULT_PLUGIN_INDEX_URL, 360.0, true);
         blocks.push(
             ui::group_with_action(
                 &t,

@@ -12,6 +12,8 @@ use ui_palette::ActionEntry;
 /// Ids of the host actions (what `PaletteEvent::Action` carries).
 pub mod id {
     pub const TAB_NEW: &str = "tab.new";
+    pub const TAB_NEW_TERMINAL: &str = "tab.new_terminal";
+    pub const CHAT_NEW: &str = "chat.new";
     pub const TAB_CLOSE: &str = "tab.close";
     pub const TAB_NEXT: &str = "tab.next";
     pub const TAB_PREV: &str = "tab.prev";
@@ -20,13 +22,17 @@ pub mod id {
     pub const FULLSCREEN: &str = "window.fullscreen";
     pub const REVIEW_OPEN: &str = "review.open";
     pub const ATTENTION_NEXT: &str = "attention.next";
+    pub const SETTINGS_OPEN: &str = "settings.open";
+    pub const SIDEBAR_TOGGLE: &str = "sidebar.toggle";
     pub const PANEL_PREFIX: &str = "panel.";
 }
 
 /// The actions of the palette's `>` scope. Panels are added by the shell from the registry.
 pub fn base_actions() -> Vec<ActionEntry> {
     vec![
-        ActionEntry::new(id::TAB_NEW, "Nueva pestaña").shortcut("Ctrl+Shift+N").icon(Icon::Plus).keywords("terminal crear abrir"),
+        ActionEntry::new(id::TAB_NEW, "Nueva pestaña").shortcut("Ctrl+N").icon(Icon::Plus).keywords("terminal chat crear abrir"),
+        ActionEntry::new(id::TAB_NEW_TERMINAL, "Nueva terminal").shortcut("Ctrl+Shift+N").icon(Icon::Terminal).keywords("pestaña shell crear abrir"),
+        ActionEntry::new(id::CHAT_NEW, "Nuevo chat con un agente").icon(Icon::Agents).keywords("hilo conversación claude codex opencode agente"),
         ActionEntry::new(id::TAB_CLOSE, "Cerrar pestaña").shortcut("Ctrl+W").icon(Icon::Close).keywords("terminal"),
         ActionEntry::new(id::TAB_NEXT, "Pestaña siguiente").shortcut("Ctrl+Tab").icon(Icon::ChevronRight),
         ActionEntry::new(id::TAB_PREV, "Pestaña anterior").shortcut("Ctrl+Shift+Tab").icon(Icon::ChevronRight),
@@ -34,6 +40,8 @@ pub fn base_actions() -> Vec<ActionEntry> {
         ActionEntry::new(id::THEME_TOGGLE, "Cambiar tema").shortcut("Ctrl+Shift+T").icon(Icon::Settings).keywords("claro oscuro oled"),
         ActionEntry::new(id::REVIEW_OPEN, "Revisar cambios").icon(Icon::Review).keywords("diff notas agente review"),
         ActionEntry::new(id::ATTENTION_NEXT, "Siguiente en atención").shortcut("Ctrl+Shift+A").icon(Icon::Attention).keywords("cola espera aprobación"),
+        ActionEntry::new(id::SETTINGS_OPEN, "Ajustes").shortcut("Ctrl+,").icon(Icon::Settings).keywords("configuración opciones preferencias"),
+        ActionEntry::new(id::SIDEBAR_TOGGLE, "Plegar la barra lateral").shortcut("Ctrl+B").icon(Icon::Layout).keywords("sidebar iconos colapsar"),
         ActionEntry::new(id::FULLSCREEN, "Pantalla completa").shortcut("F11").icon(Icon::Maximize),
     ]
 }

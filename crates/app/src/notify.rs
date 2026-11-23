@@ -66,10 +66,26 @@ pub fn toast_text(block: &Block) -> (String, String, String) {
 }
 
 /// Posts the toast for `tab` (the tab entity id) from a short-lived thread.
-#[cfg(windows)]
 pub fn long_command_toast(tab: u64, block: &Block) {
-    use tauri_winrt_notification::Toast;
     let (title, line1, line2) = toast_text(block);
+    toast(tab, title, line1, line2);
+}
+
+/// A toast for an agent that needs the user (approval, waiting, failed). Clicking it brings the
+/// window and the tab forward, like the long-command one. `detail` must already be redacted.
+pub fn attention_toast(tab: u64, title: &str, line1: &str, line2: &str) {
+    toast(tab, title.to_string(), clip(line1, 90), clip(line2, 120));
+}
+
+/// `s` cut to `max` characters with an ellipsis, first line only.
+pub fn clip(s: &str, max: usize) -> String {
+    let line = s.lines().next().unwrap_or("").trim();
+    if line.chars().count() > max { format!("{}…", line.chars().take(max.saturating_sub(1)).collect::<String>()) } else { line.to_string() }
+}
+
+#[cfg(windows)]
+fn toast(tab: u64, title: String, line1: String, line2: String) {
+    use tauri_winrt_notification::Toast;
     let spawned = std::thread::Builder::new().name("selachi-toast".into()).spawn(move || {
         let toast = Toast::new(Toast::POWERSHELL_APP_ID)
             .title(&title)
@@ -91,11 +107,19 @@ pub fn long_command_toast(tab: u64, block: &Block) {
 }
 
 #[cfg(not(windows))]
-pub fn long_command_toast(_tab: u64, _block: &Block) {}
+fn toast(_tab: u64, _title: String, _line1: String, _line2: String) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_keeps_one_short_line() {
+        assert_eq!(clip("hola
+mundo", 10), "hola");
+        assert_eq!(clip("abcdefghij", 5), "abcd…");
+        assert_eq!(clip("abc", 5), "abc");
+    }
 
     #[test]
     fn durations_read_naturally() {

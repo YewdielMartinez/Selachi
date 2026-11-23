@@ -30,15 +30,13 @@
 //! // window closing:            settings.update(cx, |s, _| s.flush());
 //! ```
 //!
-//! Settings that `store::Config` does not model yet (`[general] language`,
-//! `[general] confirm_close_running`, `[git] external_editor`, `[plugins] index_url`) are read and
-//! written by [`Extras`]; see its docs and the wave report for the store change that retires it.
+//! Every setting lives in `store::Config` (`[general]`, `[git] external_editor`, `[plugins]
+//! index_url`, `[layout]`...): there is no side storage.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod agents;
 mod agents_ui;
 mod design_ui;
-mod extras;
 mod fields;
 mod fmt;
 mod keyboard_ui;
@@ -57,7 +55,7 @@ mod validate;
 mod view;
 
 pub use agents::{AgentRow, AgentStatus, AgentsState};
-pub use extras::{DEFAULT_INDEX_URL, Extras, LANGUAGES, SidebarPrefs, TITLEBAR_PANELS};
+pub use sections::LANGUAGES;
 pub use keys::{
     ChordError, KeyAction, chord_from_keystroke, default_catalog, display_chord, effective, find_conflict, normalize_chord,
     set_binding, swap_bindings,

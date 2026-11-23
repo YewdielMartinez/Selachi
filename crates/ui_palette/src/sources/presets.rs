@@ -28,6 +28,7 @@ fn describe(p: BuiltinPreset) -> (&'static str, &'static str) {
         BuiltinPreset::Orquestador => ("Orquestador", "Proyecto, worktree y agentes; pestañas verticales"),
         BuiltinPreset::Chat => ("Chat", "Hilos agrupados, conversación y panel de contexto"),
         BuiltinPreset::Zen => ("Zen", "Solo la terminal; el resto al pasar por el borde"),
+        BuiltinPreset::EspaciosUnificados => ("Espacios unificados", "Sidebar de cristal con espacios y pestañas anidadas; paneles a la derecha"),
     }
 }
 

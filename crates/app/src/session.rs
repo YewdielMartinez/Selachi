@@ -7,7 +7,9 @@
 //! so the JSON round trip and the validation are unit tested.
 //!
 //! `[session] restore = true|false` in `config.toml` (`store::Config::session`) turns the restore
-//! off. Only terminals are saved: viewer tabs are files that reopen in one click.
+//! off. Terminals and chat threads are saved (a chat tab is just its thread id: the messages live in
+//! `chat.db`, and reopening a thread starts no agent); viewer tabs are files that reopen in one
+//! click. Also saved: whether the sidebar was folded to icons (Ctrl+B).
 
 use std::path::PathBuf;
 
@@ -18,11 +20,14 @@ pub const VERSION: u32 = 1;
 /// Most tabs a restore will open (a corrupt file must not fork-bomb the machine).
 const MAX_TABS: usize = 32;
 
-/// What kind of tab to reopen. Only terminals exist today; unknown kinds are skipped.
+/// What kind of tab to reopen. Unknown kinds fail the parse of the whole session (a newer file
+/// read by an older build starts fresh).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TabKind {
     Terminal,
+    /// A chat thread (`SavedTab::thread`).
+    Chat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -32,6 +37,19 @@ pub struct SavedTab {
     /// User-chosen title (none yet: tabs are titled after their directory).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// `chat_core::ThreadId` of a chat tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<i64>,
+}
+
+impl SavedTab {
+    pub fn terminal(cwd: Option<PathBuf>) -> Self {
+        Self { kind: TabKind::Terminal, cwd, title: None, thread: None }
+    }
+
+    pub fn chat(thread: i64, cwd: Option<PathBuf>) -> Self {
+        Self { kind: TabKind::Chat, cwd, title: None, thread: Some(thread) }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -46,6 +64,9 @@ pub struct SessionState {
     pub ratio_y: f32,
     pub sidebar_w: Option<u16>,
     pub right_w: Option<f32>,
+    /// Ctrl+B: the sidebar was folded to its icon column.
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
 }
 
 impl SessionState {
@@ -60,6 +81,8 @@ impl SessionState {
         if s.v != VERSION {
             return None;
         }
+        // A chat tab without a thread id cannot be reopened.
+        s.tabs.retain(|t| t.kind != TabKind::Chat || t.thread.is_some());
         s.tabs.truncate(MAX_TABS);
         if s.tabs.is_empty() {
             return None;
@@ -111,6 +134,7 @@ mod tests {
             ratio_y: 0.5,
             sidebar_w: Some(300),
             right_w: Some(380.0),
+            sidebar_collapsed: true,
         }
     }
 
@@ -152,9 +176,27 @@ mod tests {
     }
 
     #[test]
+    fn chat_tabs_keep_their_thread_and_orphans_are_dropped() {
+        let mut s = sample();
+        s.tabs.push(SavedTab { thread: None, ..SavedTab::chat(0, None) });
+        let back = SessionState::from_json(&s.to_json()).unwrap();
+        assert_eq!(back.tabs.len(), 3, "the chat tab without a thread is dropped");
+        assert_eq!(back.tabs[2].thread, Some(7));
+        assert_eq!(back.tabs[2].kind, TabKind::Chat);
+    }
+
+    #[test]
+    fn sessions_saved_before_chat_still_load() {
+        let old = r#"{"v":1,"tabs":[{"kind":"terminal","cwd":"C:"}],"panes":[0],"focused":0,"ratio_x":0.5,"ratio_y":0.5,"sidebar_w":null,"right_w":null}"#;
+        let s = SessionState::from_json(old).unwrap();
+        assert!(!s.sidebar_collapsed);
+        assert_eq!(s.tabs[0].thread, None);
+    }
+
+    #[test]
     fn too_many_tabs_are_cut() {
         let mut s = sample();
-        s.tabs = (0..100).map(|_| SavedTab { kind: TabKind::Terminal, cwd: None, title: None }).collect();
+        s.tabs = (0..100).map(|_| SavedTab::terminal(None)).collect();
         s.panes = vec![Some(0), Some(50)];
         let back = SessionState::from_json(&s.to_json()).unwrap();
         assert_eq!(back.tabs.len(), MAX_TABS);

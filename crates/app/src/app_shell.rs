@@ -13,6 +13,7 @@
 //!   comes from a user action, a monitor's `notify()` or a one-shot animation.
 
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -23,12 +24,14 @@ use futures::channel::mpsc::UnboundedReceiver;
 use ui_git::{GitPanelEvent, OpFinished};
 use ui_review::{AttentionEvent, AttentionItem, FocusTarget, ReviewEvent, ReviewSource, ReviewTab};
 use ui_viewer::{GitMark, ViewerConfig, ViewerEvent, ViewerTab};
+use chat_core::ThreadId;
 use gpui::{
-    Animation, AnimationExt, AnyElement, AnyView, App, Bounds, Context, Div, ElementId, Entity, Hsla,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollHandle,
-    SharedString, Subscription, Task, WeakEntity, Window, WindowBackgroundAppearance, actions, canvas, div,
-    prelude::*, px, relative,
+    Animation, AnimationExt, AnyElement, AnyView, App, Bounds, Context, Div, ElementId, Entity, FocusHandle, Hsla,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render,
+    ScrollHandle, SharedString, Subscription, Task, WeakEntity, Window, WindowBackgroundAppearance, actions, canvas,
+    div, prelude::*, px, relative,
 };
+use ui_chat::{ChatHub, ChatTab};
 use panel_api::{
     CloseCheck, PanelCtx, PanelId, PanelRegistry, PanelZone, TabHandle, TabId, TabInfo, WidthClass,
 };
@@ -36,6 +39,7 @@ use store::{
     BottomBar, Config, ConfigEvent, ConfigWatcher, Density, LayoutConfig, RailVisibility, ResolvedLayout,
     SidebarLayout, SidebarSection, SidebarSide, Splits, TabsPosition, layout_changed,
 };
+use store::config::ThemeMode;
 use theme::{Mode, Radius, Theme, motion::SHEET, motion::duration::BASE};
 use ui_kit::{Button, Card, Icon, IconButton, ListRow, Placement, Popover, glass_tint, icon};
 
@@ -51,7 +55,10 @@ use crate::palette::{self, id as action_id};
 use crate::paths;
 use crate::rail::{RailItem, rail};
 use crate::session::{SavedTab, SessionState, TabKind};
+use crate::settings_tab::SettingsTab;
 use crate::sidebar::{SidebarProps, sidebar_collapsed, sidebar_content};
+use crate::spaces;
+use crate::unified_sidebar::{UnifiedProps, Usage, unified_collapsed, unified_content};
 use crate::splits::{PaneSet, clamp_ratio, pane_count, ratio_at};
 use crate::status_bar::{StatusBar, bar_height};
 use crate::terminal_tab::{TermRequest, TerminalTab};
@@ -60,6 +67,8 @@ use crate::terminal_view::TermEnv;
 use crate::titlebar::{TITLEBAR_H, breadcrumb, new_tab_button, tab_pill, title_row, window_controls};
 use crate::usage_monitor::UsageMonitor;
 use crate::viewer_host;
+
+mod chat;
 
 pub use crate::rail::RAIL_W;
 /// Height of the titlebar (named `TAB_H` for the initial terminal size estimate).
@@ -94,6 +103,7 @@ actions!(
     [
         ToggleTheme,
         NewTab,
+        NewTerminalTab,
         CloseTab,
         NextTab,
         PrevTab,
@@ -103,6 +113,8 @@ actions!(
         CancelOverlay,
         ToggleFullscreen,
         NextAttention,
+        OpenSettings,
+        ToggleSidebar,
         Jump1,
         Jump2,
         Jump3,
@@ -194,6 +206,15 @@ struct Reveal {
     left: bool,
 }
 
+/// A checkpoint restore waiting for the user's confirmation (what `git_svc` would do, listed).
+struct RestoreConfirm {
+    id: String,
+    cwd: PathBuf,
+    warnings: Vec<String>,
+    stat: Option<String>,
+    busy: bool,
+}
+
 pub struct AppShell {
     theme: Theme,
     config: Arc<Config>,
@@ -254,6 +275,35 @@ pub struct AppShell {
     echoes: Vec<LayoutConfig>,
     save_task: Option<Task<()>>,
     blurred: bool,
+    /// Spaces (keys of [`spaces::Space`]) folded in the unified sidebar.
+    folded_spaces: HashSet<PathBuf>,
+    /// Ctrl+B: the sidebar shows only icons even when there is room for it.
+    sidebar_collapsed: bool,
+    /// Favorite and recent projects (path, label): listed as spaces without tabs.
+    known_projects: Vec<(PathBuf, String)>,
+    _projects_task: Option<Task<()>>,
+    /// The settings screen, created the first time it is opened.
+    settings: Option<Entity<ui_settings::SettingsView>>,
+    _settings_sub: Option<Subscription>,
+    /// The first-run wizard (or "Volver a configurar"): replaces the shell while it is open.
+    onboarding: Option<Entity<ui_onboarding::OnboardingView>>,
+    _onboarding_sub: Option<Subscription>,
+    /// The chat hub, created the first time chat is used (`chat_failed`: `chat.db` could not be
+    /// opened, do not retry).
+    chat: Option<Entity<ChatHub>>,
+    chat_failed: bool,
+    _chat_subs: Vec<Subscription>,
+    _chat_task: Option<Task<()>>,
+    /// Projects last given to the hub (it only hears about changes).
+    chat_projects: Vec<PathBuf>,
+    /// What each chat thread last asked of the user (a toast fires when it changes).
+    chat_attn: HashMap<ThreadId, ui_review::AttentionKind>,
+    /// The "Nueva pestaña" menu (Terminal / Chat) and its focus (keys `T`, `C`, Enter, Esc).
+    new_tab_menu: bool,
+    menu_focus: FocusHandle,
+    restore_confirm: Option<RestoreConfirm>,
+    /// Background refresh of tree-tracked process owners; only alive while it is useful.
+    tree_poll: Option<Task<()>>,
     _watcher: Option<ConfigWatcher>,
     _config_task: Option<Task<()>>,
     /// Observers and subscriptions live as long as the shell; dropping it (closing the window)
@@ -291,16 +341,40 @@ fn hsla(c: theme::Rgba) -> Hsla {
     c.into()
 }
 
+/// [`adapt_layout`] plus what only the shell knows: Ctrl+B folds a docked sidebar to its icon
+/// column, and the unified sidebar (whose footer carries the usage meter) gets the compact bottom
+/// bar, never the per-agent one that would show the usage a second time.
+fn adapt_for_shell(intent: &ResolvedLayout, width: f32, collapsed: bool) -> AdaptedLayout {
+    let mut new = adapt_layout(intent, width);
+    if collapsed && new.sidebar == SidebarMode::Docked {
+        new.layout.sidebar.width_px = COLLAPSED_SIDEBAR_W;
+        new.sidebar = SidebarMode::Collapsed;
+    }
+    if new.sidebar == SidebarMode::Docked && new.layout.sidebar.nested_tabs && new.layout.sidebar.footer_usage && new.layout.bottom_bar == BottomBar::Full {
+        new.layout.bottom_bar = BottomBar::Compact;
+    }
+    new
+}
+
+/// The sidebar footer shows the usage meter: the bottom bar leaves its usage pill out.
+fn dedupes_usage(eff: &AdaptedLayout) -> bool {
+    eff.sidebar == SidebarMode::Docked && eff.layout.sidebar.nested_tabs && eff.layout.sidebar.footer_usage
+}
+
 impl AppShell {
     pub fn new(theme: Theme, boot: ConfigBoot, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let ConfigBoot { config, watcher, session } = boot;
         let cwd0 = std::env::current_dir().unwrap_or_default();
         let layout = config.layout_for(&cwd0);
         ui_kit::set_reduced_motion(layout.reduced_motion);
-        let eff = adapt_layout(&layout, f32::from(window.viewport_size().width));
+        let eff = adapt_for_shell(&layout, f32::from(window.viewport_size().width), false);
 
         let usage = cx.new(UsageMonitor::new);
-        let status = cx.new(|cx| StatusBar::new(theme, eff.layout.bottom_bar, usage.clone(), cx));
+        let status = cx.new(|cx| {
+            let mut bar = StatusBar::new(theme, eff.layout.bottom_bar, usage.clone(), cx);
+            bar.set_dedupe_usage(dedupes_usage(&eff), cx);
+            bar
+        });
         let focused = window.is_window_active();
         status.update(cx, |s, cx| s.set_active(focused, cx));
         if let Some(services) = cx.try_global::<Services>().cloned() {
@@ -442,6 +516,24 @@ impl AppShell {
             echoes: Vec::new(),
             save_task: None,
             blurred: false,
+            folded_spaces: HashSet::new(),
+            sidebar_collapsed: false,
+            known_projects: Vec::new(),
+            _projects_task: None,
+            settings: None,
+            _settings_sub: None,
+            onboarding: None,
+            _onboarding_sub: None,
+            chat: None,
+            chat_failed: false,
+            _chat_subs: Vec::new(),
+            _chat_task: None,
+            chat_projects: Vec::new(),
+            chat_attn: HashMap::new(),
+            new_tab_menu: false,
+            menu_focus: cx.focus_handle(),
+            restore_confirm: None,
+            tree_poll: None,
             _watcher: watcher,
             _config_task: config_task,
             _subs: subs,
@@ -451,6 +543,13 @@ impl AppShell {
             None => shell.open_tab(Some(cwd0), window, cx),
         }
         shell.mount_panels(window, cx);
+        shell.load_known_projects(cx);
+        if let Some(db) = shell.session_db.clone()
+            && ui_onboarding::needs_onboarding(&db)
+        {
+            shell.start_onboarding(window, cx);
+        }
+        shell.run_demo(window, cx);
         shell
     }
 
@@ -518,44 +617,70 @@ impl AppShell {
     /// `SELACHI_EAGER_RESTORE=1` spawns them all at once (to measure the difference).
     fn restore_session(&mut self, state: SessionState, window: &mut Window, cx: &mut Context<Self>) {
         let deferred = std::env::var_os("SELACHI_EAGER_RESTORE").is_none();
-        let mut ids = Vec::new();
+        // One entry per saved tab; a chat tab that cannot be reopened leaves a hole.
+        let mut ids: Vec<Option<TabId>> = Vec::new();
         for tab in &state.tabs {
-            let TabKind::Terminal = tab.kind;
-            ids.push(self.add_tab(tab.cwd.clone(), deferred, window, cx));
+            ids.push(match tab.kind {
+                TabKind::Terminal => Some(self.add_tab(tab.cwd.clone(), deferred, window, cx)),
+                TabKind::Chat => tab.thread.and_then(|t| self.restore_chat_tab(ThreadId(t), window, cx)),
+            });
+        }
+        if ids.iter().all(Option::is_none) {
+            // Nothing could be reopened (a session of chats and the chat database is gone).
+            let cwd = std::env::current_dir().ok();
+            self.open_tab(cwd, window, cx);
+            return;
         }
         let panes: Vec<Option<TabId>> = (0..self.panes.len())
-            .map(|i| state.panes.get(i).copied().flatten().and_then(|t| ids.get(t).copied()))
+            .map(|i| state.panes.get(i).copied().flatten().and_then(|t| ids.get(t).copied().flatten()))
             .collect();
         self.panes = PaneSet::from_panes(panes, state.focused);
         if self.panes.focused_tab().is_none()
-            && let Some(first) = ids.first().copied()
+            && let Some(first) = ids.iter().flatten().next().copied()
         {
             self.panes.show(first);
         }
         self.ratio_x = clamp_ratio(state.ratio_x);
         self.ratio_y = clamp_ratio(state.ratio_y);
         self.right_w = state.right_w.map(|w| w.clamp(RIGHT_MIN_W, RIGHT_MAX_W));
+        if state.sidebar_collapsed != self.sidebar_collapsed {
+            self.sidebar_collapsed = state.sidebar_collapsed;
+            self.apply_adapted(false, cx);
+        }
         self.session_last = state.to_json();
         self.after_active_changed(window, cx);
     }
 
+    /// The tabs worth saving, with their ids: terminals and chat threads that exist (a chat draft
+    /// has no thread yet). Viewer, review and settings tabs are files or views that reopen in a click.
+    fn saved_tabs(&self, cx: &App) -> Vec<(TabId, SavedTab)> {
+        self.tabs
+            .iter()
+            .filter_map(|t| {
+                let info = t.handle.info(cx);
+                if t.handle.downcast::<TerminalTab>().is_some() {
+                    return Some((t.handle.id(), SavedTab::terminal(info.cwd)));
+                }
+                let thread = t.handle.downcast::<ChatTab>()?.read(cx).thread_id()?;
+                Some((t.handle.id(), SavedTab::chat(thread.0, info.cwd)))
+            })
+            .collect()
+    }
+
     /// The window's shape as a session.
     fn capture_session(&self, cx: &App) -> SessionState {
-        // Only terminals are restored: a viewer tab is a file the user can reopen in a click.
-        let terminals: Vec<&TabSlot> = self.tabs.iter().filter(|t| t.handle.downcast::<TerminalTab>().is_some()).collect();
-        let ids: Vec<TabId> = terminals.iter().map(|t| t.handle.id()).collect();
+        let saved = self.saved_tabs(cx);
+        let ids: Vec<TabId> = saved.iter().map(|(id, _)| *id).collect();
         SessionState {
             v: crate::session::VERSION,
-            tabs: terminals
-                .iter()
-                .map(|t| SavedTab { kind: TabKind::Terminal, cwd: t.handle.info(cx).cwd, title: None })
-                .collect(),
+            tabs: saved.into_iter().map(|(_, t)| t).collect(),
             panes: self.panes.panes().iter().map(|p| p.and_then(|id| ids.iter().position(|i| *i == id))).collect(),
             focused: self.panes.focused(),
             ratio_x: self.ratio_x,
             ratio_y: self.ratio_y,
             sidebar_w: Some(self.layout.sidebar.width_px),
             right_w: self.right_w,
+            sidebar_collapsed: self.sidebar_collapsed,
         }
     }
 
@@ -577,7 +702,7 @@ impl AppShell {
     /// Writes the session if it differs from the last one written; `flush` waits for the writer.
     fn save_session_now(&mut self, flush: bool, cx: &mut Context<Self>) {
         let Some(db) = &self.session_db else { return };
-        if self.terminal_count() == 0 {
+        if self.saved_tabs(cx).is_empty() {
             return;
         }
         let json = self.capture_session(cx).to_json();
@@ -672,7 +797,15 @@ impl AppShell {
     fn update_doctor_stats(&mut self, cx: &mut Context<Self>) {
         let Some(services) = cx.try_global::<Services>().cloned() else { return };
         let shells = self.terminal_count();
-        let stats = ui_doctor::AppStats { shells: Some(shells), agents: None, grammars: self.grammars.clone() };
+        let tree_tracked = {
+            let tracker = services.tracker.lock().unwrap_or_else(|p| p.into_inner());
+            self.tabs
+                .iter()
+                .filter(|t| t.handle.downcast::<TerminalTab>().is_some())
+                .filter(|t| tracker.attachment_hint(t.handle.id().as_u64()) == proc_svc::TrackingMode::TreeOnly)
+                .count()
+        };
+        let stats = ui_doctor::AppStats { shells: Some(shells), agents: None, grammars: self.grammars.clone(), tree_tracked };
         services.doctor.update(cx, |d, cx| d.set_app_stats(stats, cx));
     }
 
@@ -701,7 +834,11 @@ impl AppShell {
     /// A tab's title, subtitle or status changed: repaint, and re-resolve the per-project layout
     /// (the active tab may have moved to another project).
     fn on_tab_event(&mut self, cx: &mut Context<Self>) {
+        // A deferred shell registers its process owner when it starts: refresh the doctor's
+        // "tracked by tree" count (equality-guarded, so nothing repaints when it is the same).
+        self.update_doctor_stats(cx);
         self.recompute_layout(true, cx);
+        self.sync_chat_active(cx);
         self.mark_session_dirty(cx);
         cx.notify();
     }
@@ -734,6 +871,8 @@ impl AppShell {
         self.status.update(cx, |s, cx| s.set_git(git, cx));
         self.sync_git_marks(cx);
         self.clear_attention_of_active(cx);
+        self.sync_chat_projects(cx);
+        self.sync_chat_active(cx);
         self.recompute_layout(true, cx);
         self.mark_session_dirty(cx);
         self.sync_layout_panel_cwd(cx);
@@ -748,6 +887,8 @@ impl AppShell {
         let Some(slot) = self.slot(id) else { return };
         match slot.handle.can_close(cx) {
             CloseCheck::Allow => self.close_tab(id, window, cx),
+            // [general] confirm_close_running = false: close without asking.
+            CloseCheck::Confirm(_) if !self.config.general.confirm_close_running => self.close_tab(id, window, cx),
             CloseCheck::Confirm(why) => {
                 self.confirm_close = Some((id, why));
                 cx.notify();
@@ -761,6 +902,13 @@ impl AppShell {
     fn close_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self.tabs.iter().position(|t| t.handle.id() == id) else { return };
         let slot = self.tabs.remove(ix);
+        if let Some(thread) = slot.handle.downcast::<ChatTab>().and_then(|t| t.read(cx).thread_id()) {
+            self.chat_attn.remove(&thread);
+        }
+        if let Some(services) = cx.try_global::<Services>().cloned() {
+            let target = FocusTarget::new(id.as_u64().to_string());
+            services.attention.update(cx, |m, cx| m.remove_target(&target, cx));
+        }
         // The owner stays in the tracker: closing the tab ends the shell (its root), so whatever
         // the shell started and left running becomes an orphan of that owner and shows up in the
         // procs panel and the status bar. It is dropped once the job is empty.
@@ -819,7 +967,7 @@ impl AppShell {
     /// Adapts the intent to the window width. Crossing a breakpoint (or a layout change) runs one
     /// 200 ms zone transition; resizing inside a class changes nothing here, so no per-pixel work.
     fn apply_adapted(&mut self, animate: bool, cx: &mut Context<Self>) {
-        let new = adapt_layout(&self.layout, self.window_w);
+        let new = adapt_for_shell(&self.layout, self.window_w, self.sidebar_collapsed);
         if new == self.eff {
             return;
         }
@@ -846,7 +994,11 @@ impl AppShell {
         self.panes.resize(pane_count(self.layout.splits), &all);
         self.panes.clamp_focus(pane_count(self.eff.layout.splits));
         let mode = self.eff.layout.bottom_bar;
-        self.status.update(cx, |s, cx| s.set_mode(mode, cx));
+        let dedupe = dedupes_usage(&self.eff);
+        self.status.update(cx, |s, cx| {
+            s.set_mode(mode, cx);
+            s.set_dedupe_usage(dedupe, cx);
+        });
     }
 
     /// The window was resized (checked on render): re-adapt when the width class changed.
@@ -869,13 +1021,10 @@ impl AppShell {
                     self.echoes.remove(i);
                     return;
                 }
-                let changed = layout_changed(&self.config, &config);
-                cx.set_global(TermEnv(config.completion_env()));
-                self.config = config;
-                if changed {
-                    self.recompute_layout(true, cx);
+                self.adopt_config(config.clone(), cx);
+                if let Some(settings) = self.settings.clone() {
+                    settings.update(cx, |s, cx| s.set_config((*config).clone(), cx));
                 }
-                self.sync_layout_panel(cx, |p, config, _, cx| p.set_config(config.layout.clone(), cx));
             },
             ConfigEvent::Error(msg) => log::warn!("config.toml is invalid, keeping the last good one: {msg}"),
         }
@@ -913,6 +1062,10 @@ impl AppShell {
         self.schedule_save(cx);
         self.recompute_layout(animate, cx);
         self.mark_session_dirty(cx);
+        if let Some(settings) = self.settings.clone() {
+            let cfg = (*self.config).clone();
+            settings.update(cx, |s, cx| s.set_config(cfg, cx));
+        }
     }
 
     /// Edits the global layout (the preset plus global overrides) with `f` and stores only the
@@ -986,15 +1139,56 @@ impl AppShell {
             Mode::Light => Mode::Oled,
             Mode::Oled => Mode::Dark,
         };
-        self.theme = Theme::for_mode(next);
-        let theme = self.theme;
+        self.set_theme(Theme::for_mode(next), cx);
+    }
+
+    /// Re-themes every part of the window.
+    fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        if self.theme.mode == theme.mode {
+            return;
+        }
+        self.theme = theme;
         self.status.update(cx, |s, cx| s.set_theme(theme, cx));
+        if let Some(hub) = self.chat.clone() {
+            hub.update(cx, |h, cx| h.set_theme(theme, cx));
+        }
         for slot in &self.tabs {
             slot.handle.theme_changed(theme, cx);
         }
         self.sync_layout_panel(cx, |p, _, theme, cx| p.set_theme(theme, cx));
         self.palette.update(cx, |p, cx| p.set_theme(theme, cx));
+        if let Some(settings) = self.settings.clone() {
+            settings.update(cx, |s, cx| s.set_theme(theme, cx));
+        }
+        if let Some(ob) = self.onboarding.clone() {
+            ob.update(cx, |o, cx| o.set_theme(theme, cx));
+        }
         cx.notify();
+    }
+
+    /// A new configuration (hot reload, settings screen, wizard): layout, completion settings and
+    /// theme follow it. Nothing happens for what did not change.
+    fn adopt_config(&mut self, config: Arc<Config>, cx: &mut Context<Self>) {
+        let layout_moved = layout_changed(&self.config, &config);
+        let mode_moved = self.config.appearance.mode != config.appearance.mode;
+        let completion_moved = self.config.terminal.completion != config.terminal.completion;
+        let panel_config = config.layout.clone();
+        self.config = config;
+        if completion_moved {
+            cx.set_global(TermEnv(self.config.completion_env()));
+        }
+        if mode_moved {
+            let mode = match self.config.appearance.mode {
+                ThemeMode::Light => Mode::Light,
+                ThemeMode::Oled => Mode::Oled,
+                ThemeMode::Dark | ThemeMode::System => Mode::Dark,
+            };
+            self.set_theme(Theme::for_mode(mode), cx);
+        }
+        if layout_moved {
+            self.recompute_layout(true, cx);
+            self.sync_layout_panel(cx, move |p, _, _, cx| p.set_config(panel_config, cx));
+        }
     }
 
     fn toggle_layout_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1042,7 +1236,7 @@ impl AppShell {
 
     /// Rail / menu button of a panel: docks it on the right (a saved layout tweak), or opens it as
     /// an overlay / drawer when the window is narrow (not saved: the intent does not change).
-    fn toggle_right_panel(&mut self, id: PanelId, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_right_panel(&mut self, id: PanelId, cx: &mut Context<Self>) {
         if self.eff.breakpoint <= Breakpoint::S {
             if self.right_panel_active(&id) {
                 self.overlay = None;
@@ -1218,6 +1412,10 @@ impl AppShell {
             self.right = None;
             return;
         };
+        // The threads panel needs the chat hub: created now, before the panel is built.
+        if id.as_str() == ui_chat::THREADS_PANEL_ID {
+            self.ensure_chat(window, cx);
+        }
         let info = self.active_info(cx);
         let ctx = PanelCtx {
             zone: PanelZone::Right,
@@ -1574,7 +1772,10 @@ impl AppShell {
         let theme = self.theme;
         let shell = cx.entity();
         let mut row = title_row(&theme).pl(px(pad_left));
-        if self.eff.layout.breadcrumb {
+        let unified = Self::is_unified(&self.eff.layout) && self.eff.breakpoint != Breakpoint::Xs;
+        if unified {
+            row = row.child(self.title_heading(infos, cx));
+        } else if self.eff.layout.breadcrumb {
             let last_only = self.eff.breadcrumb_last_only;
             let detail: SharedString = match self.active_cwd(cx) {
                 Some(cwd) if last_only => paths::tab_label(&cwd).into(),
@@ -1593,7 +1794,7 @@ impl AppShell {
                 shell.update(cx, |s, cx| s.new_tab_here(window, cx));
             }));
         }
-        row = row.child(div().flex_1()).child(self.layout_button(cx));
+        row = row.child(div().flex_1()).child(self.titlebar_buttons(cx));
         if self.eff.rail_in_menu {
             row = row.child(self.rail_menu(cx));
         }
@@ -1603,6 +1804,108 @@ impl AppShell {
             row = row.pr(px(8.0));
         }
         row
+    }
+
+    /// Shell v2 layouts: the tabs are rows of the sidebar's spaces.
+    fn is_unified(l: &ResolvedLayout) -> bool {
+        l.sidebar.nested_tabs && l.sidebar.side != SidebarSide::Hidden && l.tabs_position == TabsPosition::Sidebar && !l.zen
+    }
+
+    /// Left of the titlebar in the unified layout: the active tab's title and, muted, its project
+    /// (or the branch when the tab is named after the project).
+    fn title_heading(&self, infos: &[TabInfo], cx: &App) -> impl IntoElement + use<> {
+        let c = self.theme.colors;
+        let ty = self.theme.typography;
+        let active = self.active_id().and_then(|id| infos.iter().find(|i| i.id == id));
+        let title: SharedString = active.map_or_else(|| "Selachi".into(), |i| i.title.clone());
+        let project = active.and_then(crate::grouping::project_key).map(|p| crate::grouping::project_name(&p));
+        let muted: Option<SharedString> = match (project, active.and_then(|i| i.subtitle.clone())) {
+            (Some(p), _) if p != title.as_ref() => Some(p.into()),
+            (_, branch) => branch,
+        };
+        let _ = cx;
+        div()
+            .min_w_0()
+            .flex()
+            .flex_row()
+            .items_baseline()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_size(px(ty.ui_size_lg))
+                    .text_color(c.text)
+                    .child(title),
+            )
+            .children(muted.map(|m| {
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(ty.ui_size_md))
+                    .text_color(c.muted)
+                    .child(m)
+            }))
+    }
+
+    /// The panel buttons at the right of the titlebar (`layout.titlebar.panel_buttons`): one per
+    /// registered right panel, the review tab and the layout popover, with their active state.
+    /// Ids nobody registered are skipped. The XS menu already lists them, so only the layout
+    /// popover stays there.
+    fn titlebar_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let l = &self.eff.layout;
+        let xs = self.eff.rail_in_menu;
+        let shell = cx.entity();
+        let mut group = div().h_full().flex_none().flex().flex_row().items_center().gap(px(2.0));
+        let ids: Vec<PanelId> = l.titlebar.panel_buttons.clone();
+        for id in ids {
+            let id_str = id.as_str();
+            if id_str == store::config::panel_ids::LAYOUT {
+                group = group.child(self.layout_button(cx));
+                continue;
+            }
+            if xs {
+                continue;
+            }
+            let (ic, title, active): (Icon, SharedString, bool) = if id_str == store::config::panel_ids::REVIEW {
+                let active =
+                    self.active_id().and_then(|t| self.slot(t)).is_some_and(|s| s.handle.downcast::<ReviewTab>().is_some());
+                (Icon::Review, "Revisar cambios".into(), active)
+            } else {
+                let Some(p) = cx.try_global::<PanelRegistry>().and_then(|r| r.get(&id)) else { continue };
+                if !p.allowed_zones().contains(&PanelZone::Right) {
+                    continue;
+                }
+                (p.icon(), p.title(), self.right_panel_active(&id))
+            };
+            let shell = shell.clone();
+            let click_id = id.clone();
+            group = group.child(
+                div().h_full().flex().flex_col().justify_center().child(
+                    IconButton::new(SharedString::from(format!("tb-{id_str}")), &self.theme, ic)
+                        .size(28.0)
+                        .active(active)
+                        .emphasize_on_hover(true)
+                        .tooltip(title)
+                        .on_click(move |_, window, cx| {
+                            let click_id = click_id.clone();
+                            shell.update(cx, |s, cx| {
+                                if click_id.as_str() == store::config::panel_ids::REVIEW {
+                                    s.open_review(window, cx);
+                                } else {
+                                    s.toggle_right_panel(click_id, cx);
+                                }
+                            });
+                        }),
+                ),
+            );
+        }
+        group
     }
 
     fn pane_header(&self, info: &TabInfo) -> impl IntoElement + use<> {
@@ -1811,9 +2114,17 @@ impl AppShell {
         } else {
             header = header.pl(px(m.margin));
         }
+        let unified = l.sidebar.nested_tabs;
         if !opts.collapsed {
             header = header.child(div().flex_1());
-            if l.tabs_position == TabsPosition::Sidebar {
+            if unified {
+                let shell = shell.clone();
+                header = header.child(
+                    div().pr(px(6.0)).child(crate::unified_sidebar::collapse_button(&self.theme, tint.is_some(), move |_, cx| {
+                        shell.update(cx, |s, cx| s.toggle_sidebar_collapsed(cx));
+                    })),
+                );
+            } else if l.tabs_position == TabsPosition::Sidebar {
                 let shell = shell.clone();
                 header = header.child(new_tab_button(&self.theme, move |_, window, cx| {
                     shell.update(cx, |s, cx| s.new_tab_here(window, cx));
@@ -1823,7 +2134,31 @@ impl AppShell {
         if opts.with_controls {
             header = header.child(window_controls(&self.theme, window.is_maximized()));
         }
-        let body = if opts.collapsed { sidebar_collapsed(&props).into_any_element() } else { sidebar_content(&props).into_any_element() };
+        let body: AnyElement = if unified {
+            let git = self.space_git(cx);
+            let up = UnifiedProps {
+                theme: &self.theme,
+                layout: l,
+                tabs: infos,
+                active: self.active_id(),
+                shell: &shell,
+                glass: tint.is_some(),
+                spaces: spaces::build_spaces(infos, l.sidebar.group_by, &git, &self.known_projects),
+                folded: &self.folded_spaces,
+                usage: self.usage_summary(cx),
+            };
+            let panel_items: Vec<RailItem> =
+                self.rail_items(cx).into_iter().filter(|i| i.id.as_ref() != "rail-terminal").collect();
+            if opts.collapsed {
+                unified_collapsed(&up, panel_items).into_any_element()
+            } else {
+                unified_content(&up, panel_items).into_any_element()
+            }
+        } else if opts.collapsed {
+            sidebar_collapsed(&props).into_any_element()
+        } else {
+            sidebar_content(&props).into_any_element()
+        };
         let card = div()
             .flex_1()
             .min_h_0()
@@ -2017,6 +2352,32 @@ struct SidebarOpts {
 
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(ob) = self.onboarding.clone() {
+            return self.onboarding_root(ob, window).into_any_element();
+        }
+        self.shell_root(window, cx)
+    }
+}
+
+impl AppShell {
+    /// The first-run wizard, with our own window controls (the system titlebar is hidden).
+    fn onboarding_root(&self, ob: Entity<ui_onboarding::OnboardingView>, window: &Window) -> impl IntoElement + use<> {
+        let theme = self.theme;
+        let c = theme.colors;
+        div()
+            .id("onboarding-root")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(c.bg)
+            .text_color(c.text)
+            .font_family(theme.typography.ui_family)
+            .child(title_row(&theme).child(div().flex_1()).child(window_controls(&theme, window.is_maximized())))
+            .child(div().flex_1().min_h_0().w_full().overflow_hidden().child(ob))
+    }
+
+    fn shell_root(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.sync_tree_poll(cx);
         if let Some(t) = &self.transition
             && t.started.elapsed() > TRANSITION_KEEP
         {
@@ -2154,7 +2515,7 @@ impl Render for AppShell {
         body = body.children(drawers);
 
         let mut key_context = String::from("AppShell");
-        if self.confirm_close.is_some() {
+        if self.confirm_close.is_some() || self.restore_confirm.is_some() {
             key_context.push_str(" CloseConfirm");
         }
         if self.overlay.is_some() {
@@ -2183,7 +2544,8 @@ impl Render for AppShell {
             .font_family(ty.ui_family)
             .key_context(key_context.as_str())
             .on_action(cx.listener(Self::toggle_theme))
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_tab_here(window, cx)))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_new_tab_menu(window, cx)))
+            .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| this.new_tab_here(window, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if let Some(id) = this.active_id() {
                     this.request_close(id, window, cx);
@@ -2194,15 +2556,20 @@ impl Render for AppShell {
             .on_action(cx.listener(|this, _: &ToggleLayoutPanel, window, cx| this.toggle_layout_panel(window, cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &NextAttention, _, cx| this.next_attention(cx)))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar_collapsed(cx)))
             .on_action(cx.listener(|this, _: &ui_palette::TogglePalette, window, cx| this.toggle_palette(window, cx)))
             .on_action(cx.listener(|this, _: &CancelOverlay, _, cx| this.close_overlay(cx)))
             .on_action(cx.listener(|this, _: &ConfirmClose, window, cx| {
                 if let Some((id, _)) = this.confirm_close.clone() {
                     this.close_tab(id, window, cx);
+                } else if this.restore_confirm.is_some() {
+                    this.confirm_restore(cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &CancelClose, _, cx| {
                 this.confirm_close = None;
+                this.restore_confirm = None;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Jump1, w, cx| this.jump_tab(0, w, cx)))
@@ -2229,13 +2596,14 @@ impl Render for AppShell {
             .children(zen_overlays)
             .children(hint_el)
             .children(confirm.map(|why| self.confirm_overlay(&why, cx)))
+            .children(self.restore_confirm.as_ref().map(|r| self.restore_overlay(r, cx)))
+            .children(self.new_tab_menu.then(|| self.new_tab_menu_el(window, cx)))
             // The palette is the last child: an absolute full-window overlay (nothing while closed).
             .child(self.palette.clone())
             .children(frame_stats.map(ui_doctor::frame_end))
+            .into_any_element()
     }
-}
 
-impl AppShell {
     /// The sidebar / right panel as drawers (XS) or overlays (S) over the main area: a subtle scrim
     /// below the titlebar (so the window controls stay reachable) and the panel sliding in from its
     /// edge. Click on the scrim or Esc closes it.
@@ -2372,6 +2740,7 @@ impl AppShell {
                     width_px: ZEN_SIDEBAR_W as u16,
                     sections: vec![SidebarSection::Agents],
                     group_by: store::GroupBy::None,
+                    ..SidebarLayout::default()
                 },
                 ..self.layout.clone()
             };
@@ -2607,18 +2976,22 @@ impl AppShell {
             ViewerEvent::OpenFile { path } => self.open_viewer(path, None, false, None, window, cx),
             ViewerEvent::OpenDiff { path, base } => self.open_viewer(path, None, true, base, window, cx),
             ViewerEvent::OpenInEditor { path, line } => {
+                let editor = self.config.git.external_editor.clone();
                 cx.spawn(async move |this, cx| {
-                    let res = cx.background_executor().spawn(async move { viewer_host::spawn_editor(&path, line) }).await;
+                    let res =
+                        cx.background_executor().spawn(async move { viewer_host::spawn_editor(&path, line, &editor) }).await;
                     if let Err(e) = res {
                         this.update(cx, |shell, cx| shell.show_hint(Hint::text(e), cx)).ok();
                     }
                 })
                 .detach();
             },
-            // Settings (and the plugin installer) arrive in 5.7.
+            // The banner of a file without highlighting: Ajustes > Plugins with that grammar open.
             ViewerEvent::InstallGrammar { id } => {
-                log::info!("grammar plugin {id} requested");
-                self.show_hint(Hint::text("Instalación de plugins: próximamente en Ajustes"), cx);
+                self.open_settings(window, cx);
+                if let Some(settings) = self.settings.clone() {
+                    settings.update(cx, |s, cx| s.handle(&ui_settings::SettingsEvent::InstallGrammar { id }, cx));
+                }
             },
         }
     }
@@ -2774,7 +3147,12 @@ impl AppShell {
 
     fn run_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         match id {
-            action_id::TAB_NEW => self.new_tab_here(window, cx),
+            action_id::TAB_NEW => self.open_new_tab_menu(window, cx),
+            action_id::TAB_NEW_TERMINAL => self.new_tab_here(window, cx),
+            action_id::CHAT_NEW => {
+                let project = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
+                self.new_chat_tab(project, window, cx);
+            },
             action_id::TAB_CLOSE => {
                 if let Some(t) = self.active_id() {
                     self.request_close(t, window, cx);
@@ -2787,6 +3165,8 @@ impl AppShell {
             action_id::FULLSCREEN => window.toggle_fullscreen(),
             action_id::REVIEW_OPEN => self.open_review(window, cx),
             action_id::ATTENTION_NEXT => self.next_attention(cx),
+            action_id::SETTINGS_OPEN => self.open_settings(window, cx),
+            action_id::SIDEBAR_TOGGLE => self.toggle_sidebar_collapsed(cx),
             other => {
                 if let Some(panel) = other.strip_prefix(action_id::PANEL_PREFIX) {
                     self.toggle_right_panel(PanelId::new(panel), cx);
@@ -2800,6 +3180,272 @@ impl AppShell {
     /// Sidebar overlay: the collapsed (S) column's "expand" button.
     pub fn toggle_sidebar_overlay(&mut self, cx: &mut Context<Self>) {
         self.toggle_overlay(Overlay::Left, cx);
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Shell v2: spaces, sidebar collapse, settings, first-run wizard
+    // ------------------------------------------------------------------------------------
+
+    /// Folds or unfolds a space of the unified sidebar.
+    pub(crate) fn toggle_space(&mut self, key: PathBuf, cx: &mut Context<Self>) {
+        if !self.folded_spaces.remove(&key) {
+            self.folded_spaces.insert(key);
+        }
+        cx.notify();
+    }
+
+    /// "+" of a space (or a click on a project without tabs): a new terminal in its folder.
+    pub(crate) fn new_tab_in(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(db) = &self.session_db {
+            let _ = db.mark_project_opened(&root.to_string_lossy());
+        }
+        self.folded_spaces.remove(&root);
+        self.open_tab(Some(root), window, cx);
+    }
+
+    /// "Buscar": the command palette.
+    pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_palette(window, cx);
+    }
+
+    /// Ctrl+B / the chevron of the sidebar: icons only and back. Where the sidebar is not docked
+    /// (S, XS) it opens the overlay / drawer instead.
+    pub(crate) fn toggle_sidebar_collapsed(&mut self, cx: &mut Context<Self>) {
+        if self.eff.breakpoint <= Breakpoint::S {
+            if self.eff.sidebar != SidebarMode::Off {
+                self.toggle_overlay(Overlay::Left, cx);
+            }
+            return;
+        }
+        if self.eff.layout.sidebar.side == SidebarSide::Hidden {
+            return;
+        }
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        self.apply_adapted(true, cx);
+        self.mark_session_dirty(cx);
+        cx.notify();
+    }
+
+    /// Branch and dirty flag of every repository the open terminals are in.
+    fn space_git(&self, cx: &App) -> HashMap<PathBuf, spaces::GitSummary> {
+        self.tabs
+            .iter()
+            .filter_map(|t| t.handle.downcast::<TerminalTab>())
+            .filter_map(|t| t.read(cx).git().read(cx).info().map(|i| (i.root.clone(), (i.branch.clone(), i.dirty))))
+            .collect()
+    }
+
+    /// The footer meter: the official 5 h (else weekly) figure when Claude Code reported one,
+    /// otherwise an empty meter labelled "estimado" (nothing is invented).
+    fn usage_summary(&self, cx: &App) -> Usage {
+        match self.usage.read(cx).info() {
+            Some(u) => match u.fresh_five_hour().or_else(|| u.fresh_official()) {
+                Some(o) => Usage {
+                    fraction: Some((o.percent / 100.0).clamp(0.0, 1.0) as f32),
+                    label: format!("{:.0} %", o.percent).into(),
+                },
+                None => Usage { fraction: None, label: "estimado".into() },
+            },
+            None => Usage { fraction: None, label: "…".into() },
+        }
+    }
+
+    /// Reads the favorite and recent projects off the UI thread; the sidebar lists them as spaces.
+    fn load_known_projects(&mut self, cx: &mut Context<Self>) {
+        let Some(db) = self.session_db.clone() else { return };
+        self._projects_task = Some(cx.spawn(async move |this, cx| {
+            let list = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut out: Vec<(PathBuf, String)> = Vec::new();
+                    for f in db.favorites().unwrap_or_default() {
+                        out.push((PathBuf::from(f.path), f.label));
+                    }
+                    let mut recent: Vec<_> = db.projects().unwrap_or_default().into_iter().filter(|p| p.last_opened.is_some()).collect();
+                    recent.sort_by_key(|p| std::cmp::Reverse(p.last_opened));
+                    for p in recent.into_iter().take(spaces::MAX_CLOSED_SPACES) {
+                        out.push((PathBuf::from(p.path), p.name));
+                    }
+                    out
+                })
+                .await;
+            this.update(cx, |shell, cx| {
+                if shell.known_projects != list {
+                    shell.known_projects = list;
+                    shell.sync_chat_projects(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Opens the settings tab (creating the view the first time), or brings it forward.
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.onboarding.is_some() {
+            return;
+        }
+        let existing = self.tabs.iter().find(|t| t.handle.downcast::<SettingsTab>().is_some()).map(|t| t.handle.id());
+        if let Some(id) = existing {
+            self.select_tab(id, window, cx);
+            return;
+        }
+        let view = self.ensure_settings(window, cx);
+        let info = self.active_info(cx);
+        let ctx = PanelCtx {
+            zone: PanelZone::Main,
+            width_class: WidthClass::Regular,
+            cwd: info.as_ref().and_then(|i| i.cwd.clone()),
+            project_root: info.and_then(|i| i.project_root),
+            theme: self.theme,
+        };
+        let Some(provider) = cx.try_global::<PanelRegistry>().and_then(|r| r.get(&PanelId::new(ui_settings::PANEL_ID))) else {
+            return;
+        };
+        let content = provider.build(ctx, window, cx);
+        let entity = cx.new(|_| SettingsTab::new(view, content));
+        let handle = TabHandle::new(entity);
+        let shell = cx.weak_entity();
+        let sub = handle.subscribe(cx, move |_, cx| {
+            shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
+        });
+        let id = handle.id();
+        self.tabs.push(TabSlot { handle, _subs: vec![sub] });
+        self.panes.open(id);
+        self.scroll_active = true;
+        self.after_active_changed(window, cx);
+    }
+
+    /// Mounts the settings: its view, the `settings` panel provider and the event wiring.
+    fn ensure_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ui_settings::SettingsView> {
+        if let Some(v) = &self.settings {
+            return v.clone();
+        }
+        let path = store::paths::config_path().unwrap_or_default();
+        let options = ui_settings::SettingsOptions::new(path, env!("CARGO_PKG_VERSION"));
+        let view = ui_settings::settings_view((*self.config).clone(), self.theme, options, cx);
+        let provider = ui_settings::SettingsPanelProvider::new(view.clone());
+        cx.update_global::<PanelRegistry, _>(|registry, _| registry.register(provider));
+        self._settings_sub = Some(cx.subscribe_in(&view, window, |this, _, ev: &ui_settings::SettingsEvent, window, cx| {
+            this.on_settings_event(ev.clone(), window, cx);
+        }));
+        self.settings = Some(view.clone());
+        view
+    }
+
+    fn on_settings_event(&mut self, event: ui_settings::SettingsEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use ui_settings::SettingsEvent as E;
+        match event {
+            E::ConfigChanged(config) => self.adopt_config(config, cx),
+            E::OpenLayoutPanel => {
+                if !self.layout_open {
+                    self.toggle_layout_panel(window, cx);
+                }
+            },
+            E::RerunOnboarding => self.start_onboarding(window, cx),
+            E::PluginInstalled { id, restart } => {
+                let tail = if restart { " (se activa al reiniciar)" } else { "" };
+                self.show_hint(Hint::text(format!("Plugin {id} instalado{tail}")), cx);
+            },
+            E::PluginRemoved { id, restart } => {
+                let tail = if restart { " (se quita al reiniciar)" } else { "" };
+                self.show_hint(Hint::text(format!("Plugin {id} quitado{tail}")), cx);
+            },
+            E::SaveFailed(msg) => self.show_hint(Hint::text(format!("No se pudo guardar config.toml: {msg}")), cx),
+            E::Saved | E::InstallGrammar { .. } => {},
+        }
+    }
+
+    /// Shows the wizard instead of the shell (first run, or "Volver a configurar").
+    fn start_onboarding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.onboarding.is_some() {
+            return;
+        }
+        let view = ui_onboarding::onboarding((*self.config).clone(), self.session_db.clone(), self.theme, cx);
+        self._onboarding_sub = Some(cx.subscribe_in(&view, window, |this, _, ev: &ui_onboarding::OnboardingEvent, window, cx| {
+            this.on_onboarding_event(ev.clone(), window, cx);
+        }));
+        view.read(cx).focus(window);
+        self.onboarding = Some(view);
+        cx.notify();
+    }
+
+    fn on_onboarding_event(&mut self, event: ui_onboarding::OnboardingEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use ui_onboarding::OnboardingEvent as E;
+        match event {
+            E::Finished { config, .. } => {
+                self.end_onboarding(window, cx);
+                // The wizard already saved config.toml; adopt it (a "System" theme is dark here).
+                self.adopt_config(Arc::new(config.clone()), cx);
+                let mode = match config.appearance.mode {
+                    ThemeMode::Light => Mode::Light,
+                    ThemeMode::Oled => Mode::Oled,
+                    ThemeMode::Dark | ThemeMode::System => Mode::Dark,
+                };
+                self.set_theme(Theme::for_mode(mode), cx);
+                if let Some(settings) = self.settings.clone() {
+                    settings.update(cx, |s, cx| s.set_config(config, cx));
+                }
+                self.load_known_projects(cx);
+            },
+            E::Skipped => self.end_onboarding(window, cx),
+            E::OpenLoginTerminal { command, .. } => {
+                let cwd = self.active_cwd(cx);
+                self.open_tab(cwd, window, cx);
+                self.type_in_active(&command, true, cx);
+            },
+            // A live preview: the window follows the choice, the config is untouched.
+            E::ThemePreview(mode) => self.set_theme(Theme::for_mode(mode), cx),
+        }
+    }
+
+    fn end_onboarding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.onboarding = None;
+        self._onboarding_sub = None;
+        if let Some(slot) = self.active_id().and_then(|id| self.slot(id)) {
+            slot.handle.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Process tracking without a job
+    // ------------------------------------------------------------------------------------
+
+    /// While tree-tracked owners exist (a shell Windows refused to put in a job, such as the
+    /// Microsoft Store `pwsh`) **and** the procs panel is open and the window focused, refreshes
+    /// them every `proc_svc::TREE_POLL_INTERVAL`. The task ends by itself as soon as one of those
+    /// stops being true, so nothing ticks at rest.
+    fn sync_tree_poll(&mut self, cx: &mut Context<Self>) {
+        if self.tree_poll.is_some() || !self.right_panel_active(&PanelId::new(ui_procs::PANEL_ID)) {
+            return;
+        }
+        let Some(services) = cx.try_global::<Services>().cloned() else { return };
+        let tracker = services.tracker.clone();
+        if !tracker.lock().unwrap_or_else(|p| p.into_inner()).needs_polling() {
+            return;
+        }
+        let procs = services.procs;
+        self.tree_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(proc_svc::TREE_POLL_INTERVAL).await;
+                let t = tracker.clone();
+                let more = cx
+                    .background_executor()
+                    .spawn(async move { t.lock().unwrap_or_else(|p| p.into_inner()).poll_tree() })
+                    .await;
+                let wanted = this
+                    .update(cx, |shell, cx| {
+                        procs.update(cx, |_, cx| cx.notify());
+                        shell.right_panel_active(&PanelId::new(ui_procs::PANEL_ID)) && notify::window_active()
+                    })
+                    .unwrap_or(false);
+                if !more || !wanted {
+                    break;
+                }
+            }
+            this.update(cx, |shell, _| shell.tree_poll = None).ok();
+        }));
     }
 }
 
@@ -2851,6 +3497,33 @@ mod tests {
         assert_eq!(AppShell::rail_w(&zen), 0.0);
         let chat = ResolvedLayout::builtin(B::Chat);
         assert_eq!(AppShell::rail_w(&chat), 0.0);
+    }
+
+    #[test]
+    fn unified_layout_dedupes_usage_and_never_gets_the_full_bar() {
+        use store::BuiltinPreset as B;
+        let mut l = ResolvedLayout::builtin(B::EspaciosUnificados);
+        l.bottom_bar = BottomBar::Full;
+        let eff = adapt_for_shell(&l, 1440.0, false);
+        assert!(dedupes_usage(&eff));
+        assert_eq!(eff.layout.bottom_bar, BottomBar::Compact);
+        // Icon-only column or a narrow window: the footer meter is not on screen, the pill returns.
+        assert!(!dedupes_usage(&adapt_for_shell(&l, 1440.0, true)));
+        assert!(!dedupes_usage(&adapt_for_shell(&l, 800.0, false)));
+        // The classic presets keep their bar and their usage pill.
+        let mut orq = ResolvedLayout::builtin(B::Orquestador);
+        orq.bottom_bar = BottomBar::Full;
+        let eff = adapt_for_shell(&orq, 1440.0, false);
+        assert!(!dedupes_usage(&eff));
+        assert_eq!(eff.layout.bottom_bar, BottomBar::Full);
+    }
+
+    #[test]
+    fn unified_preset_shows_the_panel_buttons_once() {
+        let l = ResolvedLayout::builtin(store::BuiltinPreset::EspaciosUnificados);
+        // The titlebar holds them; the sidebar's icon row stays off unless the user asks for it.
+        assert!(!l.titlebar.panel_buttons.is_empty());
+        assert!(!l.sidebar.panel_icons);
     }
 
     #[test]

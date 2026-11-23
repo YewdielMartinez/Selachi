@@ -8,6 +8,7 @@ mod agents;
 mod app_shell;
 mod block_layout;
 mod block_ui;
+mod chat_host;
 mod git_monitor;
 mod git_panel;
 mod grouping;
@@ -21,13 +22,16 @@ mod paths;
 mod rail;
 mod services;
 mod session;
+mod settings_tab;
 mod sidebar;
+mod spaces;
 mod splits;
 mod status_bar;
 mod terminal_element;
 mod terminal_tab;
 mod terminal_view;
 mod titlebar;
+mod unified_sidebar;
 mod usage_monitor;
 mod viewer_host;
 
@@ -45,7 +49,7 @@ use theme::Theme;
 
 use crate::app_shell::{
     AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, SessionBoot, ToggleFullscreen, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7,
-    Jump8, Jump9, NewTab, NextAttention, NextTab, PrevTab, ToggleLayoutPanel, ToggleTheme,
+    Jump8, Jump9, NewTab, NewTerminalTab, NextAttention, NextTab, OpenSettings, PrevTab, ToggleLayoutPanel, ToggleSidebar, ToggleTheme,
 };
 use crate::git_panel::ContextPanelProvider;
 use crate::services::Services;
@@ -110,6 +114,7 @@ fn register_panels(cx: &mut App) {
     registry.register(ui_usage::UsagePanelProvider::new(services.usage.clone()));
     registry.register(ui_review::AttentionPanelProvider::new(services.attention.clone()));
     registry.register(ui_procs::ProcsPanelProvider::new(services.procs.clone()));
+    registry.register(chat_host::ThreadsProvider);
     registry.register(ui_doctor::DoctorPanelProvider::new(services.doctor.clone(), env!("CARGO_PKG_VERSION")));
     cx.set_global(services);
     cx.set_global(registry);
@@ -118,7 +123,10 @@ fn register_panels(cx: &mut App) {
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
-        KeyBinding::new("ctrl-shift-n", NewTab, None),
+        KeyBinding::new("ctrl-shift-n", NewTerminalTab, None),
+        KeyBinding::new("ctrl-n", NewTab, None),
+        KeyBinding::new("ctrl-b", ToggleSidebar, None),
+        KeyBinding::new("ctrl-,", OpenSettings, None),
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PrevTab, None),
@@ -154,6 +162,8 @@ fn main() {
         ui_git::init(cx);
         ui_viewer::bind_keys(cx);
         ui_review::init(cx);
+        ui_chat::init(cx);
+        ui_settings::init(cx);
         register_panels(cx);
         // The layout popover's content: the real `ui_layout` panel.
         ui_layout::init(cx);

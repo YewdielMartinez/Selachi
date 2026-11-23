@@ -130,7 +130,7 @@ impl AttentionView {
         let kind_color: Hsla = match &item.kind {
             AttentionKind::Approval { .. } => ink(&theme, 11, 3),
             AttentionKind::WaitingInput => ink(&theme, 12, 4),
-            AttentionKind::Failed { .. } => c.error.into(),
+            AttentionKind::Failed { .. } | AttentionKind::AgentError => c.error.into(),
             AttentionKind::LongCommandDone => ink(&theme, 10, 2),
         };
         let id = item.id.clone();

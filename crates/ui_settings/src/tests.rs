@@ -174,14 +174,14 @@ fn hot_reload_does_not_clobber_an_edit_in_progress(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn extras_persist_and_the_https_only_rule_applies_to_the_index_url(cx: &mut TestAppContext) {
+fn general_options_persist_and_the_https_only_rule_applies_to_the_index_url(cx: &mut TestAppContext) {
     let f = fixture(cx, TEMPLATE);
     f.view.update(cx, |v, cx| {
-        v.edit_extras("general.confirm_close_running", cx, |e| e.confirm_close_running = false);
-        v.edit_extras("index_url", cx, |e| e.index_url = "http://evil.example/g.toml".into());
+        v.edit_cfg(cx, |c| c.general.confirm_close_running = false);
+        v.edit_field("index_url", cx, |c| c.plugins.index_url = "http://evil.example/g.toml".into());
         assert!(v.errors.contains_key("index_url"));
-        assert!(v.extras().index_url.is_empty(), "http:// is never adopted");
-        v.edit_extras("index_url", cx, |e| e.index_url = "https://example.com/g.toml".into());
+        assert!(v.config().plugins.index_url.is_empty(), "http:// is never adopted");
+        v.edit_field("index_url", cx, |c| c.plugins.index_url = "https://example.com/g.toml".into());
         assert!(!v.errors.contains_key("index_url"));
     });
     settle(cx);
@@ -189,28 +189,28 @@ fn extras_persist_and_the_https_only_rule_applies_to_the_index_url(cx: &mut Test
     assert!(saved.contains("confirm_close_running = false"), "{saved}");
     assert!(saved.contains("https://example.com/g.toml"));
     assert!(!saved.contains("evil.example"));
-    // The store config in the same file is untouched and still parses.
     assert!(Config::parse(&saved).is_ok());
 }
 
 #[gpui::test]
-fn sidebar_options_and_group_by_persist(cx: &mut TestAppContext) {
+fn sidebar_options_titlebar_buttons_and_group_by_persist(cx: &mut TestAppContext) {
     let f = fixture(cx, TEMPLATE);
     f.view.update(cx, |v, cx| {
-        v.edit_extras("sidebar", cx, |e| e.sidebar.row_time = false);
-        v.edit_extras("sidebar", cx, |e| e.sidebar.set_titlebar("usage", false));
         v.edit_cfg(cx, |c| {
             let mut r = c.layout.resolve();
+            r.sidebar.row_time = false;
             r.sidebar.group_by = store::GroupBy::Status;
+            r.titlebar.panel_buttons.retain(|b| b.as_str() != "usage");
             c.layout.set_resolved(&r);
         });
     });
     settle(cx);
     let saved = disk(&f);
     assert!(saved.contains("row_time = false"), "{saved}");
-    let extras = crate::extras::Extras::parse(&saved);
-    assert!(!extras.sidebar.row_time && !extras.sidebar.titlebar_has("usage") && extras.sidebar.show_actions);
-    assert_eq!(Config::parse(&saved).unwrap().config.layout.resolve().sidebar.group_by, store::GroupBy::Status);
+    let layout = Config::parse(&saved).unwrap().config.layout.resolve();
+    assert!(!layout.sidebar.row_time && layout.sidebar.show_actions);
+    assert!(!layout.titlebar.has("usage") && layout.titlebar.has("git"));
+    assert_eq!(layout.sidebar.group_by, store::GroupBy::Status);
 }
 
 #[gpui::test]

@@ -80,7 +80,7 @@ async fn app_stats_and_db_sizes_flow_into_the_diagnosis(cx: &mut TestAppContext)
     let (model, _src) = new_model(cx);
     model.update(cx, |m, cx| {
         m.set_db_paths(vec![("selachi.db".into(), "a.db".into()), ("state.db".into(), "b.db".into())]);
-        m.set_app_stats(AppStats { shells: Some(2), agents: Some(1), grammars: vec!["rust".into()] }, cx);
+        m.set_app_stats(AppStats { shells: Some(2), agents: Some(1), grammars: vec!["rust".into()], tree_tracked: 0 }, cx);
         m.set_visible(true, cx);
     });
     cx.run_until_parked();

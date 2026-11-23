@@ -381,7 +381,7 @@ impl Default for TitlebarLayout {
 impl TitlebarLayout {
     /// Every button of [`DEFAULT_TITLEBAR_BUTTONS`] (the unified preset).
     pub fn all_buttons() -> Self {
-        Self { panel_buttons: DEFAULT_TITLEBAR_BUTTONS.iter().map(|id| PanelId::new(id)).collect() }
+        Self { panel_buttons: DEFAULT_TITLEBAR_BUTTONS.iter().map(PanelId::new).collect() }
     }
 
     pub fn has(&self, id: &str) -> bool {
@@ -481,7 +481,9 @@ impl ResolvedLayout {
                 tabs_position: TabsPosition::Sidebar,
                 sidebar: SidebarLayout {
                     show_actions: true,
-                    panel_icons: true,
+                    // The panel buttons live at the right of the titlebar; the icon row of the
+                    // sidebar would show them twice (still configurable).
+                    panel_icons: false,
                     nested_tabs: true,
                     footer_usage: true,
                     ..sidebar(260, &[S::Spaces], GroupBy::Project)
@@ -1891,7 +1893,7 @@ path = ""
         assert_eq!(u.sidebar.side, SidebarSide::Left);
         assert_eq!(u.sidebar.sections, vec![SidebarSection::Spaces]);
         let s = &u.sidebar;
-        assert!(s.show_actions && s.panel_icons && s.nested_tabs && s.footer_usage);
+        assert!(s.show_actions && !s.panel_icons && s.nested_tabs && s.footer_usage);
         assert!(s.row_model && s.row_time);
         let ids: Vec<&str> = u.titlebar.panel_buttons.iter().map(PanelId::as_str).collect();
         assert_eq!(ids, DEFAULT_TITLEBAR_BUTTONS);

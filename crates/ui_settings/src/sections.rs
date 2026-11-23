@@ -4,12 +4,14 @@ use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled
 use store::config::AutoStop;
 use store::Density;
 use theme::{Rgba, rgb};
-use ui_kit::{Button, GhostButton, Slider, SwatchRow};
+use ui_kit::{Button, GhostButton, Slider};
 
-use crate::extras::LANGUAGES;
 use crate::keys;
 use crate::ui::{self, PillTone, decimal, note, row, status_pill, value_label};
 use crate::view::{Section, SettingsEvent, SettingsView};
+
+/// Language ids the UI can be translated to. Only Spanish exists today.
+pub const LANGUAGES: &[(&str, &str)] = &[("es", "Español")];
 
 /// Accent choices (the first is Selachi's brand accent, the default).
 pub const ACCENTS: [u32; 8] = [0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2];
@@ -19,15 +21,15 @@ impl SettingsView {
         let t = self.theme;
         let languages: Vec<(String, String)> =
             LANGUAGES.iter().map(|(id, name)| ((*id).to_string(), (*name).to_string())).collect();
-        let lang = self.select(cx, "general-lang", languages, &self.extras.language.clone(), |s, v, cx| {
+        let lang = self.select(cx, "general-lang", languages, &self.cfg.general.language.clone(), |s, v, cx| {
             let v = v.to_string();
-            s.edit_extras("general.language", cx, |e| e.language = v);
+            s.edit_cfg(cx, |c| c.general.language = v);
         });
         let restore = self.toggle(cx, "restore-session", self.cfg.session.restore, |s, on, cx| {
             s.edit_cfg(cx, |c| c.session.restore = on);
         });
-        let confirm = self.toggle(cx, "confirm-close", self.extras.confirm_close_running, |s, on, cx| {
-            s.edit_extras("general.confirm_close_running", cx, |e| e.confirm_close_running = on);
+        let confirm = self.toggle(cx, "confirm-close", self.cfg.general.confirm_close_running, |s, on, cx| {
+            s.edit_cfg(cx, |c| c.general.confirm_close_running = on);
         });
         let chord = keys::effective(&self.catalog, &self.cfg.keybindings, "window.fullscreen");
         let f11 = div()
@@ -100,7 +102,7 @@ impl SettingsView {
             store::config::parse_hex_color(&a.accent).is_some_and(|(r, g, b)| (u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) == *h)
         });
         let this = cx.entity();
-        let swatches = SwatchRow::new("accent", &t, colors).selected(selected).on_select(move |ix, _, cx| {
+        let swatches = accent_swatches(&t, colors, selected, move |ix, _, cx| {
             this.update(cx, |s, cx| {
                 let hex = format!("#{:06X}", ACCENTS[ix.min(ACCENTS.len() - 1)]);
                 s.errors.remove("accent_hex");
@@ -431,4 +433,48 @@ fn open_folder(dir: &std::path::Path) {
     if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
         eprintln!("ui_settings: could not open {}: {e}", dir.display());
     }
+}
+
+/// Perceived brightness above which a swatch needs a ring to stay visible on a light surface.
+const RING_LUMA: f32 = 0.85;
+
+fn luma(c: Rgba) -> f32 {
+    0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+}
+
+/// The accent swatches. Same look as `ui_kit::SwatchRow`, plus an `outline_soft` ring on the
+/// near-white ones (`#ECEEF2`): on the light theme they melt into the card otherwise.
+fn accent_swatches(
+    theme: &theme::Theme,
+    colors: Vec<Rgba>,
+    selected: Option<usize>,
+    on_select: impl Fn(usize, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl IntoElement {
+    use gpui::{ElementId, InteractiveElement, StatefulInteractiveElement, prelude::FluentBuilder};
+    let c = theme.colors;
+    let on_select = std::rc::Rc::new(on_select);
+    div().flex().flex_row().items_center().gap(px(6.0)).children(colors.into_iter().enumerate().map(move |(ix, color)| {
+        let on_select = on_select.clone();
+        let is_sel = selected == Some(ix);
+        let ringed = luma(color) > RING_LUMA;
+        div()
+            .id(ElementId::NamedInteger("accent".into(), ix as u64))
+            .occlude()
+            .size(px(24.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .cursor_pointer()
+            .when(is_sel, |d| d.border_2().border_color(c.text))
+            .child(
+                div()
+                    .size(px(if is_sel { 12.0 } else { 18.0 }))
+                    .rounded_full()
+                    .bg(color)
+                    .when(ringed, |d| d.border_1().border_color(c.outline_soft)),
+            )
+            .on_click(move |_, window, cx| on_select(ix, window, cx))
+    }))
 }

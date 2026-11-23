@@ -80,6 +80,24 @@ pub fn blocks(layout: &ResolvedLayout, cols: u8, rows: u8) -> Vec<WireRect> {
         let (x0, y0, w, h) = (z.x0, z.y0, z.w(), z.h());
         match z.zone {
             Zone::Rail => out.push(WireRect::new(x0, y0, w, h, WireFill::Solid)),
+            Zone::Sidebar if layout.sidebar.nested_tabs && w >= 4 && h >= 8 => {
+                // Unified sidebar: actions on top, spaces with nested rows, usage at the foot.
+                out.push(WireRect::new(x0, y0, w, h, WireFill::Dither));
+                let inner = w.saturating_sub(2).max(1);
+                out.push(WireRect::new(x0 + 1, y0 + 1, inner, 1, WireFill::Solid));
+                let mut y = y0 + 4;
+                let mut space = true;
+                while y + 2 < y0 + h {
+                    if space {
+                        out.push(WireRect::new(x0 + 1, y, inner, 1, WireFill::Solid));
+                    } else {
+                        out.push(WireRect::new(x0 + 2, y, inner.saturating_sub(1).max(1), 1, WireFill::Solid));
+                    }
+                    space = !space && y % 3 == 0;
+                    y += 2;
+                }
+                out.push(WireRect::new(x0 + 1, y0 + h - 1, inner, 1, WireFill::Solid));
+            }
             Zone::Sidebar | Zone::Right => out.push(WireRect::new(x0, y0, w, h, WireFill::Dither)),
             Zone::Main => out.push(WireRect::new(x0, y0, w, h, WireFill::Outline)),
             Zone::Tabs if z.is_tab_strip() => {

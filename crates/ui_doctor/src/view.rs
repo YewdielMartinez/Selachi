@@ -232,7 +232,14 @@ fn tiles(theme: &Theme, h: &Health) -> Vec<AnyElement> {
         (None, None) => (dash(), String::new()),
         (s, a) => (
             format!("{} shells", s.unwrap_or(0)),
-            match a.unwrap_or(0) { 1 => "1 agente".to_string(), n => format!("{n} agentes") },
+            {
+                let agents = match a.unwrap_or(0) { 1 => "1 agente".to_string(), n => format!("{n} agentes") };
+                match h.stats.tree_tracked {
+                    0 => agents,
+                    // No Job Object (Store `pwsh`): the processes are followed by walking the tree.
+                    n => format!("{agents} · {n} con seguimiento por árbol"),
+                }
+            },
         ),
     };
     out.push(tile(theme, "Sesiones").child(big(theme, sessions)).child(sub(theme, sessions_sub)).into_any_element());

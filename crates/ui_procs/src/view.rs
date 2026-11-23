@@ -495,6 +495,10 @@ impl ProcsPanel {
         if owner.probable {
             el = el.child(tag(&theme, probable_label(compact)));
         }
+        if owner.tree_tracked {
+            // No Job Object (for example the Microsoft Store `pwsh`): "seguimiento por árbol".
+            el = el.child(tag(&theme, if compact { "árbol" } else { "seguimiento por árbol" }));
+        }
         let orphans = owner.orphan_count();
         if orphans > 0 {
             el = el.child(

@@ -5232,8 +5232,10 @@ dependencies = [
 name = "selachi"
 version = "0.1.0"
 dependencies = [
+ "agents_driver",
  "agents_svc",
  "anyhow",
+ "chat_core",
  "embed-resource",
  "env_logger",
  "futures",
@@ -5249,13 +5251,16 @@ dependencies = [
  "term_core",
  "theme",
  "toml 0.8.23",
+ "ui_chat",
  "ui_doctor",
  "ui_git",
  "ui_kit",
  "ui_layout",
+ "ui_onboarding",
  "ui_palette",
  "ui_procs",
  "ui_review",
+ "ui_settings",
  "ui_usage",
  "ui_viewer",
  "viewer_svc",

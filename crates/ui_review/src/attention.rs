@@ -45,6 +45,8 @@ pub enum AttentionKind {
     Failed { exit_code: i32 },
     /// A long command finished (A4).
     LongCommandDone,
+    /// A chat thread's agent ended with an error (no exit code: it is not a command).
+    AgentError,
 }
 
 impl AttentionKind {
@@ -55,6 +57,7 @@ impl AttentionKind {
             AttentionKind::WaitingInput => 1,
             AttentionKind::Failed { .. } => 2,
             AttentionKind::LongCommandDone => 3,
+            AttentionKind::AgentError => 2,
         }
     }
 
@@ -66,6 +69,7 @@ impl AttentionKind {
             AttentionKind::Approval { tool, .. } => format!("Pide aprobación: {tool}"),
             AttentionKind::Failed { exit_code } => format!("Falló (código {exit_code})"),
             AttentionKind::LongCommandDone => "Terminó un comando largo".to_string(),
+            AttentionKind::AgentError => "Terminó con un error".to_string(),
         }
     }
 

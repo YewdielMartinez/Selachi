@@ -111,6 +111,9 @@ pub struct AppStats {
     pub agents: Option<usize>,
     /// Loaded language grammar plugins.
     pub grammars: Vec<String>,
+    /// Shells tracked by process tree because Windows would not put them in a Job Object
+    /// (`proc_svc::TrackingMode::TreeOnly`, for example the Microsoft Store `pwsh`).
+    pub tree_tracked: usize,
 }
 
 /// DB files to size, in display order.
@@ -274,7 +277,7 @@ mod tests {
             threads: 17,
             children: vec![ChildProc { pid: 7, name: "pwsh.exe".into(), working_set: 90 * MIB }],
             frames: FrameInfo { since_open: 1_240, last: Some(Duration::from_micros(2_300)), slowest: None },
-            stats: AppStats { shells: Some(2), agents: None, grammars: vec!["rust".into(), "toml".into()] },
+            stats: AppStats { shells: Some(2), agents: None, grammars: vec!["rust".into(), "toml".into()], tree_tracked: 0 },
             dbs: vec![DbSize { label: "selachi.db".into(), bytes: Some(MIB) }, DbSize { label: "state.db".into(), bytes: None }],
             uptime: Some(Duration::from_secs(125)),
             ..Health::default()

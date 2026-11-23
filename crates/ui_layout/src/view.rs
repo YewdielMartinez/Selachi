@@ -30,6 +30,18 @@ pub const PANEL_WIDTH: f32 = 560.0;
 const PAD: f32 = 14.0;
 const CARD_W: f32 = 101.0;
 
+/// Buttons the titlebar can show, in display order: `(id, label)`. `review` opens the review tab
+/// and `layout` is this panel's own popover.
+const TITLEBAR_BUTTONS: [(&str, &str); 7] = [
+    ("git", "Git"),
+    ("files", "Archivos"),
+    ("procs", "Procesos"),
+    ("usage", "Uso"),
+    ("review", "Revisión"),
+    ("attention", "Atención"),
+    ("layout", "Layout"),
+];
+
 type ChangeFn = Rc<dyn Fn(LayoutConfig, &mut Window, &mut App) + 'static>;
 
 /// A one-line status under the preset row (export / import results, validation errors).
@@ -53,6 +65,8 @@ pub struct LayoutPanel {
     kbd: bool,
     /// Child index of: header, presets, tabs, sidebar, zones, look in the scroll container.
     section_ix: [usize; 6],
+    /// Hosted inside another screen (Settings > Diseño): full width, no card chrome, no own scroll.
+    embedded: bool,
 }
 
 /// Create the panel.
@@ -80,6 +94,7 @@ pub fn layout_panel(
         scroll: ScrollHandle::new(),
         kbd: false,
         section_ix: [0, 1, 2, 3, 4, 5],
+        embedded: false,
     })
 }
 
@@ -90,6 +105,19 @@ impl Focusable for LayoutPanel {
 }
 
 impl LayoutPanel {
+    /// Embedded mode (Settings > Diseño): the panel takes the full width of its host, drops the
+    /// 560 px card (background, rounded corners) and its own scroll area (the host scrolls).
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded != embedded {
+            self.embedded = embedded;
+            cx.notify();
+        }
+    }
+
+    pub fn is_embedded(&self) -> bool {
+        self.embedded
+    }
+
     /// Follow a theme change.
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.theme = theme;
@@ -1128,7 +1156,7 @@ impl LayoutPanel {
         l: &ResolvedLayout,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> [Div; 4] {
+    ) -> [Div; 5] {
         let base = self.state.base_layout();
         let right = |id: &str| Some(PanelId::new(id));
 
@@ -1187,6 +1215,12 @@ impl LayoutPanel {
             window,
             cx,
         );
+        let show_actions = self.toggle("sb-actions", l.sidebar.show_actions, |l, v| l.sidebar.show_actions = v, window, cx);
+        let panel_icons = self.toggle("sb-icons", l.sidebar.panel_icons, |l, v| l.sidebar.panel_icons = v, window, cx);
+        let nested = self.toggle("sb-nested", l.sidebar.nested_tabs, |l, v| l.sidebar.nested_tabs = v, window, cx);
+        let footer = self.toggle("sb-footer", l.sidebar.footer_usage, |l, v| l.sidebar.footer_usage = v, window, cx);
+        let row_model = self.toggle("sb-model", l.sidebar.row_model, |l, v| l.sidebar.row_model = v, window, cx);
+        let row_time = self.toggle("sb-time", l.sidebar.row_time, |l, v| l.sidebar.row_time = v, window, cx);
         let sidebar_group = self.group(
             "Sidebar",
             vec![
@@ -1196,7 +1230,27 @@ impl LayoutPanel {
                     .items_start()
                     .into_any_element(),
                 self.row("Agrupar por", group_by).into_any_element(),
+                self.row("Acciones «Nueva pestaña» y «Buscar»", show_actions)
+                    .into_any_element(),
+                self.row("Fila de iconos de paneles", panel_icons)
+                    .into_any_element(),
+                self.row("Pestañas dentro de su espacio", nested)
+                    .into_any_element(),
+                self.row("Uso y Ajustes al pie", footer).into_any_element(),
+                self.row("Modelo y rama en cada fila", row_model)
+                    .into_any_element(),
+                self.row("Tiempo en cada fila", row_time).into_any_element(),
             ],
+        );
+
+        // Botones de la barra de título.
+        let chips = self.titlebar_chips(l, cx);
+        let titlebar_group = self.group(
+            "Barra de título",
+            vec![self
+                .row("Botones de paneles", chips)
+                .items_start()
+                .into_any_element()],
         );
 
         // Zonas.
@@ -1219,7 +1273,7 @@ impl LayoutPanel {
                 (right(store::config::panel_ids::GIT), "Git"),
                 (right(store::config::panel_ids::CONTEXT), "Contexto"),
                 (right(store::config::panel_ids::PROCS), "Procesos"),
-                (right(store::config::panel_ids::VIEWER), "Visor"),
+                (right(store::config::panel_ids::FILES), "Archivos"),
                 (None, "Ninguno"),
             ],
             Some(l.right_panel.clone()),
@@ -1298,7 +1352,63 @@ impl LayoutPanel {
             ],
         );
 
-        [tabs_group, sidebar_group, zones_group, look_group]
+        [tabs_group, sidebar_group, titlebar_group, zones_group, look_group]
+    }
+
+    /// One toggle chip per button the titlebar can show (right panels, review, layout).
+    fn titlebar_chips(&mut self, l: &ResolvedLayout, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let c = t.colors;
+        let this = cx.entity();
+        div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_end()
+            .gap(px(6.0))
+            .max_w(px(300.0))
+            .children(TITLEBAR_BUTTONS.iter().map(|(id, label)| {
+                let on = l.titlebar.has(id);
+                let this = this.clone();
+                let id = *id;
+                div()
+                    .id(SharedString::from(format!("tb-btn-{id}")))
+                    .occlude()
+                    .h(px(26.0))
+                    .px(px(10.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.0))
+                    .rounded(px(9.0))
+                    .cursor_pointer()
+                    .bg(if on { c.surface_4 } else { c.surface_1 })
+                    .text_size(px(12.0))
+                    .text_color(if on { c.text } else { c.muted })
+                    .hover(move |s| s.bg(c.surface_3).text_color(c.text))
+                    .when(on, |d| d.child(icon(Icon::Check, 12.0, c.text)))
+                    .child(*label)
+                    .on_click(move |_, window, cx| {
+                        this.update(cx, |p, cx| {
+                            p.edit(window, cx, |l| {
+                                let list = &mut l.titlebar.panel_buttons;
+                                if on {
+                                    list.retain(|b| b.as_str() != id);
+                                } else {
+                                    list.push(PanelId::new(id));
+                                    // Keep the canonical order of the chips.
+                                    let pos = |b: &PanelId| {
+                                        TITLEBAR_BUTTONS
+                                            .iter()
+                                            .position(|(i, _)| *i == b.as_str())
+                                            .unwrap_or(usize::MAX)
+                                    };
+                                    list.sort_by_key(pos);
+                                }
+                            });
+                        });
+                    })
+            }))
     }
 }
 
@@ -1312,10 +1422,11 @@ impl Render for LayoutPanel {
         let header = self.header(&layout, window, cx);
         let notes = self.notes();
         let presets = self.presets(window, cx);
-        let [tabs, sidebar, zones, look] = self.fine_options(&layout, window, cx);
+        let [tabs, sidebar, titlebar, zones, look] = self.fine_options(&layout, window, cx);
         // Child index of each section in the scroll container (see `reveal_focus`).
         let first = 1 + usize::from(notes.is_some());
-        self.section_ix = [0, first, first + 1, first + 2, first + 3, first + 4];
+        self.section_ix = [0, first, first + 1, first + 2, first + 4, first + 5];
+        let embedded = self.embedded;
 
         div()
             .key_context(PANEL_CONTEXT)
@@ -1344,20 +1455,19 @@ impl Render for LayoutPanel {
                     cx.notify();
                 }
             }))
-            .w(px(PANEL_WIDTH))
-            .flex_none()
-            .rounded(px(Radius::SM))
-            .bg(c.surface_2)
+            .when(!embedded, |d| {
+                d.w(px(PANEL_WIDTH)).flex_none().rounded(px(Radius::SM)).bg(c.surface_2)
+            })
+            .when(embedded, |d| d.w_full().min_w_0())
             .text_color(c.text)
             .font_family(t.typography.ui_family)
             .text_size(px(t.typography.ui_size_md))
             .child(
                 div()
                     .id("layout-panel-scroll")
-                    .max_h(px(max_h))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .p(px(PAD))
+                    .when(!embedded, |d| {
+                        d.max_h(px(max_h)).overflow_y_scroll().track_scroll(&self.scroll).p(px(PAD))
+                    })
                     .flex()
                     .flex_col()
                     .gap(px(16.0))
@@ -1366,6 +1476,7 @@ impl Render for LayoutPanel {
                     .child(presets)
                     .child(tabs)
                     .child(sidebar)
+                    .child(titlebar)
                     .child(zones)
                     .child(look),
             )
