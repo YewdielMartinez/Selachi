@@ -56,6 +56,7 @@ pub mod jobs;
 pub mod mcp;
 pub mod output;
 pub mod policy;
+pub mod profiles;
 pub mod registry;
 pub mod run;
 pub mod slots;
@@ -72,6 +73,7 @@ pub use approvals::{
 pub use control::{CancelOutcome, StatusOut};
 pub use output::{DiffStat, RunResult, RunStatus, UsageOut};
 pub use policy::{Caller, DelegationConfig, Permission, Policy, Refusal, RefusalCode};
-pub use registry::{Registry, RunRecord};
+pub use profiles::{Library, Profile, ProfileError};
+pub use registry::{Registry, RunLimits, RunRecord};
 pub use run::{Harness, HarnessBuilder, RunRequest};
 pub use usage::{AgentsSvcProbe, LimitRow, UsageProbe};

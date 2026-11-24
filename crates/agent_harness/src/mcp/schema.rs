@@ -5,8 +5,9 @@
 
 use serde_json::{json, Value};
 
-pub const TOOL_NAMES: [&str; 7] = [
+pub const TOOL_NAMES: [&str; 8] = [
     "list_agents",
+    "list_profiles",
     "run_agent",
     "agent_status",
     "agent_result",
@@ -56,6 +57,27 @@ pub fn tools() -> Vec<Value> {
             json!({"title": "List coding agents", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}),
         ),
         tool(
+            "list_profiles",
+            "List subagent profiles",
+            "List the subagent profiles you can pass as `profile` to run_agent: name, description, agent, model, effort, permission \
+             (as the profile writes it), effective_permission (what it would really get for YOU), worktree, timeout_secs, \
+             budget_tokens, output_format, whether it has instructions and where it comes from (global or project). Call this before \
+             run_agent and pick the profile whose description fits the task. A profile never raises your limits. \
+             ES: lista los perfiles de subagente (especializaciones) disponibles para run_agent.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "cwd": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Absolute path of the project, to include its .selachi/agents profiles. Optional (default: the global profiles only). ES: ruta del proyecto, para incluir sus perfiles."
+                    }
+                },
+                "additionalProperties": false
+            }),
+            json!({"title": "List subagent profiles", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}),
+        ),
+        tool(
             "run_agent",
             "Delegate a task to another agent",
             "Delegate a self-contained task to another coding agent running under Selachi's limits (permission never above \
@@ -63,14 +85,20 @@ pub fn tools() -> Vec<Value> {
              Blocks until the agent finishes unless async is true; then use agent_status / agent_result. \
              The prompt must be self-contained and must NOT contain secrets. Returns run_id, status, summary, files_changed, \
              diff_stat, usage, cost and worktree_path. With permission accept_edits use worktree=true and review with \
-             get_diff before apply_changes. ES: delega una tarea autocontenida en otro agente; nunca incluyas secretos en el prompt.",
+             get_diff before apply_changes. Prefer a `profile` (see list_profiles) when one fits: it brings its own agent, model, \
+             instructions and limits, and can only narrow yours. ES: delega una tarea autocontenida en otro agente; nunca incluyas secretos en el prompt.",
             json!({
                 "type": "object",
                 "properties": {
                     "agent": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Agent to run: claude | codex | opencode | gemini | agy (antigravity). ES: agente que ejecutará la tarea."
+                        "description": "Agent to run: claude | codex | opencode | gemini | agy (antigravity). Required unless `profile` is given (then optional: it overrides the profile's agent). ES: agente que ejecutará la tarea; opcional con un perfil."
+                    },
+                    "profile": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Name of a subagent profile from list_profiles (e.g. \"Tests\"). Its instructions, model, effort, context files and limits apply; it can never exceed your permission or the delegation limits. ES: nombre de un perfil de subagente (ver list_profiles)."
                     },
                     "prompt": {
                         "type": "string",
@@ -89,7 +117,7 @@ pub fn tools() -> Vec<Value> {
                     "permission": {
                         "type": "string",
                         "enum": ["read_only", "ask", "accept_edits"],
-                        "description": "read_only (default): the agent only reads. ask: edits need approval in Selachi. accept_edits: edits allowed (use with worktree). Never more than your own permission; full is never delegable. ES: permiso del agente hijo (nunca mayor que el tuyo)."
+                        "description": "read_only (default): the agent only reads. ask: edits need approval in Selachi. accept_edits: edits allowed (use with worktree). Never more than your own permission; full is never delegable. With a profile, omit it to use the profile's permission (lowered to yours if needed); giving it can only narrow the profile's. ES: permiso del agente hijo (nunca mayor que el tuyo)."
                     },
                     "worktree": {
                         "type": "boolean",
@@ -111,7 +139,7 @@ pub fn tools() -> Vec<Value> {
                         "description": "Return immediately with the run_id and poll with agent_status / agent_result. Default false (blocks). ES: devolver al instante y consultar después."
                     }
                 },
-                "required": ["agent", "prompt", "cwd"],
+                "required": ["prompt", "cwd"],
                 "additionalProperties": false
             }),
             json!({"title": "Delegate a task to another agent", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}),
@@ -307,7 +335,15 @@ mod tests {
         let ok = json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "permission": "ask", "timeout_s": 5, "async": true});
         assert!(validate(&s, &ok).is_ok());
         let bad = |v: Value| validate(&s, &v).unwrap_err();
-        assert!(bad(json!({"prompt": "x", "cwd": "C:/p"})).contains("`agent` is required"));
+        assert!(bad(json!({"agent": "codex", "cwd": "C:/p"})).contains("`prompt` is required"));
+        // the agent is optional (a profile supplies it); `run_agent` itself asks for one of the two
+        assert!(validate(
+            &s,
+            &json!({"profile": "Tests", "prompt": "x", "cwd": "C:/p"})
+        )
+        .is_ok());
+        assert!(bad(json!({"profile": "", "prompt": "x", "cwd": "C:/p"}))
+            .contains("`profile` must not be empty"));
         assert!(
             bad(json!({"agent": "codex", "prompt": "  ", "cwd": "C:/p"}))
                 .contains("`prompt` must not be empty")

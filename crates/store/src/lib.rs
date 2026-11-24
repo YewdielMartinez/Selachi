@@ -22,8 +22,8 @@ pub mod redact;
 pub mod snippets;
 
 pub use config::{
-    layout_changed, wireframe, BottomBar, BuiltinPreset, Config, ConfigEvent, ConfigLoad,
-    ConfigWatcher, CustomPreset, Delegation, Density, General, GroupBy, LayoutConfig,
+    layout_changed, wireframe, AgentProfiles, BottomBar, BuiltinPreset, Config, ConfigEvent,
+    ConfigLoad, ConfigWatcher, CustomPreset, Delegation, Density, General, GroupBy, LayoutConfig,
     LayoutOverrides, PanelId, Plugins, PresetId, ProjectLayoutOverride, RailVisibility,
     ResolvedLayout, RetentionConfig, SidebarLayout, SidebarOverrides, SidebarSection, SidebarSide,
     Splits, TabsPosition, TitlebarLayout, TitlebarOverrides, Updates, WireRect, WorktreeLocation,

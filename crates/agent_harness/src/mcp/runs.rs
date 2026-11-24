@@ -40,11 +40,14 @@ const POLL: Duration = Duration::from_millis(50);
 /// What `run_agent` asked for (already validated).
 #[derive(Debug, Clone)]
 pub struct Spec {
-    pub agent: String,
+    /// `None` only with a profile.
+    pub agent: Option<String>,
+    pub profile: Option<String>,
     pub prompt: String,
     pub cwd: PathBuf,
     pub model: Option<String>,
-    pub permission: String,
+    /// `None` = not given (with a profile, the profile's permission applies).
+    pub permission: Option<String>,
     pub worktree: bool,
     pub timeout_s: Option<u64>,
     pub budget_tokens: Option<u64>,
@@ -74,7 +77,12 @@ pub fn agent_exe() -> Result<PathBuf, String> {
 pub fn child_args(spec: &Spec) -> Vec<String> {
     let mut a: Vec<String> = vec!["run".into(), "--json".into(), "--announce-run-id".into()];
     a.push(format!("--cwd={}", spec.cwd.display()));
-    a.push(format!("--permission={}", spec.permission));
+    if let Some(p) = &spec.permission {
+        a.push(format!("--permission={p}"));
+    }
+    if let Some(p) = &spec.profile {
+        a.push(format!("--profile={p}"));
+    }
     if let Some(m) = &spec.model {
         a.push(format!("--model={m}"));
     }
@@ -87,8 +95,18 @@ pub fn child_args(spec: &Spec) -> Vec<String> {
     if let Some(b) = spec.budget_tokens {
         a.push(format!("--budget-tokens={b}"));
     }
-    a.push("--".into());
-    a.push(spec.agent.clone());
+    match &spec.agent {
+        // with a profile the agent is a flag too, so the prompt marker is the only positional
+        Some(agent) if spec.profile.is_some() => {
+            a.push(format!("--agent={agent}"));
+            a.push("--".into());
+        }
+        Some(agent) => {
+            a.push("--".into());
+            a.push(agent.clone());
+        }
+        None => a.push("--".into()),
+    }
     // The prompt travels on stdin: no command-line length limit, no quoting problems.
     a.push("-".into());
     a
@@ -235,11 +253,12 @@ mod tests {
     #[test]
     fn child_args_are_flag_injection_proof() {
         let spec = Spec {
-            agent: "--json".into(),
+            agent: Some("--json".into()),
+            profile: None,
             prompt: "x".into(),
             cwd: PathBuf::from("C:/my project"),
             model: Some("--worktree".into()),
-            permission: "read_only".into(),
+            permission: Some("read_only".into()),
             worktree: true,
             timeout_s: Some(30),
             budget_tokens: Some(1000),
@@ -255,5 +274,36 @@ mod tests {
         assert!(a.contains(&"--model=--worktree".to_string()));
         assert!(a.contains(&"--cwd=C:/my project".to_string()));
         assert!(a.contains(&"--timeout=30s".to_string()));
+    }
+
+    #[test]
+    fn child_args_with_a_profile() {
+        let spec = Spec {
+            agent: None,
+            profile: Some("--force".into()),
+            prompt: "x".into(),
+            cwd: PathBuf::from("C:/p"),
+            model: None,
+            permission: None,
+            worktree: false,
+            timeout_s: None,
+            budget_tokens: None,
+            background: false,
+        };
+        let a = child_args(&spec);
+        assert!(a.contains(&"--profile=--force".to_string()));
+        assert!(
+            !a.iter().any(|x| x.starts_with("--permission")),
+            "no permission flag unless the caller gave one: the profile's applies"
+        );
+        let dd = a.iter().position(|x| x == "--").unwrap();
+        assert_eq!(&a[dd + 1..], ["-"]);
+        let with_agent = child_args(&Spec {
+            agent: Some("codex".into()),
+            ..spec
+        });
+        assert!(with_agent.contains(&"--agent=codex".to_string()));
+        let dd = with_agent.iter().position(|x| x == "--").unwrap();
+        assert_eq!(&with_agent[dd + 1..], ["-"]);
     }
 }

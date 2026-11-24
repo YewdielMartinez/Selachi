@@ -531,6 +531,13 @@ fn seeded(id: &str, started_ms: i64, billable: u64) -> RunRecord {
         deadline_ms: started_ms + 1000,
         result: Some(result),
         applied_ms: None,
+        profile: None,
+        final_prompt: None,
+        limits: None,
+        launcher: None,
+        effort: None,
+        output_format: None,
+        context_files: Vec::new(),
     }
 }
 

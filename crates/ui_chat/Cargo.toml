@@ -16,6 +16,7 @@ ignore = "0.4"
 log.workspace = true
 panel_api = { version = "0.1.0", path = "../panel_api" }
 serde_json = "1"
+store = { version = "0.0.1", path = "../store" }
 theme = { version = "0.1.0", path = "../theme" }
 ui_kit = { version = "0.1.0", path = "../ui_kit" }
 viewer_svc = { version = "0.1.0", path = "../viewer_svc" }

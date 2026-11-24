@@ -19,6 +19,7 @@
 //! | Feedback | [`DitherMeter`], [`Spinner`], [`StatusGlyph`], [`Tooltip`] |
 //! | Settings | [`SettingRow`], [`SegmentedControl`], [`Toggle`], [`Slider`], [`SwatchRow`] |
 //! | Overlays | [`Popover`] |
+//! | Text | [`SelectableText`] + [`SelectionGroup`] (drag, word and paragraph selection, `Ctrl+C`, `Ctrl+A`, links) |
 //! | Lists | [`VirtualList`], [`ListRow`], [`RadioRow`], [`FocusCard`], [`EmptyState`] |
 //! | Layout | [`Wireframe`], [`SectionLabel`], [`Card`], [`MeasuredWidth`] + [`WidthClass`] |
 //! | Tests | [`testing`] (feature `test-support`) |
@@ -51,6 +52,7 @@ mod pill;
 mod popover;
 mod rows;
 mod select;
+pub mod selectable;
 mod setting_row;
 mod surface;
 pub mod text_field;
@@ -80,6 +82,10 @@ pub use meter::DitherMeter;
 pub use motion::{reduced_motion, set_reduced_motion};
 pub use pill::{Pill, PillSize};
 pub use popover::{Cancel as PopoverCancel, Placement, Popover, SHEET_BELOW_WIDTH};
+pub use selectable::{
+    Gap, SegmentSource, Segments, SelPos, SelectableText, SelectionGroup, clamp_boundary,
+    line_range, word_range,
+};
 pub use rows::{FocusCard, RADIO_CONTEXT, RADIO_ROLE, RadioNext, RadioPrev, RadioRow};
 pub use select::{Select, SelectEvent, SelectOption};
 pub use setting_row::{RowGeometry, SETTING_ROW_GAP, SettingRow};
@@ -109,6 +115,7 @@ pub fn init(cx: &mut gpui::App) {
     select::bind_keys(cx);
     popover::bind_keys(cx);
     rows::bind_keys(cx);
+    selectable::bind_keys(cx);
 }
 
 pub(crate) fn ensure_init(cx: &mut gpui::App) {

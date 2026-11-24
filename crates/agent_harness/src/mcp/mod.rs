@@ -1,5 +1,5 @@
 //! `selachi-agent mcp`: an MCP server over **stdio only** (no sockets, no ports) that exposes the agent
-//! harness as typed tools: `list_agents`, `run_agent`, `agent_status`, `agent_result`, `cancel_agent`,
+//! harness as typed tools: `list_agents`, `list_profiles`, `run_agent`, `agent_status`, `agent_result`, `cancel_agent`,
 //! `get_diff`, `apply_changes`.
 //!
 //! # Protocol
@@ -68,7 +68,8 @@ const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
 const INSTRUCTIONS: &str = "Selachi delegates work to other coding agents (Codex, Gemini, OpenCode, Claude, Antigravity) under limits. \
-Use list_agents first, then run_agent with a self-contained prompt (never secrets). Default permission is read_only; for edits use \
+Use list_agents first, and list_profiles: when a profile fits the task, call run_agent with profile=<name> (a profile can only narrow your limits, never raise them). \
+Then run_agent with a self-contained prompt (never secrets). Default permission is read_only; for edits use \
 permission=accept_edits with worktree=true, review with get_diff, then apply_changes (the user must confirm; it never applies silently). \
 Long task: run_agent with async=true, then agent_status / agent_result. Respect refusals: they say what to change.";
 

@@ -489,6 +489,39 @@ mod tests {
         let t = Config::parse(TEMPLATE).unwrap().config;
         assert_eq!(t.delegation, c.delegation);
         assert_eq!(t.updates, c.updates);
+        assert_eq!(t.agent_profiles, c.agent_profiles);
+    }
+
+    #[test]
+    fn agent_profiles_section_defaults_and_validation() {
+        let c = Config::default();
+        assert!(c.agent_profiles.enabled && c.agent_profiles.project_profiles);
+        assert_eq!(c.agent_profiles.max_context_kb, 200);
+        // it does not collide with the shell `[[profiles]]` list
+        let p = Config::parse(
+            "[agent_profiles]
+project_profiles = false
+max_context_kb = 50
+
+[[profiles]]
+name = \"x\"
+program = \"cmd\"
+",
+        )
+        .unwrap();
+        assert!(!p.config.agent_profiles.project_profiles);
+        assert_eq!(p.config.agent_profiles.max_context_kb, 50);
+        assert_eq!(p.config.profiles.len(), 1);
+        assert!(Config::parse(
+            "[agent_profiles]
+max_context_kb = 0"
+        )
+        .is_err());
+        assert!(Config::parse(
+            "[agent_profiles]
+max_context_kb = 201"
+        )
+        .is_err());
     }
 
     #[test]

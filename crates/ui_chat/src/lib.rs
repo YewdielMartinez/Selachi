@@ -48,6 +48,8 @@
 
 mod chat_view;
 mod composer;
+pub mod copy;
+mod copy_ui;
 mod hub;
 mod lineage;
 mod md;
@@ -74,7 +76,7 @@ pub use lineage::{
     DelegationRun, MAX_NEST_DEPTH, RunState, children_of, delegation_cost, delegation_line,
     files_label, nest, run_state_label,
 };
-pub use md::{MdBody, ParsedMd, parse_markdown, render_md};
+pub use md::{MdBody, ParsedMd, parse_markdown, render_md, render_md_selectable};
 pub use mentions::{MentionQuery, filter_files, mention_at, walk_files};
 pub use options::{
     AgentOption, EFFORTS, ModelOption, PERMISSION_ORDER, agent_mark, default_agents, effort_label,

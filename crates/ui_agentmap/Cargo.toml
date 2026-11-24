@@ -1,0 +1,25 @@
+[package]
+name = "ui_agentmap"
+version = "0.1.0"
+edition = "2024"
+description = "Selachi subagent map (PLAN section 21.2): the delegation tree / graph / timeline of a session, fed by chat.db links and the harness run registry, with an inspector. Emits events only; runs nothing"
+
+[lints]
+workspace = true
+
+[dependencies]
+chat_core = { version = "0.1.0", path = "../chat_core" }
+futures.workspace = true
+gpui.workspace = true
+log.workspace = true
+panel_api = { version = "0.1.0", path = "../panel_api" }
+serde_json = "1"
+store = { version = "0.0.1", path = "../store" }
+theme = { version = "0.1.0", path = "../theme" }
+ui_kit = { version = "0.1.0", path = "../ui_kit" }
+
+[dev-dependencies]
+agents_driver = { version = "0.1.0", path = "../agents_driver" }
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"
+ui_kit = { version = "0.1.0", path = "../ui_kit", features = ["test-support"] }

@@ -4,6 +4,8 @@
 //! selachi-agent list   [--json] [--models]
 //! selachi-agent run    <agent> [--cwd DIR] [--model M] [--permission read-only|ask|accept-edits]
 //!                      [--worktree] [--timeout 15m] [--budget-tokens N] [--json] "<prompt>"   ("-" = stdin)
+//! selachi-agent run    --profile <name> [--agent A] [options] "<prompt>"
+//! selachi-agent profiles list|show|dry-run|init|import-claude ...   (see [`crate::profiles::cli`])
 //! selachi-agent status <run_id> [--json]
 //! selachi-agent result <run_id> [--json]
 //! selachi-agent cancel <run_id> [--json]
@@ -24,6 +26,7 @@ use crate::apply::{Confirmation, Risk};
 use crate::control::CancelOutcome;
 use crate::output::RunStatus;
 use crate::policy::Permission;
+use crate::profiles::cli::{self as profiles_cli, ProfilesCmd};
 use crate::run::{Harness, RunRequest};
 
 pub const USAGE: &str = "\
@@ -32,6 +35,12 @@ selachi-agent: delegate work to another coding agent (Claude Code, Codex, OpenCo
 USAGE
   selachi-agent list   [--json] [--models]
   selachi-agent run    <agent> [options] \"<prompt>\"        (use - to read the prompt from stdin)
+  selachi-agent run    --profile <name> [options] \"<prompt>\"  (agent, model, limits and instructions from a profile)
+  selachi-agent profiles list    [--cwd <dir>] [--json]
+  selachi-agent profiles show    <name> [--cwd <dir>] [--json]
+  selachi-agent profiles dry-run <name> \"<prompt>\" [run options]   (prints the exact final prompt and the effective limits; runs nothing)
+  selachi-agent profiles init    [--project] [--only <name>] [--force] [--dry-run]   (writes the starter profiles)
+  selachi-agent profiles import-claude [--project] [--from <dir>] [--force] [--dry-run] [--yes]   (Claude Code subagents -> profiles)
   selachi-agent status <run_id> [--json]
   selachi-agent result <run_id> [--json]
   selachi-agent cancel <run_id> [--json]
@@ -40,6 +49,9 @@ USAGE
   selachi-agent mcp                                        MCP server on stdio (for Claude Code, Antigravity...)
 
 RUN OPTIONS
+  --profile <name>          subagent profile (%APPDATA%\\Selachi\\agents\\*.toml or <project>\\.selachi\\agents\\*.toml);
+                            it can only narrow the limits, never raise them
+  --agent <name>            agent to use (overrides the profile's)
   --cwd <dir>               project directory (default: the current directory)
   --model <name>            model for the agent
   --permission <mode>       read-only (default) | ask | accept-edits.  Never more than the calling session
@@ -70,6 +82,7 @@ pub enum Command {
         models: bool,
     },
     Run(RunArgs),
+    Profiles(ProfilesCmd),
     Status {
         id: String,
         json: bool,
@@ -99,12 +112,17 @@ pub enum Command {
 /// Arguments of `run`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunArgs {
-    pub agent: String,
+    /// `None` only with a profile (its agent applies).
+    pub agent: Option<String>,
+    /// Subagent profile name.
+    pub profile: Option<String>,
     /// `-` means "read stdin".
     pub prompt: String,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
     pub permission: Permission,
+    /// `--permission` was given (with a profile it can only narrow the profile's).
+    pub permission_explicit: bool,
     pub worktree: bool,
     pub timeout: Option<Duration>,
     pub budget_tokens: Option<u64>,
@@ -155,6 +173,10 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "--permission",
         "--timeout",
         "--budget-tokens",
+        "--profile",
+        "--agent",
+        "--from",
+        "--only",
     ];
     let mut only_positional = false;
     while let Some(a) = it.next() {
@@ -205,17 +227,23 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--budget-tokens",
             "--json",
             "--announce-run-id",
+            "--profile",
+            "--agent",
         ],
         "status" | "result" | "cancel" => &["--json"],
         "diff" => &["--stat"],
         "apply" => &["--dry-run", "--yes", "--json"],
         "mcp" => &[],
+        "profiles" => &[], // validated per action by `profiles::cli::parse`
         other => {
             return Err(format!(
                 "unknown command `{other}`; see `selachi-agent --help`"
             ))
         }
     };
+    if sub == "profiles" {
+        return profiles_cli::parse(positional, &flags).map(Command::Profiles);
+    }
     if let Some((bad, _)) = flags.iter().find(|(f, _)| !allowed.contains(&f.as_str())) {
         return Err(format!("`{sub}` does not take {bad}"));
     }
@@ -238,38 +266,21 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             }
         }
         "run" => {
+            let profile = val("--profile");
             let mut p = positional.into_iter();
-            let agent = p.next().ok_or(
-                "`run` needs an agent (claude, codex, opencode, gemini, agy) and a prompt",
-            )?;
+            // the agent is the first word unless `--agent` or a profile supplies it
+            let agent = match (val("--agent"), &profile) {
+                (Some(a), _) => Some(a),
+                (None, Some(_)) => None,
+                (None, None) => Some(p.next().ok_or(
+                    "`run` needs an agent (claude, codex, opencode, gemini, agy) or --profile, and a prompt",
+                )?),
+            };
             let prompt = p.collect::<Vec<_>>().join(" ");
             if prompt.trim().is_empty() {
                 return Err("`run` needs a prompt (use - to read it from stdin)".into());
             }
-            let permission = match val("--permission") {
-                Some(v) => Permission::parse(&v).ok_or_else(|| {
-                    format!("unknown permission `{v}` (read-only, ask, accept-edits)")
-                })?,
-                None => Permission::ReadOnly,
-            };
-            Command::Run(RunArgs {
-                agent,
-                prompt,
-                cwd: val("--cwd").map(PathBuf::from),
-                model: val("--model"),
-                permission,
-                worktree: has("--worktree"),
-                timeout: val("--timeout").map(|v| parse_duration(&v)).transpose()?,
-                budget_tokens: val("--budget-tokens")
-                    .map(|v| {
-                        v.replace('_', "")
-                            .parse::<u64>()
-                            .map_err(|_| format!("--budget-tokens `{v}` is not a number"))
-                    })
-                    .transpose()?,
-                json: has("--json"),
-                announce_run_id: has("--announce-run-id"),
-            })
+            Command::Run(build_run_args(&flags, agent, profile, prompt)?)
         }
         "mcp" => {
             if !positional.is_empty() {
@@ -303,7 +314,49 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     })
 }
 
-fn harness(export_env: bool) -> Result<Harness, String> {
+/// The options of `run` (and of `profiles dry-run`) over the parsed flags.
+pub(crate) fn build_run_args(
+    flags: &[(String, Option<String>)],
+    agent: Option<String>,
+    profile: Option<String>,
+    prompt: String,
+) -> Result<RunArgs, String> {
+    let has = |n: &str| flags.iter().any(|(f, _)| f == n);
+    let val = |n: &str| {
+        flags
+            .iter()
+            .rev()
+            .find(|(f, _)| f == n)
+            .and_then(|(_, v)| v.clone())
+    };
+    let permission = match val("--permission") {
+        Some(v) => Permission::parse(&v)
+            .ok_or_else(|| format!("unknown permission `{v}` (read-only, ask, accept-edits)"))?,
+        None => Permission::ReadOnly,
+    };
+    Ok(RunArgs {
+        agent,
+        profile,
+        prompt,
+        cwd: val("--cwd").map(PathBuf::from),
+        model: val("--model"),
+        permission,
+        permission_explicit: has("--permission"),
+        worktree: has("--worktree"),
+        timeout: val("--timeout").map(|v| parse_duration(&v)).transpose()?,
+        budget_tokens: val("--budget-tokens")
+            .map(|v| {
+                v.replace('_', "")
+                    .parse::<u64>()
+                    .map_err(|_| format!("--budget-tokens `{v}` is not a number"))
+            })
+            .transpose()?,
+        json: has("--json"),
+        announce_run_id: has("--announce-run-id"),
+    })
+}
+
+pub(crate) fn harness(export_env: bool) -> Result<Harness, String> {
     crate::fake::apply_env(Harness::builder().export_child_env(export_env))?.build()
 }
 
@@ -373,6 +426,7 @@ fn execute(cmd: Command) -> Result<i32, String> {
             Ok(0)
         }
         Command::Mcp => Ok(crate::mcp::run_stdio()),
+        Command::Profiles(p) => profiles_cli::execute(p),
         Command::Run(a) => {
             let h = run_harness(a.announce_run_id)?;
             warn_config(&h);
@@ -389,9 +443,11 @@ fn execute(cmd: Command) -> Result<i32, String> {
                 Some(c) => c,
                 None => std::env::current_dir().map_err(|e| e.to_string())?,
             };
-            let mut req = RunRequest::new(a.agent, prompt, cwd);
+            let mut req = RunRequest::new(a.agent.unwrap_or_default(), prompt, cwd);
+            req.profile = a.profile;
             req.model = a.model;
             req.permission = a.permission;
+            req.permission_explicit = a.permission_explicit;
             req.worktree = a.worktree;
             req.timeout = a.timeout;
             req.budget_tokens = a.budget_tokens;
@@ -470,7 +526,7 @@ fn execute(cmd: Command) -> Result<i32, String> {
     }
 }
 
-fn warn_config(h: &Harness) {
+pub(crate) fn warn_config(h: &Harness) {
     if let Some(w) = h.config_warning() {
         eprintln!("selachi-agent: warning: {w}");
     }
@@ -596,7 +652,8 @@ mod tests {
         let Command::Run(a) = parse(&args).unwrap() else {
             panic!("not run")
         };
-        assert_eq!(a.agent, "codex");
+        assert_eq!(a.agent.as_deref(), Some("codex"));
+        assert!(a.permission_explicit && a.profile.is_none());
         assert_eq!(a.prompt, "revisa los tests");
         assert_eq!(a.cwd, Some(PathBuf::from("C:/p")));
         assert_eq!(a.permission, Permission::AcceptEdits);

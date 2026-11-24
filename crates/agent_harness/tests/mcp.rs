@@ -271,7 +271,7 @@ fn modern_discover_and_version_errors() {
 
     let l = m.rpc("tools/list", meta("2026-07-28"));
     assert_eq!(l["result"]["resultType"], "complete");
-    assert_eq!(l["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(l["result"]["tools"].as_array().unwrap().len(), 8);
 
     let bad = m.rpc("tools/list", meta("1900-01-01"));
     assert_eq!(bad["error"]["code"], -32022);
@@ -349,7 +349,7 @@ fn partial_lines_crlf_and_blank_lines() {
     );
     m.wait_for("101", |v| v["id"] == 101);
     let l = m.wait_for("102", |v| v["id"] == 102);
-    assert_eq!(l["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(l["result"]["tools"].as_array().unwrap().len(), 8);
     // a UTF-8 BOM and multibyte text survive
     m.write_raw("\u{feff}".as_bytes());
     let r = m.call("agent_status", json!({"run_id": "ñandú-✓"}));
@@ -884,7 +884,7 @@ fn cancelled_notification_stops_the_run_and_the_response() {
             .as_array()
             .unwrap()
             .len(),
-        7
+        8
     );
     m.notify(
         "notifications/cancelled",

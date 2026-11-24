@@ -133,6 +133,13 @@ pub struct ChatView {
     pending_effort: Option<Option<String>>,
     notice: Option<String>,
     project_menu_open: bool,
+    /// Selection group of each selectable block, by `(row, block)` (see `copy_ui`).
+    pub(crate) selections: HashMap<(RowKey, u8), ui_kit::SelectionGroup>,
+    pub(crate) hover_row: Option<RowKey>,
+    pub(crate) hover_bar: Option<RowKey>,
+    pub(crate) menu: Option<crate::copy_ui::CopyMenu>,
+    pub(crate) toast: Option<crate::copy_ui::Toast>,
+    pub(crate) toast_task: Option<Task<()>>,
     /// Delegation rows that are expanded.
     open_delegations: HashSet<ThreadId>,
     /// Width of the chat zone itself (measured while painting; the window's before that).
@@ -190,6 +197,12 @@ impl ChatView {
             pending_effort: None,
             notice: None,
             project_menu_open: false,
+            selections: HashMap::new(),
+            hover_row: None,
+            hover_bar: None,
+            menu: None,
+            toast: None,
+            toast_task: None,
             open_delegations: HashSet::new(),
             viewport_w: 1200.0,
             window_w: 1200.0,

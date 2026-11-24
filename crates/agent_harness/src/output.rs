@@ -11,7 +11,7 @@
 //! }
 //! ```
 //!
-//! Extra fields (`agent`, `permission`, `thread_id`, `reason`, `code`, `notes`) are additive.
+//! Extra fields (`agent`, `permission`, `thread_id`, `reason`, `code`, `notes`, `profile`) are additive.
 
 use std::fmt::Write as _;
 
@@ -154,6 +154,9 @@ pub struct RunResult {
     /// Things worth knowing (an approval that was refused, a redaction, a checkpoint that failed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// Name of the subagent profile the run used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 impl RunResult {
@@ -174,6 +177,7 @@ impl RunResult {
             reason: None,
             code: None,
             notes: Vec::new(),
+            profile: None,
         }
     }
 
@@ -196,7 +200,14 @@ impl RunResult {
         let mut s = String::new();
         let id = self.run_id.as_deref().unwrap_or("-");
         let agent = self.agent.as_deref().unwrap_or("?");
-        let _ = writeln!(s, "run {id} · {} · {agent}", self.status.as_str());
+        let _ = match &self.profile {
+            Some(p) => writeln!(
+                s,
+                "run {id} · {} · {agent} · profile {p}",
+                self.status.as_str()
+            ),
+            None => writeln!(s, "run {id} · {} · {agent}", self.status.as_str()),
+        };
         if let Some(reason) = &self.reason {
             let _ = writeln!(s, "reason: {reason}");
         }

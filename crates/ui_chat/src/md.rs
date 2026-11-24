@@ -3,7 +3,7 @@
 //! surfaces only (no divider lines). The parse is lazy and cached per row ([`MdBody`]), so a
 //! frame never parses twice.
 
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -13,7 +13,7 @@ use gpui::{
     TextRun, div, prelude::*, px, relative,
 };
 use theme::{Mode, Radius, Rgba, Theme, rgb};
-use ui_kit::{Icon, icon};
+use ui_kit::{Gap, Icon, SelectableText, SelectionGroup, Segments, icon};
 use viewer_svc::{
     HighlightKind, Lang, MdAlign, MdBlock, MdInline, MdListItem, MdTable, highlight_text,
     markdown_blocks,
@@ -258,6 +258,12 @@ pub struct MdRender<'a> {
     next_id: Cell<usize>,
     next_code: Cell<usize>,
     in_list: Cell<bool>,
+    /// Selection of the message, when the text is selectable.
+    group: Option<SelectionGroup>,
+    /// Text of every selectable segment, in document order (the group's copy source).
+    segs: RefCell<Segments>,
+    /// How the next segment joins the previous one in a copy.
+    gap: Cell<Gap>,
 }
 
 impl<'a> MdRender<'a> {
@@ -269,6 +275,31 @@ impl<'a> MdRender<'a> {
             next_id: Cell::new(0),
             next_code: Cell::new(0),
             in_list: Cell::new(false),
+            group: None,
+            segs: RefCell::new(Segments::new()),
+            gap: Cell::new(Gap::Block),
+        }
+    }
+
+    /// Makes every text run of the document selectable through `group`.
+    pub fn with_group(mut self, group: SelectionGroup) -> Self {
+        self.group = Some(group);
+        self
+    }
+
+    /// Registers `text` as the next segment of the selection (document order) and returns its
+    /// index; `None` when the document is not selectable.
+    fn seg(&self, text: &str) -> Option<usize> {
+        self.group.as_ref()?;
+        let gap = self.gap.replace(Gap::Line);
+        Some(self.segs.borrow_mut().push(text.to_owned(), gap))
+    }
+
+    /// A new block starts: its first segment is separated from the previous one by a blank line
+    /// (list items stay on consecutive lines).
+    fn block_start(&self) {
+        if !self.in_list.get() {
+            self.gap.set(Gap::Block);
         }
     }
 
@@ -284,7 +315,7 @@ impl<'a> MdRender<'a> {
     }
 }
 
-/// Renders the whole document.
+/// Renders the whole document (not selectable: for read-only notes like the update screen).
 pub fn render_md(parsed: &ParsedMd, theme: Theme, id_base: usize) -> AnyElement {
     let r = MdRender::new(theme, parsed, id_base);
     div()
@@ -293,6 +324,28 @@ pub fn render_md(parsed: &ParsedMd, theme: Theme, id_base: usize) -> AnyElement 
         .flex()
         .flex_col()
         .children(parsed.blocks.iter().map(|b| render_block(b, &r)))
+        .into_any_element()
+}
+
+/// Renders the whole document with selectable text: drag, double / triple click, `Ctrl+C`,
+/// `Ctrl+A` inside the returned container (keyboard focusable, owned by `group`). The selection
+/// spans every block (paragraphs, lists, tables, code lines); links still open on a plain click.
+pub fn render_md_selectable(
+    parsed: &ParsedMd,
+    theme: Theme,
+    id_base: usize,
+    group: &SelectionGroup,
+) -> AnyElement {
+    let r = MdRender::new(theme, parsed, id_base).with_group(group.clone());
+    let blocks: Vec<AnyElement> = parsed.blocks.iter().map(|b| render_block(b, &r)).collect();
+    group.set_segments(r.segs.take());
+    group
+        .container(ElementId::named_usize("md-sel", id_base), &theme)
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .children(blocks)
         .into_any_element()
 }
 
@@ -391,6 +444,15 @@ fn inline_el(
 ) -> AnyElement {
     let flat = flatten(inlines);
     let has_code = flat.runs.iter().any(|(_, s)| s.code);
+    if let (Some(group), Some(seg)) = (&r.group, r.seg(&flat.text)) {
+        let sel = SelectableText::new(group, seg, SharedString::from(flat.text.clone()));
+        let sel = if has_code {
+            sel.with_runs(code_runs(&flat, &r.theme, weight, color))
+        } else {
+            sel.with_highlights(inline_styles(&flat, &r.theme))
+        };
+        return sel.links(flat.links).into_any_element();
+    }
     let text = if has_code {
         let runs = code_runs(&flat, &r.theme, weight, color);
         StyledText::new(SharedString::from(flat.text)).with_runs(runs)
@@ -426,6 +488,7 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
     let ty = r.theme.typography;
     let theme = r.theme;
     let c = theme.colors;
+    r.block_start();
     match block {
         MdBlock::Heading { level, inlines } => div()
             .mt(px(if *level <= 2 { 16.0 } else { 10.0 }))
@@ -547,14 +610,25 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
                     )
                 })
                 .collect();
+            let text_el: AnyElement = match (&r.group, r.seg(line)) {
+                (Some(group), Some(seg)) => {
+                    SelectableText::new(group, seg, SharedString::from(line.to_owned()))
+                        .with_highlights(styled)
+                        .into_any_element()
+                }
+                _ => StyledText::new(SharedString::from(line.to_owned()))
+                    .with_highlights(styled)
+                    .into_any_element(),
+            };
             div()
                 .min_h(px(19.0))
                 .whitespace_nowrap()
-                .child(StyledText::new(SharedString::from(line.to_owned())).with_highlights(styled))
+                .child(text_el)
                 .into_any_element()
         })
         .collect();
     let copy_text = body.to_string();
+    let copy_group = r.group.clone();
     let copy = div()
         .id(r.id("md-copy"))
         .occlude()
@@ -572,8 +646,9 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .tooltip(ui_kit::Tooltip::text(&theme, "Copiar código"))
         // TODO-SVG: `assets/icons/copy.svg` (16x16). Until it exists the button is text only.
         .child("Copiar")
-        .on_click(move |_, _, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
+        .on_click(move |_, window, cx| match &copy_group {
+            Some(g) => g.copy_text(copy_text.clone(), window, cx),
+            None => cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())),
         });
     div()
         .my(px(6.0))
@@ -668,7 +743,13 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
 
 fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
     let c = r.theme.colors;
-    let cell = |inlines: &[MdInline], align: MdAlign, header: bool| -> AnyElement {
+    let cell = |inlines: &[MdInline], align: MdAlign, header: bool, row: usize, col: usize| -> AnyElement {
+        // Cells of a row are tab separated, rows are lines.
+        if col > 0 {
+            r.gap.set(Gap::Tab);
+        } else if row > 0 {
+            r.gap.set(Gap::Line);
+        }
         let d = div()
             .flex_1()
             .min_w_0()
@@ -696,13 +777,13 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
         t.header
             .iter()
             .enumerate()
-            .map(|(i, h)| cell(h, align(i), true)),
+            .map(|(i, h)| cell(h, align(i), true, 0, i)),
     );
-    let rows = t.rows.iter().map(|row| {
+    let rows = t.rows.iter().enumerate().map(|(ri, row)| {
         div().flex().flex_row().children(
             row.iter()
                 .enumerate()
-                .map(|(i, h)| cell(h, align(i), false)),
+                .map(|(i, h)| cell(h, align(i), false, ri + 1, i)),
         )
     });
     div()

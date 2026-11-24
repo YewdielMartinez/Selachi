@@ -21,6 +21,7 @@ use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity
 use panel_api::TabHandle;
 use theme::Theme;
 
+use crate::copy::CopySettings;
 use crate::lineage::DelegationRun;
 use crate::mentions::{MAX_FILES, walk_files};
 use crate::options::{AgentOption, default_agents};
@@ -82,6 +83,8 @@ pub struct ChatHub {
     /// (even empty) means the agent was asked once: no retry this session.
     models: HashMap<String, Vec<agents_driver::ModelInfo>>,
     probe_models: bool,
+    /// "Ocultar secretos al copiar" (session only until the store has a field; see [`CopySettings`]).
+    copy: CopySettings,
     error: Option<String>,
     _pump: Task<()>,
 }
@@ -146,6 +149,7 @@ impl ChatHub {
             runs: HashMap::new(),
             models: HashMap::new(),
             probe_models: true,
+            copy: CopySettings::default(),
             error: None,
             _pump: pump,
         };
@@ -207,6 +211,23 @@ impl ChatHub {
         }
         out
     }
+    /// The "Ocultar secretos al copiar" toggles (command output on, text off by default).
+    pub fn copy_settings(&self) -> CopySettings {
+        self.copy
+    }
+
+    /// Changes the copy toggles and refreshes the open chats.
+    ///
+    /// TODO(integrator): the store has no field for this yet. Call it from the config loader /
+    /// hot-reload (e.g. `[chat] redact_copy_commands` / `redact_copy_text`) and persist the
+    /// `ChatEvent`-less changes the user makes in the chat menus by reading `copy_settings()`.
+    pub fn set_copy_settings(&mut self, settings: CopySettings, cx: &mut Context<Self>) {
+        if self.copy != settings {
+            self.copy = settings;
+            cx.notify();
+        }
+    }
+
 
     pub fn set_projects(&mut self, projects: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.projects = projects;

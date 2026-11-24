@@ -11,7 +11,7 @@ use crate::agents::list_agents;
 use crate::apply::{ApplyPlan, Confirmation, Risk};
 use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PROTOCOL_VERSION};
 use crate::output::{cap_chars, diff_stat_of, RunResult, RunStatus};
-use crate::policy::Caller;
+use crate::policy::{Caller, Permission};
 use crate::run::Harness;
 
 use super::runs::{self, Spec, Started};
@@ -87,6 +87,7 @@ pub fn call(ctx: &Ctx, name: &str, args: Value, state: &CallState) -> Option<Too
     let b = |k: &str| args.get(k).and_then(Value::as_bool).unwrap_or(false);
     Some(match name {
         "list_agents" => list(&h, b("models")),
+        "list_profiles" => list_profiles(&h, s("cwd").as_deref()),
         "run_agent" => run_agent(&h, &args, state),
         "agent_status" => status(&h, &s("run_id").unwrap_or_default()),
         "agent_result" => result(&h, &s("run_id").unwrap_or_default()),
@@ -110,6 +111,85 @@ fn list(h: &Harness, models: bool) -> ToolOutput {
         models,
     );
     ToolOutput::ok(list.to_text(), to_value(&list))
+}
+
+/// `list_profiles`: every usable profile with the permission it would really get for this caller.
+fn list_profiles(h: &Harness, cwd: Option<&str>) -> ToolOutput {
+    let root = match cwd {
+        Some(c) => match std::fs::canonicalize(c) {
+            Ok(p) => Some(PathBuf::from(store::paths::clean_display(
+                &p.to_string_lossy(),
+            ))),
+            Err(e) => {
+                return ToolOutput::error(format!("cwd {c} is not an existing directory: {e}"))
+            }
+        },
+        None => None,
+    };
+    let lib = h.library(root.as_deref());
+    if !lib.settings.enabled {
+        return ToolOutput::ok(
+            "agent profiles are turned off ([agent_profiles] enabled = false); use run_agent with an explicit agent",
+            json!({"profiles": [], "errors": [], "enabled": false}),
+        );
+    }
+    let listing = lib.list();
+    let cap = h
+        .caller()
+        .permission
+        .min(h.config().max_permission.min(Permission::AcceptEdits));
+    let profiles: Vec<Value> = listing
+        .profiles
+        .iter()
+        .map(|p| {
+            let mut v = p.to_value(false);
+            let wanted = p.permission.unwrap_or(Permission::ReadOnly);
+            v["effective_permission"] = json!(wanted.min(cap).as_str());
+            v
+        })
+        .collect();
+    let errors: Vec<Value> = listing
+        .errors
+        .iter()
+        .map(|e| json!({"path": store::paths::clean_display(&e.path.to_string_lossy()), "problems": e.problems}))
+        .collect();
+    let text = if listing.profiles.is_empty() {
+        format!(
+            "no profiles found; run_agent works with an explicit agent.{}",
+            if listing.errors.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} profile file(s) have errors)", listing.errors.len())
+            }
+        )
+    } else {
+        let mut s = String::from("profiles (pass the name as `profile` to run_agent):\n");
+        for (p, v) in listing.profiles.iter().zip(&profiles) {
+            s.push_str(&format!(
+                "- {} [{}]: {} (agent {}, permission {}{}{})\n",
+                p.name,
+                p.scope.as_str(),
+                if p.description.is_empty() {
+                    "(no description)"
+                } else {
+                    &p.description
+                },
+                p.agent,
+                v["effective_permission"].as_str().unwrap_or("read-only"),
+                if p.worktree { ", worktree" } else { "" },
+                match p.output_format {
+                    crate::profiles::OutputFormat::Text => String::new(),
+                    f => format!(", output {}", f.as_str()),
+                }
+            ));
+        }
+        s
+    };
+    ToolOutput::ok(
+        text,
+        json!({"profiles": profiles, "errors": errors, "enabled": true,
+               "caller_permission": h.caller().permission.as_str()}),
+    )
 }
 
 /// The text a model reads for a run result (the CLI's rendering without its CLI-only hint).
@@ -154,11 +234,13 @@ fn run_output(r: &RunResult) -> ToolOutput {
 fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
     let get = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
     let spec = Spec {
-        agent: get("agent").unwrap_or_default(),
+        agent: get("agent").filter(|a| !a.trim().is_empty()),
+        profile: get("profile").filter(|p| !p.trim().is_empty()),
         prompt: get("prompt").unwrap_or_default(),
         cwd: PathBuf::from(get("cwd").unwrap_or_default()),
         model: get("model").filter(|m| !m.trim().is_empty()),
-        permission: get("permission").unwrap_or_else(|| "read_only".into()),
+        // not given: the profile's permission applies (read-only without a profile)
+        permission: get("permission"),
         worktree: args
             .get("worktree")
             .and_then(Value::as_bool)
@@ -167,6 +249,11 @@ fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
         budget_tokens: args.get("budget_tokens").and_then(Value::as_u64),
         background: args.get("async").and_then(Value::as_bool).unwrap_or(false),
     };
+    if spec.agent.is_none() && spec.profile.is_none() {
+        return ToolOutput::error(
+            "invalid arguments for run_agent: `agent` is required unless `profile` is given (see list_profiles)",
+        );
+    }
     match runs::start(&spec, state, h.registry()) {
         Ok(Started::Finished(r)) => run_output(&r),
         Ok(Started::Background { run_id }) => ToolOutput::ok(
@@ -176,6 +263,7 @@ fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
                 "status": "running",
                 "async": true,
                 "agent": spec.agent,
+                "profile": spec.profile,
                 "permission": spec.permission,
             }),
         ),

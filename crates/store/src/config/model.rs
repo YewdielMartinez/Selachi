@@ -32,6 +32,9 @@ pub struct Config {
     /// Delegation to other agents (`[delegation]`, PLAN section 20). `selachi-agent` reads the same
     /// section straight from the file, with the same defaults.
     pub delegation: Delegation,
+    /// Subagent profiles (`[agent_profiles]`, PLAN section 21.3). Not `[profiles]`: that is the shell
+    /// profile list.
+    pub agent_profiles: AgentProfiles,
     /// Automatic updates (`[updates]`, wave 6b.2).
     pub updates: Updates,
 }
@@ -73,6 +76,35 @@ impl Default for Delegation {
             daily_token_budget: 2_000_000,
             weekly_usage_threshold_percent: 90.0,
             approval_timeout_secs: 120,
+        }
+    }
+}
+
+/// Hard ceiling of the context a profile may attach, in KiB. `AgentProfiles::max_context_kb` can only
+/// lower it.
+pub const MAX_PROFILE_CONTEXT_KB: u32 = 200;
+
+/// `[agent_profiles]`: how the subagent profiles (`%APPDATA%\Selachi\agents\*.toml` and
+/// `<project>\.selachi\agents\*.toml`) are used. `selachi-agent` reads the same section straight from
+/// the file. Profiles can never raise the `[delegation]` limits; this section only restricts further.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentProfiles {
+    /// Master switch: false = `--profile` / `profile` are refused and no profile is listed.
+    pub enabled: bool,
+    /// Also read `<project>\.selachi\agents` (they come with the repository: turn this off for projects
+    /// you do not trust).
+    pub project_profiles: bool,
+    /// Most context (`context_files`) attached to one run, in KiB (1..=200).
+    pub max_context_kb: u32,
+}
+
+impl Default for AgentProfiles {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            project_profiles: true,
+            max_context_kb: MAX_PROFILE_CONTEXT_KB,
         }
     }
 }
@@ -688,6 +720,12 @@ impl Config {
             problems.push(format!(
                 "delegation.weekly_usage_threshold_percent = {} must be within 0..=100",
                 d.weekly_usage_threshold_percent
+            ));
+        }
+        if !(1..=MAX_PROFILE_CONTEXT_KB).contains(&self.agent_profiles.max_context_kb) {
+            problems.push(format!(
+                "agent_profiles.max_context_kb = {} must be within 1..={MAX_PROFILE_CONTEXT_KB}",
+                self.agent_profiles.max_context_kb
             ));
         }
         if !UPDATE_CHANNELS.contains(&self.updates.channel.as_str()) {

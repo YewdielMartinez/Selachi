@@ -50,6 +50,23 @@ pub fn state_db_path_in(dir: &Path) -> PathBuf {
     dir.join("state.db")
 }
 
+/// Folder with the global subagent profiles (`*.toml`) of a data dir: `<data dir>\agents`
+/// (PLAN section 21.3). Not created here.
+pub fn agent_profiles_dir_in(dir: &Path) -> PathBuf {
+    dir.join("agents")
+}
+
+/// `%APPDATA%\Selachi\agents` (not created): the global subagent profiles.
+pub fn agent_profiles_dir() -> Result<PathBuf> {
+    Ok(agent_profiles_dir_in(&app_data_dir_path()?))
+}
+
+/// `<project>\.selachi\agents` (not created): the profiles that travel with a project and override
+/// the global ones by name.
+pub fn project_agent_profiles_dir(project_root: &Path) -> PathBuf {
+    project_root.join(".selachi").join("agents")
+}
+
 /// Normalize a filesystem path into a comparison key: forward slashes, no
 /// verbatim (`\\?\`) prefix, no trailing slash (except a bare root), lowercase
 /// (Windows paths are case-insensitive).
@@ -97,6 +114,16 @@ mod tests {
     fn display() {
         assert_eq!(clean_display(r"\\?\C:\Foo\"), r"C:\Foo");
         assert_eq!(clean_display(r"C:\"), r"C:\");
+    }
+
+    #[test]
+    fn profile_dirs() {
+        let d = Path::new(r"C:\data");
+        assert_eq!(agent_profiles_dir_in(d), d.join("agents"));
+        assert!(
+            project_agent_profiles_dir(Path::new(r"C:\p")).ends_with(".selachi/agents")
+                || project_agent_profiles_dir(Path::new(r"C:\p")).ends_with(r".selachi\agents")
+        );
     }
 
     #[test]

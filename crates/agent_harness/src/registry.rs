@@ -41,6 +41,63 @@ pub struct RunRecord {
     pub result: Option<RunResult>,
     /// Set by `apply`.
     pub applied_ms: Option<i64>,
+    // ---- additive fields (PLAN section 21.2 / 21.3: the map inspector reads them; records written
+    // before they existed load with the defaults) ----
+    /// Name of the subagent profile the run used, if any.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// The exact prompt the agent received (profile instructions + context files + output format +
+    /// task), redacted and capped at [`MAX_FINAL_PROMPT_CHARS`]. For a run without a profile it is the
+    /// redacted task prompt.
+    #[serde(default)]
+    pub final_prompt: Option<String>,
+    /// The limits that were in force (after taking the minimum of profile, `[delegation]` and caller).
+    #[serde(default)]
+    pub limits: Option<RunLimits>,
+    /// Who launched the run: `cli` (a shell command) or `mcp` (the MCP server).
+    #[serde(default)]
+    pub launcher: Option<String>,
+    /// Reasoning effort requested by the profile, if any.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// `text`, `json` or `diff` (the profile's `output_format`); `None` without a profile.
+    #[serde(default)]
+    pub output_format: Option<String>,
+    /// Context files that were attached (project-relative, forward slashes).
+    #[serde(default)]
+    pub context_files: Vec<String>,
+}
+
+/// Longest `final_prompt` kept in a run record (characters).
+pub const MAX_FINAL_PROMPT_CHARS: usize = 300_000;
+
+/// Limits applied to a run: the minimum of the profile, `[delegation]` and the calling session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunLimits {
+    /// Permission the agent ran with: `read-only | ask | accept-edits`.
+    pub permission: String,
+    /// Permission of the delegating session (`SELACHI_PARENT_PERMISSION`).
+    pub parent_permission: String,
+    /// `[delegation] max_permission`.
+    pub config_max_permission: String,
+    /// What the profile asked for (`null` without a profile or when it says nothing).
+    pub profile_permission: Option<String>,
+    /// Depth of this run (1 = delegated by a top-level session).
+    pub depth: u32,
+    /// `[delegation] max_depth`.
+    pub max_depth: u32,
+    pub timeout_secs: u64,
+    /// `null` = no per-run token budget (the daily budget still applies).
+    pub budget_tokens: Option<u64>,
+    pub daily_token_budget: u64,
+    pub max_concurrent: usize,
+    pub worktree: bool,
+    /// Tool lists of the profile (Claude only enforces them: see `tools_enforced`).
+    pub allowed_tools: Vec<String>,
+    pub denied_tools: Vec<String>,
+    /// `true` when the agent was started with the tool restrictions (`--allowedTools` /
+    /// `--disallowedTools`); `false` when the profile has none or the agent cannot enforce them.
+    pub tools_enforced: bool,
 }
 
 impl RunRecord {
@@ -169,6 +226,13 @@ mod tests {
             deadline_ms: started_ms + 1000,
             result: Some(result),
             applied_ms: None,
+            profile: None,
+            final_prompt: None,
+            limits: None,
+            launcher: None,
+            effort: None,
+            output_format: None,
+            context_files: Vec::new(),
         }
     }
 

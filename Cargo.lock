@@ -6576,6 +6576,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_agentmap"
+version = "0.1.0"
+dependencies = [
+ "agents_driver",
+ "chat_core",
+ "futures",
+ "gpui",
+ "log",
+ "panel_api",
+ "serde_json",
+ "store",
+ "tempfile",
+ "theme",
+ "ui_kit",
+]
+
+[[package]]
 name = "ui_chat"
 version = "0.1.0"
 dependencies = [
@@ -6589,6 +6606,7 @@ dependencies = [
  "panel_api",
  "rusqlite",
  "serde_json",
+ "store",
  "tempfile",
  "theme",
  "ui_kit",

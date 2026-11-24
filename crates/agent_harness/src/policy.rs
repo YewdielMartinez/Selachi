@@ -117,6 +117,10 @@ pub enum RefusalCode {
     /// The agent's weekly usage is over the configured threshold.
     WeeklyUsage,
     NotAGitRepo,
+    /// `profile` names no usable profile (or profiles are turned off).
+    UnknownProfile,
+    /// The profile exists but cannot be applied (a context file outside the project, a bad schema...).
+    InvalidProfile,
 }
 
 /// A refusal: a stable code plus a sentence that says what to change.

@@ -19,15 +19,16 @@ use chat_core::{
 use chrono::{Local, TimeZone};
 use parking_lot::Mutex;
 
-use crate::agents::{agent_name, canonical_name, AgentResolver, SystemResolver};
+use crate::agents::{agent_name, AgentResolver, SystemResolver};
 use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PROTOCOL_VERSION};
 use crate::jobs::JobHooks;
 use crate::output::{cap_chars, diff_stat_of, CostOut, RunResult, RunStatus, UsageOut};
 use crate::policy::{
-    Caller, DelegationConfig, Permission, Policy, Refusal, RefusalCode, ENV_DELEGATION_DEPTH,
+    Caller, DelegationConfig, Permission, Refusal, RefusalCode, ENV_DELEGATION_DEPTH,
     ENV_PARENT_PERMISSION, ENV_PARENT_TAB, ENV_PARENT_THREAD,
 };
-use crate::registry::{Registry, RunRecord};
+use crate::profiles::prepare::{claude_tool_args, ExtraArgs, ExtraArgsFactory};
+use crate::registry::{Registry, RunRecord, MAX_FINAL_PROMPT_CHARS};
 use crate::slots;
 use crate::usage::{AgentsSvcProbe, UsageProbe};
 
@@ -39,7 +40,7 @@ const POLL: Duration = Duration::from_millis(250);
 /// What to run.
 #[derive(Debug, Clone)]
 pub struct RunRequest {
-    /// `claude | codex | opencode | gemini | agy | acp:<command line>`.
+    /// `claude | codex | opencode | gemini | agy | acp:<command line>`. Empty = the agent of `profile`.
     pub agent: String,
     pub prompt: String,
     /// Project directory (default: the current directory).
@@ -47,6 +48,12 @@ pub struct RunRequest {
     pub model: Option<String>,
     /// Default read-only.
     pub permission: Permission,
+    /// The caller asked for `permission` itself. With a `profile`, an explicit permission can only
+    /// narrow the profile's; without it the profile's permission applies. Ignored without a profile.
+    pub permission_explicit: bool,
+    /// Name of a subagent profile (PLAN section 21.3): its agent, model, instructions, context files
+    /// and limits apply, never above `[delegation]` and the calling session.
+    pub profile: Option<String>,
     /// Run in a new git worktree + branch (`selachi/<slug>`) so the parent's tree is untouched.
     pub worktree: bool,
     /// `None`: `[delegation] timeout_secs` (15 min).
@@ -67,6 +74,8 @@ impl RunRequest {
             cwd: cwd.into(),
             model: None,
             permission: Permission::ReadOnly,
+            permission_explicit: false,
+            profile: None,
             worktree: false,
             timeout: None,
             budget_tokens: None,
@@ -169,6 +178,7 @@ impl HarnessBuilder {
             hooks: Arc::new(JobHooks::default()),
             export_env: self.export_env,
             on_started: self.on_started,
+            extra_args: Arc::new(ExtraArgs::default()),
         })
     }
 }
@@ -188,6 +198,8 @@ pub struct Harness {
     export_env: bool,
     on_started: Option<StartedHook>,
     config_warning: Option<String>,
+    /// Tool restrictions of the runs in flight (Claude only), see [`ExtraArgs`].
+    extra_args: Arc<ExtraArgs>,
 }
 
 enum Stop {
@@ -220,7 +232,7 @@ fn ms_of(t: std::time::SystemTime) -> Option<i64> {
 }
 
 /// Absolute, existing directory without the `\\?\` prefix.
-fn normalize_dir(p: &Path) -> Option<PathBuf> {
+pub(crate) fn normalize_dir(p: &Path) -> Option<PathBuf> {
     let c = std::fs::canonicalize(p).ok()?;
     let clean = PathBuf::from(store::paths::clean_display(&c.to_string_lossy()));
     clean.is_dir().then_some(clean)
@@ -277,9 +289,14 @@ impl Harness {
             .path(self.data_dir.join("chat.db"))
             .hooks(self.hooks.clone())
             .keep_busy_status();
-        if let Some(f) = &self.factory {
-            sb = sb.factory(f.clone());
-        }
+        let inner: Arc<dyn DriverFactory> = self
+            .factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(chat_core::DefaultDriverFactory));
+        sb = sb.factory(Arc::new(ExtraArgsFactory {
+            inner,
+            extra: self.extra_args.clone(),
+        }));
         let store = sb.open().map_err(|e| format!("cannot open chat.db: {e}"))?;
         *slot = Some(store.clone());
         Ok(store)
@@ -344,26 +361,16 @@ impl Harness {
 
     fn run_inner(&self, req: RunRequest) -> Result<RunResult, Stop> {
         let now = chat_core::now_ms();
-        if req.prompt.trim().is_empty() {
-            return Err(Refusal::new(RefusalCode::BadRequest, "the prompt is empty").into());
-        }
-        let cwd = normalize_dir(&req.cwd).ok_or_else(|| {
-            Refusal::new(
-                RefusalCode::BadRequest,
-                format!("--cwd {} is not an existing directory", req.cwd.display()),
-            )
-        })?;
 
-        // 1. static rules: enabled, allowed agent, permission <= parent, never Full, depth
-        let policy_name = canonical_name(&req.agent).unwrap_or(req.agent.trim());
-        let permission = Policy {
-            cfg: &self.cfg,
-            caller: &self.caller,
-        }
-        .check(policy_name, req.permission)?;
+        // 1. the profile (if any), the effective limits (the minimum of profile, config and caller),
+        //    the static rules (enabled, allowed agent, permission <= parent, never Full, depth) and
+        //    the final prompt, redacted
+        let prep = self.prepare(&req)?;
+        let cwd = prep.project_root.clone();
+        let permission = prep.permission;
 
         // 2. which agent exactly
-        let kind = self.resolver.resolve(&req.agent)?;
+        let kind = self.resolver.resolve(&prep.agent)?;
         let agent = agent_name(&kind);
 
         // 3. daily budget and the agent's weekly usage
@@ -387,20 +394,12 @@ impl Harness {
             Err(e) => return Err(Stop::Failed(format!("cannot take a run slot: {e}"))),
         };
 
-        // 5. input is redacted before it is stored or sent
-        let redaction = store::redact(&req.prompt);
-        let prompt = redaction.text;
-        let mut notes: Vec<String> = Vec::new();
-        if redaction.count > 0 {
-            notes.push(format!(
-                "{} secret(s) were hidden in the prompt before sending it ({})",
-                redaction.count,
-                redaction.kinds.join(", ")
-            ));
-        }
+        // 5. the prompt was redacted in `prepare`; its notes (lowered permission, redactions) travel on
+        let prompt = prep.final_prompt.clone();
+        let mut notes: Vec<String> = prep.notes.clone();
 
         // 6. child thread (+ worktree)
-        if req.worktree && !matches!(git_svc::Repo::discover(&cwd), Ok(Some(_))) {
+        if prep.worktree && !matches!(git_svc::Repo::discover(&cwd), Ok(Some(_))) {
             return Err(Refusal::new(
                 RefusalCode::NotAGitRepo,
                 format!(
@@ -422,11 +421,15 @@ impl Harness {
             }
             None => None,
         };
-        let mut spec = ThreadSpec::new(&cwd, kind);
-        spec.title = Some(thread_title(&agent, &prompt));
-        spec.model = req.model.clone();
+        let mut spec = ThreadSpec::new(&cwd, kind.clone());
+        spec.title = Some(thread_title(&agent, &prep.task_prompt));
+        spec.model = prep.model.clone();
+        spec.effort = prep
+            .effort
+            .clone()
+            .filter(|_| agents_driver::supports_effort(&kind));
         spec.permission = permission.to_driver();
-        spec.use_worktree = req.worktree;
+        spec.use_worktree = prep.worktree;
         spec.link = Some(ThreadLink {
             parent_thread_id: parent_thread.map(ThreadId),
             parent_tab: self.caller.parent_tab.clone(),
@@ -458,21 +461,19 @@ impl Harness {
             }
         }
 
-        let timeout = req
-            .timeout
-            .unwrap_or(Duration::from_secs(self.cfg.timeout_secs.max(1)));
+        let timeout = prep.timeout;
         let started_ms = chat_core::now_ms();
         let mut record = RunRecord {
             run_id: run_id.clone(),
             thread_id: thread.id.0,
             agent: agent.clone(),
-            model: req.model.clone(),
+            model: prep.model.clone(),
             permission: permission.to_string(),
             cwd: run_dir.clone(),
             project_root: cwd,
             worktree_path: thread.worktree_path.clone(),
             checkpoint_id,
-            prompt: cap_chars(&prompt, 500),
+            prompt: cap_chars(&prep.task_prompt, 500),
             parent_thread_id: parent_thread,
             depth,
             started_ms,
@@ -483,6 +484,13 @@ impl Harness {
             deadline_ms: started_ms + timeout.as_millis() as i64,
             result: None,
             applied_ms: None,
+            profile: prep.profile.clone(),
+            final_prompt: Some(cap_chars(&prompt, MAX_FINAL_PROMPT_CHARS)),
+            limits: Some(prep.limits.clone()),
+            launcher: Some(self.caller.channel.clone()),
+            effort: prep.effort.clone(),
+            output_format: prep.output_format.map(|f| f.as_str().to_string()),
+            context_files: prep.context_files.iter().map(|c| c.path.clone()).collect(),
         };
         self.registry.clear_cancel(&run_id);
         if let Err(e) = self.registry.save(&record) {
@@ -500,12 +508,24 @@ impl Harness {
             std::env::set_var(ENV_PARENT_THREAD, run_id.as_str());
             std::env::remove_var(ENV_PARENT_TAB);
         }
+        // Claude only: the profile's tool lists become command-line flags of this run's agent
+        let _tool_args = if prep.tools_enforced {
+            match self.extra_args.register(
+                &run_dir,
+                claude_tool_args(&prep.allowed_tools, &prep.denied_tools),
+            ) {
+                Ok(g) => Some(g),
+                Err(e) => return Err(Stop::Failed(e)),
+            }
+        } else {
+            None
+        };
         let rt = match store.open(thread.id) {
             Ok(rt) => rt,
             Err(e) => return Err(Stop::Failed(format!("cannot open the child thread: {e}"))),
         };
         let outcome = match rt.send(prompt, Vec::new()) {
-            Ok(()) => self.wait(&rt, &record, &req, timeout, &mut notes),
+            Ok(()) => self.wait(&rt, &record, prep.budget_tokens, timeout, &mut notes),
             Err(e) => Outcome::Failed(format!("cannot send the prompt: {e}")),
         };
 
@@ -554,6 +574,14 @@ impl Harness {
             cap_chars(&redacted(&answer), MAX_SUMMARY_CHARS)
         };
 
+        if status == RunStatus::Done
+            && prep.output_format == Some(crate::profiles::OutputFormat::Json)
+        {
+            if let Some(problem) = crate::profiles::prepare::json_reply_problem(&answer) {
+                notes.push(format!("output_format = json: {problem}"));
+            }
+        }
+
         let (files_changed, diff_stat) =
             match (&record.checkpoint_id, git_svc::Repo::discover(&run_dir)) {
                 (Some(cp), Ok(Some(repo))) => {
@@ -592,6 +620,7 @@ impl Harness {
             reason,
             code: None,
             notes,
+            profile: prep.profile.clone(),
         };
         record.status = status;
         record.finished_ms = Some(chat_core::now_ms());
@@ -609,7 +638,7 @@ impl Harness {
         &self,
         rt: &ThreadRuntime,
         record: &RunRecord,
-        req: &RunRequest,
+        budget_tokens: Option<u64>,
         timeout: Duration,
         notes: &mut Vec<String>,
     ) -> Outcome {
@@ -625,7 +654,7 @@ impl Harness {
                 let _ = rt.interrupt();
                 return Outcome::TimedOut;
             }
-            if let Some(limit) = req.budget_tokens {
+            if let Some(limit) = budget_tokens {
                 let used = rt.with_state(|s| s.usage.input + s.usage.output + s.usage.cache_create);
                 if used > limit {
                     let _ = rt.interrupt();
