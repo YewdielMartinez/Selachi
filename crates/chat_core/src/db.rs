@@ -820,12 +820,19 @@ mod tests {
             delegated_by: Some("mcp".into()),
         });
         let child = db
-            .insert_thread(NewThread { spec, title: "hijo".into(), worktree_path: None })
+            .insert_thread(NewThread {
+                spec,
+                title: "hijo".into(),
+                worktree_path: None,
+            })
             .unwrap();
         let rec = db.get_thread(child).unwrap().unwrap();
         assert!(rec.is_delegation());
         assert_eq!(rec.link.parent_thread_id, Some(parent));
-        assert_eq!((rec.link.depth, rec.link.delegated_by.as_deref()), (1, Some("mcp")));
+        assert_eq!(
+            (rec.link.depth, rec.link.delegated_by.as_deref()),
+            (1, Some("mcp"))
+        );
         let top = db.get_thread(parent).unwrap().unwrap();
         assert!(!top.is_delegation());
         assert_eq!(top.link, ThreadLink::default());

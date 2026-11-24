@@ -690,6 +690,19 @@ impl AppShell {
                 move |_, cx| b.update(cx, |s, cx| s.dismiss_hint(cx)),
             )
         });
+        let overlay_bottom = bar_height(l.bottom_bar) + m.margin + 8.0;
+        let update_el = self.update_card(
+            // above the hint when both show
+            overlay_bottom
+                + if self.prompts.hint.is_some() {
+                    52.0
+                } else {
+                    0.0
+                },
+            cx,
+        );
+        let approvals_el = self.approval_overlay(overlay_bottom, cx);
+        let whats_new_el = self.whats_new_overlay(cx);
         let frame_stats = cx
             .try_global::<Services>()
             .map(|s| s.doctor.read(cx).frame_stats());
@@ -779,6 +792,8 @@ impl AppShell {
             .children(status_el.map(|s| div().w_full().bg(c.bg).child(s)))
             .children(zen_overlays)
             .children(hint_el)
+            .children(update_el)
+            .children(approvals_el)
             .children(confirm.map(|why| self.confirm_overlay(&why, cx)))
             .children(
                 self.prompts
@@ -791,6 +806,7 @@ impl AppShell {
                     .new_tab_menu
                     .then(|| self.new_tab_menu_el(window, cx)),
             )
+            .children(whats_new_el)
             // The palette is the last child: an absolute full-window overlay (nothing while closed).
             .child(self.palette.clone())
             .children(frame_stats.map(ui_doctor::frame_end))

@@ -197,7 +197,8 @@ impl SettingsView {
             },
         );
 
-        vec![
+        let delegation = self.delegation_groups(narrow, cx);
+        let mut out = vec![
             detected.into_any_element(),
             ui::group(
                 &t,
@@ -245,6 +246,8 @@ impl SettingsView {
                 ],
             )
             .into_any_element(),
-        ]
+        ];
+        out.extend(delegation);
+        out
     }
 }

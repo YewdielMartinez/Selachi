@@ -74,6 +74,9 @@ pub struct StatusBar {
     /// Attention queue: its count feeds the badge; `on_attention` opens the panel.
     attention: Option<Entity<ui_review::AttentionModel>>,
     attention_sub: Option<Subscription>,
+    /// The git model whose PR / CI summary the pill shows (`[git] pr_status`).
+    pr: Option<Entity<ui_git::GitModel>>,
+    pr_sub: Option<Subscription>,
     on_attention: Option<OrphanClick>,
     /// Git monitor of the active tab.
     git: Option<Entity<GitMonitor>>,
@@ -107,6 +110,8 @@ impl StatusBar {
             on_usage: None,
             attention: None,
             attention_sub: None,
+            pr: None,
+            pr_sub: None,
             on_attention: None,
             git: None,
             git_sub: None,
@@ -138,6 +143,19 @@ impl StatusBar {
     ) {
         self.on_usage = Some(Rc::new(on_click));
         cx.notify();
+    }
+
+    /// Follows the git model for the PR / CI pill (it shows nothing while the model has no PR).
+    pub fn set_pr_model(&mut self, model: Entity<ui_git::GitModel>, cx: &mut Context<Self>) {
+        self.pr_sub = Some(cx.observe(&model, |_, _, cx| cx.notify()));
+        self.pr = Some(model);
+        cx.notify();
+    }
+
+    /// The PR pill, when there is a PR (`gh` available, a PR for the branch).
+    fn pr_pill(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+        let summary = self.pr.as_ref()?.read(cx).pr_summary()?;
+        Some(ui_git::pr_pill("pr-pill", &self.theme, &summary))
     }
 
     /// Follows the attention queue for the badge; `on_click` opens its panel.
@@ -406,6 +424,8 @@ impl Render for StatusBar {
         let orphans = self.orphan_pill(cx);
         let orphans_compact = self.orphan_pill(cx);
         let attention = self.attention_pill(cx);
+        let pr = self.pr_pill(cx);
+        let pr_compact = self.pr_pill(cx);
         let attention_compact = self.attention_pill(cx);
         // The shell already asks for the compact bar when the window is narrow; this keeps the
         // contents consistent if it did not.
@@ -428,6 +448,7 @@ impl Render for StatusBar {
                         .child("Sin datos de uso todavía")
                 }))
                 .children(git.map(|g| self.git_pill(&g)))
+                .children(pr)
                 .children(orphans)
                 .children(attention)
                 .child(div().flex_1())
@@ -450,6 +471,7 @@ impl Render for StatusBar {
             .font_family(ty.ui_family)
             .text_size(px(ty.ui_size_sm))
             .children(git.map(|g| self.git_pill(&g)))
+            .children(pr_compact)
             .children(orphans_compact)
             .children(attention_compact)
             .children(

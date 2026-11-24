@@ -75,6 +75,8 @@ pub enum ListItem {
         collapsed: bool,
     },
     Thread(ThreadRecord),
+    /// A delegated thread shown under its parent (`depth` >= 1).
+    Nested(ThreadRecord, usize),
 }
 
 /// Identity of an item (what the list splices on).
@@ -88,7 +90,7 @@ impl ListItem {
     pub fn key(&self) -> ItemKey {
         match self {
             ListItem::Header { key, .. } => ItemKey::Header(key.clone()),
-            ListItem::Thread(t) => ItemKey::Thread(t.id),
+            ListItem::Thread(t) | ListItem::Nested(t, _) => ItemKey::Thread(t.id),
         }
     }
 }
@@ -113,7 +115,13 @@ pub fn build_items(
                 collapsed: is_collapsed,
             });
             if !is_collapsed {
-                out.extend(list.into_iter().map(ListItem::Thread));
+                out.extend(crate::lineage::nest(list).into_iter().map(|(t, depth)| {
+                    if depth == 0 {
+                        ListItem::Thread(t)
+                    } else {
+                        ListItem::Nested(t, depth)
+                    }
+                }));
             }
         };
     match mode {
@@ -154,6 +162,9 @@ pub fn subtitle(t: &ThreadRecord, with_project: bool) -> String {
     );
     if let Some(w) = &t.worktree_path {
         parts.push(project_name(w));
+    }
+    if t.is_delegation() {
+        parts.push("Delegado".into());
     }
     parts.join(" · ")
 }
@@ -684,10 +695,11 @@ impl ThreadListView {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
-        let ListItem::Thread(rec) = &self.items[ix] else {
-            return div().into_any_element();
+        let (rec, depth) = match &self.items[ix] {
+            ListItem::Thread(rec) => (rec.clone(), 0),
+            ListItem::Nested(rec, depth) => (rec.clone(), *depth),
+            ListItem::Header { .. } => return div().into_any_element(),
         };
-        let rec = rec.clone();
         let id = rec.id;
         let active = self.hub.read(cx).active_thread() == Some(id);
         let hovered = self.hovered == Some(id);
@@ -785,7 +797,8 @@ impl ThreadListView {
             .children(glyph);
         div()
             .w_full()
-            .px(px(8.0))
+            .pl(px(8.0 + 14.0 * depth as f32))
+            .pr(px(8.0))
             .py(px(2.0))
             .child(
                 div()
@@ -1013,7 +1026,9 @@ impl Render for ThreadListView {
                 self.list.clone(),
                 cx.processor(|this, ix: usize, window, cx| match this.items.get(ix) {
                     Some(ListItem::Header { .. }) => this.group_header(ix, cx),
-                    Some(ListItem::Thread(_)) => this.thread_row(ix, window, cx),
+                    Some(ListItem::Thread(_) | ListItem::Nested(..)) => {
+                        this.thread_row(ix, window, cx)
+                    }
                     None => div().into_any_element(),
                 }),
             )
@@ -1237,6 +1252,40 @@ mod tests {
             }
         });
         assert_eq!(first_thread, Some(3));
+    }
+
+    #[test]
+    fn delegated_threads_nest_under_their_parent() {
+        let mut parent = rec(1, ThreadStatus::Done, "C:/p/a", 40);
+        parent.title = "padre".into();
+        let mut child = rec(2, ThreadStatus::Done, "C:/p/a", 50);
+        child.link = chat_core::ThreadLink {
+            parent_thread_id: Some(ThreadId(1)),
+            depth: 1,
+            delegated_by: Some("mcp".into()),
+            ..Default::default()
+        };
+        let other = rec(3, ThreadStatus::Done, "C:/p/a", 60);
+        let items = build_items(&[other, child, parent], GroupMode::Status, &HashSet::new());
+        let rows: Vec<(i64, bool)> = items
+            .iter()
+            .filter_map(|i| match i {
+                ListItem::Thread(t) => Some((t.id.0, false)),
+                ListItem::Nested(t, _) => Some((t.id.0, true)),
+                ListItem::Header { .. } => None,
+            })
+            .collect();
+        assert_eq!(rows, vec![(3, false), (1, false), (2, true)]);
+        assert!(
+            subtitle(
+                &match &items[3] {
+                    ListItem::Nested(t, _) => t.clone(),
+                    _ => unreachable!(),
+                },
+                false
+            )
+            .contains("Delegado")
+        );
     }
 
     #[test]

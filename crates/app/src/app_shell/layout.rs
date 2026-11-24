@@ -271,7 +271,15 @@ impl AppShell {
             || self.config.appearance.accent != config.appearance.accent;
         let completion_moved = self.config.terminal.completion != config.terminal.completion;
         let panel_config = config.layout.clone();
+        let pr_moved = self.config.git.pr_status != config.git.pr_status;
+        let updates_moved = self.config.updates != config.updates;
         self.config = config;
+        if pr_moved {
+            self.apply_pr_status(cx);
+        }
+        if updates_moved {
+            self.on_updates_config_changed(cx);
+        }
         if completion_moved {
             cx.set_global(TermEnv(self.config.completion_env()));
         }

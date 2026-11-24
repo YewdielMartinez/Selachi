@@ -481,7 +481,10 @@ mod tests {
         assert_eq!(c.delegation.daily_token_budget, 2_000_000);
         assert_eq!(c.delegation.approval_timeout_secs, 120);
         assert!(c.updates.check);
-        assert_eq!((c.updates.channel.as_str(), c.updates.install.as_str()), ("stable", "now"));
+        assert_eq!(
+            (c.updates.channel.as_str(), c.updates.install.as_str()),
+            ("stable", "now")
+        );
         // the template (written on first run) says the same
         let t = Config::parse(TEMPLATE).unwrap().config;
         assert_eq!(t.delegation, c.delegation);
@@ -504,7 +507,10 @@ mod tests {
         c.save_to(&path).unwrap();
         let back = Config::load_from(&path).unwrap();
         assert_eq!(back.config.delegation.max_depth, 2);
-        assert_eq!(back.config.delegation.allowed_agents, vec!["codex".to_string()]);
+        assert_eq!(
+            back.config.delegation.allowed_agents,
+            vec!["codex".to_string()]
+        );
         assert!(!back.config.updates.check);
         assert!(back.warnings.is_empty(), "{:?}", back.warnings);
     }

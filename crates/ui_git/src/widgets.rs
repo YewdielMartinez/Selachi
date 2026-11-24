@@ -594,7 +594,7 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
     out
 }
 
-fn card_shell(theme: &Theme, danger: bool) -> gpui::Div {
+pub(crate) fn card_shell(theme: &Theme, danger: bool) -> gpui::Div {
     let c = theme.colors;
     let bg = if danger {
         alpha(c.error, 0.10)

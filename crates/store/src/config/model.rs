@@ -515,6 +515,10 @@ pub struct GitConfig {
     pub external_editor: String,
     /// Where new worktrees are created.
     pub worktrees: WorktreeLocation,
+    /// Show the PR and CI state of the current branch through the system `gh` (hidden when `gh` is
+    /// missing or not logged in). Queries happen on branch change, after a push, on demand and on
+    /// window focus (at most every 5 minutes): never in the background.
+    pub pr_status: bool,
 }
 
 impl Default for GitConfig {
@@ -523,6 +527,7 @@ impl Default for GitConfig {
             confirm_sensitive: true,
             external_editor: String::new(),
             worktrees: WorktreeLocation::Beside,
+            pr_status: true,
         }
     }
 }

@@ -56,6 +56,13 @@ impl AppShell {
                 }
                 self.sync_chat_projects(cx);
                 self.sync_chat_active(cx);
+                if let Some(hub) = self.chat.read(cx).hub() {
+                    // The hub notifies when the list changes (a delegated child appeared): repaint
+                    // the sidebar rows that nest them.
+                    self._subs
+                        .push(cx.observe(&hub, |this, _, cx| this.refresh(cx)));
+                }
+                self.reload_runs(cx);
                 self.finish_deferred_startup(window, cx);
                 for intent in self.chat.update(cx, |c, _| c.take_pending()) {
                     self.run_chat_intent(intent, window, cx);
@@ -358,6 +365,9 @@ impl AppShell {
             Ok("menu") => self.open_new_tab_menu(window, cx),
             Ok("chat") if chat_host::fake_requested() => {
                 self.run_chat_intent(ChatIntent::Demo, window, cx)
+            }
+            Ok(other) => {
+                self.run_delegation_demo(other, window, cx);
             }
             _ => {}
         }

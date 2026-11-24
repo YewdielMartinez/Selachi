@@ -21,13 +21,14 @@ use gpui::{
 };
 use panel_api::WidthClass;
 use theme::{Radius, Theme};
-use ui_kit::{Icon, Logo, Pill, Placement, Popover, Spinner, agent_icon, icon};
+use ui_kit::{Button, Icon, Logo, Pill, Placement, Popover, Spinner, agent_icon, icon};
 
 use crate::composer::{Composer, ComposerEvent, ComposerState};
-use crate::hub::ChatHub;
+use crate::hub::{ChatEvent, ChatHub};
+use crate::lineage::{DelegationRun, RunState, delegation_line, run_state_label};
 use crate::options::{agent_mark, model_label};
 use crate::rows::{ChatRow, RowCache, RowKey, build_rows, diff_rows, keys_of};
-use crate::util::{project_name, read_branch};
+use crate::util::{format_cost, format_tokens, project_name, read_branch};
 use crate::widgets::menu_row;
 
 /// Widest reading column at XL (docs/DESIGN.md, Responsive).
@@ -132,6 +133,8 @@ pub struct ChatView {
     pending_effort: Option<Option<String>>,
     notice: Option<String>,
     project_menu_open: bool,
+    /// Delegation rows that are expanded.
+    open_delegations: HashSet<ThreadId>,
     /// Width of the chat zone itself (measured while painting; the window's before that).
     viewport_w: f32,
     /// Width of the window (only the XL reading cap depends on it).
@@ -187,6 +190,7 @@ impl ChatView {
             pending_effort: None,
             notice: None,
             project_menu_open: false,
+            open_delegations: HashSet::new(),
             viewport_w: 1200.0,
             window_w: 1200.0,
             measured: ui_kit::MeasuredWidth::with_breaks(&[WidthClass::COMPACT_BELOW_PX, 640.0]),
@@ -845,6 +849,7 @@ impl ChatView {
             };
             (agent_mark(&r.agent), model_label(model.as_deref()))
         });
+        let cost = self.cost_label(cx);
         let narrow = self.viewport_w < 640.0;
         let inner = div()
             .h(px(52.0))
@@ -868,6 +873,15 @@ impl ChatView {
                 }))
             })
             .child(div().flex_1())
+            .children(cost.map(|(text, tip)| {
+                div()
+                    .id("chat-cost")
+                    .flex_none()
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.muted)
+                    .tooltip(ui_kit::Tooltip::text(&t, tip))
+                    .child(SharedString::from(text))
+            }))
             .children(agent.map(|(mark, model)| {
                 div()
                     .flex_none()
@@ -934,6 +948,7 @@ impl ChatView {
         let t = self.theme;
         let c = t.colors;
         let header = self.header(cx);
+        let deleg = self.delegation_block(cx);
         let body: AnyElement = if self.rows.is_empty() {
             div()
                 .size_full()
@@ -957,6 +972,7 @@ impl ChatView {
                 div()
                     .flex()
                     .flex_col()
+                    .children(deleg)
                     .children(self.notice_line(cx))
                     .child(self.composer.clone()),
             ),
@@ -1207,5 +1223,198 @@ impl Render for ChatView {
             .line_height(relative(1.4))
             .child(self.measured.probe())
             .child(content)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Delegations (PLAN section 20): "Delegó en Codex · título · 2 min · 3 archivos"
+// ---------------------------------------------------------------------------------------------
+
+/// Most delegation rows listed under a conversation (older ones fold into "+N anteriores").
+const MAX_DELEGATION_ROWS: usize = 5;
+
+impl ChatView {
+    /// Cost of this thread's own turns plus everything it delegated: `(own, delegated)`.
+    fn cost_with_delegations(&self, cx: &App) -> (f64, f64) {
+        let own = self
+            .runtime
+            .as_ref()
+            .map_or(0.0, |rt| rt.with_state(|s| s.usage.cost_usd()));
+        let delegated = self
+            .record
+            .as_ref()
+            .map_or(0.0, |r| self.hub.read(cx).delegation_cost(r.id));
+        (own, delegated)
+    }
+
+    /// The header's cost label: the thread's total, "incluye delegaciones" when children cost something.
+    pub(crate) fn cost_label(&self, cx: &App) -> Option<(String, String)> {
+        let (own, delegated) = self.cost_with_delegations(cx);
+        let total = own + delegated;
+        if total <= 0.0 {
+            return None;
+        }
+        let tip = if delegated > 0.0 {
+            format!(
+                "Hilo {} · Delegaciones {}",
+                format_cost(own),
+                format_cost(delegated)
+            )
+        } else {
+            "Coste de este hilo".to_string()
+        };
+        let text = if delegated > 0.0 {
+            format!("{} · incluye delegaciones", format_cost(total))
+        } else {
+            format_cost(total)
+        };
+        Some((text, tip))
+    }
+
+    /// Is the delegation row of `child` expanded?
+    #[cfg(test)]
+    pub(crate) fn delegation_open(&self, child: ThreadId) -> bool {
+        self.open_delegations.contains(&child)
+    }
+
+    /// One row per delegated child, between the conversation and the composer.
+    fn delegation_block(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let parent = self.record.as_ref()?.id;
+        let now = chat_core::now_ms();
+        let kids: Vec<(ThreadRecord, Option<DelegationRun>)> = {
+            let hub = self.hub.read(cx);
+            hub.children_of(parent)
+                .into_iter()
+                .map(|t| (t.clone(), hub.delegation_run(t.id).cloned()))
+                .collect()
+        };
+        if kids.is_empty() {
+            return None;
+        }
+        let t = self.theme;
+        let c = t.colors;
+        let ty = t.typography;
+        let hidden = kids.len().saturating_sub(MAX_DELEGATION_ROWS);
+        let mut col = div().w_full().flex().flex_col().pb(px(6.0));
+        if hidden > 0 {
+            col = col.child(
+                div()
+                    .px(px(10.0))
+                    .pb(px(2.0))
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.outline)
+                    .child(SharedString::from(format!(
+                        "+{hidden} delegaciones anteriores"
+                    ))),
+            );
+        }
+        for (child, run) in kids.into_iter().skip(hidden) {
+            let id = child.id;
+            let open = self.open_delegations.contains(&id);
+            let line = delegation_line(&child, run.as_ref(), now);
+            let status = match run.as_ref().map(|r| r.state) {
+                Some(RunState::Running) => Some(ui_kit::RowStatus::Working),
+                Some(RunState::Done) => Some(ui_kit::RowStatus::Done),
+                Some(RunState::Failed) => Some(ui_kit::RowStatus::Error),
+                Some(RunState::Cancelled) => None,
+                None => match child.status {
+                    ThreadStatus::Working => Some(ui_kit::RowStatus::Working),
+                    ThreadStatus::WaitingForInput => Some(ui_kit::RowStatus::Waiting),
+                    ThreadStatus::Error => Some(ui_kit::RowStatus::Error),
+                    ThreadStatus::Done => Some(ui_kit::RowStatus::Done),
+                    ThreadStatus::Idle => None,
+                },
+            };
+            let head = div()
+                .id(("deleg", id.0 as usize))
+                .debug_selector(move || format!("deleg-{}", id.0))
+                .w_full()
+                .h(px(32.0))
+                .px(px(10.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(10.0))
+                .rounded(px(Radius::CONTROL))
+                .cursor_pointer()
+                .hover(move |s| s.bg(c.surface_2))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if !this.open_delegations.remove(&id) {
+                        this.open_delegations.insert(id);
+                    }
+                    cx.notify();
+                }))
+                .child(agent_icon(agent_mark(&child.agent), 16.0, c.muted))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(ty.ui_size_md))
+                        .text_color(c.muted)
+                        .child(SharedString::from(line)),
+                )
+                .children(status.map(|s| ui_kit::StatusGlyph::new(&t, s)))
+                .child(ui_kit::icon_rotated(
+                    Icon::ChevronRight,
+                    if open {
+                        ui_kit::Rotation::Deg90
+                    } else {
+                        ui_kit::Rotation::None
+                    },
+                    12.0,
+                    c.muted,
+                ));
+            let mut row = div().w_full().flex().flex_col().child(head);
+            if open {
+                let state = run_state_label(&child, run.as_ref());
+                let mut meta = vec![state.to_string()];
+                if let Some(r) = &run {
+                    if r.cost_usd > 0.0 {
+                        meta.push(format_cost(r.cost_usd));
+                    }
+                    if r.tokens > 0 {
+                        meta.push(format!("{} tokens", format_tokens(r.tokens)));
+                    }
+                }
+                let summary = run
+                    .as_ref()
+                    .map(|r| r.summary.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                row = row.child(
+                    div()
+                        .pl(px(36.0))
+                        .pr(px(10.0))
+                        .pb(px(8.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.muted)
+                        .children(summary.map(|s| {
+                            div()
+                                .max_h(px(96.0))
+                                .overflow_hidden()
+                                .text_color(c.text)
+                                .child(SharedString::from(s))
+                        }))
+                        .child(SharedString::from(meta.join(" · ")))
+                        .child(
+                            div().flex().flex_row().child(
+                                Button::ghost(format!("deleg-open-{}", id.0), &t, "Abrir hilo")
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.hub.update(cx, |h, cx| {
+                                            h.emit_event(ChatEvent::OpenThread(id), cx)
+                                        });
+                                    })),
+                            ),
+                        ),
+                );
+            }
+            col = col.child(row);
+        }
+        Some(col.into_any_element())
     }
 }

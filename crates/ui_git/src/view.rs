@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use git_svc::{DeltaKind, GitAction, Worktree};
+use git_svc::{DeltaKind, DraftKind, GitAction, Worktree};
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
@@ -26,12 +26,15 @@ use crate::cmd::{GitOp, Slot, commit_message};
 use crate::data::{DiffTarget, GitData, same_path, worktree_label};
 use crate::fmt::{plural, relative_time, truncate_end, truncate_middle, unix_secs};
 use crate::gate::Gate;
-use crate::model::{CheckpointFiles, GitModel, Load, OpFinished};
+use crate::model::{CheckpointFiles, DraftReady, GitModel, Load, OpFinished};
 use crate::sections::{FileRow, Section, build_sections, total_changes};
 use crate::widgets::{
     diff_card, empty_state, file_row, gate_card, mini_button, quiet_error_card, section_header,
     tag, working_target,
 };
+
+mod pr_view;
+pub use pr_view::pr_pill;
 
 /// Panel id stored in `layout.right_panel`.
 pub const PANEL_ID: &str = "git";
@@ -149,16 +152,19 @@ pub enum Tab {
     Changes,
     History,
     Checkpoints,
+    /// Pull request and CI; only listed while `gh` is available.
+    Pr,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Changes, Tab::History, Tab::Checkpoints];
+    pub const ALL: [Tab; 4] = [Tab::Changes, Tab::Pr, Tab::History, Tab::Checkpoints];
 
     pub const fn label(self) -> &'static str {
         match self {
             Tab::Changes => "Cambios",
             Tab::History => "Historial",
             Tab::Checkpoints => "Checkpoints",
+            Tab::Pr => "PR",
         }
     }
 }
@@ -181,6 +187,12 @@ pub struct GitPanel {
     body: Entity<TextField>,
     wt_name: Entity<TextField>,
     cp_label: Entity<TextField>,
+    /// "Crear PR" form fields.
+    pr_title: Entity<TextField>,
+    pr_body: Entity<TextField>,
+    pr_form: bool,
+    pr_draft: bool,
+    pr_all_checks: bool,
     tab: Tab,
     collapsed: HashSet<&'static str>,
     show_all: HashSet<Section>,
@@ -221,7 +233,30 @@ impl GitPanel {
                 .placeholder("etiqueta (opcional)")
         });
 
+        let pr_title = cx.new(|cx| {
+            TextField::new(theme, cx)
+                .bare()
+                .placeholder("Título del pull request")
+        });
+        let pr_body = cx.new(|cx| {
+            TextField::area(theme, cx)
+                .bare()
+                .enter_mode(EnterMode::Newline)
+                .lines(3, 8)
+                .placeholder("Descripción (Markdown)")
+        });
+
         let mut subs = vec![cx.observe(&model, |_, _, cx| cx.notify())];
+        for field in [&pr_title, &pr_body] {
+            subs.push(cx.subscribe(field, |_, _, ev: &TextFieldEvent, cx| {
+                if matches!(ev, TextFieldEvent::Changed) {
+                    cx.notify();
+                }
+            }));
+        }
+        subs.push(cx.subscribe(&model, |this, _, ev: &DraftReady, cx| {
+            this.apply_draft(ev.kind, cx)
+        }));
         // Enter in the subject, or Ctrl+Enter in the description, starts the commit. That only
         // opens the review card: nothing runs until "Confirmar".
         for field in [&subject, &body] {
@@ -260,13 +295,18 @@ impl GitPanel {
         let for_release = model.clone();
         subs.push(cx.on_release(move |_, cx| for_release.update(cx, |m, cx| m.detach_view(cx))));
 
-        Self {
+        let mut this = Self {
             ctx,
             model,
             subject,
             body,
             wt_name,
             cp_label,
+            pr_title,
+            pr_body,
+            pr_form: false,
+            pr_draft: false,
+            pr_all_checks: false,
             tab: Tab::Changes,
             collapsed: HashSet::new(),
             show_all: HashSet::new(),
@@ -275,14 +315,25 @@ impl GitPanel {
             cp_new: false,
             measure: MeasuredWidth::with_breaks(&[WIDE_FROM_PX]),
             _subs: subs,
-        }
+        };
+        // A draft that arrived while no panel was open.
+        this.apply_draft(DraftKind::Commit, cx);
+        this.apply_draft(DraftKind::PullRequest, cx);
+        this
     }
 
     /// The shell moved / resized the panel or the active tab changed directory.
     pub fn retarget(&mut self, ctx: PanelCtx, cx: &mut Context<Self>) {
         let root = root_of(&ctx);
         if self.ctx.theme != ctx.theme {
-            for f in [&self.subject, &self.body, &self.wt_name, &self.cp_label] {
+            for f in [
+                &self.subject,
+                &self.body,
+                &self.wt_name,
+                &self.cp_label,
+                &self.pr_title,
+                &self.pr_body,
+            ] {
                 let theme = ctx.theme;
                 f.update(cx, |f, cx| f.set_theme(theme, cx));
             }
@@ -616,7 +667,8 @@ impl GitPanel {
                 Button::tonal("git-push", &theme, push_label)
                     .disabled(busy)
                     .on_click(self.act(push_op)),
-            );
+            )
+            .when_some(self.pr_header_pill(cx), |d, pill| d.child(pill));
 
         let mut col = div()
             .w_full()
@@ -1043,6 +1095,7 @@ impl GitPanel {
         if card_active {
             return card.into_any_element();
         }
+        let draft = self.draft_button("git-commit-draft", DraftKind::Commit, staged > 0, cx);
         card = card
             .child(
                 div()
@@ -1054,6 +1107,7 @@ impl GitPanel {
                     .child(commit)
                     .child(push),
             )
+            .child(div().flex().flex_row().child(draft))
             .when_some(hint, |d, h| {
                 d.child(
                     div()
@@ -1422,7 +1476,7 @@ impl GitPanel {
 
     fn spaced(&self, blocks: Vec<Vec<AnyElement>>) -> Vec<AnyElement> {
         let mut out = Vec::new();
-        for (i, b) in blocks.into_iter().enumerate() {
+        for (i, b) in blocks.into_iter().filter(|b| !b.is_empty()).enumerate() {
             if i > 0 {
                 out.push(div().h(px(10.0)).flex_none().into_any_element());
             }
@@ -1435,20 +1489,29 @@ impl GitPanel {
         let theme = self.ctx.theme;
         match self.layout() {
             Layout::Tabs => {
+                let pr_on = self.pr_available(cx);
+                let tab = if self.tab == Tab::Pr && !pr_on {
+                    Tab::Changes
+                } else {
+                    self.tab
+                };
                 let this = cx.entity();
-                let tabs = div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(4.0))
-                    .children(Tab::ALL.map(|t| {
-                        let this = this.clone();
-                        Pill::compact(SharedString::from(format!("git-tab-{}", t.label())), &theme)
+                let tabs = div().flex().flex_row().flex_wrap().gap(px(4.0)).children(
+                    Tab::ALL
+                        .into_iter()
+                        .filter(|t| *t != Tab::Pr || pr_on)
+                        .map(|t| {
+                            let this = this.clone();
+                            Pill::compact(
+                                SharedString::from(format!("git-tab-{}", t.label())),
+                                &theme,
+                            )
                             .label(t.label())
-                            .active(self.tab == t)
+                            .active(tab == t)
                             .on_click(move |_, _, cx| this.update(cx, |p, cx| p.select_tab(t, cx)))
-                    }));
-                let content = match self.tab {
+                        }),
+                );
+                let content = match tab {
                     Tab::Changes => {
                         let rows = self.changes_block(data, cx);
                         let commit = self.commit_block(data, window, cx);
@@ -1462,6 +1525,10 @@ impl GitPanel {
                             .child(self.scroll("git-scroll-changes", rows))
                             .child(commit)
                             .into_any_element()
+                    }
+                    Tab::Pr => {
+                        let rows = self.pr_block(false, window, cx);
+                        self.scroll("git-scroll-pr", rows)
                     }
                     Tab::History => {
                         let rows = self.history_block(data, true, cx);
@@ -1493,6 +1560,7 @@ impl GitPanel {
             Layout::Stacked => {
                 let blocks = vec![
                     self.changes_block(data, cx),
+                    self.pr_block(true, window, cx),
                     self.history_block(data, false, cx),
                     self.checkpoints_block(data, true, window, cx),
                 ];
@@ -1513,6 +1581,7 @@ impl GitPanel {
                 let left_rows = self.changes_block(data, cx);
                 let commit = self.commit_block(data, window, cx);
                 let right_blocks = vec![
+                    self.pr_block(true, window, cx),
                     self.history_block(data, false, cx),
                     self.checkpoints_block(data, true, window, cx),
                 ];

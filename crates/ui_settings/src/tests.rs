@@ -616,3 +616,164 @@ mod ui {
         );
     }
 }
+
+// ----- delegation, registration and updates ------------------------------------------------------
+
+mod delegation {
+    use std::sync::Mutex;
+
+    use gpui::{TestAppContext, VisualTestContext, px, size};
+    use store::config::TEMPLATE;
+    use ui_kit::testing;
+
+    use super::*;
+    use crate::registration::{CommandRunner, McpTarget};
+
+    /// Records what it was asked to run and runs nothing.
+    #[derive(Default)]
+    struct Fake {
+        calls: Mutex<Vec<(McpTarget, PathBuf)>>,
+    }
+
+    impl CommandRunner for Fake {
+        fn run(&self, target: McpTarget, agent_exe: &Path) -> Result<String, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((target, agent_exe.to_path_buf()));
+            Ok("fake ok".into())
+        }
+    }
+
+    struct Win {
+        _dir: tempfile::TempDir,
+        view: Entity<SettingsView>,
+        fake: Arc<Fake>,
+    }
+
+    fn open(cx: &mut TestAppContext) -> (Win, &mut VisualTestContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, TEMPLATE).unwrap();
+        let config = Config::load_from(&path).unwrap().config;
+        let fake = Arc::new(Fake::default());
+        let options = SettingsOptions {
+            registry: Some(Arc::new(GrammarRegistry::new(dir.path().join("plugins")))),
+            fetcher: Some(Arc::new(LocalFetcher {
+                archives_dir: dist(),
+            })),
+            agent_exe: Some(PathBuf::from(r"C:\Selachi\selachi-agent.exe")),
+            runner: Some(fake.clone()),
+            ..SettingsOptions::new(path, "0.0.1")
+        };
+        let (view, vcx) = testing::open_window(cx, |_, cx| {
+            SettingsView::new(config, Theme::dark(), options, cx)
+        });
+        vcx.simulate_resize(size(px(600.0), px(3600.0)));
+        for _ in 0..3 {
+            vcx.update(|window, _| window.refresh());
+            vcx.run_until_parked();
+        }
+        (
+            Win {
+                _dir: dir,
+                view,
+                fake,
+            },
+            vcx,
+        )
+    }
+
+    #[gpui::test]
+    fn the_delegation_switch_and_agent_chips_edit_the_config(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        w.view
+            .update(vcx, |v, cx| v.set_section(Section::Agents, cx));
+        vcx.run_until_parked();
+        assert!(w.view.read_with(vcx, |v, _| v.config().delegation.enabled));
+        testing::click_id(vcx, "deleg-enabled");
+        assert!(!w.view.read_with(vcx, |v, _| v.config().delegation.enabled));
+        testing::click_id(vcx, "deleg-agent-codex");
+        let allowed = w
+            .view
+            .read_with(vcx, |v, _| v.config().delegation.allowed_agents.clone());
+        assert_eq!(allowed, ["claude", "opencode", "gemini", "agy"]);
+    }
+
+    #[gpui::test]
+    fn registering_runs_nothing_until_the_user_confirms(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        w.view
+            .update(vcx, |v, cx| v.set_section(Section::Agents, cx));
+        vcx.run_until_parked();
+        // opening the dialog shows the command and runs nothing
+        testing::click_id(vcx, "register-claude");
+        assert!(w.fake.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            w.view.read_with(vcx, |v, _| v.register.clone()),
+            Some((
+                McpTarget::ClaudeCode,
+                crate::registration::RegPhase::Confirm
+            )),
+            "the dialog is open, nothing ran"
+        );
+        // "Cancelar" closes it (the popover body is not part of the test frame): still nothing
+        w.view.update(vcx, |v, cx| {
+            v.register = None;
+            cx.notify();
+        });
+        assert_eq!(w.view.read_with(vcx, |v, _| v.register.clone()), None);
+        assert!(w.fake.calls.lock().unwrap().is_empty());
+        // the dialog's confirm button calls `run_registration`: now it runs, once, with the exact
+        // executable (the popover body is not part of the test frame)
+        w.view
+            .update(vcx, |v, cx| v.run_registration(McpTarget::ClaudeCode, cx));
+        vcx.run_until_parked();
+        let calls = w.fake.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec![(
+                McpTarget::ClaudeCode,
+                PathBuf::from(r"C:\Selachi\selachi-agent.exe")
+            )]
+        );
+        let ok = w.view.read_with(vcx, |v, _| {
+            v.register_results.get(&McpTarget::ClaudeCode).cloned()
+        });
+        assert_eq!(ok, Some(Ok("fake ok".to_string())));
+    }
+
+    #[gpui::test]
+    fn the_update_settings_edit_the_config_and_ask_the_host(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        assert!(w.view.read_with(vcx, |v, _| v.config().updates.check));
+        testing::click_id(vcx, "updates-check");
+        assert!(!w.view.read_with(vcx, |v, _| v.config().updates.check));
+        testing::click_id(vcx, "updates-check");
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = asked.clone();
+        vcx.update(|_, cx| {
+            cx.subscribe(&w.view, move |_, ev: &SettingsEvent, _| {
+                if matches!(ev, SettingsEvent::CheckUpdates) {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+            .detach();
+        });
+        testing::click_id(vcx, "updates-check-now");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // a ready update offers the restart
+        w.view.update(vcx, |v, cx| {
+            v.set_update_status(
+                crate::view::UpdateStatus {
+                    text: "Actualización 0.2.0 lista".into(),
+                    busy: false,
+                    ready: true,
+                },
+                cx,
+            )
+        });
+        vcx.run_until_parked();
+        assert!(testing::bounds_of(vcx, "updates-install-now").is_some());
+    }
+}

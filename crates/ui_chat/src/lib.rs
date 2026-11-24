@@ -49,6 +49,7 @@
 mod chat_view;
 mod composer;
 mod hub;
+mod lineage;
 mod md;
 mod mentions;
 mod options;
@@ -69,7 +70,11 @@ pub use composer::{
     ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode,
 };
 pub use hub::{ChatEvent, ChatHub, FilesReady, ModelsReady};
-pub use md::{MdBody, ParsedMd, parse_markdown};
+pub use lineage::{
+    DelegationRun, MAX_NEST_DEPTH, RunState, children_of, delegation_cost, delegation_line,
+    files_label, nest, run_state_label,
+};
+pub use md::{MdBody, ParsedMd, parse_markdown, render_md};
 pub use mentions::{MentionQuery, filter_files, mention_at, walk_files};
 pub use options::{
     AgentOption, EFFORTS, ModelOption, PERMISSION_ORDER, agent_mark, default_agents, effort_label,

@@ -111,7 +111,9 @@ fn focus_key(id: &ElementId) -> ElementId {
     )
 }
 
-/// The tab-stop handle of the component with element id `id`, kept across frames.
+/// The tab-stop handle of the component with element id `id`, kept across frames. Public so host
+/// rows built outside the kit (the unified sidebar's delegation rows) get the standard 2 px ring:
+/// `let h = focus::handle(window, cx, &id); focus::wire(row, Some(h), &id, radius, accent)`.
 pub fn handle(window: &mut Window, cx: &mut App, id: &ElementId) -> FocusHandle {
     crate::init(cx);
     let state = window.use_keyed_state(focus_key(id), cx, |_, cx| {
@@ -122,12 +124,7 @@ pub fn handle(window: &mut Window, cx: &mut App, id: &ElementId) -> FocusHandle 
 
 /// The ring, as the last child of a `relative` control: paints nothing unless
 /// [`ring_visible`], and while painted it also records mouse presses (pointer modality).
-pub fn ring_element(
-    handle: FocusHandle,
-    id: String,
-    radius: f32,
-    color: Rgba,
-) -> impl IntoElement {
+pub fn ring_element(handle: FocusHandle, id: String, radius: f32, color: Rgba) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds: Bounds<Pixels>, (), window, _| {

@@ -79,6 +79,9 @@ external_editor = ""
 #   "inside"  dentro del repositorio, en .worktrees
 #   o una ruta: una carpeta única para todos, p. ej. "D:\worktrees"
 worktrees = "beside"
+# Estado del PR y de CI de la rama actual (necesita `gh` instalado y con sesión; si no, se oculta).
+# Se consulta al cambiar de rama, tras un push, bajo demanda y al enfocar la ventana (máx. cada 5 min).
+pr_status = true
 
 [plugins]
 # URL (https://) del índice grammars.toml de los plugins de lenguaje. Vacío = el índice oficial

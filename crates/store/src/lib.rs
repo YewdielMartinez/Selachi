@@ -15,6 +15,7 @@
 
 pub mod config;
 pub mod db;
+pub mod dirwatch;
 pub mod error;
 pub mod paths;
 pub mod redact;
@@ -22,16 +23,18 @@ pub mod snippets;
 
 pub use config::{
     layout_changed, wireframe, BottomBar, BuiltinPreset, Config, ConfigEvent, ConfigLoad,
-    ConfigWatcher, CustomPreset, Delegation, Density, General, GroupBy, LayoutConfig, LayoutOverrides, PanelId,
-    Plugins, PresetId, ProjectLayoutOverride, RailVisibility, ResolvedLayout, RetentionConfig,
-    SidebarLayout, SidebarOverrides, SidebarSection, SidebarSide, Splits, TabsPosition,
-    TitlebarLayout, TitlebarOverrides, Updates, WireRect, WorktreeLocation, Zone,
+    ConfigWatcher, CustomPreset, Delegation, Density, General, GroupBy, LayoutConfig,
+    LayoutOverrides, PanelId, Plugins, PresetId, ProjectLayoutOverride, RailVisibility,
+    ResolvedLayout, RetentionConfig, SidebarLayout, SidebarOverrides, SidebarSection, SidebarSide,
+    Splits, TabsPosition, TitlebarLayout, TitlebarOverrides, Updates, WireRect, WorktreeLocation,
+    Zone,
 };
 pub use db::{
     detect_project, discover_projects, looks_sensitive, now_ms, DiscoveredProject, Favorite,
     HistoryEntry, NewCommand, NewSnippet, PathEntry, Project, ProjectKind, PruneStats,
     SessionLayout, Snippet, SnippetScope, StateDb,
 };
+pub use dirwatch::DirWatcher;
 pub use error::{Result, StoreError};
 pub use redact::{redact, Redacted};
 pub use snippets::{parse_template, render, Param, Quoting};

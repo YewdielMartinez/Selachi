@@ -21,6 +21,7 @@ use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity
 use panel_api::TabHandle;
 use theme::Theme;
 
+use crate::lineage::DelegationRun;
 use crate::mentions::{MAX_FILES, walk_files};
 use crate::options::{AgentOption, default_agents};
 use crate::tab::ChatTab;
@@ -75,6 +76,8 @@ pub struct ChatHub {
     projects: Vec<PathBuf>,
     default_project: Option<PathBuf>,
     files: HashMap<String, FileSlot>,
+    /// What the harness run registry says about each delegated thread (fed by the host).
+    runs: HashMap<ThreadId, DelegationRun>,
     /// Models each agent told us (`agents_driver::probe_models`), by [`agent_key`]. An entry
     /// (even empty) means the agent was asked once: no retry this session.
     models: HashMap<String, Vec<agents_driver::ModelInfo>>,
@@ -140,6 +143,7 @@ impl ChatHub {
             projects: Vec::new(),
             default_project: None,
             files: HashMap::new(),
+            runs: HashMap::new(),
             models: HashMap::new(),
             probe_models: true,
             error: None,
@@ -218,6 +222,39 @@ impl ChatHub {
 
     pub fn set_default_project(&mut self, project: Option<PathBuf>) {
         self.default_project = project;
+    }
+
+    // ----- delegation lineage ----------------------------------------------------------------
+
+    /// Replaces what the host knows about delegated runs (from the harness run registry). Views
+    /// repaint only when something changed.
+    pub fn set_delegation_runs(&mut self, runs: Vec<DelegationRun>, cx: &mut Context<Self>) {
+        let map: HashMap<ThreadId, DelegationRun> =
+            runs.into_iter().map(|r| (r.thread, r)).collect();
+        if map != self.runs {
+            self.runs = map;
+            cx.notify();
+        }
+    }
+
+    /// The run record of a delegated thread, when the registry has one.
+    pub fn delegation_run(&self, thread: ThreadId) -> Option<&DelegationRun> {
+        self.runs.get(&thread)
+    }
+
+    /// Every run record, keyed by child thread.
+    pub fn delegation_runs(&self) -> &HashMap<ThreadId, DelegationRun> {
+        &self.runs
+    }
+
+    /// The threads `parent` delegated, oldest first.
+    pub fn children_of(&self, parent: ThreadId) -> Vec<&ThreadRecord> {
+        crate::lineage::children_of(&self.threads, parent)
+    }
+
+    /// Cost of everything `parent` delegated (all levels).
+    pub fn delegation_cost(&self, parent: ThreadId) -> f64 {
+        crate::lineage::delegation_cost(&self.threads, &self.runs, parent)
     }
 
     /// The thread whose tab is in front (highlighted in the list).

@@ -24,6 +24,7 @@ use crate::agents::AgentsState;
 use crate::keys::{self, KeyAction};
 use crate::net::{Fetcher, HttpFetcher};
 use crate::plugins::{PluginsEvent, PluginsModel};
+use crate::registration::{CommandRunner, McpTarget, RegPhase, SystemRunner};
 use crate::save::{SAVE_DEBOUNCE, SaveGate, merge_external};
 use crate::validate::{FieldError, first_error};
 
@@ -78,12 +79,12 @@ impl Section {
 
     pub fn subtitle(self) -> &'static str {
         match self {
-            Section::General => "Idioma, sesión y cierre.",
+            Section::General => "Idioma, sesión, cierre y actualizaciones.",
             Section::Appearance => "Temas, acento, tipografía y densidad.",
             Section::Design => "Presets, pestañas, barra lateral, paneles y zonas.",
             Section::Terminal => "Shell, perfiles, cursor y completado.",
-            Section::Agents => "CLI detectados, permisos y uso.",
-            Section::Git => "Confirmaciones y editor externo.",
+            Section::Agents => "CLI detectados, permisos, uso y delegación.",
+            Section::Git => "Confirmaciones, editor externo y estado del PR.",
             Section::Processes => "Qué pasa con los procesos de un hilo al cerrarlo.",
             Section::Plugins => "Resaltado de código para más lenguajes.",
             Section::Keyboard => "Atajos y conflictos.",
@@ -109,6 +110,17 @@ impl Section {
     }
 }
 
+/// What the host tells the view about updates (the settings row shows it).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UpdateStatus {
+    /// "Estás al día · versión 0.1.0", "Actualización 0.2.0 lista"...
+    pub text: String,
+    /// A check or a download is running.
+    pub busy: bool,
+    /// A verified update waits for "Reiniciar y actualizar".
+    pub ready: bool,
+}
+
 /// What the host gives the view at creation.
 #[derive(Clone)]
 pub struct SettingsOptions {
@@ -122,6 +134,12 @@ pub struct SettingsOptions {
     pub fetcher: Option<Arc<dyn Fetcher>>,
     /// Rebindable actions (default: [`keys::default_catalog`]).
     pub key_catalog: Option<Vec<KeyAction>>,
+    /// `selachi-agent.exe` (what "Registrar en Claude Code / Antigravity" points the MCP client at).
+    /// `None` disables those buttons.
+    pub agent_exe: Option<PathBuf>,
+    /// Runs the registration command (default: the real clients). Tests give a fake: nothing runs
+    /// until the user confirms.
+    pub runner: Option<Arc<dyn CommandRunner>>,
 }
 
 impl SettingsOptions {
@@ -132,6 +150,8 @@ impl SettingsOptions {
             registry: None,
             fetcher: None,
             key_catalog: None,
+            agent_exe: None,
+            runner: None,
         }
     }
 }
@@ -156,6 +176,11 @@ pub enum SettingsEvent {
     PluginInstalled { id: String, restart: bool },
     /// A plugin was removed (`restart`: it is deleted at the next start).
     PluginRemoved { id: String, restart: bool },
+    /// "Buscar ahora" (General > Actualizaciones): the host looks for an update and answers with
+    /// [`SettingsView::set_update_status`].
+    CheckUpdates,
+    /// "Reiniciar y actualizar" (General > Actualizaciones): the host installs the ready update.
+    InstallUpdate,
 }
 
 /// Pending confirmation of a plugin action.
@@ -222,6 +247,14 @@ pub struct SettingsView {
     pub(crate) capture: Option<Capture>,
     pub(crate) capture_sub: Option<Subscription>,
     pub(crate) width_hint: Option<f32>,
+    /// `selachi-agent.exe` for the register buttons.
+    pub(crate) agent_exe: Option<PathBuf>,
+    pub(crate) runner: Arc<dyn CommandRunner>,
+    /// The register dialog that is open (or running) and the last result of each client.
+    pub(crate) register: Option<(McpTarget, RegPhase)>,
+    pub(crate) register_results: HashMap<McpTarget, Result<String, String>>,
+    /// What the host says about updates (General > Actualizaciones).
+    pub(crate) update_status: UpdateStatus,
     /// The zone width really measured while painting (preferred over the window width).
     pub(crate) measured: ui_kit::MeasuredWidth,
     focus: FocusHandle,
@@ -326,6 +359,11 @@ impl SettingsView {
             capture: None,
             capture_sub: None,
             width_hint: None,
+            agent_exe: options.agent_exe,
+            runner: options.runner.unwrap_or_else(|| Arc::new(SystemRunner)),
+            register: None,
+            register_results: HashMap::new(),
+            update_status: UpdateStatus::default(),
             measured: ui_kit::MeasuredWidth::new(crate::ui::NARROW_BELOW),
             focus: cx.focus_handle(),
             _subs: subs,
@@ -619,6 +657,15 @@ impl SettingsView {
         self.field_subs.retain(|k, _| keep(k));
     }
 
+    /// The host's answer to [`SettingsEvent::CheckUpdates`] (and every later change of the update
+    /// state).
+    pub fn set_update_status(&mut self, status: UpdateStatus, cx: &mut Context<Self>) {
+        if self.update_status != status {
+            self.update_status = status;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn focus_handle_ref(&self) -> FocusHandle {
         self.focus.clone()
     }
@@ -640,6 +687,11 @@ impl SettingsView {
             "accept_word_key",
             "external_editor",
             "index_url",
+            "deleg_concurrent",
+            "deleg_timeout",
+            "deleg_budget",
+            "deleg_weekly",
+            "deleg_approval",
         ] {
             let (o, n) = (config_field_value(before, key), self.field_value(key));
             if o != n
@@ -720,6 +772,11 @@ pub(crate) fn config_field_value(cfg: &Config, key: &str) -> Option<String> {
         "accept_word_key" => cfg.terminal.completion.accept_word_key.clone(),
         "external_editor" => cfg.git.external_editor.clone(),
         "index_url" => cfg.plugins.index_url.clone(),
+        "deleg_concurrent" => cfg.delegation.max_concurrent.to_string(),
+        "deleg_timeout" => crate::delegation_ui::minutes_text(cfg.delegation.timeout_secs),
+        "deleg_budget" => cfg.delegation.daily_token_budget.to_string(),
+        "deleg_weekly" => crate::ui::decimal(cfg.delegation.weekly_usage_threshold_percent, 0),
+        "deleg_approval" => cfg.delegation.approval_timeout_secs.to_string(),
         _ => return None,
     })
 }

@@ -14,6 +14,12 @@
 //! * `--review X`: asks for a sensitive operation so its confirmation card is on screen (it is
 //!   never confirmed here).
 //! * `--terminal-mode`: confirmed sensitive operations emit `RunInTerminal` instead of running.
+//! * `--fake-gh`: the PR / CI integration (B1) against a fake `gh` shim with recorded data (a PR
+//!   with failing, running and green checks). The real `gh` is never run.
+//! * `--pr-form`: opens the "Crear PR" form (the branch has no PR: use with `--fake-gh --no-pr`).
+//! * `--no-pr`: the fake `gh` finds no PR for the branch.
+//! * `--fake-agent`: plays the host for "Redactar con agente": answers a draft with canned text
+//!   after a moment. No model is ever called.
 //!
 //! The host strip at the bottom prints every `GitPanelEvent` the panel emits.
 
@@ -21,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use git_svc::Repo;
+use git_svc::{DraftKind, GhClient, Repo};
 use gpui::{
     AnyView, App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, size,
@@ -110,6 +116,32 @@ impl Render for Host {
             .child(titlebar)
             .child(body)
     }
+}
+
+/// A fake `gh`: a `.cmd` shim in a temp dir answering with recorded JSON. Never the real one.
+fn make_fake_gh(no_pr: bool) -> GhClient {
+    const SHIM: &str = r#"@echo off
+if "%1"=="auth" exit /b 0
+if "%1 %2"=="pr list" (type "%~dp0pr_list.json" & exit /b 0)
+if "%1 %2"=="pr checks" (type "%~dp0checks.json" & exit /b 1)
+if "%1 %2"=="pr create" (findstr "^" >nul & echo https://github.com/acme/selachi/pull/7 & exit /b 0)
+if "%1 %2"=="run view" (type "%~dp0log.txt" & exit /b 0)
+exit /b 2
+"#;
+    const PR: &str = r#"[{"headRefName":"main","isDraft":false,"mergeable":"MERGEABLE","number":12,"reviewDecision":"REVIEW_REQUIRED","state":"OPEN","title":"feat(git): estado de PR y CI en el panel","url":"https://github.com/acme/selachi/pull/12"}]"#;
+    let dir = std::env::temp_dir().join("selachi-fake-gh");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join("gh.cmd"), SHIM);
+    let _ = std::fs::write(dir.join("pr_list.json"), if no_pr { "[]" } else { PR });
+    let _ = std::fs::write(
+        dir.join("checks.json"),
+        include_str!("../../git_svc/tests/fixtures/checks_mixed.json"),
+    );
+    let _ = std::fs::write(
+        dir.join("log.txt"),
+        include_str!("../../git_svc/tests/fixtures/failed_log.txt"),
+    );
+    GhClient::with_program(dir.join("gh.cmd"))
 }
 
 fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -417,6 +449,10 @@ fn main() {
     let review = arg_value(&args, "--review").map(str::to_owned);
     let worktrees = args.iter().any(|a| a == "--worktrees");
     let terminal_mode = args.iter().any(|a| a == "--terminal-mode");
+    let fake_gh = args.iter().any(|a| a == "--fake-gh");
+    let no_pr = args.iter().any(|a| a == "--no-pr");
+    let pr_form = args.iter().any(|a| a == "--pr-form");
+    let fake_agent = args.iter().any(|a| a == "--fake-agent");
     eprintln!(
         "git_demo: {} (writes {})",
         repo_dir.display(),
@@ -443,6 +479,9 @@ fn main() {
                 if terminal_mode {
                     m.set_exec_mode(ExecMode::Terminal);
                 }
+                if fake_gh {
+                    m.set_pr_client(Some(make_fake_gh(no_pr)), cx);
+                }
             });
             let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
             let _ = cx.open_window(
@@ -468,9 +507,46 @@ fn main() {
                         events: Vec::new(),
                     });
                     let log = host.clone();
+                    let agent_model = model.clone();
                     cx.subscribe(&model, move |_, ev: &GitPanelEvent, cx| {
                         let line = format!("evento: {ev:?}");
+                        let line = if line.len() > 160 {
+                            format!("{}…", line.chars().take(160).collect::<String>())
+                        } else {
+                            line
+                        };
                         eprintln!("{line}");
+                        if let (true, GitPanelEvent::DraftMessage { kind, .. }) = (fake_agent, ev) {
+                            // Plays the host: canned text, no model.
+                            let (kind, m) = (*kind, agent_model.clone());
+                            cx.spawn(async move |cx| {
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(900))
+                                    .await;
+                                let text = match kind {
+                                    DraftKind::Commit => {
+                                        "feat(config): sube el tamaño de fuente
+
+Ajusta font_size a 14 y añade el historial."
+                                    }
+                                    DraftKind::PullRequest => {
+                                        "feat(git): estado de PR y CI en el panel
+
+## Resumen
+Muestra el PR de la rama y sus checks.
+
+## Cambios
+- Píldora y sección «Pull request»
+
+## Pruebas
+- cargo test -p ui_git"
+                                    }
+                                };
+                                let _ = cx
+                                    .update(|cx| m.update(cx, |m, cx| m.set_draft(kind, text, cx)));
+                            })
+                            .detach();
+                        }
                         log.update(cx, |h, cx| {
                             h.events.push(line);
                             cx.notify();
@@ -493,6 +569,9 @@ fn main() {
                                     }
                                     if worktrees {
                                         p.set_worktree_menu(true, cx);
+                                    }
+                                    if pr_form {
+                                        p.open_pr_form(cx);
                                     }
                                 });
                             }

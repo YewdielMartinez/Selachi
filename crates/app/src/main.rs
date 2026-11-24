@@ -6,10 +6,14 @@
 mod adapt;
 mod agents;
 mod app_shell;
+mod approval_queue;
+mod approvals;
+mod approvals_ui;
 mod block_layout;
 mod block_ui;
 mod chat_host;
 mod cli;
+mod draft_agent;
 mod drop;
 mod git_monitor;
 mod git_panel;
@@ -39,6 +43,7 @@ mod terminal_view;
 mod titlebar;
 mod titlebar_view;
 mod unified_sidebar;
+mod update_host;
 mod usage_monitor;
 mod viewer_host;
 
@@ -137,6 +142,22 @@ fn register_panels(cx: &mut App) {
     cx.set_global(registry);
 }
 
+/// Serves the approvals pipe: delegated agents (`selachi-agent`) ask here before they run a tool or
+/// apply their changes. The server thread sleeps in `ConnectNamedPipe`; the shell takes the
+/// receiver when it is built. If the pipe cannot be created (another Selachi owns it) delegated
+/// agents are denied by the harness with a clear reason.
+fn start_approvals(cx: &mut App) {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    match approvals::start(&agent_harness::default_pipe_path(), tx) {
+        Ok(_) => {
+            if let Some(services) = cx.try_global::<Services>() {
+                services.approvals_rx.replace(Some(rx));
+            }
+        }
+        Err(e) => log::warn!("the approvals pipe is not available: {e}"),
+    }
+}
+
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
@@ -175,6 +196,11 @@ fn bind_keys(cx: &mut App) {
 }
 
 fn main() {
+    // `selachi agent ...` and `selachi mcp` are the harness CLI: no window, no GUI state.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(forwarded) = cli::forwarded_args(&argv) {
+        std::process::exit(cli::run_forwarded(&forwarded));
+    }
     env_logger::init();
     let base = std::env::current_dir().unwrap_or_default();
     let args = cli::parse(std::env::args_os().skip(1), &base);
@@ -207,6 +233,7 @@ fn main() {
             ui_chat::init(cx);
             ui_settings::init(cx);
             register_panels(cx);
+            start_approvals(cx);
             // The layout popover's content: the real `ui_layout` panel.
             ui_layout::init(cx);
             ui_palette::init(cx);

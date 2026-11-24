@@ -17,16 +17,19 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use git_svc::{CheckpointChange, Editor, Repo, WatchHandle};
+use git_svc::{CheckpointChange, DraftKind, Editor, GhClient, NewPr, Repo, WatchHandle};
 use gpui::{Context, EventEmitter, Task};
 
 use crate::cmd::GitOp;
 use crate::data::{self, DiffTarget, GitData};
 use crate::diffview::{DiffPreview, agent_markdown};
 use crate::gate::{Gate, Outcome, RefreshGate, Step};
+use crate::pr::{
+    self, MAX_FAILED_SENT, PrCreate, PrCreated, PrQuery, PrSnapshot, PrSummary, PrTrigger, PrView,
+};
 
 /// Debounce of the file watcher.
 pub const WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -45,6 +48,45 @@ pub enum GitPanelEvent {
     AskAgent { context_markdown: String },
     /// The user picked another worktree in the switcher: the host may `cd` the terminal.
     WorktreeSelected { path: PathBuf },
+    /// "Redactar con agente" (backlog B3): the user asked an agent to draft a commit message or
+    /// a PR description. **This is the only moment tokens are spent.** The host builds the prompt
+    /// ([`GitPanelEvent::draft_prompt`]), runs the chosen agent read-only and answers with
+    /// [`GitModel::set_draft`] (or [`GitModel::fail_draft`]). `staged_diff` is already redacted
+    /// and capped at 60 KB; for a PR it is the diff of the branch against its base.
+    DraftMessage {
+        kind: DraftKind,
+        diff_stat: String,
+        staged_diff: String,
+        recent_subjects: Vec<String>,
+    },
+}
+
+impl GitPanelEvent {
+    /// The prompt for a [`GitPanelEvent::DraftMessage`] (Spanish or English following the
+    /// language of the repository history); `None` for any other event.
+    pub fn draft_prompt(&self) -> Option<String> {
+        match self {
+            GitPanelEvent::DraftMessage {
+                kind,
+                diff_stat,
+                staged_diff,
+                recent_subjects,
+            } => Some(git_svc::draft_prompt(
+                *kind,
+                diff_stat,
+                staged_diff,
+                recent_subjects,
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// The agent's draft arrived ([`GitModel::set_draft`]): the commit box / PR form fill themselves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraftReady {
+    pub kind: DraftKind,
+    pub text: String,
 }
 
 /// An operation ended (for the panel to clear its inputs, for the host to refresh its own state).
@@ -56,6 +98,8 @@ pub struct OpFinished {
 
 impl EventEmitter<GitPanelEvent> for GitModel {}
 impl EventEmitter<OpFinished> for GitModel {}
+impl EventEmitter<DraftReady> for GitModel {}
+impl EventEmitter<PrCreated> for GitModel {}
 
 /// Where the model is in discovering and reading the repository.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,6 +188,25 @@ pub struct GitModel {
     read_only: bool,
     editor: Editor,
     stats: Stats,
+    // ----- pull request / CI (B1) and drafts (B3) -----
+    /// `None` = the PR integration is off (the default).
+    gh: Option<GhClient>,
+    /// `gh` was proven installed and logged in (skips the auth probe on later queries).
+    gh_ok: bool,
+    pr_view: PrView,
+    /// Branch the last query was started for (branch-change detection).
+    pr_branch: Option<String>,
+    pr_queried: Option<Instant>,
+    pr_inflight: bool,
+    pr_again: bool,
+    pr_task: Option<Task<()>>,
+    pr_queries: u32,
+    /// Bumped when the target or the client changes: late results are dropped.
+    pr_epoch: u64,
+    pr_sending: bool,
+    pr_create: PrCreate,
+    drafting: Option<DraftKind>,
+    drafts: Vec<(DraftKind, String)>,
 }
 
 impl Default for GitModel {
@@ -180,6 +243,20 @@ impl GitModel {
             read_only: false,
             editor: Editor::VsCode,
             stats: Stats::default(),
+            gh: None,
+            gh_ok: false,
+            pr_view: PrView::Idle,
+            pr_branch: None,
+            pr_queried: None,
+            pr_inflight: false,
+            pr_again: false,
+            pr_task: None,
+            pr_queries: 0,
+            pr_epoch: 0,
+            pr_sending: false,
+            pr_create: PrCreate::Idle,
+            drafting: None,
+            drafts: Vec::new(),
         }
     }
 
@@ -289,6 +366,9 @@ impl GitModel {
         self.diff = None;
         self.diff_task = None;
         self.checkpoint_view = None;
+        self.reset_pr();
+        self.drafting = None;
+        self.drafts.clear();
         self.load = if self.target_dir().is_some() {
             Load::Idle
         } else {
@@ -518,6 +598,7 @@ impl GitModel {
         }
         if changed {
             self.data_changed(cx);
+            self.branch_maybe_changed(cx);
             cx.notify();
         }
         match self.refresh.finish() {
@@ -682,6 +763,9 @@ impl GitModel {
             self.quiet_error = Some(summary);
         }
         cx.emit(OpFinished { op: op.clone(), ok });
+        if pr::refresh_after(&op, ok) {
+            self.refresh_pr(PrTrigger::AfterPush, cx);
+        }
         // History changes with everything except plain staging.
         let full = !matches!(
             op,
@@ -866,6 +950,413 @@ impl GitModel {
         })
         .detach();
         cx.notify();
+    }
+
+    // ----- pull request and CI (B1) ----------------------------------------------------------
+    //
+    // Cost model: `gh` runs only on a trigger (see [`crate::pr`]): the branch changed, a push
+    // finished, an explicit refresh, or a window focus when the last query is older than five
+    // minutes. There is no timer. One query in flight, one coalesced. Off by default.
+
+    /// Turns the PR / CI integration on with the system `gh`. Without `gh` installed and logged
+    /// in, everything stays hidden.
+    pub fn enable_pr_status(&mut self, cx: &mut Context<Self>) {
+        self.set_pr_client(Some(GhClient::system()), cx);
+    }
+
+    /// Turns the integration on with a specific client (a fake `gh` in tests) or off (`None`).
+    pub fn set_pr_client(&mut self, client: Option<GhClient>, cx: &mut Context<Self>) {
+        self.gh = client;
+        self.reset_pr();
+        if self.gh.is_some() && self.repo.is_some() && self.visible {
+            self.pr_branch = self.current_branch();
+            self.refresh_pr(PrTrigger::BranchChanged, cx);
+        }
+        cx.notify();
+    }
+
+    fn reset_pr(&mut self) {
+        self.pr_epoch += 1;
+        self.pr_view = PrView::Idle;
+        self.pr_branch = None;
+        self.pr_queried = None;
+        self.pr_inflight = false;
+        self.pr_again = false;
+        self.pr_task = None;
+        self.pr_sending = false;
+        self.pr_create = PrCreate::Idle;
+        self.gh_ok = false;
+    }
+
+    fn current_branch(&self) -> Option<String> {
+        self.data.as_ref().and_then(|d| d.status.branch.clone())
+    }
+
+    /// What the panel knows about the PR of the current branch.
+    pub fn pr_view(&self) -> &PrView {
+        &self.pr_view
+    }
+
+    /// The loaded PR and checks, if any.
+    pub fn pr_snapshot(&self) -> Option<&Arc<PrSnapshot>> {
+        match &self.pr_view {
+            PrView::Ready(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The one-line summary for the status bar (`PR #12 · 2 checks fallan` / `PR #12 · ✓ CI`),
+    /// `None` when there is no PR, `gh` is unavailable or the integration is off.
+    pub fn pr_summary(&self) -> Option<PrSummary> {
+        self.pr_snapshot().map(|s| pr::summarize(&s.pr, &s.checks))
+    }
+
+    /// A query is in flight.
+    pub fn pr_loading(&self) -> bool {
+        self.pr_inflight
+    }
+
+    /// `gh` queries issued so far (tests and the doctor: proves there is no polling).
+    pub fn pr_queries(&self) -> u32 {
+        self.pr_queries
+    }
+
+    pub fn pr_last_queried(&self) -> Option<Instant> {
+        self.pr_queried
+    }
+
+    /// "Actualizar": asks again now (and re-probes `gh`, in case the user logged in).
+    pub fn refresh_pr_now(&mut self, cx: &mut Context<Self>) {
+        self.gh_ok = false;
+        self.refresh_pr(PrTrigger::Manual, cx);
+    }
+
+    /// The host's window gained focus: refreshes only when the last query is older than five
+    /// minutes (or there was none).
+    pub fn on_window_focus(&mut self, cx: &mut Context<Self>) {
+        self.on_window_focus_at(Instant::now(), cx);
+    }
+
+    /// [`GitModel::on_window_focus`] with an explicit clock.
+    pub fn on_window_focus_at(&mut self, now: Instant, cx: &mut Context<Self>) {
+        if self.gh.is_some() && pr::focus_refresh_due(self.pr_queried, now) {
+            self.refresh_pr(PrTrigger::WindowFocus, cx);
+        }
+    }
+
+    /// A push the host ran itself (`ExecMode::Terminal`) finished: its PR / CI may have changed.
+    pub fn notify_push_finished(&mut self, cx: &mut Context<Self>) {
+        self.refresh_pr(PrTrigger::AfterPush, cx);
+    }
+
+    /// After every repository read: a new branch is a new PR query.
+    fn branch_maybe_changed(&mut self, cx: &mut Context<Self>) {
+        if self.gh.is_none() {
+            return;
+        }
+        let branch = self.current_branch();
+        if branch == self.pr_branch {
+            return;
+        }
+        self.pr_branch = branch.clone();
+        if branch.is_some() {
+            self.refresh_pr(PrTrigger::BranchChanged, cx);
+        } else {
+            self.pr_view = PrView::Detached;
+        }
+    }
+
+    fn refresh_pr(&mut self, trigger: PrTrigger, cx: &mut Context<Self>) {
+        let (Some(client), Some(repo)) = (self.gh.clone(), self.repo.clone()) else {
+            return;
+        };
+        if self.pr_inflight {
+            self.pr_again = true;
+            return;
+        }
+        self.pr_inflight = true;
+        self.pr_queries += 1;
+        // Another branch's PR must not linger while the new one loads.
+        if trigger == PrTrigger::BranchChanged
+            || matches!(self.pr_view, PrView::Idle | PrView::Detached)
+        {
+            self.pr_view = PrView::Loading;
+        }
+        cx.notify();
+        let epoch = self.pr_epoch;
+        let known = self.gh_ok;
+        self.pr_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { pr::query_pr(&client, &repo, known) })
+                .await;
+            let _ = this.update(cx, |m, cx| m.apply_pr(epoch, result, cx));
+        }));
+    }
+
+    fn apply_pr(&mut self, epoch: u64, result: PrQuery, cx: &mut Context<Self>) {
+        if epoch != self.pr_epoch {
+            return;
+        }
+        self.pr_inflight = false;
+        self.pr_queried = Some(Instant::now());
+        let prev = self.pr_view.clone();
+        let next = match result {
+            PrQuery::Unavailable => {
+                self.gh_ok = false;
+                PrView::Unavailable
+            }
+            PrQuery::NoBranch => {
+                self.gh_ok = true;
+                PrView::Detached
+            }
+            PrQuery::NoPr { branch } => {
+                self.gh_ok = true;
+                match &prev {
+                    // `gh` answered nothing for a branch that had a PR a moment ago: most likely
+                    // a failed query (offline), so keep what is shown.
+                    PrView::Ready(s) if s.branch == branch => prev.clone(),
+                    _ => PrView::NoPr { branch },
+                }
+            }
+            PrQuery::Ready(snap) => {
+                self.gh_ok = true;
+                PrView::Ready(Arc::new(snap))
+            }
+        };
+        self.pr_view = next;
+        cx.notify();
+        if std::mem::take(&mut self.pr_again) {
+            self.refresh_pr(PrTrigger::Manual, cx);
+        }
+    }
+
+    /// "Enviar checks fallidos al agente": downloads the logs of the failing checks (at most
+    /// three, redacted) and emits [`GitPanelEvent::AskAgent`] with them.
+    pub fn send_failed_checks_to_agent(&mut self, cx: &mut Context<Self>) {
+        let (Some(client), Some(repo), Some(snap)) = (
+            self.gh.clone(),
+            self.repo.clone(),
+            self.pr_snapshot().cloned(),
+        ) else {
+            return;
+        };
+        if self.pr_sending {
+            return;
+        }
+        let failing: Vec<_> = snap.failing().take(MAX_FAILED_SENT).cloned().collect();
+        if failing.is_empty() {
+            return;
+        }
+        self.pr_sending = true;
+        cx.notify();
+        let epoch = self.pr_epoch;
+        cx.spawn(async move |this, cx| {
+            let logs = cx
+                .background_executor()
+                .spawn(async move {
+                    failing
+                        .into_iter()
+                        .map(|c| {
+                            let log = client.failed_check_log(&repo, &c);
+                            (c, log)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |m, cx| {
+                if epoch != m.pr_epoch {
+                    return;
+                }
+                m.pr_sending = false;
+                cx.emit(GitPanelEvent::AskAgent {
+                    context_markdown: pr::failed_checks_markdown(&snap, &logs),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The logs of the failing checks are being downloaded.
+    pub fn is_sending_failed_checks(&self) -> bool {
+        self.pr_sending
+    }
+
+    // ----- "Crear PR" (B3) ---------------------------------------------------------------------
+
+    pub fn pr_create(&self) -> &PrCreate {
+        &self.pr_create
+    }
+
+    /// "Revisar": validates the PR and shows the confirmation card with the **exact command**.
+    /// Nothing runs until [`GitModel::confirm_create_pr`].
+    pub fn request_create_pr(&mut self, mut pr: NewPr, cx: &mut Context<Self>) {
+        if self.read_only {
+            self.quiet_error = Some("Solo lectura: esta vista no modifica el repositorio".into());
+            cx.notify();
+            return;
+        }
+        if self.gh.is_none()
+            || self.repo.is_none()
+            || matches!(self.pr_create, PrCreate::Running(_))
+        {
+            return;
+        }
+        // The card names the branch the PR is made from.
+        if pr.head.is_none() {
+            pr.head = self.current_branch();
+        }
+        if let Err(e) = pr.validate() {
+            self.quiet_error = Some(e);
+            cx.notify();
+            return;
+        }
+        self.quiet_error = None;
+        self.pr_create = PrCreate::Confirm(pr);
+        cx.notify();
+    }
+
+    /// "Confirmar" on the PR card: runs `gh pr create` (the body goes by stdin). Does nothing
+    /// unless the card is showing.
+    pub fn confirm_create_pr(&mut self, cx: &mut Context<Self>) {
+        let PrCreate::Confirm(pr) = self.pr_create.clone() else {
+            return;
+        };
+        let (Some(client), Some(repo)) = (self.gh.clone(), self.repo.clone()) else {
+            return;
+        };
+        self.pr_create = PrCreate::Running(pr.clone());
+        cx.notify();
+        let epoch = self.pr_epoch;
+        cx.spawn(async move |this, cx| {
+            let for_run = pr.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { client.create_pr(&repo, &for_run) })
+                .await;
+            let _ = this.update(cx, |m, cx| {
+                if epoch != m.pr_epoch {
+                    return;
+                }
+                match result {
+                    Ok(url) => {
+                        m.pr_create = PrCreate::Done { url: url.clone() };
+                        cx.emit(PrCreated { url });
+                        m.refresh_pr(PrTrigger::AfterCreate, cx);
+                    }
+                    Err(error) => m.pr_create = PrCreate::Failed { pr, error },
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// "Cancelar" / "Cerrar" on the PR card.
+    pub fn cancel_create_pr(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.pr_create, PrCreate::Idle | PrCreate::Running(_)) {
+            self.pr_create = PrCreate::Idle;
+            cx.notify();
+        }
+    }
+
+    // ----- "Redactar con agente" (B3) ----------------------------------------------------------
+    //
+    // Tokens are spent only when the user clicks the button: the click collects the (redacted,
+    // capped) diff on the background executor and emits `GitPanelEvent::DraftMessage`. The host
+    // runs the agent and answers with `set_draft` / `fail_draft`.
+
+    /// A draft was asked and the host has not answered yet.
+    pub fn drafting(&self) -> Option<DraftKind> {
+        self.drafting
+    }
+
+    /// "Redactar con agente": collects the diff and emits [`GitPanelEvent::DraftMessage`].
+    pub fn request_draft(&mut self, kind: DraftKind, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+        if self.drafting.is_some() {
+            return;
+        }
+        self.quiet_error = None;
+        self.drafting = Some(kind);
+        cx.notify();
+        let epoch = self.epoch;
+        cx.spawn(async move |this, cx| {
+            let input = cx
+                .background_executor()
+                .spawn(async move { repo.draft_input(kind) })
+                .await;
+            let _ = this.update(cx, |m, cx| {
+                if epoch != m.epoch || m.drafting != Some(kind) {
+                    return;
+                }
+                match input {
+                    Ok(i) if !i.is_empty() => cx.emit(GitPanelEvent::DraftMessage {
+                        kind,
+                        diff_stat: i.diff_stat,
+                        staged_diff: i.diff,
+                        recent_subjects: i.recent_subjects,
+                    }),
+                    Ok(_) => {
+                        m.drafting = None;
+                        m.quiet_error = Some(match kind {
+                            DraftKind::Commit => "No hay cambios en staged que describir".into(),
+                            DraftKind::PullRequest => {
+                                "La rama no tiene cambios respecto a la rama base".into()
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        m.drafting = None;
+                        m.quiet_error = Some(format!("No se pudo preparar el diff: {e}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The host's answer: the drafted text (for a commit, subject, blank line, body; for a PR,
+    /// title, blank line, description). Fills the commit box / PR form, where the user can edit it
+    /// before confirming. Ignored when no draft of that kind is pending (the user cancelled).
+    pub fn set_draft(&mut self, kind: DraftKind, text: &str, cx: &mut Context<Self>) {
+        if self.drafting != Some(kind) {
+            return;
+        }
+        self.drafting = None;
+        self.drafts.retain(|(k, _)| *k != kind);
+        self.drafts.push((kind, text.to_owned()));
+        cx.emit(DraftReady {
+            kind,
+            text: text.to_owned(),
+        });
+        cx.notify();
+    }
+
+    /// The host could not produce the draft (agent missing, cancelled, failed).
+    pub fn fail_draft(&mut self, kind: DraftKind, message: &str, cx: &mut Context<Self>) {
+        if self.drafting == Some(kind) {
+            self.drafting = None;
+            self.quiet_error = Some(message.to_owned());
+            cx.notify();
+        }
+    }
+
+    /// "Cancelar" while drafting: a late answer is ignored.
+    pub fn cancel_draft(&mut self, cx: &mut Context<Self>) {
+        if self.drafting.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The latest draft of `kind` nobody picked up yet (a panel opened after the answer arrived).
+    pub fn take_draft(&mut self, kind: DraftKind) -> Option<String> {
+        let i = self.drafts.iter().position(|(k, _)| *k == kind)?;
+        Some(self.drafts.remove(i).1)
     }
 
     // ----- worktrees ---------------------------------------------------------------------

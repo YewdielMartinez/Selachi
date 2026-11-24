@@ -39,6 +39,27 @@ pub enum TermRequest {
         label: String,
         kind: ui_review::AttentionKind,
     },
+    /// A `git push` finished in this terminal: the PR / CI state of the branch may have changed.
+    PushFinished,
+}
+
+/// Is this the command of a push (`git push`, `git -C x push`, `git push -u origin x`)?
+pub fn is_git_push(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    if words.next() != Some("git") {
+        return false;
+    }
+    let mut rest = words;
+    while let Some(w) = rest.next() {
+        match w {
+            "-C" | "-c" => {
+                rest.next();
+            }
+            w if w.starts_with('-') => {}
+            w => return w == "push",
+        }
+    }
+    false
 }
 
 pub struct TerminalTab {
@@ -139,6 +160,9 @@ impl TerminalTab {
                         label = format!("{label} · {}", clean.chars().take(48).collect::<String>());
                     }
                     cx.emit(TermRequest::Attention { id, label, kind });
+                }
+                if block.command.as_deref().is_some_and(is_git_push) {
+                    cx.emit(TermRequest::PushFinished);
                 }
                 let policy = term_core::LongCommandPolicy::default();
                 if term_core::should_notify(block, crate::notify::window_active(), &policy) {
@@ -255,5 +279,32 @@ impl TabModel for TerminalTab {
 
     fn theme_changed(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.view.update(cx, |v, cx| v.set_theme(theme, cx));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_git_push;
+
+    #[test]
+    fn recognizes_pushes() {
+        for yes in [
+            "git push",
+            "git push -u origin feat",
+            "git -C ../repo push",
+            "  git   push --force-with-lease",
+        ] {
+            assert!(is_git_push(yes), "{yes}");
+        }
+        for no in [
+            "git status",
+            "git pull",
+            "echo git push",
+            "gitpush",
+            "",
+            "git commit -m push",
+        ] {
+            assert!(!is_git_push(no), "{no}");
+        }
     }
 }

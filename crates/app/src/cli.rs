@@ -1,4 +1,5 @@
-//! The command line: `selachi [--cwd <dir> | <dir>] [--version]`.
+//! The command line: `selachi [--cwd <dir> | <dir>] [--version]`, and `selachi agent ...` / `selachi mcp`
+//! (forwarded to `selachi-agent.exe`, see [`forwarded_args`]).
 //!
 //! * `--cwd <dir>` (or `--cwd=<dir>`, or a bare `<dir>`): the folder the first tab opens in. The
 //!   Explorer entry "Abrir en Selachi" runs `selachi.exe --cwd "%V"`. A file is taken as its
@@ -99,6 +100,130 @@ pub fn print_version() {
     println!("{}", version_line());
 }
 
+// ------------------------------------------------------------------------------------
+// `selachi.exe agent ...` / `selachi.exe mcp` -> `selachi-agent.exe`
+// ------------------------------------------------------------------------------------
+
+/// File name of the console binary of the harness, next to `selachi.exe`.
+pub const AGENT_EXE: &str = "selachi-agent.exe";
+
+/// The arguments for `selachi-agent` when `argv` (without the program name) is a harness
+/// invocation: `agent <args...>` forwards `<args...>` and `mcp [args...]` forwards `mcp [args...]`.
+/// `None` for everything else (the GUI starts).
+pub fn forwarded_args(argv: &[OsString]) -> Option<Vec<OsString>> {
+    let first = argv.first()?.to_string_lossy().to_ascii_lowercase();
+    match first.as_str() {
+        "agent" => Some(argv[1..].to_vec()),
+        "mcp" => Some(argv.to_vec()),
+        _ => None,
+    }
+}
+
+/// `selachi-agent.exe` in the folder of the running executable.
+pub fn agent_exe() -> std::io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| std::io::Error::other("the executable has no folder"))?;
+    Ok(dir.join(AGENT_EXE))
+}
+
+/// Gives this GUI-subsystem process the console of the program that launched it, for the three
+/// standard handles that are not already redirected. Returns whether a console was found.
+#[cfg(windows)]
+fn attach_parent_console() -> bool {
+    use std::os::windows::io::IntoRawHandle as _;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+        STD_OUTPUT_HANDLE, SetStdHandle,
+    };
+    let missing = |which| {
+        // SAFETY: plain Win32 call with no pointers.
+        let h = unsafe { GetStdHandle(which) };
+        h.is_null() || h == INVALID_HANDLE_VALUE
+    };
+    let need = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE].map(missing);
+    if !need.iter().any(|m| *m) {
+        return true; // all redirected (pipes, files): they are inherited as they are
+    }
+    // SAFETY: as above.
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
+        return false;
+    }
+    let open = |name: &str, write: bool| {
+        std::fs::OpenOptions::new()
+            .read(!write)
+            .write(write)
+            .open(name)
+            .ok()
+            .map(|f| f.into_raw_handle())
+    };
+    if need[0]
+        && let Some(h) = open("CONIN$", false)
+    {
+        // SAFETY: `h` is a valid console handle we own and never close.
+        unsafe { SetStdHandle(STD_INPUT_HANDLE, h) };
+    }
+    for (i, which) in [(1, STD_OUTPUT_HANDLE), (2, STD_ERROR_HANDLE)] {
+        if need[i]
+            && let Some(h) = open("CONOUT$", true)
+        {
+            // SAFETY: as above.
+            unsafe { SetStdHandle(which, h) };
+        }
+    }
+    true
+}
+
+/// Runs `selachi-agent.exe` with `args`, standard handles inherited, and returns its exit code
+/// (the GUI never opens). Used by `selachi.exe agent ...` and `selachi.exe mcp`.
+pub fn run_forwarded(args: &[OsString]) -> i32 {
+    #[cfg(windows)]
+    let console = attach_parent_console();
+    #[cfg(not(windows))]
+    let console = true;
+    let report = |msg: String| {
+        #[cfg(windows)]
+        if console && let Ok(mut con) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+            use std::io::Write as _;
+            let _ = writeln!(con, "{msg}");
+            return;
+        }
+        eprintln!("{msg}");
+    };
+    let exe = match agent_exe() {
+        Ok(p) if p.is_file() => p,
+        Ok(p) => {
+            report(format!(
+                "selachi: no se encontró {} (se busca junto a selachi.exe). Reinstala Selachi.",
+                p.display()
+            ));
+            return 127;
+        }
+        Err(e) => {
+            report(format!("selachi: no se pudo localizar el ejecutable: {e}"));
+            return 127;
+        }
+    };
+    let status = std::process::Command::new(&exe)
+        .args(args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+    match status {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            report(format!(
+                "selachi: no se pudo ejecutar {}: {e}",
+                exe.display()
+            ));
+            126
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +236,23 @@ mod tests {
         let d = std::env::temp_dir().join(format!("selachi-cli-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn agent_and_mcp_are_forwarded_to_the_console_binary() {
+        assert_eq!(forwarded_args(&args(&[])), None);
+        assert_eq!(forwarded_args(&args(&["C:/proj"])), None);
+        assert_eq!(
+            forwarded_args(&args(&["agent", "list", "--json"])),
+            Some(args(&["list", "--json"]))
+        );
+        assert_eq!(forwarded_args(&args(&["AGENT"])), Some(args(&[])));
+        assert_eq!(
+            forwarded_args(&args(&["mcp"])),
+            Some(args(&["mcp"])),
+            "`selachi mcp` is `selachi-agent mcp`"
+        );
+        assert!(agent_exe().unwrap().ends_with(AGENT_EXE));
     }
 
     #[test]

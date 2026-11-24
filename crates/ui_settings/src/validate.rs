@@ -39,6 +39,18 @@ fn friendly(problem: &str) -> FieldError {
         "La URL del índice debe empezar por https://".to_string()
     } else if known("git.external_editor") {
         "El comando no puede tener saltos de línea.".to_string()
+    } else if known("delegation.max_permission") {
+        "Elige solo lectura, preguntar o aceptar ediciones.".to_string()
+    } else if known("delegation.max_concurrent") {
+        "Entre 1 y 16 ejecuciones a la vez.".to_string()
+    } else if known("delegation.max_depth") {
+        "La profundidad va de 1 a 4.".to_string()
+    } else if known("delegation.timeout_secs") {
+        "El tiempo máximo va de 10 s a 24 h.".to_string()
+    } else if known("delegation.approval_timeout_secs") {
+        "Entre 5 s y 1 hora.".to_string()
+    } else if known("delegation.weekly_usage_threshold_percent") {
+        "El umbral va de 0 a 100 %.".to_string()
     } else if key.starts_with("profiles[") {
         "El perfil necesita un nombre y un programa.".to_string()
     } else {

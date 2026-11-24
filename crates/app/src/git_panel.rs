@@ -164,7 +164,12 @@ fn kv(theme: &Theme, key: &'static str, value: impl Into<SharedString>) -> impl 
     div()
         .flex()
         .flex_col()
-        .child(div().text_size(px(ty.ui_size_xs)).text_color(c.muted).child(key))
+        .child(
+            div()
+                .text_size(px(ty.ui_size_xs))
+                .text_color(c.muted)
+                .child(key),
+        )
         .child(
             div()
                 .overflow_hidden()

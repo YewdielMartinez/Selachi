@@ -40,6 +40,9 @@ pub struct Services {
     pub chat: Rc<RefCell<Option<Entity<ui_chat::ChatHub>>>>,
     /// Events of the file tree, taken once by the shell.
     pub viewer_events: Rc<RefCell<Option<UnboundedReceiver<ViewerEvent>>>>,
+    /// Requests of delegated agents from the approvals pipe, taken once by the shell. `None` in
+    /// tests and when the pipe could not be opened.
+    pub approvals_rx: Rc<RefCell<Option<UnboundedReceiver<crate::approvals::ServerEvent>>>>,
 }
 
 impl Global for Services {}
@@ -74,6 +77,7 @@ impl Services {
             files,
             chat: Rc::new(RefCell::new(None)),
             viewer_events: Rc::new(RefCell::new(Some(rx))),
+            approvals_rx: Rc::new(RefCell::new(None)),
         }
     }
 }

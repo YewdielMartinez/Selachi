@@ -70,6 +70,7 @@ impl SettingsView {
                     },
                 )),
             );
+        let updates = self.updates_group(narrow, cx);
         vec![
             ui::group(
                 &t,
@@ -114,7 +115,107 @@ impl SettingsView {
                 ],
             )
             .into_any_element(),
+            updates,
         ]
+    }
+
+    /// General > Actualizaciones: look for updates, channel, when to install, state and "Buscar ahora".
+    fn updates_group(&mut self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let check = self.toggle(cx, "updates-check", self.cfg.updates.check, |s, on, cx| {
+            s.edit_cfg(cx, |c| c.updates.check = on);
+        });
+        let channel = self.select(
+            cx,
+            "updates-channel",
+            vec![("stable".into(), "Estable".into())],
+            "stable",
+            |s, v, cx| {
+                let v = v.to_string();
+                s.edit_cfg(cx, |c| c.updates.channel = v);
+            },
+        );
+        let install = self.segmented(
+            cx,
+            "updates-install",
+            ["Reiniciar y actualizar", "Al cerrar"],
+            usize::from(self.cfg.updates.install == "on_exit"),
+            |s, ix, cx| {
+                let v = if ix == 1 { "on_exit" } else { "now" };
+                s.edit_cfg(cx, |c| c.updates.install = v.to_string());
+            },
+        );
+        let status = self.update_status.clone();
+        let enabled = self.cfg.updates.check;
+        let mut control = div().flex().flex_row().items_center().gap(px(8.0));
+        if status.ready {
+            control = control.child(
+                Button::action("updates-install-now", &t, "Reiniciar y actualizar")
+                    .no_icon()
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::InstallUpdate))),
+            );
+        }
+        control = control.child(
+            Button::tonal(
+                "updates-check-now",
+                &t,
+                if status.busy {
+                    "Buscando…"
+                } else {
+                    "Buscar ahora"
+                },
+            )
+            .disabled(status.busy || !enabled)
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::CheckUpdates))),
+        );
+        let text = if status.text.is_empty() {
+            format!("Versión {}", self.version)
+        } else {
+            status.text
+        };
+        ui::group(
+            &t,
+            Some("Actualizaciones"),
+            vec![
+                row(
+                    &t,
+                    narrow,
+                    "Buscar actualizaciones",
+                    Some("Mira GitHub Releases (solo HTTPS) a los 30 s de abrir y luego cada 24 h. Apagado: Selachi no toca la red por esto.".into()),
+                    check,
+                    None,
+                )
+                .into_any_element(),
+                row(
+                    &t,
+                    narrow,
+                    "Canal",
+                    Some("Solo existe el estable (las releases publicadas, sin borradores ni prereleases).".into()),
+                    channel,
+                    self.error_for("updates.channel"),
+                )
+                .into_any_element(),
+                row(
+                    &t,
+                    narrow,
+                    "Instalar",
+                    Some("Se descarga y verifica sola (SHA256); nunca se instala sin tu acción. «Al cerrar» lo instala en silencio cuando cierras Selachi.".into()),
+                    install,
+                    None,
+                )
+                .into_any_element(),
+                row(
+                    &t,
+                    narrow,
+                    "Estado",
+                    Some(SharedString::from(text)),
+                    control,
+                    None,
+                )
+                .into_any_element(),
+            ],
+        )
+        .into_any_element()
     }
 
     pub(crate) fn appearance(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -354,6 +455,9 @@ impl SettingsView {
             },
         );
         let editor = self.input(cx, "external_editor", "code, cursor, notepad…", 240.0, true);
+        let pr = self.toggle(cx, "git-pr-status", self.cfg.git.pr_status, |s, on, cx| {
+            s.edit_cfg(cx, |c| c.git.pr_status = on);
+        });
         vec![
             ui::group(
                 &t,
@@ -374,6 +478,15 @@ impl SettingsView {
                         "Editor externo",
                         Some("Comando para «Abrir en el editor». Vacío = la aplicación predeterminada de Windows.".into()),
                         editor,
+                        None,
+                    )
+                    .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Estado del PR y de CI",
+                        Some("Muestra el pull request de la rama y sus checks (necesita `gh` instalado y con sesión; si no, se oculta). Se consulta al cambiar de rama, tras un push, bajo demanda y al volver a la ventana (máx. cada 5 min): nunca en segundo plano.".into()),
+                        pr,
                         None,
                     )
                     .into_any_element(),

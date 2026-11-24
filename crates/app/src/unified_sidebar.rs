@@ -22,7 +22,9 @@ use ui_kit::{
 };
 
 use crate::rail::RailItem;
-use crate::sidebar_view::{CloseFocusedRow, RowFocus, SidebarEvent, SidebarView, focus_bg, send};
+use crate::sidebar_view::{
+    ChildRow, CloseFocusedRow, Lineage, RowFocus, SidebarEvent, SidebarView, focus_bg, send,
+};
 use crate::spaces::{Space, row_subtitle, row_time};
 
 /// What the unified sidebar needs to paint, prepared by the shell.
@@ -37,6 +39,8 @@ pub struct UnifiedProps<'a> {
     pub spaces: Vec<Space>,
     /// Keys of the spaces that are folded.
     pub folded: &'a HashSet<PathBuf>,
+    /// Delegations nested under their parent tab.
+    pub lineage: &'a Lineage,
     /// The tab row under the pointer (state kept by the shell).
     pub hovered_row: Option<TabId>,
     /// The space header under the pointer (by its key, not its position).
@@ -282,6 +286,95 @@ fn tab_row(
                     )
             })),
     )
+}
+
+/// A delegated thread nested under its parent tab: agent mark, title, state line and status glyph.
+/// It is a tab stop with the standard 2 px keyboard ring (`ui_kit::focus`).
+#[derive(IntoElement)]
+struct ChildRowEl {
+    theme: Theme,
+    glass: bool,
+    view: Entity<SidebarView>,
+    row: ChildRow,
+    selected: bool,
+}
+
+impl ChildRowEl {
+    fn new(p: &UnifiedProps, row: &ChildRow) -> Self {
+        Self {
+            theme: *p.theme,
+            glass: p.glass,
+            view: p.view.clone(),
+            selected: row.tab.is_some() && row.tab == p.active,
+            row: row.clone(),
+        }
+    }
+}
+
+impl RenderOnce for ChildRowEl {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = self.theme;
+        let c = t.colors;
+        let ty = t.typography;
+        let (thread, tab) = (self.row.thread, self.row.tab);
+        let id = gpui::ElementId::from(SharedString::from(format!("uchild-{thread}")));
+        let handle = ui_kit::focus::handle(window, cx, &id);
+        let bg = pill_bg(&t, self.glass, self.selected);
+        let view = self.view.clone();
+        let mark = ui_kit::AgentMark::from_name(&self.row.agent);
+        let el = div()
+            .id(id.clone())
+            .occlude()
+            .w_full()
+            .h(px(34.0))
+            .my(px(1.0))
+            .pl(px(38.0 + 14.0 * self.row.depth as f32))
+            .pr(px(10.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .rounded(px(Radius::PILL))
+            .cursor_pointer()
+            .when(self.selected, move |d| d.bg(bg))
+            .when(!self.selected, move |d| d.hover(move |s| s.bg(bg)))
+            .on_click(move |_, _, cx| match tab {
+                Some(tab) => send(&view, cx, SidebarEvent::Select(tab)),
+                None => send(&view, cx, SidebarEvent::OpenThread(thread)),
+            })
+            .child(ui_kit::agent_icon(
+                mark,
+                14.0,
+                if self.selected { c.text } else { c.muted },
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.text)
+                            .child(self.row.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(ty.ui_size_xs))
+                            .text_color(c.muted)
+                            .child(self.row.subtitle.clone()),
+                    ),
+            )
+            .children(self.row.status.map(|s| StatusGlyph::new(&t, s)));
+        ui_kit::focus::wire(el, Some(handle), &id, Radius::PILL, c.accent)
+    }
 }
 
 /// A space header: fold chevron, name, branch and dirty dot, and "+" (a new tab there).
@@ -546,6 +639,9 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
         let mut block = div().flex().flex_col();
         if s.headless {
             for &ti in &s.tabs {
+                if p.lineage.nested.contains(&p.tabs[ti].id) {
+                    continue;
+                }
                 block = block.child(tab_row(p, &p.tabs[ti], false, now));
             }
             spaces = spaces.child(block);
@@ -554,7 +650,14 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
         block = block.child(space_header(p, s, folded));
         if s.is_open() && !folded {
             for &ti in &s.tabs {
+                let id = p.tabs[ti].id;
+                if p.lineage.nested.contains(&id) {
+                    continue;
+                }
                 block = block.child(tab_row(p, &p.tabs[ti], true, now));
+                for child in p.lineage.children.get(&id).into_iter().flatten() {
+                    block = block.child(ChildRowEl::new(p, child));
+                }
             }
         }
         spaces = spaces.child(block);

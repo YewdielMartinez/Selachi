@@ -79,10 +79,13 @@ use crate::usage_monitor::UsageMonitor;
 
 mod chat;
 mod chrome;
+mod delegation;
+mod demos;
 mod integrations;
 mod layout;
 mod render;
 mod tabs;
+mod updates;
 
 pub use crate::rail::RAIL_W;
 pub use crate::titlebar::TITLEBAR_H as TAB_H;
@@ -353,6 +356,15 @@ struct Chrome {
     right_focus: FocusHandle,
 }
 
+/// Delegation (PLAN section 20): the approvals of delegated agents and the run registry.
+struct Delegation {
+    /// Requests waiting for the user (fed by the approvals pipe).
+    approvals: Entity<crate::approval_queue::ApprovalQueue>,
+    /// Watches `agent-runs`: another process writes there, the OS tells us.
+    _watcher: Option<store::DirWatcher>,
+    runs_task: Option<Task<()>>,
+}
+
 /// Background work that lives as long as the shell.
 #[derive(Default)]
 struct Tasks {
@@ -396,6 +408,10 @@ pub struct AppShell {
     modes: Modes,
     prompts: Prompts,
     chat: Entity<ChatHost>,
+    deleg: Delegation,
+    /// Auto-update (6b.2) and the "Novedades" screen.
+    updates: Entity<crate::update_host::UpdateHost>,
+    whats_new: Option<updates::WhatsNew>,
     session: Entity<SessionPersistence>,
     chrome: Chrome,
     tasks: Tasks,
@@ -618,6 +634,9 @@ impl AppShell {
                 notify::set_window_active(active);
                 this.usage.update(cx, |u, cx| u.set_active(active, cx));
                 this.status.update(cx, |s, cx| s.set_active(active, cx));
+                if active {
+                    this.git_window_focus(cx);
+                }
                 // The tree poll ends by itself when the window loses focus: restart it here.
                 this.sync_tree_poll(cx);
             }),
@@ -644,8 +663,12 @@ impl AppShell {
         // Closing the window: write the session now (and wait for the writer thread).
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
-            weak.update(cx, |this, cx| this.save_session_now(true, cx))
-                .ok();
+            weak.update(cx, |this, cx| {
+                this.save_session_now(true, cx);
+                // "Al cerrar": the update installs now, in the background of the closing app.
+                this.install_update_on_exit(cx);
+            })
+            .ok();
             true
         });
         let SessionBoot {
@@ -688,6 +711,13 @@ impl AppShell {
                 this.on_chat_host_event(ev, window, cx)
             }),
         );
+        let approvals_rx = cx
+            .try_global::<Services>()
+            .and_then(|s| s.approvals_rx.borrow_mut().take());
+        let approvals = cx.new(|cx| crate::approval_queue::ApprovalQueue::new(approvals_rx, cx));
+        let updates_host = cx.new(|_| {
+            crate::update_host::UpdateHost::new(updates::CURRENT_VERSION, &config.updates)
+        });
         let session_entity = cx.new(|_| SessionPersistence::new(session_db));
         subs.push(
             cx.subscribe(&session_entity, |this, _, _: &SessionEvent, cx| {
@@ -766,6 +796,13 @@ impl AppShell {
                 hint_task: None,
             },
             chat,
+            deleg: Delegation {
+                approvals,
+                _watcher: None,
+                runs_task: None,
+            },
+            updates: updates_host,
+            whats_new: None,
             session: session_entity,
             chrome: Chrome {
                 left,
@@ -799,10 +836,13 @@ impl AppShell {
         self.load_known_projects(cx);
         let db = self.session.read(cx).db().cloned();
         if let Some(db) = db
+            && std::env::var_os("SELACHI_DEMO").is_none()
             && ui_onboarding::needs_onboarding(&db)
         {
             self.start_onboarding(window, cx);
         }
+        self.init_delegation(window, cx);
+        self.init_updates(window, cx);
         self.run_demo(window, cx);
         self.refresh(cx);
     }

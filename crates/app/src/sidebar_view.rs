@@ -52,6 +52,32 @@ pub struct SidebarOpts {
     pub bare: bool,
 }
 
+/// A delegated thread listed under its parent chat tab (PLAN section 20).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChildRow {
+    /// The child's chat thread id.
+    pub thread: i64,
+    /// Its tab when it is open (clicking selects it; otherwise the thread is opened).
+    pub tab: Option<TabId>,
+    pub title: gpui::SharedString,
+    /// Agent name for the mark (`"codex"`).
+    pub agent: String,
+    pub status: Option<panel_api::RowStatus>,
+    /// "Terminó · 3 archivos", "En curso".
+    pub subtitle: gpui::SharedString,
+    /// 0 = delegated by the parent tab itself, 1 = delegated by that child...
+    pub depth: usize,
+}
+
+/// The parent -> child delegations of the open chat tabs.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Lineage {
+    /// Children listed under a parent tab, oldest first.
+    pub children: HashMap<TabId, Vec<ChildRow>>,
+    /// Open tabs that are children of an open tab: shown nested, not as a top-level row too.
+    pub nested: HashSet<TabId>,
+}
+
 /// Everything the sidebar paints that comes from the shell. Pushed with
 /// [`SidebarView::set_model`], which repaints only when it differs.
 #[derive(Clone, PartialEq)]
@@ -73,6 +99,8 @@ pub struct SidebarModel {
     pub tint: Option<Hsla>,
     /// Outer margin of the card (density).
     pub margin: f32,
+    /// Delegations nested under their parent tab (unified sidebar only).
+    pub lineage: Lineage,
 }
 
 impl SidebarModel {
@@ -90,6 +118,7 @@ impl SidebarModel {
             opts: SidebarOpts::default(),
             tint: None,
             margin: 8.0,
+            lineage: Lineage::default(),
         }
     }
 }
@@ -115,6 +144,8 @@ pub enum SidebarEvent {
     /// The collapsed S column's expand button: the overlay.
     ExpandOverlay,
     DropOnSpace(Vec<PathBuf>),
+    /// A delegated thread row that has no tab yet: open its thread.
+    OpenThread(i64),
 }
 
 /// Emits `ev` from `view` (what the row callbacks of [`crate::sidebar`] and
@@ -318,6 +349,7 @@ impl Render for SidebarView {
                 glass: tint.is_some(),
                 spaces: spaces::build_spaces(&m.infos, l.sidebar.group_by, &m.git, &m.known),
                 folded: &m.folded,
+                lineage: &m.lineage,
                 hovered_row: self.hovered_row,
                 hovered_space: self.hovered_space.clone(),
                 usage: self.usage_summary(cx),

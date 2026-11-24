@@ -519,3 +519,70 @@ fn the_hub_list_follows_thread_status(cx: &mut TestAppContext) {
         })
     });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Delegation lineage (PLAN section 20)
+// ---------------------------------------------------------------------------------------------
+
+#[gpui::test]
+fn a_parent_chat_lists_its_delegations_and_sums_their_cost(cx: &mut TestAppContext) {
+    use crate::lineage::{DelegationRun, RunState};
+    use chat_core::{ThreadId, ThreadLink};
+
+    let e = env(cx, FakeFactory::new(|_, _| Vec::new()));
+    let (view, vcx, rt) = thread_view(cx, &e);
+    let parent = rt.record().id;
+    let mut spec = ThreadSpec::new(e.project(), AgentKind::Codex);
+    spec.title = Some("Revisa los tests de auth".into());
+    spec.link = Some(ThreadLink {
+        parent_thread_id: Some(parent),
+        parent_tab: None,
+        depth: 1,
+        delegated_by: Some("mcp".into()),
+    });
+    let child = e.store.create_thread(spec).unwrap();
+    let now = chat_core::now_ms();
+    e.hub.update(vcx, |h, cx| {
+        h.refresh(cx);
+        h.set_delegation_runs(
+            vec![DelegationRun {
+                thread: child.id,
+                state: RunState::Done,
+                files_changed: 3,
+                started_ms: now - 120_000,
+                finished_ms: Some(now),
+                cost_usd: 0.42,
+                tokens: 12_000,
+                summary: "Añadí tres pruebas.".into(),
+            }],
+            cx,
+        );
+    });
+    settle(vcx, "the hub lists the child", |vcx| {
+        e.hub
+            .read_with(vcx, |h, _| h.children_of(parent).len() == 1)
+    });
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+    // the row is on screen and its click expands it
+    let id = format!("deleg-{}", child.id.0);
+    assert!(
+        ui_kit::testing::bounds_of(vcx, &id).is_some(),
+        "the delegation row is painted"
+    );
+    assert!(!view.read_with(vcx, |v, _| v.delegation_open(child.id)));
+    ui_kit::testing::click_id(vcx, &id);
+    assert!(view.read_with(vcx, |v, _| v.delegation_open(child.id)));
+    // the header cost includes what was delegated, and says so
+    let (text, tip) = view
+        .read_with(vcx, |v, cx| v.cost_label(cx))
+        .expect("a cost label");
+    assert_eq!(text, "$0.42 · incluye delegaciones");
+    assert!(tip.contains("Delegaciones $0.42"), "{tip}");
+    // a thread that delegated nothing has no such label
+    assert_eq!(
+        e.hub
+            .read_with(vcx, |h, _| h.delegation_cost(ThreadId(child.id.0))),
+        0.0
+    );
+}

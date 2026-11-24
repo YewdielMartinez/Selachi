@@ -86,6 +86,11 @@ impl AppShell {
                 cx,
             );
         });
+        // PR / CI of the current branch (backlog B1): the pill follows the git model; the model
+        // only talks to `gh` once it is enabled, and never in the background.
+        self.status
+            .update(cx, |s, cx| s.set_pr_model(services.git.clone(), cx));
+        self.apply_pr_status(cx);
         // File tree: events come through a channel because the provider is built before the shell.
         if let Some(mut rx) = services.viewer_events.borrow_mut().take() {
             self.tasks.viewer = Some(cx.spawn_in(window, async move |this, cx| {
@@ -119,6 +124,28 @@ impl AppShell {
     // ------------------------------------------------------------------------------------
     // Git panel, file viewer, terminal requests
     // ------------------------------------------------------------------------------------
+
+    /// `[git] pr_status`: turns the PR / CI integration on (system `gh`) or off.
+    pub(super) fn apply_pr_status(&mut self, cx: &mut Context<Self>) {
+        let Some(git) = cx.try_global::<Services>().map(|s| s.git.clone()) else {
+            return;
+        };
+        let on = self.config.git.pr_status;
+        git.update(cx, |g, cx| {
+            if on {
+                g.enable_pr_status(cx);
+            } else {
+                g.set_pr_client(None, cx);
+            }
+        });
+    }
+
+    /// The window gained focus: the PR / CI state refreshes when it is older than five minutes.
+    pub(super) fn git_window_focus(&mut self, cx: &mut Context<Self>) {
+        if let Some(git) = cx.try_global::<Services>().map(|s| s.git.clone()) {
+            git.update(cx, |g, cx| g.on_window_focus(cx));
+        }
+    }
 
     /// The user is looking at the active tab: whatever it had in the attention queue is seen.
     pub(super) fn clear_attention_of_active(&mut self, cx: &mut Context<Self>) {
@@ -260,7 +287,67 @@ impl AppShell {
                     cx,
                 );
             }
+            // "Redactar con agente" (6d.1, B3): the only moment tokens are spent. One read-only
+            // turn of the user's agent; the answer fills the commit box / PR form.
+            ev @ GitPanelEvent::DraftMessage { kind, .. } => {
+                let prompt = ev.draft_prompt().unwrap_or_default();
+                self.run_draft(kind, prompt, cx);
+            }
         }
+    }
+
+    /// Runs the drafting agent off the UI thread and gives the text (or the reason it failed) back to
+    /// the git model.
+    fn run_draft(&mut self, kind: ui_git::DraftKind, prompt: String, cx: &mut Context<Self>) {
+        let Some(git) = cx.try_global::<Services>().map(|s| s.git.clone()) else {
+            return;
+        };
+        let fail = |cx: &mut Context<Self>, msg: &str| {
+            git.update(cx, |g, cx| g.fail_draft(kind, msg, cx));
+        };
+        let Some(hub) = self.chat.read(cx).hub() else {
+            // The chat database loads in the background the first time chat is used.
+            self.chat.update(cx, |c, cx| c.ensure(cx));
+            fail(
+                cx,
+                "El chat se está iniciando; vuelve a pulsar «Redactar con agente» en un momento",
+            );
+            return;
+        };
+        let (store, agent) = {
+            let h = hub.read(cx);
+            let agent = h
+                .agents()
+                .iter()
+                .find(|a| a.available)
+                .or_else(|| h.agents().first())
+                .map(|a| a.kind.clone());
+            (h.store().clone(), agent)
+        };
+        let Some(agent) = agent else {
+            fail(cx, "No hay ningún agente instalado para redactar");
+            return;
+        };
+        let root = git
+            .read(cx)
+            .root()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let job = cx
+            .background_executor()
+            .spawn(async move { crate::draft_agent::run(&store, agent, root, &prompt) });
+        cx.spawn(async move |this, cx| {
+            let res = job.await;
+            this.update(cx, |_, cx| {
+                git.update(cx, |g, cx| match res {
+                    Ok(text) => g.set_draft(kind, &text, cx),
+                    Err(e) => g.fail_draft(kind, &format!("No se pudo redactar: {e}"), cx),
+                });
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Types a confirmed git command in the active terminal (or a new one when the active tab is
@@ -334,6 +421,11 @@ impl AppShell {
                     }
                 } else {
                     self.open_viewer(path, line.map(|l| l as usize), false, None, window, cx);
+                }
+            }
+            TermRequest::PushFinished => {
+                if let Some(git) = cx.try_global::<Services>().map(|s| s.git.clone()) {
+                    git.update(cx, |g, cx| g.notify_push_finished(cx));
                 }
             }
             TermRequest::Attention { id, label, kind } => {
@@ -648,8 +740,12 @@ impl AppShell {
             return v;
         }
         let path = store::paths::config_path().unwrap_or_default();
-        let options = ui_settings::SettingsOptions::new(path, env!("CARGO_PKG_VERSION"));
+        let mut options = ui_settings::SettingsOptions::new(path, env!("CARGO_PKG_VERSION"));
+        // "Registrar en Claude Code / Antigravity" points the MCP clients at the CLI next to us.
+        options.agent_exe = crate::cli::agent_exe().ok().filter(|p| p.is_file());
         let view = ui_settings::settings_view((*self.config).clone(), self.theme, options, cx);
+        let status = self.update_status_for_settings(cx);
+        view.update(cx, |s, cx| s.set_update_status(status, cx));
         let provider = ui_settings::SettingsPanelProvider::new(view.clone());
         cx.update_global::<PanelRegistry, _>(|registry, _| registry.register(provider));
         let sub = cx.subscribe_in(
@@ -698,6 +794,8 @@ impl AppShell {
                 Hint::text(format!("No se pudo guardar config.toml: {msg}")),
                 cx,
             ),
+            E::CheckUpdates => self.check_updates_now(cx),
+            E::InstallUpdate => self.install_update_now(cx),
             E::Saved | E::InstallGrammar { .. } => {}
         }
     }

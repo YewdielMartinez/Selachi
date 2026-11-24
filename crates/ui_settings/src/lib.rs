@@ -36,6 +36,7 @@
 
 mod agents;
 mod agents_ui;
+mod delegation_ui;
 mod design_ui;
 mod fields;
 mod fmt;
@@ -45,6 +46,7 @@ mod net;
 mod panel;
 mod plugins;
 mod plugins_ui;
+mod registration;
 mod render;
 mod save;
 mod sections;
@@ -54,6 +56,7 @@ mod validate;
 mod view;
 
 pub use agents::{AgentRow, AgentStatus, AgentsState};
+pub use delegation_ui::{DELEGATE_AGENTS, effective_allowed, minutes_text, toggled_allowed};
 pub use keys::{
     ChordError, KeyAction, chord_from_keystroke, default_catalog, display_chord, effective,
     find_conflict, normalize_chord, set_binding, swap_bindings,
@@ -69,12 +72,15 @@ pub use plugins::{
     Group, INDEX_TTL, IndexState, Op, PluginRow, PluginState, PluginsEvent, PluginsModel,
     RestartKind, build_rows, download_and_install, fetch_index,
 };
+pub use registration::{CommandRunner, McpTarget, SystemRunner};
 pub use save::{SAVE_DEBOUNCE, SaveGate, merge_external};
 pub use sections::LANGUAGES;
 pub use validate::{
     FieldError, field_errors, first_error, join_args, parse_count, parse_number, split_args,
 };
-pub use view::{Section, SettingsEvent, SettingsOptions, SettingsView, init, settings_view};
+pub use view::{
+    Section, SettingsEvent, SettingsOptions, SettingsView, UpdateStatus, init, settings_view,
+};
 
 #[cfg(test)]
 mod tests;

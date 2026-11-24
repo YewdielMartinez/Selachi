@@ -12,8 +12,8 @@ use gpui::{
     AnyElement, ClipboardItem, Context, IntoElement, ModifiersChangedEvent, MouseDownEvent,
     MouseMoveEvent, Pixels, Point, SharedString, div, prelude::*, px,
 };
-use theme::Radius;
 use term_core::{Block, BlockId, BlockState, Session};
+use theme::Radius;
 use ui_kit::{ActionButton, Icon, Pill};
 
 use crate::app_shell::TERM_PAD;

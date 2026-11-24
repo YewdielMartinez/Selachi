@@ -7,6 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+agent_harness = { version = "0.1.0", path = "../agent_harness" }
 agents_driver = { version = "0.1.0", path = "../agents_driver" }
 agents_svc = { version = "0.0.1", path = "../agents_svc" }
 anyhow.workspace = true
@@ -36,6 +37,7 @@ ui_review = { path = "../ui_review" }
 ui_settings = { path = "../ui_settings" }
 ui_usage = { path = "../ui_usage" }
 ui_viewer = { path = "../ui_viewer" }
+updater = { version = "0.1.0", path = "../updater" }
 viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
 
 [target.'cfg(windows)'.dependencies]
@@ -43,6 +45,7 @@ tauri-winrt-notification = "0.8"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_IO",
@@ -55,5 +58,6 @@ windows-sys = { version = "0.59", features = [
 embed-resource = "3"
 
 [dev-dependencies]
+tempfile = "3"
 gpui = { workspace = true, features = ["test-support"] }
 ui_kit = { version = "0.1.0", path = "../ui_kit", features = ["test-support"] }

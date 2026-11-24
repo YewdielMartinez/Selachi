@@ -271,6 +271,11 @@ impl AppShell {
             },
             opts,
             tint,
+            lineage: if unified {
+                shared.lineage.clone()
+            } else {
+                Default::default()
+            },
             margin: Metrics::of(sl.density).margin,
         }
     }
@@ -318,6 +323,7 @@ impl AppShell {
             active: self.active_id(),
             git: self.space_git(cx),
             panel_items: self.panel_items(cx),
+            lineage: self.compute_lineage(cx),
         };
         let collapsed = |sl: &ResolvedLayout| sl.sidebar.width_px == COLLAPSED_SIDEBAR_W;
         if z.left_w > 0.0 || z.left_from > 0.0 {
@@ -492,6 +498,9 @@ impl AppShell {
             SidebarEvent::ToggleCollapsed => self.toggle_sidebar_collapsed(cx),
             SidebarEvent::ExpandOverlay => self.toggle_overlay(Overlay::Left, cx),
             SidebarEvent::DropOnSpace(paths) => self.drop_on_space(&paths, window, cx),
+            SidebarEvent::OpenThread(id) => {
+                self.open_chat_thread(chat_core::ThreadId(id), window, cx)
+            }
         }
     }
 
@@ -836,4 +845,5 @@ pub(super) struct Shared {
     active: Option<TabId>,
     git: HashMap<PathBuf, spaces::GitSummary>,
     panel_items: Vec<RailItem>,
+    lineage: crate::sidebar_view::Lineage,
 }

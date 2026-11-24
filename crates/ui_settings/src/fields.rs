@@ -51,6 +51,32 @@ pub(crate) fn apply(
             }
             view.edit_field(key, cx, |c| c.terminal.completion.accept_word_key = trimmed);
         }
+        "deleg_concurrent" => match parse_count(&trimmed) {
+            Ok(n) => view.edit_field(key, cx, |c| c.delegation.max_concurrent = n),
+            Err(m) => set_error(view, key, &m, cx),
+        },
+        "deleg_approval" => match parse_count(&trimmed) {
+            Ok(n) => view.edit_field(key, cx, |c| {
+                c.delegation.approval_timeout_secs = u64::from(n)
+            }),
+            Err(m) => set_error(view, key, &m, cx),
+        },
+        "deleg_budget" => match parse_count(&trimmed) {
+            Ok(n) => view.edit_field(key, cx, |c| c.delegation.daily_token_budget = u64::from(n)),
+            Err(m) => set_error(view, key, &m, cx),
+        },
+        "deleg_timeout" => match crate::validate::parse_number(&trimmed) {
+            Ok(min) if (0.0..=1440.0).contains(&min) => {
+                let secs = (min * 60.0).round() as u64;
+                view.edit_field(key, cx, |c| c.delegation.timeout_secs = secs)
+            }
+            Ok(_) => set_error(view, key, "Entre 1 y 1440 minutos.", cx),
+            Err(m) => set_error(view, key, &m, cx),
+        },
+        "deleg_weekly" => match crate::validate::parse_number(&trimmed) {
+            Ok(p) => view.edit_field(key, cx, |c| c.delegation.weekly_usage_threshold_percent = p),
+            Err(m) => set_error(view, key, &m, cx),
+        },
         "external_editor" => view.edit_field(key, cx, |c| c.git.external_editor = trimmed),
         "index_url" => view.edit_field(key, cx, |c| c.plugins.index_url = trimmed),
         k if k.starts_with("profile.") => profile_field(view, k, text, cx),

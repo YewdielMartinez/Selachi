@@ -36,6 +36,7 @@ mod diffview;
 mod fmt;
 mod gate;
 mod model;
+mod pr;
 mod sections;
 mod view;
 mod widgets;
@@ -45,14 +46,23 @@ pub use data::{DiffTarget, GitData, HISTORY_LEN};
 pub use diffview::{DiffPreview, DiffRow, FileDiff, PreviewLine, parse_unified};
 pub use gate::{Gate, Outcome, Review, ReviewLine, translate_warning};
 pub use model::{
-    CheckpointFiles, CheckpointView, DiffSlot, DiffState, ExecMode, GitModel, GitPanelEvent, Load,
-    OpFinished, Stats, WATCH_DEBOUNCE,
+    CheckpointFiles, CheckpointView, DiffSlot, DiffState, DraftReady, ExecMode, GitModel,
+    GitPanelEvent, Load, OpFinished, Stats, WATCH_DEBOUNCE,
 };
+pub use pr::{
+    FOCUS_STALE, MAX_FAILED_SENT, PrCreate, PrCreated, PrQuery, PrSnapshot, PrSummary, PrTone,
+    PrTrigger, PrView, check_glyph, display_command, failed_checks_markdown, focus_refresh_due,
+    format_duration, query_pr, refresh_after, summarize,
+};
+// Types of `git_svc` that appear in this crate's API.
+pub use git_svc::{Check, DraftKind, GhClient, NewPr, PrInfo, draft_prompt, split_message};
 pub use sections::{FileRow, Section, build_sections};
 pub use view::{
     GitPanel, GitPanelProvider, Layout, PANEL_ID, Tab, WIDE_FROM_PX, init, layout_for, path_budget,
-    thumbnail,
+    pr_pill, thumbnail,
 };
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pr;
