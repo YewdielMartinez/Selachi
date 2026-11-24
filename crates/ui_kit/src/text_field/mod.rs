@@ -27,7 +27,7 @@
 //!
 //! | Variant | Enter | Shift+Enter | Ctrl+Enter |
 //! |---|---|---|---|
-//! | single line | `Submit` | `SubmitReverse` (find previous) | `Submit` |
+//! | single line | `Submit` | `SubmitReverse` (find previous) | `Submit` (`SubmitAlt` with [`TextField::set_capture_nav`]) |
 //! | area, [`EnterMode::Submit`] (chat) | `Submit` | newline | `Submit` |
 //! | area, [`EnterMode::Newline`] (notes) | newline | newline | `Submit` |
 
@@ -165,6 +165,18 @@ pub enum TextFieldEvent {
     Nav(Nav),
 }
 
+/// Extra keys of a single-line field, a separate event type so the existing [`TextFieldEvent`] and
+/// [`Nav`] enums (matched exhaustively by consumers) stay as they are. Emitted only while
+/// [`TextField::set_capture_nav`] is on; subscribe with `ev: &TextFieldAlt`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextFieldAlt {
+    /// `Ctrl+Enter` (alternate commit, e.g. "commit and push"). It replaces the plain `Submit`
+    /// that `Ctrl+Enter` emits while the capture is off.
+    SubmitAlt,
+    /// `Shift+Tab` (it replaces moving the focus back).
+    BackTab,
+}
+
 /// What `Enter` does in a [`TextArea`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum EnterMode {
@@ -189,6 +201,7 @@ pub struct TextField {
     read_only: bool,
     password: bool,
     error: Option<SharedString>,
+    invalid: bool,
     chrome: bool,
     mono: bool,
     font_size: Option<f32>,
@@ -206,6 +219,7 @@ pub struct TextField {
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
+impl EventEmitter<TextFieldAlt> for TextField {}
 
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -226,6 +240,7 @@ impl TextField {
             read_only: false,
             password: false,
             error: None,
+            invalid: false,
             chrome: true,
             mono: false,
             font_size: None,
@@ -343,6 +358,11 @@ impl TextField {
         self.error.as_ref()
     }
 
+    /// The border is painted as an error: a message is set or [`TextField::set_invalid`] is on.
+    pub fn is_invalid(&self) -> bool {
+        self.invalid || self.error.is_some()
+    }
+
     /// Replaces the text from outside (hot reload); caret at the end. Does not emit `Changed`.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         let text = clean(text, self.multiline);
@@ -407,6 +427,15 @@ impl TextField {
         }
     }
 
+    /// Paints the error border without a message line (the host explains the problem elsewhere).
+    /// Independent of [`TextField::set_error`]: either one makes the field invalid.
+    pub fn set_invalid(&mut self, invalid: bool, cx: &mut Context<Self>) {
+        if self.invalid != invalid {
+            self.invalid = invalid;
+            cx.notify();
+        }
+    }
+
     /// Re-themes the field (on a theme or accent change).
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         if self.theme != theme {
@@ -421,6 +450,8 @@ impl TextField {
     }
 
     /// While on, `Up` / `Down` / `Tab` are emitted as [`TextFieldEvent::Nav`] instead of acting.
+    /// A single-line field also emits `Shift+Tab` and `Ctrl+Enter` as [`TextFieldAlt`]; with it
+    /// off both behave as before.
     pub fn set_capture_nav(&mut self, on: bool) {
         self.capture_nav = on;
     }
@@ -812,7 +843,7 @@ impl Render for TextField {
         let full =
             (overflowing && !self.password).then(|| SharedString::from(self.buf.text.clone()));
         let id = ElementId::from(("ui-kit-text-field", cx.entity_id().as_u64() as usize));
-        let invalid = self.error.is_some();
+        let invalid = self.is_invalid();
 
         let mut field = div()
             .id(id)
@@ -898,7 +929,13 @@ impl Render for TextField {
             .on_action(cx.listener(Self::on_paste))
             .on_action(cx.listener(Self::on_enter))
             .on_action(cx.listener(Self::on_shift_enter))
-            .on_action(cx.listener(|_, _: &act::CtrlEnter, _, cx| cx.emit(TextFieldEvent::Submit)))
+            .on_action(cx.listener(|t, _: &act::CtrlEnter, _, cx| {
+                if t.capture_nav && !t.multiline {
+                    cx.emit(TextFieldAlt::SubmitAlt);
+                } else {
+                    cx.emit(TextFieldEvent::Submit);
+                }
+            }))
             .on_action(cx.listener(|_, _: &act::Cancel, _, cx| cx.emit(TextFieldEvent::Cancel)))
             .on_action(cx.listener(|t, _: &act::TabKey, window, cx| {
                 if t.capture_nav {
@@ -907,7 +944,13 @@ impl Render for TextField {
                     window.focus_next();
                 }
             }))
-            .on_action(cx.listener(|_, _: &act::BackTab, window, _| window.focus_prev()))
+            .on_action(cx.listener(|t, _: &act::BackTab, window, cx| {
+                if t.capture_nav && !t.multiline {
+                    cx.emit(TextFieldAlt::BackTab);
+                } else {
+                    window.focus_prev();
+                }
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))

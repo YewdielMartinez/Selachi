@@ -1,0 +1,4 @@
+test (windows-latest)	Run tests	2026-11-23T14:09:58.1Z [36;1mcargo test --workspace[0m
+test (windows-latest)	Run tests	2026-11-23T14:10:01.2Z error[E0432]: unresolved import `foo`
+test (windows-latest)	Run tests	2026-11-23T14:10:01.3Z GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD
+test (windows-latest)	Run tests	2026-11-23T14:10:01.4Z test result: FAILED. 3 passed; 1 failed

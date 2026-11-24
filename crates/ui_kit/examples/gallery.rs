@@ -17,10 +17,11 @@ use gpui::{
 };
 use theme::{Mode, Theme, rgb};
 use ui_kit::{
-    ActionSize, Assets, Button, Card, CardTone, Checkbox, DitherMeter, GhostButton, Icon,
-    IconButton, ListRow, Logo, Pill, Placement, Popover, RadioGroup, RowStatus, SectionLabel,
-    SegmentedControl, Select, SelectOption, Slider, Spinner, SwatchRow, TextArea, TextField,
-    Toggle, Tooltip, UniformListScrollHandle, VirtualList, WirePreset, Wireframe,
+    ActionSize, Assets, Button, Card, CardTone, Checkbox, DitherMeter, EmptyState, FocusCard,
+    GhostButton, Icon, IconButton, ListRow, Logo, Pill, Placement, Popover, RadioGroup, RadioRow,
+    Rotation, RowStatus, SectionLabel, SegmentedControl, Select, SelectOption, Slider, Spinner,
+    SwatchRow, TextArea, TextField, Toggle, Tooltip, UniformListScrollHandle, VirtualList,
+    WirePreset, Wireframe,
 };
 
 struct Gallery {
@@ -44,6 +45,9 @@ struct Gallery {
     select_long: Entity<Select>,
     agreed: bool,
     density: usize,
+    radio_row: usize,
+    nav_row: usize,
+    flagged: Entity<TextField>,
 }
 
 impl Gallery {
@@ -99,7 +103,12 @@ impl Gallery {
                 .with_value("font-7")
                 .max_w(260.0)
         });
+        let flagged = cx.new(|cx| TextField::new(t, cx).with_text("sin mensaje, solo borde"));
+        flagged.update(cx, |f, cx| f.set_invalid(true, cx));
         Self {
+            flagged,
+            radio_row: 1,
+            nav_row: 1,
             name,
             long_path,
             invalid,
@@ -176,6 +185,7 @@ impl Render for Gallery {
             &self.invalid,
             &self.secret,
             &self.frozen,
+            &self.flagged,
         ] {
             f.update(cx, |f, cx| f.set_theme(t, cx));
         }
@@ -678,6 +688,7 @@ impl Render for Gallery {
                     .selected(Some(self.density))
                     .horizontal(true)
                     .on_change({
+                        let this = this.clone();
                         move |ix, _, cx| {
                             this.update(cx, |g, cx| {
                                 g.density = ix;
@@ -711,6 +722,128 @@ impl Render for Gallery {
                             .focusable(false)
                             .on_click(|_, _, _| {}),
                     ),
+            );
+
+        let radio_rows: Vec<_> = [
+            ("Rapido", "Modelo pequeno, respuestas cortas"),
+            ("Equilibrado", "El valor por defecto"),
+            ("Profundo", "Mas razonamiento, mas tokens"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(ix, (title, sub))| {
+            let this = this.clone();
+            RadioRow::new("gal-radio", ix, 3, &t)
+                .selected(Some(self.radio_row))
+                .on_select(move |i, _, cx| {
+                    this.update(cx, |g, cx| {
+                        g.radio_row = i;
+                        cx.notify();
+                    });
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(title)
+                        .child(div().text_size(px(12.0)).text_color(c.muted).child(sub)),
+                )
+                .into_any_element()
+        })
+        .collect();
+        let nav_pills: Vec<_> = [
+            (Icon::Terminal, "Terminal"),
+            (Icon::GitBranch, "Git"),
+            (
+                Icon::Files,
+                "Archivos con un nombre larguisimo que se corta",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(ix, (ic, label))| {
+            let this = this.clone();
+            Pill::new(format!("gal-nav-{ix}"), &t)
+                .full_width(true)
+                .icon(ic)
+                .label(label)
+                .active(self.nav_row == ix)
+                .on_click(move |_, _, cx| {
+                    this.update(cx, |g, cx| {
+                        g.nav_row = ix;
+                        cx.notify();
+                    });
+                })
+                .into_any_element()
+        })
+        .collect();
+        let col5 = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .w(px(300.0))
+            .child(SectionLabel::new(
+                &t,
+                "TextField · set_invalid (solo borde)",
+            ))
+            .child(self.flagged.clone())
+            .child(SectionLabel::new(
+                &t,
+                "SwatchRow · anillo en blanco / casi fondo",
+            ))
+            .child(SwatchRow::new(
+                "gal-swatch",
+                &t,
+                [
+                    rgb(0x00AAFF),
+                    rgb(0xFFFFFF),
+                    rgb(0xF4F4F6),
+                    rgb(0x1B1B1F),
+                    rgb(0x000000),
+                    rgb(0x7FCB8F),
+                ],
+            ))
+            .child(SectionLabel::new(&t, "Rotation · chevrons derivados"))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.0))
+                    .child(IconButton::new("gal-rot-0", &t, Icon::ChevronDown))
+                    .child(
+                        IconButton::new("gal-rot-180", &t, Icon::ChevronDown)
+                            .rotate(Rotation::Deg180),
+                    )
+                    .child(IconButton::new("gal-rot-r", &t, Icon::ChevronRight))
+                    .child(
+                        IconButton::new("gal-rot-l", &t, Icon::ChevronRight)
+                            .rotate(Rotation::Deg180),
+                    ),
+            )
+            .child(SectionLabel::new(
+                &t,
+                "Pill full_width · lista de navegacion",
+            ))
+            .child(div().flex().flex_col().gap(px(2.0)).children(nav_pills))
+            .child(SectionLabel::new(
+                &t,
+                "RadioRow · una parada, flechas, Espacio",
+            ))
+            .child(div().flex().flex_col().gap(px(4.0)).children(radio_rows))
+            .child(SectionLabel::new(&t, "FocusCard"))
+            .child(
+                FocusCard::new("gal-fc", &t)
+                    .on_click(|_, _, _| {})
+                    .child("Tarjeta enfocable: Tab + Enter / Espacio"),
+            )
+            .child(SectionLabel::new(&t, "EmptyState"))
+            .child(
+                Card::new(&t).child(
+                    EmptyState::new(&t, "Sin cambios")
+                        .icon(Icon::GitBranch)
+                        .body("El arbol de trabajo esta limpio.")
+                        .action(Button::tonal("gal-es", &t, "Actualizar").on_click(|_, _, _| {})),
+                ),
             );
 
         div()
@@ -750,7 +883,8 @@ impl Render for Gallery {
                     .child(col1)
                     .child(col2)
                     .child(col3)
-                    .child(col4),
+                    .child(col4)
+                    .child(col5),
             )
     }
 }
@@ -790,6 +924,8 @@ fn main() {
                     "f-toggle",
                     "gal-ck",
                     "gal-rg-1",
+                    "gal-fc",
+                    "gal-radio-1",
                     "gal-select-trigger",
                     "b1",
                     "rail2",
@@ -797,7 +933,7 @@ fn main() {
                     "alpha",
                 ]);
             }
-            let bounds = Bounds::centered(None, size(px(1640.0), px(940.0)), cx);
+            let bounds = Bounds::centered(None, size(px(1960.0), px(1000.0)), cx);
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),

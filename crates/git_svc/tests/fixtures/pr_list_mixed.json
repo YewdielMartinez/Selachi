@@ -1,0 +1,5 @@
+[
+  {"headRefName":"feat/ci","isDraft":false,"mergeable":"UNKNOWN","number":9,"reviewDecision":"APPROVED","state":"MERGED","title":"feat: first attempt","url":"https://github.com/acme/selachi/pull/9"},
+  {"headRefName":"feat/ci","isDraft":true,"mergeable":"CONFLICTING","number":12,"reviewDecision":"CHANGES_REQUESTED","state":"OPEN","title":"feat(ci): estado de PR en el panel","url":"https://github.com/acme/selachi/pull/12"},
+  {"headRefName":"other","isDraft":false,"mergeable":"MERGEABLE","number":13,"reviewDecision":"","state":"OPEN","title":"unrelated","url":"https://github.com/acme/selachi/pull/13"}
+]

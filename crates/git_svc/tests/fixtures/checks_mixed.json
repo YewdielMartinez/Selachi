@@ -1,0 +1,9 @@
+[
+  {"bucket":"pass","completedAt":"2026-11-23T14:04:24Z","description":"","event":"","link":"https://github.com/cli/cli/runs/137746427837","name":"CodeQL","startedAt":"2026-11-23T14:04:20Z","state":"SUCCESS","workflow":""},
+  {"bucket":"skipping","completedAt":"2026-11-23T14:03:42Z","description":"","event":"pull_request_target","link":"https://github.com/cli/cli/actions/runs/45190148370/job/137746137978","name":"close-unmet-requirements","startedAt":"2026-11-23T14:03:52Z","state":"SKIPPED","workflow":"PR Triaging"},
+  {"bucket":"fail","completedAt":"2026-11-23T14:10:30Z","description":"","event":"pull_request","link":"https://github.com/acme/selachi/actions/runs/777/job/888","name":"test (windows-latest)","startedAt":"2026-11-23T14:05:00Z","state":"FAILURE","workflow":"CI"},
+  {"bucket":"fail","completedAt":"2026-11-23T14:06:00Z","description":"","event":"pull_request","link":"https://github.com/acme/selachi/actions/runs/777/job/889","name":"clippy","startedAt":"2026-11-23T14:05:00Z","state":"FAILURE","workflow":"CI"},
+  {"bucket":"pending","completedAt":"0001-01-01T00:00:00Z","description":"","event":"pull_request","link":"https://github.com/acme/selachi/actions/runs/777/job/890","name":"build","startedAt":"2026-11-23T14:05:00Z","state":"IN_PROGRESS","workflow":"CI"},
+  {"bucket":"pending","completedAt":"0001-01-01T00:00:00Z","description":"","event":"pull_request","link":"https://github.com/acme/selachi/actions/runs/777/job/891","name":"bench","startedAt":"0001-01-01T00:00:00Z","state":"QUEUED","workflow":"CI"},
+  {"bucket":"cancel","completedAt":"2026-11-23T14:07:00Z","description":"","event":"pull_request","link":"","name":"docs","startedAt":"2026-11-23T14:05:00Z","state":"CANCELLED","workflow":"CI"}
+]

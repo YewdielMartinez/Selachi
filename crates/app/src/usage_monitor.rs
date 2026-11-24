@@ -336,24 +336,32 @@ impl UsageMonitor {
         };
         // Init job: install the watchers and read the numbers already in the database. No log
         // is touched here; the first focus (or the pin) triggers the full scan.
-        let (db, cfg) = (monitor.db.clone(), monitor.cfg.clone());
-        cx.spawn(async move |this, cx| {
-            let (watcher, out) = cx
-                .background_executor()
-                .spawn(async move {
-                    let watcher = LogWatcher::start(&cfg);
-                    let out = scan_job(None, &db, &cfg, &Work::Summary, true);
-                    (watcher, out)
-                })
-                .await;
-            let _ = this.update(cx, |m, cx| {
-                m.watcher = Some(Arc::new(watcher));
-                m.in_flight = false;
-                m.apply(out, false, cx);
-                m.check(ACTIVATION_GAP, cx);
-            });
-        })
-        .detach();
+        // (Tests of the shell must not watch or scan the developer's agent logs.)
+        #[cfg(not(test))]
+        {
+            let (db, cfg) = (monitor.db.clone(), monitor.cfg.clone());
+            cx.spawn(async move |this, cx| {
+                let (watcher, out) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let watcher = LogWatcher::start(&cfg);
+                        let out = scan_job(None, &db, &cfg, &Work::Summary, true);
+                        (watcher, out)
+                    })
+                    .await;
+                let _ = this.update(cx, |m, cx| {
+                    m.watcher = Some(Arc::new(watcher));
+                    m.in_flight = false;
+                    m.apply(out, false, cx);
+                    m.check(ACTIVATION_GAP, cx);
+                });
+            })
+            .detach();
+        }
+        #[cfg(test)]
+        {
+            monitor.in_flight = false;
+        }
         if pinned_active {
             monitor.set_active(true, cx);
         }

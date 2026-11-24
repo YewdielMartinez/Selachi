@@ -690,7 +690,7 @@ impl ChatDb {
 
 const THREAD_SELECT: &str =
     "SELECT id, title, project_root, worktree_path, agent_kind, model, permission_mode, status, \
-     created, updated, agent_session_id, archived, checkpoint_before_turn, effort FROM threads";
+     created, updated, agent_session_id, archived, checkpoint_before_turn, effort, \n     parent_thread_id, parent_tab, depth, delegated_by FROM threads";
 
 const LINK_COLS: &str = "parent_thread_id, parent_tab, depth, delegated_by";
 
@@ -719,6 +719,12 @@ fn thread_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadRecord> {
         archived: r.get::<_, i64>(11)? != 0,
         checkpoint_before_turn: r.get::<_, i64>(12)? != 0,
         effort: r.get(13)?,
+        link: ThreadLink {
+            parent_thread_id: r.get::<_, Option<i64>>(14)?.map(ThreadId),
+            parent_tab: r.get(15)?,
+            depth: r.get(16)?,
+            delegated_by: r.get(17)?,
+        },
     })
 }
 
@@ -800,6 +806,29 @@ mod tests {
             worktree_path: None,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn the_record_carries_its_delegation_link() {
+        let (_d, db) = temp_db();
+        let parent = new_thread(&db, "padre");
+        let mut spec = ThreadSpec::new("C:/proj", AgentKind::Codex);
+        spec.link = Some(ThreadLink {
+            parent_thread_id: Some(parent),
+            parent_tab: None,
+            depth: 1,
+            delegated_by: Some("mcp".into()),
+        });
+        let child = db
+            .insert_thread(NewThread { spec, title: "hijo".into(), worktree_path: None })
+            .unwrap();
+        let rec = db.get_thread(child).unwrap().unwrap();
+        assert!(rec.is_delegation());
+        assert_eq!(rec.link.parent_thread_id, Some(parent));
+        assert_eq!((rec.link.depth, rec.link.delegated_by.as_deref()), (1, Some("mcp")));
+        let top = db.get_thread(parent).unwrap().unwrap();
+        assert!(!top.is_delegation());
+        assert_eq!(top.link, ThreadLink::default());
     }
 
     #[test]

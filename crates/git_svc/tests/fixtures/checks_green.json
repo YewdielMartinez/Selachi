@@ -1,0 +1,4 @@
+[
+  {"bucket":"pass","completedAt":"2026-11-23T14:04:24Z","description":"","event":"","link":"https://github.com/acme/selachi/actions/runs/1/job/2","name":"test","startedAt":"2026-11-23T14:04:20Z","state":"SUCCESS","workflow":"CI"},
+  {"bucket":"skipping","completedAt":"2026-11-23T14:03:42Z","description":"","event":"","link":"","name":"label","startedAt":"2026-11-23T14:03:40Z","state":"SKIPPED","workflow":"Triage"}
+]

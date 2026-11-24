@@ -40,6 +40,7 @@ pub struct Pill {
     agent: Option<AgentMark>,
     label: Option<SharedString>,
     active: bool,
+    full_width: bool,
     focusable: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ClickFn>,
@@ -56,6 +57,7 @@ impl Pill {
             agent: None,
             label: None,
             active: false,
+            full_width: false,
             focusable: true,
             tooltip: None,
             on_click: None,
@@ -93,6 +95,14 @@ impl Pill {
     /// `surface_3` background and `text` foreground.
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self
+    }
+
+    /// Nav-list variant: the pill spans the width of its row (so the active one is a full-width
+    /// grey bar), the label takes the free space and is cut with an ellipsis, trailing children
+    /// (a count, a dot) sit at the right edge.
+    pub fn full_width(mut self, full_width: bool) -> Self {
+        self.full_width = full_width;
         self
     }
 
@@ -147,6 +157,7 @@ impl RenderOnce for Pill {
             .occlude()
             .h(px(h))
             .flex_none()
+            .when(self.full_width, |d| d.w_full().min_w(px(0.0)))
             .px(px(px_x))
             .flex()
             .flex_row()
@@ -165,7 +176,21 @@ impl RenderOnce for Pill {
             .when(self.agent.is_none(), |d| {
                 d.when_some(self.icon, |d, i| d.child(icon(i, 16.0, fg)))
             })
-            .when_some(self.label, |d, l| d.child(l))
+            .when_some(self.label, |d, l| {
+                if self.full_width {
+                    d.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(l),
+                    )
+                } else {
+                    d.child(l)
+                }
+            })
             .children(self.children);
         if let Some(f) = self.on_click {
             el = el.on_click(move |e, w, cx| f(e, w, cx));

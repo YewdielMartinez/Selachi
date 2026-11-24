@@ -112,7 +112,7 @@ fn focus_key(id: &ElementId) -> ElementId {
 }
 
 /// The tab-stop handle of the component with element id `id`, kept across frames.
-pub(crate) fn handle(window: &mut Window, cx: &mut App, id: &ElementId) -> FocusHandle {
+pub fn handle(window: &mut Window, cx: &mut App, id: &ElementId) -> FocusHandle {
     crate::init(cx);
     let state = window.use_keyed_state(focus_key(id), cx, |_, cx| {
         cx.focus_handle().tab_index(0).tab_stop(true)
@@ -122,7 +122,7 @@ pub(crate) fn handle(window: &mut Window, cx: &mut App, id: &ElementId) -> Focus
 
 /// The ring, as the last child of a `relative` control: paints nothing unless
 /// [`ring_visible`], and while painted it also records mouse presses (pointer modality).
-pub(crate) fn ring_element(
+pub fn ring_element(
     handle: FocusHandle,
     id: String,
     radius: f32,
@@ -159,7 +159,7 @@ pub(crate) fn ring_element(
 
 /// Everything a focusable control needs on its root: tab stop, ring, `Tab` handling and no
 /// focus-steal on press. `radius` is the control's corner radius in px.
-pub(crate) fn wire(
+pub fn wire(
     el: Stateful<Div>,
     handle: Option<FocusHandle>,
     id: &ElementId,

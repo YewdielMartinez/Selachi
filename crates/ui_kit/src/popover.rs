@@ -4,6 +4,17 @@
 //! nothing while open: the 200 ms `EASE.pop` entrance is a one-shot animation, afterwards the
 //! window is idle again. With reduced motion (see [`crate::set_reduced_motion`]) it simply
 //! appears.
+//!
+//! # Esc
+//!
+//! Two paths close an open popover, both ending in `on_dismiss`:
+//!
+//! * the panel is a key context ([`CONTEXT`]) that handles the [`Cancel`] action (`Esc` is bound
+//!   to it by [`init`](crate::init)): it runs when focus is inside the panel and needs no help
+//!   from the app;
+//! * while open, an interceptor catches `Esc` wherever the focus is (a terminal behind the panel
+//!   must not receive it). On by default, `.esc_interceptor(false)` leaves only the focus-scoped
+//!   action, for hosts that route `Esc` themselves.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -11,7 +22,7 @@ use std::rc::Rc;
 use gpui::{Animation, AnimationExt};
 use gpui::{
     AnyElement, App, Bounds, Context, Corner, DispatchPhase, IntoElement, Modifiers,
-    MouseDownEvent, ParentElement, Pixels, RenderOnce, SharedString, Subscription, Window,
+    MouseDownEvent, ParentElement, Pixels, RenderOnce, SharedString, Subscription, Window, actions,
     anchored, canvas, deferred, div, point, prelude::*, px,
 };
 use theme::{
@@ -20,6 +31,21 @@ use theme::{
 };
 
 use crate::motion::{clamped, reduced_motion};
+
+actions!(
+    ui_kit_popover,
+    [
+        /// `Esc` inside an open popover: dismiss it (runs `on_dismiss`).
+        Cancel,
+    ]
+);
+
+/// Key context of the popover panel.
+pub const CONTEXT: &str = "SelachiPopover";
+
+pub(crate) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([gpui::KeyBinding::new("escape", Cancel, Some(CONTEXT))]);
+}
 
 /// Where the panel opens relative to its trigger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -86,6 +112,7 @@ pub struct Popover {
     width: Option<f32>,
     padding: f32,
     sheet_when_narrow: bool,
+    esc_interceptor: bool,
     on_dismiss: Option<DismissFn>,
     children: Vec<AnyElement>,
 }
@@ -101,6 +128,7 @@ impl Popover {
             width: None,
             padding: 8.0,
             sheet_when_narrow: false,
+            esc_interceptor: true,
             on_dismiss: None,
             children: Vec::new(),
         }
@@ -138,6 +166,13 @@ impl Popover {
     /// to the bottom edge, `EASE.sheet` entrance) instead of next to the trigger.
     pub fn sheet_when_narrow(mut self, on: bool) -> Self {
         self.sheet_when_narrow = on;
+        self
+    }
+
+    /// Whether an open popover also catches `Esc` wherever the focus is (default `true`). `false`
+    /// keeps only the [`Cancel`] action of the panel, which needs focus inside it.
+    pub fn esc_interceptor(mut self, on: bool) -> Self {
+        self.esc_interceptor = on;
         self
     }
 
@@ -188,7 +223,8 @@ impl RenderOnce for Popover {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
-        if self.open {
+        crate::ensure_init(cx);
+        if self.open && self.esc_interceptor {
             // Esc is a window-level shortcut: dispatch-tree key listeners only run on the focused
             // path, so an interceptor (alive only while the popover is rendered) is used instead.
             let watch = window.use_keyed_state(
@@ -243,8 +279,15 @@ impl RenderOnce for Popover {
                 1.0
             };
             let travel = if sheet { 48.0 } else { TRAVEL };
+            let on_cancel = self.on_dismiss.clone();
             let mut body = div()
                 .relative()
+                .key_context(CONTEXT)
+                .on_action(move |_: &Cancel, window, cx| {
+                    if let Some(f) = &on_cancel {
+                        f(window, cx);
+                    }
+                })
                 .when_some(self.width, |d, w| d.w(px(w)))
                 .p(px(self.padding))
                 .rounded(px(Radius::SM))

@@ -18,16 +18,16 @@ use store::{Density, ResolvedLayout, SidebarSection};
 use theme::Theme;
 use ui_kit::{GhostButton, Icon, IconButton, ListRow, SectionLabel};
 
-use crate::app_shell::AppShell;
 use crate::grouping::{self, aggregate_status, group_tabs};
 use crate::paths;
+use crate::sidebar_view::{CloseFocusedRow, SidebarEvent, SidebarView, send};
 
 pub struct SidebarProps<'a> {
     pub theme: &'a Theme,
     pub layout: &'a ResolvedLayout,
     pub tabs: &'a [TabInfo],
     pub active: Option<TabId>,
-    pub shell: &'a Entity<AppShell>,
+    pub view: &'a Entity<SidebarView>,
     /// The tab row under the pointer (state kept by the shell).
     pub hovered_row: Option<TabId>,
     /// The column is glass: rows use translucent pills so the backdrop shows through.
@@ -49,7 +49,7 @@ fn section_title(section: SidebarSection, forced_tabs: bool) -> &'static str {
 /// and one icon per tab. Clicks select the tab; hovering shows its title.
 pub fn sidebar_collapsed(p: &SidebarProps) -> Stateful<Div> {
     let theme = p.theme;
-    let shell = p.shell.clone();
+    let view = p.view.clone();
     let mut col = div()
         .id("sidebar-collapsed")
         .size_full()
@@ -63,11 +63,11 @@ pub fn sidebar_collapsed(p: &SidebarProps) -> Stateful<Div> {
             IconButton::new("sb-expand", theme, Icon::ChevronRight)
                 .glass(p.glass)
                 .tooltip("Expandir la barra lateral")
-                .on_click(move |_, _, cx| shell.update(cx, |s, cx| s.toggle_sidebar_overlay(cx))),
+                .on_click(move |_, _, cx| send(&view, cx, SidebarEvent::ExpandOverlay)),
         );
     for info in p.tabs {
         let id = info.id;
-        let shell = p.shell.clone();
+        let view = p.view.clone();
         col = col.child(
             IconButton::new(
                 SharedString::from(format!("sb-tab-{}", id.as_u64())),
@@ -77,7 +77,7 @@ pub fn sidebar_collapsed(p: &SidebarProps) -> Stateful<Div> {
             .glass(p.glass)
             .active(Some(id) == p.active)
             .tooltip(info.title.clone())
-            .on_click(move |_, window, cx| shell.update(cx, |s, cx| s.select_tab(id, window, cx))),
+            .on_click(move |_, _, cx| send(&view, cx, SidebarEvent::Select(id))),
         );
     }
     col
@@ -123,11 +123,11 @@ pub fn sidebar_content(p: &SidebarProps) -> Stateful<Div> {
 }
 
 fn select(
-    shell: &Entity<AppShell>,
+    view: &Entity<SidebarView>,
     id: TabId,
 ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
-    let shell = shell.clone();
-    move |_, window, cx| shell.update(cx, |s, cx| s.select_tab(id, window, cx))
+    let view = view.clone();
+    move |_, _, cx| send(&view, cx, SidebarEvent::Select(id))
 }
 
 /// Projects among the open tabs. `rich` (spaces) adds the branch and the aggregated status.
@@ -147,7 +147,7 @@ fn project_rows(p: &SidebarProps, rich: bool) -> Vec<impl IntoElement + use<>> {
                 .icon(Icon::Folder)
                 .glass(p.glass)
                 .selected(contains_active)
-                .on_click(select(p.shell, first.id));
+                .on_click(select(p.view, first.id));
             if rich {
                 row = row.title(e.name.clone());
                 if let Some(branch) = members.iter().find_map(|t| t.subtitle.clone()) {
@@ -191,7 +191,7 @@ fn worktree_rows(p: &SidebarProps) -> Vec<impl IntoElement + use<>> {
                 .title(branch)
                 .subtitle(grouping::project_name(&root))
                 .selected(selected)
-                .on_click(select(p.shell, t.id)),
+                .on_click(select(p.view, t.id)),
         );
         seen.push(root);
     }
@@ -201,7 +201,7 @@ fn worktree_rows(p: &SidebarProps) -> Vec<impl IntoElement + use<>> {
 /// The tabs as rows, grouped, plus the "new tab" action.
 fn tab_list(p: &SidebarProps) -> impl IntoElement + use<> {
     let groups = group_tabs(p.tabs, p.layout.sidebar.group_by);
-    let shell = p.shell.clone();
+    let view = p.view.clone();
     let mut col = div().flex().flex_col();
     for g in groups {
         if let Some(label) = g.label.clone() {
@@ -216,7 +216,7 @@ fn tab_list(p: &SidebarProps) -> impl IntoElement + use<> {
                     .child(SectionLabel::new(p.theme, label))
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .text_size(px(p.theme.typography.ui_size_xs))
                             .text_color(p.theme.colors.outline)
                             .child(g.tabs.len().to_string()),
                     ),
@@ -230,8 +230,8 @@ fn tab_list(p: &SidebarProps) -> impl IntoElement + use<> {
         div().mt(px(4.0)).child(
             GhostButton::new("sb-new-tab", p.theme, "Nueva pestaña")
                 .icon(Icon::Plus)
-                .on_click(move |_, window, cx| {
-                    shell.update(cx, |s, cx| s.new_tab_here(window, cx));
+                .on_click(move |_, _, cx| {
+                    send(&view, cx, SidebarEvent::NewHere);
                 }),
         ),
     )
@@ -243,15 +243,15 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     let c = theme.colors;
     let id = info.id;
     let show_close = crate::unified_sidebar::close_visible(Some(id) == p.active, p.hovered_row, id);
-    let shell_hover = p.shell.clone();
+    let view_hover = p.view.clone();
     let mut row = ListRow::new(("srow", id), theme)
-        .on_hover(move |h, _, cx| shell_hover.update(cx, |s, cx| s.set_row_hover(id, h, cx)))
+        .on_hover(move |h, _, cx| view_hover.update(cx, |v, cx| v.set_row_hover(id, h, cx)))
         .icon(info.icon.icon())
         .when_some(crate::agents::agent_of(&info.icon), |r, m| r.agent(m))
         .glass(p.glass)
         .title(info.title.clone())
         .selected(Some(id) == p.active)
-        .on_click(select(p.shell, id));
+        .on_click(select(p.view, id));
     if let Some(s) = info.subtitle.clone() {
         row = row.subtitle(s);
     }
@@ -263,10 +263,17 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
             ));
         }
     }
-    let shell = p.shell.clone();
+    let view = p.view.clone();
+    let view_key = p.view.clone();
     let close_id: SharedString = format!("srow-close-{}", id.as_u64()).into();
+    // Delete on the focused row (a tab stop of the `ListRow`) closes its tab; the shell asks
+    // first when something runs in it.
     div()
         .relative()
+        .key_context("SidebarRow")
+        .on_action(move |_: &CloseFocusedRow, _, cx| {
+            send(&view_key, cx, SidebarEvent::Close(id));
+        })
         .child(row)
         .children(show_close.then(|| {
             div().absolute().right(px(8.0)).top(px(10.0)).child(
@@ -276,9 +283,9 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
                     .size(22.0)
                     .icon_size(10.0)
                     .tooltip("Cerrar (Ctrl+W)")
-                    .on_click(move |_, window, cx| {
+                    .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        shell.update(cx, |s, cx| s.request_close(id, window, cx));
+                        send(&view, cx, SidebarEvent::Close(id));
                     }),
             )
         }))

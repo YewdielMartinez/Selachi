@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: YewdielMartinez.Selachi
+PackageVersion: 0.1.0 # TODO
+InstallerType: inno
+Scope: user
+MinimumOSVersion: 10.0.17763.0
+UpgradeBehavior: install
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+InstallerSwitches:
+  Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+  SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/YewdielMartinez/Selachi/releases/download/v0.1.0/Selachi-Setup-0.1.0.exe # TODO: published release asset URL
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000 # TODO: from SHA256SUMS.txt (uppercase or lowercase)
+ManifestType: installer
+ManifestVersion: 1.6.0

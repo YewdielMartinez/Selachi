@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: YewdielMartinez.Selachi
+PackageVersion: 0.1.0 # TODO
+PackageLocale: es-ES
+Publisher: Selachi
+PublisherUrl: https://github.com/YewdielMartinez/Selachi
+PublisherSupportUrl: https://github.com/YewdielMartinez/Selachi/issues
+PackageName: Selachi
+PackageUrl: https://github.com/YewdielMartinez/Selachi
+License: MIT
+LicenseUrl: https://github.com/YewdielMartinez/Selachi/blob/main/LICENSE
+Copyright: Copyright (c) Selachi contributors # TODO: confirm holder
+ShortDescription: Terminal GPU ligera para Windows con agentes de código integrados.
+Description: Selachi es una terminal para Windows (GPUI, ConPTY) con pestañas, divisiones, bloques de comandos, panel de git, visor de archivos y harness para delegar tareas en agentes de código (Claude Code, Codex, Gemini, OpenCode).
+Moniker: selachi
+Tags:
+  - terminal
+  - windows-terminal
+  - ai
+  - agents
+  - gpu
+ReleaseNotesUrl: https://github.com/YewdielMartinez/Selachi/releases/tag/v0.1.0 # TODO
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

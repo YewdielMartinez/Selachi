@@ -12,6 +12,8 @@
 //! * [`ThreadsProvider`]: the `threads` panel, registered at startup but resolved lazily, so the
 //!   chat database is only opened when chat is used.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,8 +22,15 @@ use chat_core::{
     AgentControl, ApprovalDecision, ChatStore, DriverFactory, JobHandle, OwnerInfo, ProcessHooks,
     SpawnedAgent, ThreadId, ThreadStatus,
 };
+use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use gpui::{AnyView, App, AppContext as _, IntoElement, Render, SharedString, Window, div};
+use gpui::{
+    AnyView, App, AppContext as _, Context, Entity, EventEmitter, IntoElement, Render,
+    SharedString, Subscription, Task, Window, div,
+};
+use ui_chat::{ChatEvent, ChatHub};
+
+use crate::services::Services;
 use panel_api::{PanelCtx, PanelId, PanelProvider, PanelZone};
 use ui_kit::Icon;
 use ui_procs::SharedTracker;
@@ -207,6 +216,226 @@ impl PanelProvider for ThreadsProvider {
         cx: &mut App,
     ) -> bool {
         Self::inner(cx).is_some_and(|p| p.context_changed(view, ctx, window, cx))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The hub's lifecycle: `ChatHost`
+// ---------------------------------------------------------------------------------------------
+
+/// Chat work that needs the hub and was asked before it was ready.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChatIntent {
+    /// A thread row was clicked: its tab, opened or brought forward.
+    OpenThread(ThreadId),
+    /// "Nuevo chat" (the project to start in, if any).
+    NewThread(Option<PathBuf>),
+    /// `SELACHI_DEMO=chat`.
+    Demo,
+}
+
+/// Where the hub is: `chat.db` is opened off the UI thread, so there is a loading state.
+#[derive(Clone)]
+enum ChatPhase {
+    /// Nobody used chat yet: nothing was opened.
+    Idle,
+    Loading,
+    Ready(Entity<ChatHub>),
+    /// `chat.db` could not be opened (never retried).
+    Failed,
+}
+
+/// What the host tells the shell.
+pub enum ChatHostEvent {
+    Ready,
+    Failed(String),
+    /// An event of the hub (open a thread, new thread, restore a checkpoint...).
+    Chat(ChatEvent),
+    /// A thread changed (status, approvals...).
+    Thread(chat_core::ThreadUpdate),
+    /// A thread runtime closed: its process owner can be pruned by the shell.
+    OwnerClosed(u64),
+}
+
+/// Owns the chat hub's lifecycle and what travels with it: the hooks bridge, the projects last
+/// given to the hub, what each thread last asked of the user, and the work queued while the
+/// database loads. Created with the shell, but the hub (and `chat.db`) only the first time chat is
+/// used, so a terminal-only session pays nothing.
+pub struct ChatHost {
+    phase: ChatPhase,
+    theme: theme::Theme,
+    pending: Vec<ChatIntent>,
+    /// Projects last given to the hub (it only hears about changes).
+    projects: Vec<PathBuf>,
+    /// What each chat thread last asked of the user (a toast fires when it changes).
+    attn: HashMap<ThreadId, AttentionKind>,
+    subs: Vec<Subscription>,
+    _open: Option<Task<()>>,
+    _hooks: Option<Task<()>>,
+}
+
+impl EventEmitter<ChatHostEvent> for ChatHost {}
+
+impl ChatHost {
+    pub fn new(theme: theme::Theme) -> Self {
+        Self {
+            phase: ChatPhase::Idle,
+            theme,
+            pending: Vec::new(),
+            projects: Vec::new(),
+            attn: HashMap::new(),
+            subs: Vec::new(),
+            _open: None,
+            _hooks: None,
+        }
+    }
+
+    /// The hub, once it is ready.
+    pub fn hub(&self) -> Option<Entity<ChatHub>> {
+        match &self.phase {
+            ChatPhase::Ready(h) => Some(h.clone()),
+            _ => None,
+        }
+    }
+
+    /// Is the database opening right now?
+    #[cfg(test)]
+    pub fn loading(&self) -> bool {
+        matches!(self.phase, ChatPhase::Loading)
+    }
+
+    pub fn failed(&self) -> bool {
+        matches!(self.phase, ChatPhase::Failed)
+    }
+
+    pub fn set_theme(&mut self, theme: theme::Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        if let Some(hub) = self.hub() {
+            hub.update(cx, |h, cx| h.set_theme(theme, cx));
+        }
+    }
+
+    /// Queues `intent` and starts loading when nobody did. `false`: chat is unavailable.
+    pub fn queue(&mut self, intent: ChatIntent, cx: &mut Context<Self>) -> bool {
+        if self.failed() {
+            return false;
+        }
+        self.pending.push(intent);
+        self.ensure(cx);
+        true
+    }
+
+    pub fn take_pending(&mut self) -> Vec<ChatIntent> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Starts opening `chat.db` on the background executor (once). The hub appears through
+    /// [`ChatHostEvent::Ready`]; a failure through [`ChatHostEvent::Failed`].
+    pub fn ensure(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.phase, ChatPhase::Idle) {
+            return;
+        }
+        let Some(services) = cx.try_global::<Services>().cloned() else {
+            self.phase = ChatPhase::Failed;
+            self.pending.clear();
+            cx.emit(ChatHostEvent::Failed("sin servicios".into()));
+            return;
+        };
+        self.phase = ChatPhase::Loading;
+        let (tx, mut rx) = unbounded::<HookMsg>();
+        let hooks = Arc::new(ProcHooks::new(services.tracker.clone(), tx));
+        // The hooks run on chat worker threads; what needs the UI thread arrives here.
+        let procs = services.procs;
+        self._hooks = Some(cx.spawn(async move |this, cx| {
+            while let Some(msg) = rx.next().await {
+                let done = this.update(cx, |_, cx| match msg {
+                    HookMsg::Events(events) => {
+                        procs.update(cx, |m, cx| m.watch_job_events(events, cx))
+                    }
+                    HookMsg::Closed(owner) => cx.emit(ChatHostEvent::OwnerClosed(owner)),
+                });
+                if done.is_err() {
+                    break;
+                }
+            }
+        }));
+        self._open = Some(cx.spawn(async move |this, cx| {
+            let res = cx
+                .background_executor()
+                .spawn(async move { open_store(hooks) })
+                .await;
+            this.update(cx, |host, cx| host.finish(res, cx)).ok();
+        }));
+    }
+
+    /// The store was opened (or not): create the hub on the UI thread and wire its events.
+    fn finish(&mut self, res: chat_core::Result<ChatStore>, cx: &mut Context<Self>) {
+        let store = match res {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("chat is unavailable: {e}");
+                self.phase = ChatPhase::Failed;
+                self.pending.clear();
+                cx.emit(ChatHostEvent::Failed(e.to_string()));
+                cx.notify();
+                return;
+            }
+        };
+        let Some(services) = cx.try_global::<Services>().cloned() else {
+            self.phase = ChatPhase::Failed;
+            self.pending.clear();
+            cx.emit(ChatHostEvent::Failed("sin servicios".into()));
+            return;
+        };
+        let hub = ChatHub::create(store, self.theme, cx);
+        *services.chat.borrow_mut() = Some(hub.clone());
+        hub.update(cx, |h, cx| h.detect_agents(cx));
+        // Scripted agents (`SELACHI_CHAT_FAKE`) start no processes, not even to list models.
+        hub.update(cx, |h, _| h.set_probe_models(!fake_requested()));
+        self.subs
+            .push(cx.subscribe(&hub, |_, _, ev: &ChatEvent, cx| {
+                cx.emit(ChatHostEvent::Chat(ev.clone()))
+            }));
+        self.subs
+            .push(cx.subscribe(&hub, |_, _, u: &chat_core::ThreadUpdate, cx| {
+                cx.emit(ChatHostEvent::Thread(u.clone()))
+            }));
+        self.phase = ChatPhase::Ready(hub.clone());
+        self.projects.clear();
+        cx.emit(ChatHostEvent::Ready);
+        cx.notify();
+    }
+
+    /// The projects the new-thread picker offers and the default one. Told to the hub only when
+    /// they changed.
+    pub fn sync_projects(
+        &mut self,
+        projects: Vec<PathBuf>,
+        default: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(hub) = self.hub() else { return };
+        hub.update(cx, |h, _| h.set_default_project(default));
+        if projects != self.projects {
+            self.projects.clone_from(&projects);
+            hub.update(cx, |h, cx| h.set_projects(projects, cx));
+        }
+    }
+
+    /// What `thread` last asked of the user.
+    pub fn attention_of(&self, thread: ThreadId) -> Option<&AttentionKind> {
+        self.attn.get(&thread)
+    }
+
+    pub fn set_attention(&mut self, thread: ThreadId, kind: Option<AttentionKind>) {
+        match kind {
+            Some(k) => {
+                self.attn.insert(thread, k);
+            }
+            None => {
+                self.attn.remove(&thread);
+            }
+        }
     }
 }
 

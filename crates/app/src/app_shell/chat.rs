@@ -1,28 +1,28 @@
-//! The chat mode inside the shell (wave 5.8): the hub, its tabs and its events, the attention
-//! queue fed by threads, the "Nueva pestaña" menu and the checkpoint restore prompt.
+//! The chat mode inside the shell (wave 5.8): its tabs and events, the attention queue fed by
+//! threads, the "Nueva pestaña" menu and the checkpoint restore prompt.
 //!
-//! Everything here is on demand. The hub (and so `chat.db`) is created the first time chat is used
-//! (a new chat, a restored chat tab, the threads panel); until then a terminal-only session pays
-//! nothing. Thread updates arrive through the hub's event stream, which is a waker: no timers.
+//! The hub's lifecycle belongs to [`ChatHost`](crate::chat_host::ChatHost): `chat.db` is opened
+//! off the UI thread the first time chat is used (a new chat, a restored chat tab, the threads
+//! panel); until then a terminal-only session pays nothing. What needs the hub before it is ready
+//! is queued there as a [`ChatIntent`] and runs when the host reports `Ready`. Thread updates
+//! arrive through the hub's event stream, which is a waker: no timers.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use chat_core::{ThreadId, ThreadUpdate};
-use futures::StreamExt as _;
-use futures::channel::mpsc::unbounded;
 use gpui::{
     AnyElement, Context, Entity, Hsla, IntoElement, KeyDownEvent, SharedString, Window, div,
     prelude::*, px,
 };
-use panel_api::{TabHandle, TabId};
+use panel_api::TabId;
 use theme::Radius;
 use ui_chat::{ChatEvent, ChatHub, ChatTab};
 use ui_kit::{Button, Card, CardTone, Icon, ListRow};
 use ui_review::{AttentionItem, AttentionKind, FocusTarget};
 
-use super::{AppShell, RestoreConfirm, TabSlot};
-use crate::chat_host::{self, HookMsg};
+use super::{AppShell, ChatHostEvent, RestoreConfirm};
+use crate::chat_host::{self, ChatIntent};
 use crate::hint::Hint;
 use crate::notify;
 use crate::services::Services;
@@ -33,85 +33,93 @@ const MAX_RESTORE_LINES: usize = 8;
 
 impl AppShell {
     // ------------------------------------------------------------------------------------
-    // The hub
+    // The hub (owned by `ChatHost`)
     // ------------------------------------------------------------------------------------
 
-    /// The chat hub, created on first use: opens `chat.db`, bridges thread processes to the shared
-    /// tracker, probes the installed agents (off-thread) and wires the events. `None` when the
-    /// database cannot be opened (the user sees a hint once; chat stays unavailable).
-    pub(super) fn ensure_chat(
+    /// What the chat host reports: the hub is ready (or could not open), one of its events, a
+    /// thread update, a closed process owner.
+    pub(super) fn on_chat_host_event(
         &mut self,
+        event: &ChatHostEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<ChatHub>> {
-        if let Some(h) = &self.chat {
-            return Some(h.clone());
-        }
-        if self.chat_failed {
-            return None;
-        }
-        let services = cx.try_global::<Services>().cloned()?;
-        let (tx, mut rx) = unbounded();
-        let hooks = std::sync::Arc::new(chat_host::ProcHooks::new(services.tracker.clone(), tx));
-        let store = match chat_host::open_store(hooks) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("chat is unavailable: {e}");
-                self.chat_failed = true;
-                self.show_hint(Hint::text(format!("El chat no está disponible: {e}")), cx);
-                return None;
-            }
-        };
-        let hub = ChatHub::create(store, self.theme, cx);
-        *services.chat.borrow_mut() = Some(hub.clone());
-        hub.update(cx, |h, cx| h.detect_agents(cx));
-        // Scripted agents (`SELACHI_CHAT_FAKE`) start no processes, not even to list models.
-        hub.update(cx, |h, _| h.set_probe_models(!chat_host::fake_requested()));
-        self._chat_subs.push(cx.subscribe_in(
-            &hub,
-            window,
-            |this, _, ev: &ChatEvent, window, cx| {
-                this.on_chat_event(ev.clone(), window, cx);
-            },
-        ));
-        self._chat_subs
-            .push(cx.subscribe(&hub, |this, _, u: &ThreadUpdate, cx| {
-                this.on_thread_update(u, cx)
-            }));
-        // The hooks run on chat worker threads; what needs the UI thread arrives here.
-        let procs = services.procs;
-        self._chat_task = Some(cx.spawn(async move |this, cx| {
-            while let Some(msg) = rx.next().await {
-                let done = this.update(cx, |shell, cx| match msg {
-                    HookMsg::Events(events) => {
-                        procs.update(cx, |m, cx| m.watch_job_events(events, cx))
-                    }
-                    HookMsg::Closed(owner) => {
-                        shell.closed_owners.push(owner);
-                        shell.prune_closed_owners(cx);
-                    }
-                });
-                if done.is_err() {
-                    break;
+    ) {
+        match event {
+            ChatHostEvent::Ready => {
+                // The threads panel was built with a stand-in while the hub loaded.
+                if self
+                    .right
+                    .as_ref()
+                    .is_some_and(|r| r.id.as_str() == ui_chat::THREADS_PANEL_ID)
+                {
+                    self.right = None;
                 }
+                self.sync_chat_projects(cx);
+                self.sync_chat_active(cx);
+                self.finish_deferred_startup(window, cx);
+                for intent in self.chat.update(cx, |c, _| c.take_pending()) {
+                    self.run_chat_intent(intent, window, cx);
+                }
+                self.refresh(cx);
             }
-        }));
-        self.chat = Some(hub.clone());
-        self.chat_projects.clear();
-        self.sync_chat_projects(cx);
-        Some(hub)
+            ChatHostEvent::Failed(e) => {
+                self.show_hint(Hint::text(format!("El chat no está disponible: {e}")), cx);
+                self.finish_deferred_startup(window, cx);
+            }
+            ChatHostEvent::Chat(ev) => self.on_chat_event(ev.clone(), window, cx),
+            ChatHostEvent::Thread(u) => self.on_thread_update(u, cx),
+            ChatHostEvent::OwnerClosed(owner) => {
+                self.closed_owners.push(*owner);
+                self.prune_closed_owners(cx);
+            }
+        }
+    }
+
+    /// A session that waited for the hub (its chat tabs need it) is restored now; so is the folder
+    /// the launch asked for.
+    fn finish_deferred_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((state, then_open)) = self.session.update(cx, |s, _| s.take_pending_restore())
+        else {
+            return;
+        };
+        self.restore_session(state, window, cx);
+        if let Some(dir) = then_open {
+            self.open_tab(Some(dir), window, cx);
+        }
+    }
+
+    /// Runs `intent` now when the hub is ready, else queues it (and starts the hub loading).
+    fn run_chat_intent(&mut self, intent: ChatIntent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(hub) = self.chat.read(cx).hub() else {
+            // `false`: chat is unavailable (the user was told once); nothing to do.
+            self.chat.update(cx, |c, cx| c.queue(intent, cx));
+            return;
+        };
+        match intent {
+            ChatIntent::OpenThread(thread) => {
+                let handle = hub.update(cx, |h, cx| h.open_thread_tab(thread, cx));
+                self.add_handle_tab(handle, window, cx);
+            }
+            ChatIntent::NewThread(project) => {
+                let handle = hub.update(cx, |h, cx| h.new_thread_tab(project, cx));
+                self.add_handle_tab(handle, window, cx);
+            }
+            ChatIntent::Demo => self.run_chat_demo(hub, window, cx),
+        }
     }
 
     /// The projects the new-thread picker offers: the favorites and recents of the sidebar plus the
     /// project of every open tab. Told to the hub only when they changed.
     pub(super) fn sync_chat_projects(&mut self, cx: &mut Context<Self>) {
-        let Some(hub) = self.chat.clone() else { return };
+        if self.chat.read(cx).hub().is_none() {
+            return;
+        }
         let mut projects: Vec<PathBuf> = Vec::new();
         let open = self.tabs.iter().filter_map(|t| {
             let i = t.handle.info(cx);
             i.project_root.or(i.cwd)
         });
-        for p in open.chain(self.known_projects.iter().map(|(p, _)| p.clone())) {
+        for p in open.chain(self.spaces.known.iter().map(|(p, _)| p.clone())) {
             if !projects
                 .iter()
                 .any(|q| crate::paths::is_within(q, &p) && crate::paths::is_within(&p, q))
@@ -120,11 +128,8 @@ impl AppShell {
             }
         }
         let default = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
-        hub.update(cx, |h, _| h.set_default_project(default));
-        if projects != self.chat_projects {
-            self.chat_projects.clone_from(&projects);
-            hub.update(cx, |h, cx| h.set_projects(projects, cx));
-        }
+        self.chat
+            .update(cx, |c, cx| c.sync_projects(projects, default, cx));
     }
 
     // ------------------------------------------------------------------------------------
@@ -134,22 +139,13 @@ impl AppShell {
     /// Shows a tab model's handle in the main zone (first empty pane, else the focused one).
     fn add_handle_tab(
         &mut self,
-        handle: TabHandle,
+        handle: panel_api::TabHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TabId {
         let id = handle.id();
-        let shell = cx.weak_entity();
-        let sub = handle.subscribe(cx, move |_, cx| {
-            shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
-        });
-        self.tabs.push(TabSlot {
-            handle,
-            _subs: vec![sub],
-        });
-        self.panes.open(id);
-        self.scroll_active = true;
-        self.after_active_changed(window, cx);
+        self.push_tab(handle, Vec::new(), cx);
+        self.show_new_tab(id, window, cx);
         id
     }
 
@@ -179,31 +175,20 @@ impl AppShell {
             self.select_tab(id, window, cx);
             return;
         }
-        let Some(hub) = self.ensure_chat(window, cx) else {
-            return;
-        };
-        let handle = hub.update(cx, |h, cx| h.open_thread_tab(thread, cx));
-        self.add_handle_tab(handle, window, cx);
+        self.run_chat_intent(ChatIntent::OpenThread(thread), window, cx);
     }
 
     /// A restored chat tab. It loads the thread in the background and starts no agent.
     pub(super) fn restore_chat_tab(
         &mut self,
         thread: ThreadId,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<TabId> {
-        let hub = self.ensure_chat(window, cx)?;
+        let hub = self.chat.read(cx).hub()?;
         let handle = hub.update(cx, |h, cx| h.open_thread_tab(thread, cx));
         let id = handle.id();
-        let shell = cx.weak_entity();
-        let sub = handle.subscribe(cx, move |_, cx| {
-            shell.update(cx, |this, cx| this.on_tab_event(cx)).ok();
-        });
-        self.tabs.push(TabSlot {
-            handle,
-            _subs: vec![sub],
-        });
+        self.push_tab(handle, Vec::new(), cx);
         Some(id)
     }
 
@@ -214,11 +199,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(hub) = self.ensure_chat(window, cx) else {
-            return;
-        };
-        let handle = hub.update(cx, |h, cx| h.new_thread_tab(project, cx));
-        self.add_handle_tab(handle, window, cx);
+        self.run_chat_intent(ChatIntent::NewThread(project), window, cx);
     }
 
     fn on_chat_event(&mut self, event: ChatEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -238,7 +219,7 @@ impl AppShell {
                 if let Some((tab, _)) = self.chat_tab_of(id, cx) {
                     self.close_tab(tab, window, cx);
                 }
-                self.chat_attn.remove(&id);
+                self.chat.update(cx, |c, _| c.set_attention(id, None));
                 self.remove_chat_attention(id, cx);
             }
         }
@@ -267,7 +248,7 @@ impl AppShell {
     pub(super) fn sync_chat_active(&mut self, cx: &mut Context<Self>) {
         let tab = self.active_chat_tab(cx);
         let thread = tab.as_ref().and_then(|t| t.read(cx).thread_id());
-        if let Some(hub) = self.chat.clone() {
+        if let Some(hub) = self.chat.read(cx).hub() {
             hub.update(cx, |h, cx| h.set_active_thread(thread, cx));
         }
         let session = tab.and_then(|t| {
@@ -323,18 +304,19 @@ impl AppShell {
             return;
         };
         let Some(kind) = chat_host::attention_for(record.status, approval) else {
-            self.chat_attn.remove(&thread);
+            self.chat.update(cx, |c, _| c.set_attention(thread, None));
             self.remove_chat_attention(thread, cx);
             return;
         };
         let looking = self.active_id() == Some(tab_id) && notify::window_active();
         if looking {
-            self.chat_attn.remove(&thread);
+            self.chat.update(cx, |c, _| c.set_attention(thread, None));
             self.remove_chat_attention(thread, cx);
             return;
         }
-        let changed = self.chat_attn.get(&thread) != Some(&kind);
-        self.chat_attn.insert(thread, kind.clone());
+        let changed = self.chat.read(cx).attention_of(thread) != Some(&kind);
+        self.chat
+            .update(cx, |c, _| c.set_attention(thread, Some(kind.clone())));
         let agent = chat_core::agent_label(&record.agent);
         if let Some(services) = cx.try_global::<Services>().cloned() {
             let item = AttentionItem {
@@ -375,38 +357,39 @@ impl AppShell {
         match std::env::var("SELACHI_DEMO").as_deref() {
             Ok("menu") => self.open_new_tab_menu(window, cx),
             Ok("chat") if chat_host::fake_requested() => {
-                let Some(hub) = self.ensure_chat(window, cx) else {
-                    return;
-                };
-                let store = hub.read(cx).store().clone();
-                let root = std::env::current_dir().unwrap_or_default();
-                let job = cx.background_executor().spawn(async move {
-                    let rec = store
-                        .create_thread(chat_core::ThreadSpec::new(
-                            root,
-                            agents_driver::AgentKind::ClaudeCode,
-                        ))
-                        .ok()?;
-                    let rt = store.open(rec.id).ok()?;
-                    rt.send(
-                        "Explica cómo se cierran los comentarios en el lexer",
-                        Vec::new(),
-                    )
-                    .ok()?;
-                    Some(rec.id)
-                });
-                cx.spawn_in(window, async move |this, cx| {
-                    if let Some(id) = job.await {
-                        this.update_in(cx, |shell, window, cx| {
-                            shell.open_chat_thread(id, window, cx)
-                        })
-                        .ok();
-                    }
-                })
-                .detach();
+                self.run_chat_intent(ChatIntent::Demo, window, cx)
             }
             _ => {}
         }
+    }
+
+    fn run_chat_demo(&mut self, hub: Entity<ChatHub>, window: &mut Window, cx: &mut Context<Self>) {
+        let store = hub.read(cx).store().clone();
+        let root = std::env::current_dir().unwrap_or_default();
+        let job = cx.background_executor().spawn(async move {
+            let rec = store
+                .create_thread(chat_core::ThreadSpec::new(
+                    root,
+                    agents_driver::AgentKind::ClaudeCode,
+                ))
+                .ok()?;
+            let rt = store.open(rec.id).ok()?;
+            rt.send(
+                "Explica cómo se cierran los comentarios en el lexer",
+                Vec::new(),
+            )
+            .ok()?;
+            Some(rec.id)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Some(id) = job.await {
+                this.update_in(cx, |shell, window, cx| {
+                    shell.open_chat_thread(id, window, cx)
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     // ------------------------------------------------------------------------------------
@@ -418,7 +401,8 @@ impl AppShell {
     fn request_restore(&mut self, thread: ThreadId, id: String, cx: &mut Context<Self>) {
         let Some(record) = self
             .chat
-            .as_ref()
+            .read(cx)
+            .hub()
             .and_then(|h| h.read(cx).thread(thread).cloned())
         else {
             self.show_hint(Hint::text("No se encontró el hilo de ese checkpoint"), cx);
@@ -445,14 +429,14 @@ impl AppShell {
                     );
                 }
                 Ok(pf) => {
-                    shell.restore_confirm = Some(RestoreConfirm {
+                    shell.prompts.restore = Some(RestoreConfirm {
                         id,
                         cwd,
                         warnings: pf.warnings,
                         stat: pf.diff_stat,
                         busy: false,
                     });
-                    cx.notify();
+                    shell.refresh(cx);
                 }
                 Err(e) => shell.show_hint(Hint::text(format!("No se puede restaurar: {e}")), cx),
             })
@@ -464,7 +448,7 @@ impl AppShell {
     /// The user confirmed: restores the whole tree (git_svc first takes an "antes de restaurar"
     /// checkpoint, so this can be undone with another restore).
     pub(super) fn confirm_restore(&mut self, cx: &mut Context<Self>) {
-        let Some(r) = &mut self.restore_confirm else {
+        let Some(r) = &mut self.prompts.restore else {
             return;
         };
         if r.busy {
@@ -472,7 +456,7 @@ impl AppShell {
         }
         r.busy = true;
         let (dir, id) = (r.cwd.clone(), r.id.clone());
-        cx.notify();
+        self.refresh(cx);
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
@@ -485,7 +469,7 @@ impl AppShell {
                 })
                 .await;
             this.update(cx, |shell, cx| {
-                shell.restore_confirm = None;
+                shell.prompts.restore = None;
                 let text = match res {
                     Ok(rep) => format!(
                         "Checkpoint restaurado: {} archivos recuperados, {} borrados",
@@ -569,8 +553,8 @@ impl AppShell {
                             .gap(px(8.0))
                             .child(Button::ghost("restore-cancel", &self.theme, "Cancelar").on_click(move |_, _, cx| {
                                 cancel.update(cx, |s, cx| {
-                                    s.restore_confirm = None;
-                                    cx.notify();
+                                    s.prompts.restore = None;
+                                    s.refresh(cx);
                                 });
                             }))
                             .child(
@@ -587,33 +571,32 @@ impl AppShell {
 
     /// Ctrl+N and the sidebar's "Nueva pestaña": a small menu. Ctrl+Shift+N skips it.
     pub(crate) fn open_new_tab_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_tab_menu = true;
-        self.menu_open = false;
-        self.tabs_menu_open = false;
-        window.focus(&self.menu_focus);
-        cx.notify();
+        self.prompts.new_tab_menu = true;
+        self.chrome.titlebar.update(cx, |t, cx| t.close_menus(cx));
+        window.focus(&self.prompts.menu_focus);
+        self.refresh(cx);
     }
 
     pub(super) fn close_new_tab_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.new_tab_menu {
+        if !self.prompts.new_tab_menu {
             return;
         }
-        self.new_tab_menu = false;
+        self.prompts.new_tab_menu = false;
         if let Some(slot) = self.active_id().and_then(|id| self.slot(id)) {
             slot.handle.focus(window, cx);
         }
-        cx.notify();
+        self.refresh(cx);
     }
 
     fn pick_new_tab(&mut self, chat: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_tab_menu = false;
+        self.prompts.new_tab_menu = false;
         if chat {
             let project = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
             self.new_chat_tab(project, window, cx);
         } else {
             self.new_tab_here(window, cx);
         }
-        cx.notify();
+        self.refresh(cx);
     }
 
     /// The menu card, placed under the sidebar's "Nueva pestaña" row (or the top-left corner when
@@ -648,7 +631,7 @@ impl AppShell {
                     .left(px(x))
                     .top(px(y))
                     .w(px(250.0))
-                    .track_focus(&self.menu_focus)
+                    .track_focus(&self.prompts.menu_focus)
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_key_down(move |e: &KeyDownEvent, window, cx| {
                         let key = e.keystroke.key.as_str();

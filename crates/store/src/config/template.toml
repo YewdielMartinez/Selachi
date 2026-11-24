@@ -105,6 +105,36 @@ usage_raw_days = 30
 # Hard cap on stored commands (0 = no cap).
 history_max_rows = 500000
 
+[delegation]
+# Delegar en otros agentes (`selachi agent run ...` / MCP `selachi`). Ajustes > Agentes > Delegación.
+enabled = true
+# Agentes permitidos: "claude", "codex", "opencode", "gemini", "agy". Vacío = todos.
+allowed_agents = []
+# Permiso máximo de una delegación: "read_only" | "ask" | "accept_edits". `full` nunca se delega.
+max_permission = "accept_edits"
+# Ejecuciones a la vez (1-16).
+max_concurrent = 3
+# Cadena máxima: 1 = el padre delega y el hijo no puede volver a delegar.
+max_depth = 1
+# Tiempo máximo por ejecución, en segundos.
+timeout_secs = 900
+# Tokens facturables por día entre todas las delegaciones (0 = sin límite).
+daily_token_budget = 2000000
+# Rechaza delegar en un agente cuyo límite semanal supere este % (0 = nunca rechaza).
+weekly_usage_threshold_percent = 90.0
+# Segundos que se espera tu respuesta a una aprobación antes de denegarla.
+approval_timeout_secs = 120
+
+[updates]
+# Buscar actualizaciones (a los 30 s de arrancar y luego cada 24 h, solo por HTTPS contra
+# GitHub Releases). false = no se toca la red.
+check = true
+# Canal: "stable".
+channel = "stable"
+# Cuándo se instala una actualización descargada: "now" (al pulsar "Reiniciar y actualizar")
+# o "on_exit" (en silencio al cerrar Selachi).
+install = "now"
+
 [layout]
 # Organización visual de Selachi (también se cambia en vivo desde el panel de
 # layout, Ctrl+Shift+L, o en Ajustes > Diseño). Preset de partida, uno de:

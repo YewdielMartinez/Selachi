@@ -11,6 +11,8 @@ workspace = true
 thiserror.workspace = true
 futures.workspace = true
 notify = "8"
+serde_json = "1"
+store = { version = "0.0.1", path = "../store" }
 
 [dev-dependencies]
 tempfile = "3"

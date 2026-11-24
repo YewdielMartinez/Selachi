@@ -1,0 +1,32 @@
+Selachi - third-party notices / Avisos de terceros
+==================================================
+
+Selachi bundles or links the following components. Their licenses are in the "licenses" folder next to
+this file; THIRD-PARTY-LICENSES.txt lists every Rust crate linked into the executables with its SPDX
+license.
+
+1. GPUI (UI framework)
+   Copyright 2022 - 2025 Zed Industries, Inc. Licensed under the Apache License, Version 2.0.
+   Selachi ships a locally modified copy (patch: on-demand frame clock and lazy path textures; see
+   vendor/gpui/SELACHI_PATCH.md in the source repository). Modified files carry that notice.
+   Full text: licenses\LICENSE-APACHE-gpui.txt
+
+2. alacritty_terminal (terminal emulation core)
+   Copyright (c) The Alacritty Project Contributors. Licensed under the Apache License, Version 2.0.
+   Full text: licenses\LICENSE-APACHE-alacritty_terminal.txt
+
+3. DM Sans (embedded font, 400/500/600)
+   Copyright (c) The DM Sans Project Authors. SIL Open Font License 1.1.
+   Full text: licenses\OFL-DMSans.txt
+
+4. Geist Mono (embedded font, 400/500)
+   Copyright (c) The Geist Project Authors. SIL Open Font License 1.1.
+   Full text: licenses\OFL-GeistMono.txt
+
+5. Other Rust crates (MIT, Apache-2.0, BSD, ISC, Unicode, Zlib, etc.)
+   See THIRD-PARTY-LICENSES.txt for the name, version, license and repository of each one.
+
+6. Tree-sitter grammar plugins (downloaded separately from Settings > Plugins, not part of this installer)
+   Each plugin zip carries its own LICENSE.txt.
+
+Selachi itself: MIT, see LICENSE.txt.

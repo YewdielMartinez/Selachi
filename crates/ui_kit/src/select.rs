@@ -9,6 +9,8 @@
 //! | `Esc` | (falls through) | closes, focus stays on the trigger |
 //! | letters | picks the next option starting with them | moves the highlight |
 //! | `Tab` | moves on | closes, then moves on |
+//! | focus leaves the trigger | | closes, even when the host handles `Tab` itself |
+//! | focus leaves the trigger | | closes (also when the host overrides `Tab` and focus moves by itself) |
 //!
 //! The trigger has a max width and ellipsizes a long label. The list is a plain scrolling column
 //! up to [`VIRTUALIZE_ABOVE`] options and a [`VirtualList`] beyond (so a thousand-entry list of
@@ -35,8 +37,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, Context, ElementId, EventEmitter, FocusHandle, Focusable, IntoElement,
-    KeyDownEvent, MouseButton, Render, ScrollHandle, ScrollStrategy, SharedString, Window, actions,
-    canvas, div, prelude::*, px,
+    KeyDownEvent, MouseButton, Render, ScrollHandle, ScrollStrategy, SharedString, Subscription,
+    Window, actions, canvas, div, prelude::*, px,
 };
 use theme::{Radius, Theme};
 
@@ -146,6 +148,7 @@ pub struct Select {
     trigger_w: Rc<Cell<f32>>,
     query: String,
     last_key: Option<Instant>,
+    _blur: Option<Subscription>,
 }
 
 impl EventEmitter<SelectEvent> for Select {}
@@ -221,6 +224,7 @@ impl Select {
             trigger_w: Rc::new(Cell::new(0.0)),
             query: String::new(),
             last_key: None,
+            _blur: None,
         }
     }
 
@@ -524,8 +528,13 @@ fn option_row(
 }
 
 impl Render for Select {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::ensure_init(cx);
+        if self._blur.is_none() {
+            // Needs the window: subscribe on the first frame. Focus leaving the trigger (a host
+            // that overrides `Tab`, a click elsewhere, a window switch) closes the list.
+            self._blur = Some(cx.on_focus_out(&self.focus, window, |s, _, _, cx| s.close(cx)));
+        }
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let theme = self.theme;

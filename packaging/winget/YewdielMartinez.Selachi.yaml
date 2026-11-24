@@ -1,0 +1,10 @@
+# DRAFT winget manifest (NOT submitted). Schema 1.6.0, multi-file set:
+#   YewdielMartinez.Selachi.yaml (this: version) + .installer.yaml + .locale.es-ES.yaml
+# To publish later: replace the TODO values, `winget validate --manifest packaging/winget`,
+# test with `winget install --manifest packaging/winget` (needs `winget settings --enable LocalManifestFiles`)
+# and open a PR to microsoft/winget-pkgs under manifests/y/YewdielMartinez/Selachi/<version>/.
+PackageIdentifier: YewdielMartinez.Selachi
+PackageVersion: 0.1.0 # TODO: the release version (no leading v)
+DefaultLocale: es-ES
+ManifestType: version
+ManifestVersion: 1.6.0

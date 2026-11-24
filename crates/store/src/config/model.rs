@@ -29,6 +29,80 @@ pub struct Config {
     pub layout: super::LayoutConfig,
     /// Grammar plugins (`[plugins]`).
     pub plugins: Plugins,
+    /// Delegation to other agents (`[delegation]`, PLAN section 20). `selachi-agent` reads the same
+    /// section straight from the file, with the same defaults.
+    pub delegation: Delegation,
+    /// Automatic updates (`[updates]`, wave 6b.2).
+    pub updates: Updates,
+}
+
+/// `[delegation]`: what other agents may do when a session delegates to them. The defaults equal
+/// the ones `agent_harness::DelegationConfig` uses when the section is missing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Delegation {
+    /// Master switch.
+    pub enabled: bool,
+    /// Agents that may be delegated to (`claude`, `codex`, `opencode`, `gemini`, `agy`). Empty = all.
+    pub allowed_agents: Vec<String>,
+    /// Highest permission a delegation may have: `read_only`, `ask` or `accept_edits`.
+    pub max_permission: String,
+    /// Runs in flight at once (1..=16).
+    pub max_concurrent: u32,
+    /// Longest delegation chain: 1 = the parent delegates and the child cannot, 2 = one more hop.
+    pub max_depth: u32,
+    /// Default timeout of a run, in seconds.
+    pub timeout_secs: u64,
+    /// Billable tokens all delegations together may use per day. 0 = unlimited.
+    pub daily_token_budget: u64,
+    /// Refuse delegating to an agent whose weekly limit is used above this percent. 0 = never.
+    pub weekly_usage_threshold_percent: f64,
+    /// Seconds to wait for the user to answer a forwarded approval before denying it.
+    pub approval_timeout_secs: u64,
+}
+
+impl Default for Delegation {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_agents: Vec::new(),
+            max_permission: "accept_edits".to_string(),
+            max_concurrent: 3,
+            max_depth: 1,
+            timeout_secs: 15 * 60,
+            daily_token_budget: 2_000_000,
+            weekly_usage_threshold_percent: 90.0,
+            approval_timeout_secs: 120,
+        }
+    }
+}
+
+/// Allowed values of `updates.channel`.
+pub const UPDATE_CHANNELS: &[&str] = &["stable"];
+/// Allowed values of `updates.install`.
+pub const UPDATE_INSTALL_MODES: &[&str] = &["now", "on_exit"];
+
+/// `[updates]`: how Selachi keeps itself current.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Updates {
+    /// Look for a new release (30 s after start and then every 24 h). Off = never touches the network.
+    pub check: bool,
+    /// Release channel. Only `stable` exists (the latest non-prerelease GitHub release).
+    pub channel: String,
+    /// When a downloaded update is installed: `now` (when the user presses "Reiniciar y actualizar")
+    /// or `on_exit` (silently when the app closes).
+    pub install: String,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            check: true,
+            channel: "stable".to_string(),
+            install: "now".to_string(),
+        }
+    }
 }
 
 /// `[general]`: app-wide behaviour.
@@ -564,6 +638,64 @@ impl Config {
         }
         if self.git.external_editor.chars().any(char::is_control) {
             problems.push("git.external_editor must not contain line breaks".to_string());
+        }
+        let d = &self.delegation;
+        if !matches!(
+            d.max_permission
+                .trim()
+                .to_ascii_lowercase()
+                .replace('-', "_")
+                .as_str(),
+            "read_only" | "readonly" | "ask" | "accept_edits"
+        ) {
+            problems.push(format!(
+                "delegation.max_permission = {:?} must be read_only, ask or accept_edits",
+                d.max_permission
+            ));
+        }
+        if !(1..=16).contains(&d.max_concurrent) {
+            problems.push(format!(
+                "delegation.max_concurrent = {} must be within 1..=16",
+                d.max_concurrent
+            ));
+        }
+        if !(1..=4).contains(&d.max_depth) {
+            problems.push(format!(
+                "delegation.max_depth = {} must be within 1..=4",
+                d.max_depth
+            ));
+        }
+        if !(10..=86_400).contains(&d.timeout_secs) {
+            problems.push(format!(
+                "delegation.timeout_secs = {} must be within 10..=86400",
+                d.timeout_secs
+            ));
+        }
+        if !(5..=3_600).contains(&d.approval_timeout_secs) {
+            problems.push(format!(
+                "delegation.approval_timeout_secs = {} must be within 5..=3600",
+                d.approval_timeout_secs
+            ));
+        }
+        if !(d.weekly_usage_threshold_percent.is_finite()
+            && (0.0..=100.0).contains(&d.weekly_usage_threshold_percent))
+        {
+            problems.push(format!(
+                "delegation.weekly_usage_threshold_percent = {} must be within 0..=100",
+                d.weekly_usage_threshold_percent
+            ));
+        }
+        if !UPDATE_CHANNELS.contains(&self.updates.channel.as_str()) {
+            problems.push(format!(
+                "updates.channel = {:?} must be \"stable\"",
+                self.updates.channel
+            ));
+        }
+        if !UPDATE_INSTALL_MODES.contains(&self.updates.install.as_str()) {
+            problems.push(format!(
+                "updates.install = {:?} must be \"now\" or \"on_exit\"",
+                self.updates.install
+            ));
         }
         for (i, p) in self.profiles.iter().enumerate() {
             if p.name.trim().is_empty() || p.program.trim().is_empty() {

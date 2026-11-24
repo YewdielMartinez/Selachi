@@ -473,3 +473,363 @@ fn select_set_options_keeps_the_selection_by_value(cx: &mut TestAppContext) {
     });
     assert_eq!(s.read_with(vcx, |s, _| s.selected_index()), None);
 }
+
+// ----- v3 additions -------------------------------------------------------------------------
+
+/// Focus handles captured while rendering (a handle can only be created during a frame).
+type Handles = Rc<RefCell<std::collections::HashMap<String, gpui::FocusHandle>>>;
+
+fn record(handles: &Handles, window: &mut Window, cx: &mut gpui::App, id: gpui::ElementId) {
+    let h = focus::handle(window, cx, &id);
+    handles.borrow_mut().insert(id.to_string(), h);
+}
+
+fn handle_of(handles: &Handles, id: &gpui::ElementId) -> gpui::FocusHandle {
+    handles.borrow()[&id.to_string()].clone()
+}
+
+fn selected_cell() -> Rc<Cell<Option<usize>>> {
+    Rc::new(Cell::new(None))
+}
+
+/// Three radio rows (optionally preselected) followed by a plain button, to tell when Tab leaves.
+/// Focus is observed through behavior: `Space` selects the focused row.
+fn radio_probe(
+    cx: &mut TestAppContext,
+    sel: Rc<Cell<Option<usize>>>,
+    on_arrow: bool,
+) -> (&mut VisualTestContext, Rc<Cell<u32>>) {
+    let t = Theme::dark();
+    let after_hits = counter();
+    let ah = after_hits.clone();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        let mut all: Vec<AnyElement> = (0..3)
+            .map(|ix| {
+                let s = sel.clone();
+                RadioRow::new("rg3", ix, 3, &t)
+                    .selected(sel.get())
+                    .select_on_arrow(on_arrow)
+                    .on_select(move |i, w, _| {
+                        s.set(Some(i));
+                        w.refresh();
+                    })
+                    .child(format!("fila {ix}"))
+                    .into_any_element()
+            })
+            .collect();
+        all.push(
+            Button::tonal("after", &t, "Despues")
+                .on_click(bump(&ah))
+                .into_any_element(),
+        );
+        column(all)
+    });
+    (vcx, after_hits)
+}
+
+#[gpui::test]
+fn radio_rows_have_one_tab_stop_arrows_move_focus_and_space_selects(cx: &mut TestAppContext) {
+    let sel = selected_cell();
+    let (vcx, after) = radio_probe(cx, sel.clone(), false);
+    // Nothing selected: the first row is the only stop.
+    press(vcx, "tab space");
+    assert_eq!(sel.get(), Some(0), "Tab landed on the first row");
+    sel.set(None);
+    press(vcx, "down");
+    assert_eq!(sel.get(), None, "an arrow only moves the focus");
+    press(vcx, "space");
+    assert_eq!(sel.get(), Some(1), "Down moved to the second row");
+    press(vcx, "down space");
+    assert_eq!(sel.get(), Some(2));
+    press(vcx, "down space");
+    assert_eq!(sel.get(), Some(0), "Down wraps around");
+    press(vcx, "up space");
+    assert_eq!(sel.get(), Some(2), "Up wraps backwards");
+    press(vcx, "up enter");
+    assert_eq!(sel.get(), Some(1), "Enter selects");
+    // One group = one tab stop: Tab leaves for the button after it.
+    press(vcx, "tab enter");
+    assert_eq!(after.get(), 1, "Tab left the group");
+    assert_eq!(sel.get(), Some(1));
+    // Shift+Tab comes back to the selected row, not to the first one.
+    press(vcx, "shift-tab down space");
+    assert_eq!(sel.get(), Some(2), "back on the selected row (1), Down = 2");
+}
+
+#[gpui::test]
+fn radio_tab_stop_is_the_selected_row(cx: &mut TestAppContext) {
+    let sel = Rc::new(Cell::new(Some(1)));
+    let (vcx, _) = radio_probe(cx, sel.clone(), false);
+    press(vcx, "tab down space");
+    assert_eq!(
+        sel.get(),
+        Some(2),
+        "Tab lands on the selected row (a first-row stop would give 1)"
+    );
+}
+
+#[gpui::test]
+fn radio_arrows_select_when_asked_and_click_selects(cx: &mut TestAppContext) {
+    let sel = Rc::new(Cell::new(Some(0)));
+    let (vcx, _) = radio_probe(cx, sel.clone(), true);
+    press(vcx, "tab down");
+    assert_eq!(sel.get(), Some(1), "the arrow selected the row it moved to");
+    let id = RadioRow::row_id("rg3", 2).to_string();
+    testing::click_id(vcx, &id);
+    assert_eq!(sel.get(), Some(2), "a click selects");
+}
+
+#[gpui::test]
+fn focus_card_is_a_tab_stop_that_clicks_on_enter_and_space(cx: &mut TestAppContext) {
+    let t = Theme::dark();
+    let hits = counter();
+    let h = hits.clone();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        column(vec![
+            FocusCard::new("fc-inert", &t)
+                .child("sin accion")
+                .into_any_element(),
+            FocusCard::new("fc-off", &t)
+                .focusable(false)
+                .on_click(|_, _, _| {})
+                .child("fuera del orden")
+                .into_any_element(),
+            FocusCard::new("fc", &t)
+                .on_click(bump(&h))
+                .p_4()
+                .child("tarjeta")
+                .into_any_element(),
+        ])
+    });
+    press(vcx, "tab enter");
+    assert_eq!(hits.get(), 1, "the card is the first (only) stop");
+    press(vcx, "space");
+    assert_eq!(hits.get(), 2);
+    testing::click_id(vcx, "fc");
+    assert_eq!(hits.get(), 3);
+}
+
+#[gpui::test]
+fn icon_button_rotates_in_code_without_changing_layout(cx: &mut TestAppContext) {
+    let t = Theme::dark();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        column(vec![
+            IconButton::new("up", &t, Icon::ChevronDown)
+                .rotate(Rotation::Deg180)
+                .on_click(|_, _, _| {})
+                .into_any_element(),
+            IconButton::new("down", &t, Icon::ChevronDown)
+                .on_click(|_, _, _| {})
+                .into_any_element(),
+            icon_rotated(Icon::ChevronRight, Rotation::Deg270, 16.0, t.colors.text)
+                .into_any_element(),
+            Icon::ChevronRight
+                .rotate(Rotation::Deg90)
+                .svg(16.0, t.colors.text)
+                .into_any_element(),
+        ])
+    });
+    let (a, b) = (
+        testing::bounds_of(vcx, "up").unwrap(),
+        testing::bounds_of(vcx, "down").unwrap(),
+    );
+    assert_eq!(a.size, b.size, "rotation is paint-only");
+    assert_eq!(Rotation::Deg90.degrees(), 90.0);
+    assert_eq!(Rotation::None.degrees(), 0.0);
+    assert_eq!(
+        Icon::ChevronDown.rotate(Rotation::Deg180),
+        RotatedIcon {
+            icon: Icon::ChevronDown,
+            rotation: Rotation::Deg180
+        }
+    );
+}
+
+#[gpui::test]
+fn full_width_pill_spans_the_row_and_the_default_hugs_its_label(cx: &mut TestAppContext) {
+    let t = Theme::dark();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        column(vec![
+            div()
+                .flex()
+                .flex_row()
+                .child(
+                    Pill::new("p-full", &t)
+                        .full_width(true)
+                        .active(true)
+                        .icon(Icon::Folder)
+                        .label("Proyectos")
+                        .on_click(|_, _, _| {}),
+                )
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_row()
+                .child(
+                    Pill::new("p-hug", &t)
+                        .label("Proyectos")
+                        .on_click(|_, _, _| {}),
+                )
+                .into_any_element(),
+        ])
+    });
+    let full = testing::bounds_of(vcx, "p-full").unwrap();
+    let hug = testing::bounds_of(vcx, "p-hug").unwrap();
+    // The probe is 400 wide with 10 px of padding.
+    assert_eq!(f32::from(full.size.width), 380.0);
+    assert!(f32::from(hug.size.width) < 380.0);
+}
+
+#[gpui::test]
+fn empty_state_renders_its_action(cx: &mut TestAppContext) {
+    let t = Theme::dark();
+    let hits = counter();
+    let h = hits.clone();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        EmptyState::new(&t, "Sin cambios")
+            .icon(Icon::GitBranch)
+            .body("El arbol de trabajo esta limpio.")
+            .action(Button::tonal("es-act", &t, "Actualizar").on_click(bump(&h)))
+            .into_any_element()
+    });
+    testing::click_id(vcx, "es-act");
+    assert_eq!(hits.get(), 1);
+}
+
+#[gpui::test]
+fn empty_state_with_only_a_title_is_a_valid_block(cx: &mut TestAppContext) {
+    let t = Theme::light();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        div()
+            .id("es-wrap")
+            .debug_selector(|| "es-wrap".to_string())
+            .child(EmptyState::new(&t, "Vacio").fill(false))
+            .into_any_element()
+    });
+    let b = testing::bounds_of(vcx, "es-wrap").unwrap();
+    assert!(f32::from(b.size.height) > 0.0);
+}
+
+/// A host with a `Select` and another focusable control.
+struct SelectPair {
+    select: Entity<Select>,
+    handles: Handles,
+}
+
+impl Render for SelectPair {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::dark();
+        record(&self.handles, window, cx, gpui::ElementId::from("other"));
+        div()
+            .w(px(400.0))
+            .h(px(500.0))
+            .p(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(self.select.clone())
+            .child(IconButton::new("other", &t, Icon::Plus).on_click(|_, _, _| {}))
+    }
+}
+
+#[gpui::test]
+fn select_closes_when_focus_leaves_even_without_tab(cx: &mut TestAppContext) {
+    let handles: Handles = Rc::default();
+    let hs = handles.clone();
+    let (view, vcx) = testing::open_window(cx, move |window, cx| {
+        let select = cx.new(|cx| {
+            Select::new("pair", Theme::dark(), cx)
+                .options((0..4).map(|i| SelectOption::new(format!("v{i}"), format!("Op {i}"))))
+        });
+        select.read(cx).focus(window);
+        SelectPair {
+            select,
+            handles: hs,
+        }
+    });
+    let s = view.read_with(vcx, |v, _| v.select.clone());
+    press(vcx, "down");
+    assert!(s.read_with(vcx, |s, _| s.is_open()));
+    // A host that swallows Tab moves the focus itself: the list must still close.
+    let other = handle_of(&handles, &gpui::ElementId::from("other"));
+    vcx.update(|window, _| window.focus(&other));
+    vcx.run_until_parked();
+    assert!(
+        !s.read_with(vcx, |s, _| s.is_open()),
+        "focus-out closed the list"
+    );
+    // Re-open, then lose the focus to nothing (a click on the background / window blur).
+    let sel_focus = s.read_with(vcx, gpui::Focusable::focus_handle);
+    vcx.update(|window, _| window.focus(&sel_focus));
+    press(vcx, "down");
+    assert!(s.read_with(vcx, |s, _| s.is_open()));
+    vcx.update(|window, _| window.blur());
+    vcx.run_until_parked();
+    assert!(!s.read_with(vcx, |s, _| s.is_open()));
+    // Picking with the mouse is not a focus-out.
+    testing::click_id(vcx, "pair-trigger");
+    assert!(s.read_with(vcx, |s, _| s.is_open()));
+    testing::click_id(vcx, "pair-v2");
+    assert_eq!(
+        s.read_with(vcx, |s, _| s.value().cloned()),
+        Some("v2".into())
+    );
+}
+
+#[gpui::test]
+fn popover_escape_dismisses_through_the_interceptor(cx: &mut TestAppContext) {
+    let t = Theme::dark();
+    let dismissed = counter();
+    let d = dismissed.clone();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        let d = d.clone();
+        Popover::new("pop-esc", &t)
+            .open(true)
+            .on_dismiss(move |window, _| {
+                d.set(d.get() + 1);
+                window.refresh();
+            })
+            .trigger(IconButton::new("pop-trigger", &t, Icon::Layout).on_click(|_, _, _| {}))
+            .child(
+                Button::tonal("pop-inner", &t, "Dentro")
+                    .on_click(|_, _, _| {})
+                    .into_any_element(),
+            )
+            .into_any_element()
+    });
+    // Default: the interceptor catches Esc wherever the focus is (here: nowhere).
+    press(vcx, "escape");
+    assert_eq!(dismissed.get(), 1, "interceptor path");
+}
+
+#[gpui::test]
+fn popover_cancel_action_works_alone_when_the_interceptor_is_off(cx: &mut TestAppContext) {
+    let t = Theme::dark();
+    let dismissed = counter();
+    let d = dismissed.clone();
+    let (_v, vcx) = probe(cx, move |_, _| {
+        let d = d.clone();
+        Popover::new("pop-act", &t)
+            .open(true)
+            .esc_interceptor(false)
+            .on_dismiss(move |window, _| {
+                d.set(d.get() + 1);
+                window.refresh();
+            })
+            .trigger(IconButton::new("pop-trigger2", &t, Icon::Layout).on_click(|_, _, _| {}))
+            .child(
+                Button::tonal("pop-inner2", &t, "Dentro")
+                    .on_click(|_, _, _| {})
+                    .into_any_element(),
+            )
+            .into_any_element()
+    });
+    // No focus inside the panel: nothing handles Esc (the app keeps it).
+    press(vcx, "escape");
+    assert_eq!(dismissed.get(), 0, "nothing focused, no interceptor");
+    // Focus inside the panel: the component's own Cancel action runs.
+    press(vcx, "tab");
+    assert_eq!(dismissed.get(), 0, "the trigger is outside the panel");
+    press(vcx, "tab escape");
+    assert_eq!(dismissed.get(), 1, "the panel handled Esc itself");
+}

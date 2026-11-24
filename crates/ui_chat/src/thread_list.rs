@@ -1135,6 +1135,7 @@ mod tests {
             agent_session_id: None,
             archived: false,
             checkpoint_before_turn: false,
+            link: chat_core::ThreadLink::default(),
         }
     }
 

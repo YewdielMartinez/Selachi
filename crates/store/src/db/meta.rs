@@ -8,6 +8,14 @@ use rusqlite::{params, OptionalExtension};
 /// `meta` key of the first-run wizard: set once it was finished or skipped.
 pub const ONBOARDING_DONE: &str = "onboarding.done";
 
+/// `meta` key of "Novedades": the version whose release notes the user already saw or dismissed.
+pub const WHATS_NEW_SEEN: &str = "whatsnew.seen_version";
+/// `meta` key: the version that was running when an update was handed to the installer. At the next
+/// start, a running version newer than this means "just updated": "Novedades" shows.
+pub const UPDATE_FROM: &str = "update.installed_from";
+/// `meta` key: JSON with the release notes of the update being installed (so "Novedades" works offline).
+pub const UPDATE_NOTES: &str = "update.pending_notes";
+
 impl StateDb {
     /// The value stored under `key`, if any.
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {

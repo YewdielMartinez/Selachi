@@ -111,7 +111,7 @@ fn stat(theme: &Theme, label: &'static str, n: u32) -> impl IntoElement {
         .gap(px(6.0))
         .px(px(8.0))
         .h(px(22.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .bg(c.surface_2)
         .text_size(px(ty.ui_size_sm))
         .child(
@@ -122,13 +122,13 @@ fn stat(theme: &Theme, label: &'static str, n: u32) -> impl IntoElement {
         .child(div().text_color(c.muted).child(label))
 }
 
-fn file_row(theme: &Theme, i: usize, f: &ChangedFile) -> impl IntoElement {
+fn file_row(theme: &Theme, f: &ChangedFile) -> impl IntoElement {
     let c = theme.colors;
     let ty = theme.typography;
     // Long paths keep their tail (the file name).
     let shown = paths::middle_truncate(&f.path.replace('/', "\\"), 44);
     div()
-        .id(("git-file", i))
+        .id(SharedString::from(format!("git-file:{}", f.path)))
         .h(px(22.0))
         .flex_none()
         .flex()
@@ -136,7 +136,7 @@ fn file_row(theme: &Theme, i: usize, f: &ChangedFile) -> impl IntoElement {
         .items_center()
         .gap(px(8.0))
         .px(px(6.0))
-        .rounded(px(6.0))
+        .rounded(px(Radius::CHIP))
         .hover(move |s| s.bg(c.surface_2))
         .text_size(px(ty.ui_size_sm))
         .child(
@@ -164,7 +164,7 @@ fn kv(theme: &Theme, key: &'static str, value: impl Into<SharedString>) -> impl 
     div()
         .flex()
         .flex_col()
-        .child(div().text_size(px(11.0)).text_color(c.muted).child(key))
+        .child(div().text_size(px(ty.ui_size_xs)).text_color(c.muted).child(key))
         .child(
             div()
                 .overflow_hidden()
@@ -201,12 +201,7 @@ impl ContextPanel {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(
-                info.files
-                    .iter()
-                    .enumerate()
-                    .map(|(i, f)| file_row(&theme, i, f)),
-            )
+            .children(info.files.iter().map(|f| file_row(&theme, f)))
             .children((total as usize > info.files.len()).then(|| {
                 div()
                     .px(px(6.0))

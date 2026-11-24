@@ -9,7 +9,7 @@ use theme::{Radius, Theme};
 
 use crate::focus;
 
-use crate::icon::{Icon, icon};
+use crate::icon::{Icon, Rotation, icon, icon_rotated};
 use crate::tooltip::Tooltip;
 
 pub(crate) type ClickFn = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -29,6 +29,7 @@ pub struct IconButton {
     id: SharedString,
     theme: Theme,
     icon: Icon,
+    rotation: Rotation,
     size: f32,
     icon_size: f32,
     active: bool,
@@ -46,6 +47,7 @@ impl IconButton {
             id: id.into(),
             theme: *theme,
             icon,
+            rotation: Rotation::None,
             size: 36.0,
             icon_size: 16.0,
             active: false,
@@ -76,6 +78,12 @@ impl IconButton {
     /// active) instead of opaque surfaces.
     pub fn glass(mut self, glass: bool) -> Self {
         self.glass = glass;
+        self
+    }
+
+    /// Turns the glyph clockwise (a chevron-up is `ChevronDown` + `Rotation::Deg180`; no new SVGs).
+    pub fn rotate(mut self, rotation: Rotation) -> Self {
+        self.rotation = rotation;
         self
     }
 
@@ -121,7 +129,7 @@ impl RenderOnce for IconButton {
         let id = ElementId::from(self.id.clone());
         let emphasize = self.emphasize_on_hover;
         let text = c.text;
-        let glyph = icon(self.icon, self.icon_size, fg);
+        let glyph = icon_rotated(self.icon, self.rotation, self.icon_size, fg);
         // The "+" brightens through a hover *group*. The group name must be unique per instance,
         // not the element id: the shell paints two zones during a layout transition, and a repeated
         // id would otherwise address the wrong hitbox. The keyed state's entity id is unique per

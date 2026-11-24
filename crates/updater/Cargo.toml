@@ -1,0 +1,26 @@
+[package]
+name = "updater"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Selachi auto-update (wave 6b.2): look for a GitHub release over HTTPS, download the Inno Setup installer under a size cap, verify its SHA256 (and Authenticode when signed) and launch it with the documented silent flags. UI-agnostic."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -376,3 +376,54 @@ fn programmatic_updates_do_not_emit_and_errors_are_kept(cx: &mut TestAppContext)
     type_text(vcx, "ok");
     assert_eq!(text(&f, vcx), "ok");
 }
+
+#[gpui::test]
+fn capture_nav_adds_back_tab_and_submit_alt_to_a_single_line(cx: &mut TestAppContext) {
+    let (f, vcx, ev) = single(cx);
+    let alt: Rc<RefCell<Vec<TextFieldAlt>>> = Rc::default();
+    let a = alt.clone();
+    let _sub =
+        vcx.update(|_, cx| cx.subscribe(&f, move |_, e: &TextFieldAlt, _| a.borrow_mut().push(*e)));
+    // Off: Shift+Tab only moves focus and Ctrl+Enter is a plain submit.
+    press(vcx, "shift-tab ctrl-enter");
+    assert_eq!(*ev.borrow(), vec![TextFieldEvent::Submit]);
+    assert!(alt.borrow().is_empty());
+    ev.borrow_mut().clear();
+    f.update(vcx, |f, _| f.set_capture_nav(true));
+    press(vcx, "shift-tab ctrl-enter enter tab");
+    assert_eq!(
+        *alt.borrow(),
+        vec![TextFieldAlt::BackTab, TextFieldAlt::SubmitAlt]
+    );
+    assert_eq!(
+        *ev.borrow(),
+        vec![TextFieldEvent::Submit, TextFieldEvent::Nav(Nav::Tab)],
+        "the existing events are untouched"
+    );
+}
+
+#[gpui::test]
+fn capture_nav_leaves_the_area_keys_alone_for_back_tab_and_ctrl_enter(cx: &mut TestAppContext) {
+    let (f, vcx, ev) = area(cx, EnterMode::Newline);
+    f.update(vcx, |f, _| f.set_capture_nav(true));
+    press(vcx, "ctrl-enter shift-tab");
+    assert_eq!(
+        *ev.borrow(),
+        vec![TextFieldEvent::Submit],
+        "the area keeps Ctrl+Enter = Submit and Shift+Tab = focus"
+    );
+}
+
+#[gpui::test]
+fn set_invalid_paints_the_error_without_a_message(cx: &mut TestAppContext) {
+    let (f, vcx, _) = single(cx);
+    assert!(!f.read_with(vcx, |f, _| f.is_invalid()));
+    f.update(vcx, |f, cx| f.set_invalid(true, cx));
+    assert!(f.read_with(vcx, |f, _| f.is_invalid() && f.error().is_none()));
+    // A message and the flag are independent: clearing the message keeps it invalid.
+    f.update(vcx, |f, cx| f.set_error(Some("mal"), cx));
+    f.update(vcx, |f, cx| f.set_error(None::<&str>, cx));
+    assert!(f.read_with(vcx, |f, _| f.is_invalid()));
+    f.update(vcx, |f, cx| f.set_invalid(false, cx));
+    assert!(!f.read_with(vcx, |f, _| f.is_invalid()));
+}

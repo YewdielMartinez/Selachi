@@ -9,6 +9,7 @@ mod app_shell;
 mod block_layout;
 mod block_ui;
 mod chat_host;
+mod cli;
 mod drop;
 mod git_monitor;
 mod git_panel;
@@ -21,10 +22,14 @@ mod notify;
 mod palette;
 mod paths;
 mod rail;
+mod repaint;
 mod services;
 mod session;
+mod session_persistence;
 mod settings_tab;
 mod sidebar;
+mod sidebar_view;
+mod single_instance;
 mod spaces;
 mod splits;
 mod status_bar;
@@ -32,6 +37,7 @@ mod terminal_element;
 mod terminal_tab;
 mod terminal_view;
 mod titlebar;
+mod titlebar_view;
 mod unified_sidebar;
 mod usage_monitor;
 mod viewer_host;
@@ -47,10 +53,10 @@ use panel_api::PanelRegistry;
 use store::{Config, ConfigWatcher, StateDb};
 
 use crate::app_shell::{
-    AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, Jump1, Jump2, Jump3,
-    Jump4, Jump5, Jump6, Jump7, Jump8, Jump9, NewTab, NewTerminalTab, NextAttention, NextTab,
-    OpenSettings, PrevTab, SessionBoot, ToggleFullscreen, ToggleLayoutPanel, ToggleSidebar,
-    ToggleTheme,
+    AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, FocusSidebar,
+    FocusTerminal, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7, Jump8, Jump9, NewTab,
+    NewTerminalTab, NextAttention, NextTab, NextZone, OpenSettings, PrevTab, PrevZone, SessionBoot,
+    ToggleFullscreen, ToggleLayoutPanel, ToggleSidebar, ToggleTheme,
 };
 use crate::git_panel::ContextPanelProvider;
 use crate::services::Services;
@@ -59,7 +65,7 @@ use crate::services::Services;
 const CONFIG_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// Loads `config.toml` (writing the commented template on first run) and starts watching it.
-fn boot_config() -> ConfigBoot {
+fn boot_config(start_dir: Option<std::path::PathBuf>) -> ConfigBoot {
     let load = Config::load_or_default();
     if let Some(e) = &load.error {
         log::warn!("config.toml: {e}; using defaults");
@@ -84,6 +90,7 @@ fn boot_config() -> ConfigBoot {
         config,
         watcher,
         session: boot_session(restore),
+        start_dir,
     }
 }
 
@@ -152,6 +159,13 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-7", Jump7, None),
         KeyBinding::new("ctrl-8", Jump8, None),
         KeyBinding::new("ctrl-9", Jump9, None),
+        // Keyboard between zones: F6 cycles sidebar, terminal and right panel.
+        KeyBinding::new("f6", NextZone, None),
+        KeyBinding::new("shift-f6", PrevZone, None),
+        KeyBinding::new("ctrl-shift-e", FocusSidebar, None),
+        KeyBinding::new("ctrl-shift-`", FocusTerminal, None),
+        // A focused sidebar row closes its tab (asks first when it is running).
+        KeyBinding::new("delete", sidebar_view::CloseFocusedRow, Some("SidebarRow")),
         // The close prompt: Enter confirms, Esc cancels.
         KeyBinding::new("enter", ConfirmClose, Some("CloseConfirm")),
         KeyBinding::new("escape", CancelClose, Some("CloseConfirm")),
@@ -162,14 +176,30 @@ fn bind_keys(cx: &mut App) {
 
 fn main() {
     env_logger::init();
+    let base = std::env::current_dir().unwrap_or_default();
+    let args = cli::parse(std::env::args_os().skip(1), &base);
+    if args.version {
+        cli::print_version();
+        return;
+    }
+    // One Selachi per user: a second launch hands its folder to the first and exits.
+    let _instance =
+        match single_instance::acquire(&single_instance::Request::Open(args.cwd.clone())) {
+            single_instance::Instance::Forwarded => return,
+            single_instance::Instance::Primary(guard) => guard,
+        };
+    let (requests_tx, requests_rx) = futures::channel::mpsc::unbounded();
+    single_instance::listen(requests_tx);
+    let start_dir = args.cwd;
     // `ui_procs::Assets` forwards to `ui_kit::Assets` and adds the runtime icons of the panels.
     Application::new()
         .with_assets(ui_procs::Assets)
-        .run(|cx: &mut App| {
+        .run(move |cx: &mut App| {
             if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
                 log::error!("failed to register embedded fonts: {e}");
             }
 
+            ui_kit::init(cx);
             bind_keys(cx);
             ui_git::init(cx);
             ui_viewer::bind_keys(cx);
@@ -190,7 +220,7 @@ fn main() {
             })
             .detach();
 
-            let boot = boot_config();
+            let boot = boot_config(start_dir);
             let theme = crate::app_shell::theme_for(&boot.config);
             let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
             let opened = cx.open_window(
@@ -211,11 +241,37 @@ fn main() {
                 |window, cx| cx.new(|cx| AppShell::new(theme, boot, window, cx)),
             );
             match opened {
-                Ok(_) => cx.activate(true),
+                Ok(handle) => {
+                    cx.activate(true);
+                    forward_requests(handle, requests_rx, cx);
+                }
                 Err(e) => {
                     log::error!("failed to open window: {e}");
                     cx.quit();
                 }
             }
         });
+}
+
+/// Later launches (see [`single_instance`]) open a tab in their folder and bring the window
+/// forward. The task sleeps on the channel: it costs nothing while no launch arrives.
+fn forward_requests(
+    window: gpui::WindowHandle<AppShell>,
+    mut requests: futures::channel::mpsc::UnboundedReceiver<single_instance::Request>,
+    cx: &mut App,
+) {
+    use futures::StreamExt as _;
+    cx.spawn(async move |cx| {
+        while let Some(request) = requests.next().await {
+            let single_instance::Request::Open(dir) = request;
+            let done = window.update(cx, |shell, window, cx| match dir {
+                Some(dir) => shell.open_in_folder(dir, window, cx),
+                None => window.activate_window(),
+            });
+            if done.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
 }

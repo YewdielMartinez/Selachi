@@ -16,13 +16,13 @@ use gpui::{
 };
 use panel_api::{TabId, TabInfo};
 use store::ResolvedLayout;
-use theme::Theme;
+use theme::{Radius, Theme};
 use ui_kit::{
     DitherMeter, Icon, IconButton, SectionLabel, StatusGlyph, glass_hover, glass_selected, icon,
 };
 
-use crate::app_shell::AppShell;
 use crate::rail::RailItem;
+use crate::sidebar_view::{CloseFocusedRow, RowFocus, SidebarEvent, SidebarView, focus_bg, send};
 use crate::spaces::{Space, row_subtitle, row_time};
 
 /// What the unified sidebar needs to paint, prepared by the shell.
@@ -31,7 +31,7 @@ pub struct UnifiedProps<'a> {
     pub layout: &'a ResolvedLayout,
     pub tabs: &'a [TabInfo],
     pub active: Option<TabId>,
-    pub shell: &'a Entity<AppShell>,
+    pub view: &'a Entity<SidebarView>,
     /// The column is glass: pills are translucent.
     pub glass: bool,
     pub spaces: Vec<Space>,
@@ -39,8 +39,8 @@ pub struct UnifiedProps<'a> {
     pub folded: &'a HashSet<PathBuf>,
     /// The tab row under the pointer (state kept by the shell).
     pub hovered_row: Option<TabId>,
-    /// The space header under the pointer.
-    pub hovered_space: Option<usize>,
+    /// The space header under the pointer (by its key, not its position).
+    pub hovered_space: Option<PathBuf>,
     pub usage: Usage,
 }
 
@@ -110,12 +110,13 @@ fn action_row(
         .flex_row()
         .items_center()
         .gap(px(10.0))
-        .rounded(px(10.0))
+        .rounded(px(Radius::PILL))
         .cursor_pointer()
         .text_size(px(ty.ui_size_md))
         .text_color(c.text)
         .hover(move |s| s.bg(hover))
         .on_click(move |e, w, cx| on_click(e, w, cx))
+        .tab_stop_row(focus_bg(t, p.glass))
         .child(icon(ic, 16.0, c.muted))
         .child(div().flex_1().child(label))
         .child(
@@ -135,15 +136,16 @@ fn panel_icons(p: &UnifiedProps, items: Vec<RailItem>) -> Div {
             icon: ic,
             title,
             active,
-            on_click,
+            action,
         } = item;
         let mut b = IconButton::new(SharedString::from(format!("sb-{id}")), p.theme, ic)
             .size(28.0)
             .glass(p.glass)
             .active(active)
             .tooltip(title);
-        if let Some(f) = on_click {
-            b = b.on_click(move |_, window, cx| f(window, cx));
+        if let Some(a) = action {
+            let v = p.view.clone();
+            b = b.on_click(move |_, _, cx| send(&v, cx, SidebarEvent::Rail(a.clone())));
         }
         row = row.child(b);
     }
@@ -165,7 +167,12 @@ fn tab_row(
     let l = &p.layout.sidebar;
     let subtitle = row_subtitle(info, l.row_model);
     let time = row_time(info, l.row_time, now);
-    let (shell_sel, shell_close, shell_hover) = (p.shell.clone(), p.shell.clone(), p.shell.clone());
+    let (view_sel, view_close, view_hover, view_key) = (
+        p.view.clone(),
+        p.view.clone(),
+        p.view.clone(),
+        p.view.clone(),
+    );
     let show_close = close_visible(selected, p.hovered_row, id);
     let lead = crate::agents::lead_icon(&info.icon, 16.0, if selected { c.text } else { c.muted });
     let bg = pill_bg(t, p.glass, selected);
@@ -188,16 +195,21 @@ fn tab_row(
             .items_center()
             .justify_between()
             .gap(px(10.0))
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .cursor_pointer()
             .when(selected, move |d| d.bg(bg))
             .when(!selected, move |d| d.hover(move |s| s.bg(bg)))
             .on_hover(move |hovered, _, cx| {
-                shell_hover.update(cx, |s, cx| s.set_row_hover(id, *hovered, cx))
+                view_hover.update(cx, |v, cx| v.set_row_hover(id, *hovered, cx))
             })
-            .on_click(move |_, window, cx| {
-                shell_sel.update(cx, |s, cx| s.select_tab(id, window, cx))
+            .on_click(move |_, _, cx| send(&view_sel, cx, SidebarEvent::Select(id)))
+            // Keyboard: a tab stop; Delete closes it (the shell asks first when it is running).
+            .key_context("SidebarRow")
+            .on_action(move |_: &CloseFocusedRow, _, cx| {
+                send(&view_key, cx, SidebarEvent::Close(id));
             })
+            .tab_stop_row(focus_bg(t, p.glass))
+            .debug_selector(move || format!("urow-{}", id.as_u64()))
             .child(lead)
             .child(
                 div()
@@ -251,7 +263,7 @@ fn tab_row(
                     .flex()
                     .items_center()
                     .child(
-                        div().rounded(px(7.0)).bg(close_bg).child(
+                        div().rounded(px(Radius::CHIP)).bg(close_bg).child(
                             IconButton::new(
                                 SharedString::from(format!("urow-close-{}", id.as_u64())),
                                 t,
@@ -262,9 +274,9 @@ fn tab_row(
                             .size(22.0)
                             .icon_size(10.0)
                             .tooltip("Cerrar (Ctrl+W)")
-                            .on_click(move |_, window, cx| {
+                            .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
-                                shell_close.update(cx, |s, cx| s.request_close(id, window, cx));
+                                send(&view_close, cx, SidebarEvent::Close(id));
                             }),
                         ),
                     )
@@ -273,7 +285,7 @@ fn tab_row(
 }
 
 /// A space header: fold chevron, name, branch and dirty dot, and "+" (a new tab there).
-fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl IntoElement + use<> {
+fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement + use<> {
     let t = p.theme;
     let c = t.colors;
     let ty = t.typography;
@@ -281,12 +293,12 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
     let root = s.root.clone();
     let open = s.is_open();
     let hover = pill_bg(t, p.glass, false);
-    let show_plus = p.hovered_space == Some(ix);
-    let (shell, shell_plus, shell_hover, shell_drop) = (
-        p.shell.clone(),
-        p.shell.clone(),
-        p.shell.clone(),
-        p.shell.clone(),
+    let show_plus = p.hovered_space.as_ref() == Some(&key);
+    let (view, view_plus, view_hover, view_drop) = (
+        p.view.clone(),
+        p.view.clone(),
+        p.view.clone(),
+        p.view.clone(),
     );
     let theme = *t;
     let chevron = {
@@ -305,8 +317,13 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
             .bg(gpui::rgb(t.terminal.ansi[3]))
     });
     let can_add = !root.as_os_str().is_empty();
+    // Ids and hover are keyed by the space (its project path), never by its position: spaces
+    // fold, reorder and appear while the pointer is over the list.
+    let key_str = key.to_string_lossy().into_owned();
+    let hover_key = key.clone();
+    let focus = focus_bg(t, p.glass);
     div()
-        .id(("space", ix))
+        .id(SharedString::from(format!("space:{key_str}")))
         .relative()
         .occlude()
         .w_full()
@@ -316,22 +333,25 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .cursor_pointer()
         .hover(move |st| st.bg(hover))
         .on_hover(move |hovered, _, cx| {
-            shell_hover.update(cx, |sh, cx| sh.set_space_hover(ix, *hovered, cx))
+            view_hover.update(cx, |v, cx| v.set_space_hover(&hover_key, *hovered, cx))
         })
-        .on_click(move |_, window, cx| {
+        .on_click(move |_, _, cx| {
             let (key, root) = (key.clone(), root.clone());
-            shell.update(cx, |sh, cx| {
+            send(
+                &view,
+                cx,
                 if open {
-                    sh.toggle_space(key, cx);
+                    SidebarEvent::ToggleSpace(key)
                 } else {
-                    sh.new_tab_in(root, window, cx);
-                }
-            });
+                    SidebarEvent::NewIn(root)
+                },
+            );
         })
+        .tab_stop_row(focus)
         .child(chevron)
         .child(
             div()
@@ -363,30 +383,34 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
                 return div().size(px(22.0)).flex_none();
             }
             div().child(
-                IconButton::new(SharedString::from(format!("space-add-{ix}")), t, Icon::Plus)
-                    .glass(p.glass)
-                    .passthrough(true)
-                    .size(22.0)
-                    .icon_size(12.0)
-                    .tooltip("Nueva pestaña aquí")
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        let root = root.clone();
-                        shell_plus.update(cx, |sh, cx| sh.new_tab_in(root, window, cx));
-                    }),
+                IconButton::new(
+                    SharedString::from(format!("space-add:{key_str}")),
+                    t,
+                    Icon::Plus,
+                )
+                .glass(p.glass)
+                .passthrough(true)
+                .size(22.0)
+                .icon_size(12.0)
+                .tooltip("Nueva pestaña aquí")
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    let root = root.clone();
+                    send(&view_plus, cx, SidebarEvent::NewIn(root));
+                }),
             )
         }))
         .child(
             ui_kit::DropZone::new(
-                ("space-drop", ix),
+                SharedString::from(format!("space-drop:{key_str}")),
                 &theme,
                 "Soltar para abrir una terminal aquí",
             )
             .radius(8.0)
             .compact(true)
-            .on_drop(move |paths, window, cx| {
+            .on_drop(move |paths, _, cx| {
                 let paths = paths.to_vec();
-                shell_drop.update(cx, |sh, cx| sh.drop_on_space(&paths, window, cx));
+                send(&view_drop, cx, SidebarEvent::DropOnSpace(paths));
             }),
         )
 }
@@ -395,8 +419,8 @@ fn footer(p: &UnifiedProps) -> impl IntoElement + use<> {
     let t = p.theme;
     let c = t.colors;
     let ty = t.typography;
-    let shell = p.shell.clone();
-    let usage_shell = p.shell.clone();
+    let view = p.view.clone();
+    let usage_view = p.view.clone();
     div()
         .flex_none()
         .h(px(44.0))
@@ -416,10 +440,9 @@ fn footer(p: &UnifiedProps) -> impl IntoElement + use<> {
                 .items_center()
                 .gap(px(8.0))
                 .cursor_pointer()
+                .tab_stop_row(focus_bg(t, p.glass))
                 .on_click(move |_, _, cx| {
-                    usage_shell.update(cx, |s, cx| {
-                        s.toggle_right_panel(panel_api::PanelId::new(ui_usage::PANEL_ID), cx)
-                    });
+                    send(&usage_view, cx, SidebarEvent::ToggleUsage);
                 })
                 .child(DitherMeter::new(t).segments(6).value(p.usage.fraction))
                 .child(
@@ -435,9 +458,7 @@ fn footer(p: &UnifiedProps) -> impl IntoElement + use<> {
                 .glass(p.glass)
                 .size(30.0)
                 .tooltip("Ajustes (Ctrl+,)")
-                .on_click(move |_, window, cx| {
-                    shell.update(cx, |s, cx| s.open_settings(window, cx))
-                }),
+                .on_click(move |_, _, cx| send(&view, cx, SidebarEvent::Settings)),
         )
 }
 
@@ -457,7 +478,7 @@ pub fn collapse_button(
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(10.0))
+        .rounded(px(Radius::PILL))
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
         .tooltip(ui_kit::Tooltip::text(
@@ -486,7 +507,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
         .gap(px(10.0))
         .p(px(8.0));
     if l.show_actions {
-        let (a, b) = (p.shell.clone(), p.shell.clone());
+        let (a, b) = (p.view.clone(), p.view.clone());
         body = body.child(
             div()
                 .flex()
@@ -497,9 +518,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
                     Icon::Plus,
                     "Nueva pestaña",
                     "Ctrl+N",
-                    Box::new(move |_, window, cx| {
-                        a.update(cx, |s, cx| s.open_new_tab_menu(window, cx))
-                    }),
+                    Box::new(move |_, _, cx| send(&a, cx, SidebarEvent::NewMenu)),
                 ))
                 .child(action_row(
                     p,
@@ -507,7 +526,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
                     Icon::Search,
                     "Buscar",
                     "Ctrl+K",
-                    Box::new(move |_, window, cx| b.update(cx, |s, cx| s.open_palette(window, cx))),
+                    Box::new(move |_, _, cx| send(&b, cx, SidebarEvent::Palette)),
                 )),
         );
     }
@@ -522,7 +541,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
             .pb(px(2.0))
             .child(SectionLabel::new(t, "Espacios").uppercase(true)),
     );
-    for (ix, s) in p.spaces.iter().enumerate() {
+    for s in &p.spaces {
         let folded = p.folded.contains(&s.key());
         let mut block = div().flex().flex_col();
         if s.headless {
@@ -532,7 +551,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
             spaces = spaces.child(block);
             continue;
         }
-        block = block.child(space_header(p, ix, s, folded));
+        block = block.child(space_header(p, s, folded));
         if s.is_open() && !folded {
             for &ti in &s.tabs {
                 block = block.child(tab_row(p, &p.tabs[ti], true, now));
@@ -552,7 +571,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
 pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful<Div> {
     let t = p.theme;
     let l = &p.layout.sidebar;
-    let shell = p.shell.clone();
+    let view = p.view.clone();
     let mut col = div()
         .id("usb-collapsed")
         .size_full()
@@ -572,32 +591,28 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
         .items_center()
         .gap(px(4.0));
     {
-        let s = shell.clone();
+        let s = view.clone();
         top = top.child(
             IconButton::new("sb-expand", t, Icon::ChevronRight)
                 .glass(p.glass)
                 .tooltip("Expandir la barra lateral (Ctrl+B)")
-                .on_click(move |_, _, cx| s.update(cx, |s, cx| s.toggle_sidebar_collapsed(cx))),
+                .on_click(move |_, _, cx| send(&s, cx, SidebarEvent::ToggleCollapsed)),
         );
     }
     if l.show_actions {
-        let (a, b) = (shell.clone(), shell.clone());
+        let (a, b) = (view.clone(), view.clone());
         top = top
             .child(
                 IconButton::new("sb-c-new", t, Icon::Plus)
                     .glass(p.glass)
                     .tooltip("Nueva pestaña (Ctrl+N)")
-                    .on_click(move |_, window, cx| {
-                        a.update(cx, |s, cx| s.open_new_tab_menu(window, cx))
-                    }),
+                    .on_click(move |_, _, cx| send(&a, cx, SidebarEvent::NewMenu)),
             )
             .child(
                 IconButton::new("sb-c-search", t, Icon::Search)
                     .glass(p.glass)
                     .tooltip("Buscar (Ctrl+K)")
-                    .on_click(move |_, window, cx| {
-                        b.update(cx, |s, cx| s.open_palette(window, cx))
-                    }),
+                    .on_click(move |_, _, cx| send(&b, cx, SidebarEvent::Palette)),
             );
     }
     if l.panel_icons {
@@ -607,14 +622,15 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
                 icon: ic,
                 title,
                 active,
-                on_click,
+                action,
             } = item;
             let mut b = IconButton::new(SharedString::from(format!("sbc-{id}")), t, ic)
                 .glass(p.glass)
                 .active(active)
                 .tooltip(title);
-            if let Some(f) = on_click {
-                b = b.on_click(move |_, window, cx| f(window, cx));
+            if let Some(a) = action {
+                let v = view.clone();
+                b = b.on_click(move |_, _, cx| send(&v, cx, SidebarEvent::Rail(a.clone())));
             }
             top = top.child(b);
         }
@@ -622,7 +638,7 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
     top = top.child(div().h(px(6.0)));
     for info in p.tabs {
         let id = info.id;
-        let s = shell.clone();
+        let s = view.clone();
         let mut b = IconButton::new(
             SharedString::from(format!("sb-tab-{}", id.as_u64())),
             t,
@@ -631,7 +647,7 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
         .glass(p.glass)
         .active(Some(id) == p.active)
         .tooltip(info.title.clone());
-        b = b.on_click(move |_, window, cx| s.update(cx, |s, cx| s.select_tab(id, window, cx)));
+        b = b.on_click(move |_, _, cx| send(&s, cx, SidebarEvent::Select(id)));
         top = top.child(b);
     }
     col = col.child(top);
@@ -640,9 +656,7 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
             IconButton::new("sb-c-settings", t, Icon::Settings)
                 .glass(p.glass)
                 .tooltip("Ajustes (Ctrl+,)")
-                .on_click(move |_, window, cx| {
-                    shell.update(cx, |s, cx| s.open_settings(window, cx))
-                }),
+                .on_click(move |_, _, cx| send(&view, cx, SidebarEvent::Settings)),
         );
     }
     col

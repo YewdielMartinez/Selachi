@@ -229,12 +229,19 @@ pub struct ThreadRecord {
     pub agent_session_id: Option<String>,
     pub archived: bool,
     pub checkpoint_before_turn: bool,
+    /// Delegation lineage (`depth` 0 and nothing else when the thread is not a delegation).
+    pub link: ThreadLink,
 }
 
 /// Title shown for untitled threads.
 pub const UNTITLED: &str = "Nuevo hilo";
 
 impl ThreadRecord {
+    /// Was this thread started by another session through the harness (CLI or MCP)?
+    pub fn is_delegation(&self) -> bool {
+        self.link.delegated_by.is_some() || self.link.parent_thread_id.is_some()
+    }
+
     /// Directory the agent runs in: the worktree when there is one, else the project root.
     pub fn cwd(&self) -> &Path {
         self.worktree_path.as_deref().unwrap_or(&self.project_root)

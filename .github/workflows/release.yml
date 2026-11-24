@@ -1,15 +1,19 @@
 # Release (Wave 6c.1): on a `v*` tag, build the release exe and the grammar plugins and attach them to a
 # DRAFT GitHub release. Nothing is published automatically: review the draft and publish it by hand.
 #
-# Assets: selachi.exe, SHA256SUMS.txt, <lang>-<version>.zip (grammar plugins), grammars.toml (the plugin
-# index the app downloads; `plugins.index_url` points at it).
+# Assets: Selachi-Setup-<version>.exe (Inno Setup installer, per-user, see docs/adr/0002-instalador.md and
+# packaging/installer/README.md), selachi.exe, selachi-agent.exe, SHA256SUMS.txt, <lang>-<version>.zip
+# (grammar plugins), grammars.toml (the plugin index the app downloads; `plugins.index_url` points at it).
 #
 # TODO(signing): the exe is NOT code-signed. This needs the user's code-signing certificate. Plan:
 #   1. Export the certificate as .pfx, base64 it and store it as the repository secrets
 #      WINDOWS_CERT_PFX_BASE64 and WINDOWS_CERT_PASSWORD (or use Azure Trusted Signing / a cloud HSM).
-#   2. Add a step before "Checksums" that decodes the secret to a temp file, runs
-#        signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx /p <password> target\release\selachi.exe
-#      and deletes the file afterwards (never echo the secrets).
+#   2. Add a step before "Build installer" that decodes the secret to a temp .pfx and builds
+#        $sign = 'signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f <tmp.pfx> /p <password>'
+#      then change the installer step to: ./packaging/installer/build.ps1 -SkipBuild -Version $env:TAG -SignCommand $sign
+#      (signs selachi.exe, selachi-agent.exe, the installer and its uninstaller). Delete the .pfx afterwards and never
+#      echo the secrets. Azure Trusted Signing instead: secrets AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+#      plus its signtool dlib, through the same -SignCommand hook.
 #   3. Sign the grammar DLLs too if the plugin loader ever requires it.
 # Until then SmartScreen warns on first run.
 name: Release
@@ -43,8 +47,8 @@ jobs:
 
       # No cargo cache on purpose: a cache saved from a tag ref is not readable by other refs and the
       # release must be a clean build anyway. Two independent cargo workspaces: the app and packaging/grammars.
-      - name: Build selachi.exe (release)
-        run: cargo build --release -p selachi
+      - name: Build selachi.exe and selachi-agent.exe (release)
+        run: cargo build --release -p selachi -p agent_harness
 
       - name: Build grammar plugins
         shell: pwsh
@@ -55,11 +59,39 @@ jobs:
           ./packaging/grammars/build.ps1 -BaseUrl "https://github.com/$env:REPO/releases/download/$env:TAG"
           Get-ChildItem packaging/grammars/dist -File | Format-Table Name, Length
 
+      # Inno Setup is installed per user from the official release, pinned by SHA256 (no chocolatey, no admin).
+      - name: Install Inno Setup
+        shell: pwsh
+        env:
+          INNO_VERSION: "7.1.1"
+          INNO_SHA256: "8A5A6711C3766A6E5FB74F280BA0E3551E719CE94538D901FDBD1F8F9920B3F0"
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_VERSION-x64.exe"
+          $tag = 'is-' + $env:INNO_VERSION.Replace('.', '_')
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/$tag/innosetup-$env:INNO_VERSION-x64.exe" -OutFile $exe
+          $actual = (Get-FileHash $exe -Algorithm SHA256).Hash
+          if ($actual -ne $env:INNO_SHA256) { throw "Inno Setup SHA256 mismatch: $actual" }
+          $dir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          Start-Process $exe -Wait -ArgumentList '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir"
+          if (-not (Test-Path "$dir\ISCC.exe")) { throw 'ISCC.exe missing after install' }
+          "ISCC=$dir\ISCC.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # Reuses the exes built above (-SkipBuild). Unsigned until the signing TODO is done.
+      - name: Build installer
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ./packaging/installer/build.ps1 -SkipBuild -Version $env:TAG
+          Get-ChildItem packaging/installer/dist -File | Format-Table Name, Length
+
       - name: Checksums
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item packaging/installer/dist/Selachi-Setup-*.exe release-assets/
           Copy-Item target/release/selachi.exe release-assets/
+          Copy-Item target/release/selachi-agent.exe release-assets/
           Copy-Item packaging/grammars/dist/*.zip release-assets/
           Copy-Item packaging/grammars/dist/grammars.toml release-assets/
           Get-ChildItem release-assets -File |

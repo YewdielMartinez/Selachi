@@ -9,7 +9,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 use panel_api::TabInfo;
-use theme::Theme;
+use theme::{Radius, Theme};
 use ui_kit::{Icon, IconButton, Pill, StatusGlyph, icon};
 
 use crate::paths;
@@ -126,7 +126,7 @@ pub fn tab_pill(
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.0))
+                .rounded(px(Radius::CHIP))
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.surface_4))
                 .on_click(move |e, w, cx| {

@@ -620,7 +620,36 @@ pub struct SwatchRow {
     colors: Vec<Rgba>,
     selected: Option<usize>,
     focusable: bool,
+    surface: Option<Rgba>,
     on_select: Option<IndexFn>,
+}
+
+/// Below this WCAG contrast ratio against its surface a swatch gets an `outline_soft` ring.
+pub const SWATCH_RING_CONTRAST: f32 = 1.5;
+
+fn channel_linear(v: f32) -> f32 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn luminance(c: Rgba) -> f32 {
+    0.2126 * channel_linear(c.r) + 0.7152 * channel_linear(c.g) + 0.0722 * channel_linear(c.b)
+}
+
+/// WCAG contrast ratio of two colors (1.0 ..= 21.0).
+pub fn contrast(a: Rgba, b: Rgba) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Does a swatch of `color` melt into `surfaces` (contrast under [`SWATCH_RING_CONTRAST`] with any of them)?
+pub(crate) fn swatch_needs_ring(color: Rgba, surfaces: &[Rgba]) -> bool {
+    surfaces
+        .iter()
+        .any(|s| contrast(color, *s) < SWATCH_RING_CONTRAST)
 }
 
 impl SwatchRow {
@@ -635,8 +664,17 @@ impl SwatchRow {
             colors: colors.into_iter().collect(),
             selected: None,
             focusable: true,
+            surface: None,
             on_select: None,
         }
+    }
+
+    /// The surface the row sits on. A swatch whose contrast against it is under 1.5:1 (near-white
+    /// on a light surface, near-black on a dark one) gets an `outline_soft` ring. Without it the
+    /// check runs against `bg`, `surface_1` and `surface_2`, so it holds in every mode.
+    pub fn surface(mut self, surface: Rgba) -> Self {
+        self.surface = Some(surface);
+        self
     }
 
     /// Keyboard focus: every swatch is a tab stop (`Enter` / `Space` pick it) and shows the ring.
@@ -664,6 +702,10 @@ impl RenderOnce for SwatchRow {
         let on_select = self.on_select;
         let selected = self.selected;
         let focusable = self.focusable && on_select.is_some();
+        let surfaces: Vec<Rgba> = match self.surface {
+            Some(s) => vec![s],
+            None => vec![c.bg, c.surface_1, c.surface_2],
+        };
         let items: Vec<_> = self
             .colors
             .into_iter()
@@ -671,6 +713,7 @@ impl RenderOnce for SwatchRow {
             .map(|(ix, color)| {
                 let on_select = on_select.clone();
                 let is_sel = selected == Some(ix);
+                let ring = swatch_needs_ring(color, &surfaces);
                 let sw_id = ElementId::NamedInteger(id.clone(), ix as u64);
                 let focus = focusable.then(|| focus::handle(window, cx, &sw_id));
                 let el = div()
@@ -688,7 +731,8 @@ impl RenderOnce for SwatchRow {
                         div()
                             .size(px(if is_sel { 12.0 } else { 18.0 }))
                             .rounded_full()
-                            .bg(color),
+                            .bg(color)
+                            .when(ring, |d| d.border_1().border_color(c.outline_soft)),
                     )
                     .on_click(move |_, window, cx| {
                         if let Some(f) = &on_select {
@@ -710,6 +754,31 @@ impl RenderOnce for SwatchRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swatches_that_melt_into_the_surface_get_a_ring_in_every_mode() {
+        use theme::{Theme, rgb};
+        let (dark, light, oled) = (Theme::dark(), Theme::light(), Theme::oled());
+        let white = rgb(0xFFFFFF);
+        let near_white = rgb(0xF6F6F8);
+        let black = rgb(0x000000);
+        let surfaces = |t: &Theme| [t.colors.bg, t.colors.surface_1, t.colors.surface_2];
+        // Light mode: white and near-white vanish into the surfaces.
+        assert!(swatch_needs_ring(white, &surfaces(&light)));
+        assert!(swatch_needs_ring(near_white, &surfaces(&light)));
+        // Dark and OLED: a near-black swatch does.
+        assert!(swatch_needs_ring(black, &surfaces(&oled)));
+        assert!(swatch_needs_ring(rgb(0x1A1A1E), &surfaces(&dark)));
+        // The accent reads on all of them: no ring.
+        for t in [&dark, &light, &oled] {
+            assert!(!swatch_needs_ring(rgb(0x00AAFF), &surfaces(t)));
+            assert!(!swatch_needs_ring(rgb(0xE5484D), &surfaces(t)));
+        }
+        // An explicit surface replaces the default set.
+        assert!(swatch_needs_ring(white, &[white]));
+        assert!(!swatch_needs_ring(white, &[black]));
+        assert!((contrast(white, black) - 21.0).abs() < 1e-3);
+    }
 
     #[test]
     fn slider_maps_pointer_to_range() {

@@ -69,32 +69,45 @@ pub(crate) fn run_git_with<S: AsRef<OsStr>>(
         .args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(if opts.stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .env("GIT_TERMINAL_PROMPT", "0");
     for (k, v) in &opts.envs {
         cmd.env(k, v);
     }
+    run_command(cmd, display_args(args), opts.stdin, timeout, |e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::GitNotFound(e)
+        } else {
+            Error::Io(e)
+        }
+    })
+}
+
+/// Spawns a prepared command with piped output (no console window, stdin closed or piped from
+/// `stdin`) and waits up to `timeout`, killing it afterwards. `shown` names the command in a
+/// timeout error; `spawn_err` maps a spawn failure.
+pub(crate) fn run_command(
+    mut cmd: Command,
+    shown: String,
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+    spawn_err: impl FnOnce(std::io::Error) -> Error,
+) -> Result<Raw> {
+    cmd.stdin(if stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Error::GitNotFound(e)
-        } else {
-            Error::Io(e)
-        }
-    })?;
+    let mut child = cmd.spawn().map_err(spawn_err)?;
 
-    let in_t = opts.stdin.and_then(|data| {
+    let in_t = stdin.and_then(|data| {
         let data = data.to_vec();
         child.stdin.take().map(|mut si| {
             thread::spawn(move || {
@@ -149,7 +162,7 @@ pub(crate) fn run_git_with<S: AsRef<OsStr>>(
             stderr,
         }),
         None => Err(Error::Timeout {
-            args: display_args(args),
+            args: shown,
             timeout,
         }),
     }

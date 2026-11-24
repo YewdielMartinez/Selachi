@@ -12,6 +12,7 @@ use gpui::{
     AnyElement, ClipboardItem, Context, IntoElement, ModifiersChangedEvent, MouseDownEvent,
     MouseMoveEvent, Pixels, Point, SharedString, div, prelude::*, px,
 };
+use theme::Radius;
 use term_core::{Block, BlockId, BlockState, Session};
 use ui_kit::{ActionButton, Icon, Pill};
 
@@ -393,7 +394,7 @@ impl TerminalView {
             .items_center()
             .gap(px(4.0))
             .p(px(4.0))
-            .rounded(px(10.0))
+            .rounded(px(Radius::PILL))
             .bg(c.surface_2)
             .font_family(ty.ui_family)
             .text_size(px(ty.ui_size_sm));

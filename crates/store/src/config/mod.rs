@@ -469,6 +469,47 @@ mod tests {
     }
 
     #[test]
+    fn delegation_and_updates_have_the_harness_defaults() {
+        let c = Config::default();
+        assert!(c.delegation.enabled && c.delegation.allowed_agents.is_empty());
+        assert_eq!(c.delegation.max_permission, "accept_edits");
+        assert_eq!(
+            (c.delegation.max_concurrent, c.delegation.max_depth),
+            (3, 1)
+        );
+        assert_eq!(c.delegation.timeout_secs, 900);
+        assert_eq!(c.delegation.daily_token_budget, 2_000_000);
+        assert_eq!(c.delegation.approval_timeout_secs, 120);
+        assert!(c.updates.check);
+        assert_eq!((c.updates.channel.as_str(), c.updates.install.as_str()), ("stable", "now"));
+        // the template (written on first run) says the same
+        let t = Config::parse(TEMPLATE).unwrap().config;
+        assert_eq!(t.delegation, c.delegation);
+        assert_eq!(t.updates, c.updates);
+    }
+
+    #[test]
+    fn delegation_and_updates_are_validated_and_saved() {
+        assert!(Config::parse("[delegation]\nmax_permission = \"full\"").is_err());
+        assert!(Config::parse("[delegation]\nmax_concurrent = 0").is_err());
+        assert!(Config::parse("[delegation]\nmax_depth = 9").is_err());
+        assert!(Config::parse("[updates]\nchannel = \"nightly\"").is_err());
+        assert!(Config::parse("[updates]\ninstall = \"later\"").is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut c = Config::default();
+        c.delegation.max_depth = 2;
+        c.delegation.allowed_agents = vec!["codex".into()];
+        c.updates.check = false;
+        c.save_to(&path).unwrap();
+        let back = Config::load_from(&path).unwrap();
+        assert_eq!(back.config.delegation.max_depth, 2);
+        assert_eq!(back.config.delegation.allowed_agents, vec!["codex".to_string()]);
+        assert!(!back.config.updates.check);
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    }
+
+    #[test]
     fn first_run_writes_template() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub").join("config.toml");
