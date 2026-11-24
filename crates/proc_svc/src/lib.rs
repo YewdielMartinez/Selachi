@@ -27,19 +27,18 @@ mod sys;
 mod tracker;
 
 pub use actions::{
-    SafetyPolicy, TerminateOptions, TerminateOutcome, check_safe, collect_tree, console_break,
-    terminate_job, terminate_job_with, terminate_tree, terminate_tree_with,
+    check_safe, collect_tree, console_break, terminate_job, terminate_job_with, terminate_tree,
+    terminate_tree_with, SafetyPolicy, TerminateOptions, TerminateOutcome,
 };
-pub use cpu::{CpuSampler, logical_cores};
+pub use cpu::{logical_cores, CpuSampler};
 pub use error::{Error, RefuseReason, Result};
-pub use job::{JobEvent, JobGroup, JobOptions, resume_process};
-pub use ports::{PortInfo, PortState, Proto, listening_ports, ports_by_pid};
-pub use runtime::{Runtime, RuntimeKind, classify};
+pub use job::{resume_process, JobEvent, JobGroup, JobOptions};
+pub use ports::{listening_ports, ports_by_pid, PortInfo, PortState, Proto};
+pub use runtime::{classify, Runtime, RuntimeKind};
 pub use snapshot::{
-    ProcInfo, SnapshotOptions, snapshot, snapshot_with, start_time_of, try_snapshot,
+    snapshot, snapshot_with, start_time_of, try_snapshot, ProcInfo, SnapshotOptions,
 };
 pub use tracker::{
-    Attribution, OwnerId, OwnerMeta, OwnerReport, ProcState, TREE_POLL_INTERVAL, TrackedProc,
-    TrackingMode, Tracker, UntrackedProc,
-    heuristic_from,
+    heuristic_from, Attribution, OwnerId, OwnerMeta, OwnerReport, ProcState, TrackedProc, Tracker,
+    TrackingMode, UntrackedProc, TREE_POLL_INTERVAL,
 };

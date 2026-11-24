@@ -22,7 +22,12 @@ pub enum AgentCli {
 }
 
 impl AgentCli {
-    pub const ALL: [AgentCli; 4] = [AgentCli::Claude, AgentCli::Codex, AgentCli::OpenCode, AgentCli::Gemini];
+    pub const ALL: [AgentCli; 4] = [
+        AgentCli::Claude,
+        AgentCli::Codex,
+        AgentCli::OpenCode,
+        AgentCli::Gemini,
+    ];
 
     pub const fn name(self) -> &'static str {
         match self {
@@ -142,7 +147,12 @@ pub struct AgentRow {
 
 impl AgentRow {
     pub fn checking(cli: AgentCli) -> Self {
-        Self { cli, status: AgentStatus::Checking, version: None, path: None }
+        Self {
+            cli,
+            status: AgentStatus::Checking,
+            version: None,
+            path: None,
+        }
     }
 }
 
@@ -150,14 +160,24 @@ impl AgentRow {
 pub fn rows_from_detected(detected: &[DetectedAgent]) -> Vec<AgentRow> {
     AgentCli::ALL
         .into_iter()
-        .map(|cli| match detected.iter().find(|d| AgentCli::from_kind(&d.kind) == cli) {
-            Some(d) => AgentRow {
-                cli,
-                status: status_of(d),
-                version: d.version.clone(),
-                path: Some(d.path.clone()),
-            },
-            None => AgentRow { cli, status: AgentStatus::NotInstalled, version: None, path: None },
+        .map(|cli| {
+            match detected
+                .iter()
+                .find(|d| AgentCli::from_kind(&d.kind) == cli)
+            {
+                Some(d) => AgentRow {
+                    cli,
+                    status: status_of(d),
+                    version: d.version.clone(),
+                    path: Some(d.path.clone()),
+                },
+                None => AgentRow {
+                    cli,
+                    status: AgentStatus::NotInstalled,
+                    version: None,
+                    path: None,
+                },
+            }
         })
         .collect()
 }
@@ -171,8 +191,14 @@ pub fn checking_rows() -> Vec<AgentRow> {
 pub fn short_version(version: &str) -> String {
     version
         .split_whitespace()
-        .find(|t| t.trim_start_matches('v').starts_with(|c: char| c.is_ascii_digit()))
-        .map_or_else(|| version.trim().to_string(), |t| t.trim_start_matches('v').to_string())
+        .find(|t| {
+            t.trim_start_matches('v')
+                .starts_with(|c: char| c.is_ascii_digit())
+        })
+        .map_or_else(
+            || version.trim().to_string(),
+            |t| t.trim_start_matches('v').to_string(),
+        )
 }
 
 #[cfg(test)]
@@ -191,8 +217,14 @@ mod tests {
     #[test]
     fn login_state_maps_to_row_status() {
         let k = AgentKind::ClaudeCode;
-        assert_eq!(status_of(&detected(k.clone(), Some(true), "1")), AgentStatus::Ready);
-        assert_eq!(status_of(&detected(k.clone(), Some(false), "1")), AgentStatus::NeedsLogin);
+        assert_eq!(
+            status_of(&detected(k.clone(), Some(true), "1")),
+            AgentStatus::Ready
+        );
+        assert_eq!(
+            status_of(&detected(k.clone(), Some(false), "1")),
+            AgentStatus::NeedsLogin
+        );
         assert_eq!(status_of(&detected(k, None, "1")), AgentStatus::Unverified);
         assert!(AgentStatus::NeedsLogin.offers_login());
         assert!(AgentStatus::Unverified.offers_login());
@@ -206,17 +238,31 @@ mod tests {
         let found = [
             detected(AgentKind::OpenCode, None, "1.19.6"),
             detected(AgentKind::ClaudeCode, Some(true), "2.1.330 (Claude Code)"),
-            detected(AgentKind::Acp { command: "\"C:/g.cmd\"".into() }, Some(true), "0.70.0"),
+            detected(
+                AgentKind::Acp {
+                    command: "\"C:/g.cmd\"".into(),
+                },
+                Some(true),
+                "0.70.0",
+            ),
         ];
         let rows = rows_from_detected(&found);
         let clis: Vec<_> = rows.iter().map(|r| r.cli).collect();
-        assert_eq!(clis, AgentCli::ALL, "stable order, whatever detect() returned");
+        assert_eq!(
+            clis,
+            AgentCli::ALL,
+            "stable order, whatever detect() returned"
+        );
         assert_eq!(rows[0].status, AgentStatus::Ready);
         assert_eq!(rows[1].status, AgentStatus::NotInstalled);
         assert_eq!(rows[1].version, None);
         assert_eq!(rows[2].status, AgentStatus::Unverified);
         assert_eq!(rows[3].status, AgentStatus::Ready, "Acp is Gemini");
-        assert!(rows_from_detected(&[]).iter().all(|r| r.status == AgentStatus::NotInstalled));
+        assert!(
+            rows_from_detected(&[])
+                .iter()
+                .all(|r| r.status == AgentStatus::NotInstalled)
+        );
     }
 
     #[test]
@@ -228,10 +274,16 @@ mod tests {
 
     #[test]
     fn commands_match_the_verified_ones() {
-        assert_eq!(AgentCli::Claude.install_command(), "npm i -g @anthropic-ai/claude-code");
+        assert_eq!(
+            AgentCli::Claude.install_command(),
+            "npm i -g @anthropic-ai/claude-code"
+        );
         assert_eq!(AgentCli::Codex.install_command(), "npm i -g @openai/codex");
         assert_eq!(AgentCli::OpenCode.install_command(), "npm i -g opencode-ai");
-        assert_eq!(AgentCli::Gemini.install_command(), "npm i -g @google/gemini-cli");
+        assert_eq!(
+            AgentCli::Gemini.install_command(),
+            "npm i -g @google/gemini-cli"
+        );
         assert_eq!(AgentCli::Claude.login_command(), "claude auth login");
         assert_eq!(AgentCli::Codex.login_command(), "codex login");
         assert_eq!(AgentCli::OpenCode.login_command(), "opencode auth login");

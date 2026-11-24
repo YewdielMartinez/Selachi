@@ -86,7 +86,11 @@ pub struct Flow {
 
 impl Flow {
     pub fn new(start: Step) -> Self {
-        Self { step: start, furthest: start, skipped: BTreeSet::new() }
+        Self {
+            step: start,
+            furthest: start,
+            skipped: BTreeSet::new(),
+        }
     }
 
     pub fn step(&self) -> Step {
@@ -175,7 +179,13 @@ mod tests {
     #[test]
     fn walks_forward_to_the_end() {
         let mut f = Flow::new(Step::Welcome);
-        for expected in [Step::Agents, Step::Projects, Step::Appearance, Step::Terminal, Step::Done] {
+        for expected in [
+            Step::Agents,
+            Step::Projects,
+            Step::Appearance,
+            Step::Terminal,
+            Step::Done,
+        ] {
             assert_eq!(f.advance(), Nav::Moved(expected));
         }
         assert_eq!(f.advance(), Nav::Finish);
@@ -206,7 +216,10 @@ mod tests {
         let mut f = Flow::new(Step::Agents);
         f.skip();
         assert_eq!(f.back(), Nav::Moved(Step::Agents));
-        assert!(f.is_skipped(Step::Agents), "going back alone keeps the skip");
+        assert!(
+            f.is_skipped(Step::Agents),
+            "going back alone keeps the skip"
+        );
         f.advance();
         assert!(!f.is_skipped(Step::Agents));
     }

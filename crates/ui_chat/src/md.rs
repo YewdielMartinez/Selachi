@@ -8,12 +8,16 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, ClipboardItem, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _,
-    SharedString, StrikethroughStyle, Styled as _, StyledText, TextRun, div, prelude::*, px, relative,
+    AnyElement, ClipboardItem, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText,
+    IntoElement, ParentElement as _, SharedString, StrikethroughStyle, Styled as _, StyledText,
+    TextRun, div, prelude::*, px, relative,
 };
 use theme::{Mode, Radius, Rgba, Theme, rgb};
 use ui_kit::{Icon, icon};
-use viewer_svc::{HighlightKind, Lang, MdAlign, MdBlock, MdInline, MdListItem, MdTable, highlight_text, markdown_blocks};
+use viewer_svc::{
+    HighlightKind, Lang, MdAlign, MdBlock, MdInline, MdListItem, MdTable, highlight_text,
+    markdown_blocks,
+};
 
 /// Code blocks bigger than this are shown without colors (keeps streaming cheap).
 const MAX_HIGHLIGHT_BYTES: usize = 24 * 1024;
@@ -39,7 +43,9 @@ pub fn code_blocks(blocks: &[MdBlock]) -> Vec<(usize, String, String)> {
     fn walk(blocks: &[MdBlock], out: &mut Vec<(usize, String, String)>) {
         for b in blocks {
             match b {
-                MdBlock::CodeBlock { lang, text } => out.push((out.len(), lang.clone().unwrap_or_default(), text.clone())),
+                MdBlock::CodeBlock { lang, text } => {
+                    out.push((out.len(), lang.clone().unwrap_or_default(), text.clone()))
+                }
                 MdBlock::List { items, .. } => items.iter().for_each(|i| walk(&i.blocks, out)),
                 MdBlock::Quote(inner) => walk(inner, out),
                 _ => {}
@@ -76,13 +82,18 @@ pub struct MdBody {
 
 impl std::fmt::Debug for MdBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MdBody").field("len", &self.text.len()).finish()
+        f.debug_struct("MdBody")
+            .field("len", &self.text.len())
+            .finish()
     }
 }
 
 impl MdBody {
     pub fn new(text: String) -> Self {
-        Self { text: text.into(), parsed: Rc::new(OnceCell::new()) }
+        Self {
+            text: text.into(),
+            parsed: Rc::new(OnceCell::new()),
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -150,11 +161,51 @@ fn walk(inlines: &[MdInline], style: InlineStyle, link: Option<&str>, out: &mut 
     for i in inlines {
         match i {
             MdInline::Text(t) => push(out, t, style, link),
-            MdInline::Code(t) => push(out, t, InlineStyle { code: true, ..style }, link),
-            MdInline::Emph(c) => walk(c, InlineStyle { italic: true, ..style }, link, out),
-            MdInline::Strong(c) => walk(c, InlineStyle { bold: true, ..style }, link, out),
-            MdInline::Strike(c) => walk(c, InlineStyle { strike: true, ..style }, link, out),
-            MdInline::Link { url, children } => walk(children, InlineStyle { link: true, ..style }, Some(url), out),
+            MdInline::Code(t) => push(
+                out,
+                t,
+                InlineStyle {
+                    code: true,
+                    ..style
+                },
+                link,
+            ),
+            MdInline::Emph(c) => walk(
+                c,
+                InlineStyle {
+                    italic: true,
+                    ..style
+                },
+                link,
+                out,
+            ),
+            MdInline::Strong(c) => walk(
+                c,
+                InlineStyle {
+                    bold: true,
+                    ..style
+                },
+                link,
+                out,
+            ),
+            MdInline::Strike(c) => walk(
+                c,
+                InlineStyle {
+                    strike: true,
+                    ..style
+                },
+                link,
+                out,
+            ),
+            MdInline::Link { url, children } => walk(
+                children,
+                InlineStyle {
+                    link: true,
+                    ..style
+                },
+                Some(url),
+                out,
+            ),
             MdInline::Image { alt, .. } => push(out, &format!("[{alt}]"), style, link),
             MdInline::SoftBreak => push(out, " ", style, link),
             MdInline::HardBreak => push(out, "\n", style, link),
@@ -211,7 +262,14 @@ pub struct MdRender<'a> {
 
 impl<'a> MdRender<'a> {
     pub fn new(theme: Theme, parsed: &'a ParsedMd, id_base: usize) -> Self {
-        Self { theme, parsed, id_base, next_id: Cell::new(0), next_code: Cell::new(0), in_list: Cell::new(false) }
+        Self {
+            theme,
+            parsed,
+            id_base,
+            next_id: Cell::new(0),
+            next_code: Cell::new(0),
+            in_list: Cell::new(false),
+        }
     }
 
     /// A fresh element id: `(kind, row id_base)` plus the ordinal of the node in the row. A tuple,
@@ -219,14 +277,23 @@ impl<'a> MdRender<'a> {
     fn id(&self, kind: &'static str) -> ElementId {
         let i = self.next_id.get();
         self.next_id.set(i + 1);
-        ElementId::NamedChild(Box::new(ElementId::named_usize(kind, self.id_base)), SharedString::from(i.to_string()))
+        ElementId::NamedChild(
+            Box::new(ElementId::named_usize(kind, self.id_base)),
+            SharedString::from(i.to_string()),
+        )
     }
 }
 
 /// Renders the whole document.
 pub fn render_md(parsed: &ParsedMd, theme: Theme, id_base: usize) -> AnyElement {
     let r = MdRender::new(theme, parsed, id_base);
-    div().w_full().min_w_0().flex().flex_col().children(parsed.blocks.iter().map(|b| render_block(b, &r))).into_any_element()
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .children(parsed.blocks.iter().map(|b| render_block(b, &r)))
+        .into_any_element()
 }
 
 fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(Range<usize>, HighlightStyle)> {
@@ -242,7 +309,10 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(Range<usize>, Highlig
                 h.font_style = Some(FontStyle::Italic);
             }
             if s.strike {
-                h.strikethrough = Some(StrikethroughStyle { thickness: px(1.0), color: Some(c.muted.into()) });
+                h.strikethrough = Some(StrikethroughStyle {
+                    thickness: px(1.0),
+                    color: Some(c.muted.into()),
+                });
             }
             if s.code {
                 // Neutral, never the ANSI red (it read as an error): text on a tonal chip.
@@ -251,7 +321,11 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(Range<usize>, Highlig
             }
             if s.link {
                 h.color = Some(c.accent.into());
-                h.underline = Some(gpui::UnderlineStyle { thickness: px(1.0), color: Some(c.accent.into()), wavy: false });
+                h.underline = Some(gpui::UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(c.accent.into()),
+                    wavy: false,
+                });
             }
             (range.clone(), h)
         })
@@ -264,7 +338,11 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(Range<usize>, Highlig
 fn code_runs(flat: &FlatInline, theme: &Theme, weight: FontWeight, color: Rgba) -> Vec<TextRun> {
     let c = theme.colors;
     let run = |range: Range<usize>, s: InlineStyle| {
-        let mut f = gpui::font(if s.code { theme.typography.mono_family } else { theme.typography.ui_family });
+        let mut f = gpui::font(if s.code {
+            theme.typography.mono_family
+        } else {
+            theme.typography.ui_family
+        });
         f.weight = if s.bold { FontWeight::SEMIBOLD } else { weight };
         if s.italic {
             f.style = FontStyle::Italic;
@@ -279,8 +357,15 @@ fn code_runs(flat: &FlatInline, theme: &Theme, weight: FontWeight, color: Rgba) 
             font: f,
             color: fg.into(),
             background_color: bg.map(Into::into),
-            underline: s.link.then(|| gpui::UnderlineStyle { thickness: px(1.0), color: Some(c.accent.into()), wavy: false }),
-            strikethrough: s.strike.then(|| StrikethroughStyle { thickness: px(1.0), color: Some(c.muted.into()) }),
+            underline: s.link.then(|| gpui::UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(c.accent.into()),
+                wavy: false,
+            }),
+            strikethrough: s.strike.then(|| StrikethroughStyle {
+                thickness: px(1.0),
+                color: Some(c.muted.into()),
+            }),
         }
     };
     let mut out = Vec::new();
@@ -298,7 +383,12 @@ fn code_runs(flat: &FlatInline, theme: &Theme, weight: FontWeight, color: Rgba) 
     out
 }
 
-fn inline_el(inlines: &[MdInline], r: &MdRender<'_>, weight: FontWeight, color: Rgba) -> AnyElement {
+fn inline_el(
+    inlines: &[MdInline],
+    r: &MdRender<'_>,
+    weight: FontWeight,
+    color: Rgba,
+) -> AnyElement {
     let flat = flatten(inlines);
     let has_code = flat.runs.iter().any(|(_, s)| s.code);
     let text = if has_code {
@@ -341,10 +431,23 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .mt(px(if *level <= 2 { 16.0 } else { 10.0 }))
             .mb(px(4.0))
             .text_size(px(heading_size(*level)))
-            .font_weight(if *level <= 3 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+            .font_weight(if *level <= 3 {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::MEDIUM
+            })
             .line_height(relative(1.35))
             .text_color(c.text)
-            .child(inline_el(inlines, r, if *level <= 3 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }, c.text))
+            .child(inline_el(
+                inlines,
+                r,
+                if *level <= 3 {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::MEDIUM
+                },
+                c.text,
+            ))
             .into_any_element(),
         MdBlock::Paragraph(inlines) => div()
             .my(px(if r.in_list.get() { 1.0 } else { 4.0 }))
@@ -354,10 +457,23 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .child(inline_el(inlines, r, FontWeight::NORMAL, c.text))
             .into_any_element(),
         MdBlock::CodeBlock { lang, text } => code_block(lang.as_deref(), text, r),
-        MdBlock::List { ordered, start, items } => {
-            let rows: Vec<AnyElement> =
-                items.iter().enumerate().map(|(i, item)| list_item(*ordered, *start + i as u64, item, r)).collect();
-            div().my(px(4.0)).flex().flex_col().gap(px(1.0)).children(rows).into_any_element()
+        MdBlock::List {
+            ordered,
+            start,
+            items,
+        } => {
+            let rows: Vec<AnyElement> = items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| list_item(*ordered, *start + i as u64, item, r))
+                .collect();
+            div()
+                .my(px(4.0))
+                .flex()
+                .flex_col()
+                .gap(px(1.0))
+                .children(rows)
+                .into_any_element()
         }
         MdBlock::Quote(inner) => div()
             .my(px(6.0))
@@ -375,7 +491,11 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .flex()
             .flex_row()
             .gap(px(6.0))
-            .children((0..3).map(|i| div().size(px(4.0)).bg(if i == 1 { c.outline } else { c.surface_4 })))
+            .children((0..3).map(|i| {
+                div()
+                    .size(px(4.0))
+                    .bg(if i == 1 { c.outline } else { c.surface_4 })
+            }))
             .into_any_element(),
         MdBlock::Table(t) => table(t, r),
         MdBlock::Image { alt, .. } => div()
@@ -406,16 +526,22 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .split('\n')
         .enumerate()
         .map(|(i, line)| {
-            let spans: &[(Range<usize>, HighlightKind)] = hl.and_then(|h| h.lines.get(i)).map_or(&[], Vec::as_slice);
+            let spans: &[(Range<usize>, HighlightKind)] =
+                hl.and_then(|h| h.lines.get(i)).map_or(&[], Vec::as_slice);
             let styled: Vec<(Range<usize>, HighlightStyle)> = spans
                 .iter()
-                .filter(|(range, _)| range.end <= line.len() && line.is_char_boundary(range.start) && line.is_char_boundary(range.end))
+                .filter(|(range, _)| {
+                    range.end <= line.len()
+                        && line.is_char_boundary(range.start)
+                        && line.is_char_boundary(range.end)
+                })
                 .map(|(range, kind)| {
                     (
                         range.clone(),
                         HighlightStyle {
                             color: color_for(*kind, &theme).map(Into::into),
-                            font_style: (*kind == HighlightKind::Comment).then_some(FontStyle::Italic),
+                            font_style: (*kind == HighlightKind::Comment)
+                                .then_some(FontStyle::Italic),
                             ..HighlightStyle::default()
                         },
                     )
@@ -446,7 +572,9 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .tooltip(ui_kit::Tooltip::text(&theme, "Copiar código"))
         // TODO-SVG: `assets/icons/copy.svg` (16x16). Until it exists the button is text only.
         .child("Copiar")
-        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())));
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))
+        });
     div()
         .my(px(6.0))
         .rounded(px(Radius::SM))
@@ -468,7 +596,9 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
                         .text_size(px(ty.ui_size_xs))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.outline)
-                        .child(SharedString::from(lang.filter(|l| !l.is_empty()).unwrap_or("texto").to_owned())),
+                        .child(SharedString::from(
+                            lang.filter(|l| !l.is_empty()).unwrap_or("texto").to_owned(),
+                        )),
                 )
                 .child(copy),
         )
@@ -524,7 +654,12 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
         .child(marker)
         .child({
             let was = r.in_list.replace(true);
-            let body = div().flex_1().min_w_0().flex().flex_col().children(item.blocks.iter().map(|b| render_block(b, r)));
+            let body = div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .children(item.blocks.iter().map(|b| render_block(b, r)));
             r.in_list.set(was);
             body
         })
@@ -548,20 +683,38 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
             MdAlign::Center => d.justify_center(),
             _ => d,
         };
-        let (weight, color) = if header { (FontWeight::MEDIUM, c.text) } else { (FontWeight::NORMAL, c.muted) };
-        d.child(inline_el(inlines, r, weight, color)).into_any_element()
+        let (weight, color) = if header {
+            (FontWeight::MEDIUM, c.text)
+        } else {
+            (FontWeight::NORMAL, c.muted)
+        };
+        d.child(inline_el(inlines, r, weight, color))
+            .into_any_element()
     };
     let align = |i: usize| t.aligns.get(i).copied().unwrap_or(MdAlign::None);
-    let header = div()
+    let header = div().flex().flex_row().bg(c.surface_2).children(
+        t.header
+            .iter()
+            .enumerate()
+            .map(|(i, h)| cell(h, align(i), true)),
+    );
+    let rows = t.rows.iter().map(|row| {
+        div().flex().flex_row().children(
+            row.iter()
+                .enumerate()
+                .map(|(i, h)| cell(h, align(i), false)),
+        )
+    });
+    div()
+        .my(px(6.0))
+        .rounded(px(Radius::SM))
+        .bg(c.surface_1)
+        .overflow_hidden()
         .flex()
-        .flex_row()
-        .bg(c.surface_2)
-        .children(t.header.iter().enumerate().map(|(i, h)| cell(h, align(i), true)));
-    let rows = t
-        .rows
-        .iter()
-        .map(|row| div().flex().flex_row().children(row.iter().enumerate().map(|(i, h)| cell(h, align(i), false))));
-    div().my(px(6.0)).rounded(px(Radius::SM)).bg(c.surface_1).overflow_hidden().flex().flex_col().child(header).children(rows).into_any_element()
+        .flex_col()
+        .child(header)
+        .children(rows)
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -590,11 +743,22 @@ mod tests {
 
     #[test]
     fn styles_nest_and_links_collect() {
-        let f = flatten(&[Text("a ".into()), Strong(vec![Text("b ".into()), Emph(vec![Text("c".into())])]), Code("d".into())]);
+        let f = flatten(&[
+            Text("a ".into()),
+            Strong(vec![Text("b ".into()), Emph(vec![Text("c".into())])]),
+            Code("d".into()),
+        ]);
         assert_eq!(f.text, "a b cd");
         assert_eq!(f.runs.len(), 3);
         assert!(f.runs.windows(2).all(|w| w[0].0.end <= w[1].0.start));
-        let f = flatten(&[Text("ver ".into()), Link { url: "https://x.dev".into(), children: vec![Text("docs".into())] }, SoftBreak]);
+        let f = flatten(&[
+            Text("ver ".into()),
+            Link {
+                url: "https://x.dev".into(),
+                children: vec![Text("docs".into())],
+            },
+            SoftBreak,
+        ]);
         assert_eq!(f.text, "ver docs ");
         assert_eq!(f.links, vec![(4..8, "https://x.dev".to_string())]);
     }
@@ -603,12 +767,19 @@ mod tests {
     fn element_ids_of_two_rows_never_collide() {
         // The old `id_base * 997 + i` gave (base 1, i = 997) the same id as (base 2, i = 0).
         let parsed = parse_markdown("x");
-        let (a, b) = (MdRender::new(Theme::dark(), &parsed, 1), MdRender::new(Theme::dark(), &parsed, 2));
+        let (a, b) = (
+            MdRender::new(Theme::dark(), &parsed, 1),
+            MdRender::new(Theme::dark(), &parsed, 2),
+        );
         let ids_a: Vec<_> = (0..1500).map(|_| a.id("md-text")).collect();
         let ids_b: Vec<_> = (0..1500).map(|_| b.id("md-text")).collect();
         let all: std::collections::HashSet<_> = ids_a.iter().chain(ids_b.iter()).collect();
         assert_eq!(all.len(), 3000);
-        assert_ne!(a.id("md-text"), a.id("md-copy"), "the ordinal advances for every kind");
+        assert_ne!(
+            a.id("md-text"),
+            a.id("md-copy"),
+            "the ordinal advances for every kind"
+        );
     }
 
     #[test]
@@ -622,7 +793,12 @@ mod tests {
     #[test]
     fn syntax_colors_never_use_the_accent() {
         for theme in [Theme::dark(), Theme::light()] {
-            for kind in [HighlightKind::Keyword, HighlightKind::String, HighlightKind::Function, HighlightKind::Type] {
+            for kind in [
+                HighlightKind::Keyword,
+                HighlightKind::String,
+                HighlightKind::Function,
+                HighlightKind::Type,
+            ] {
                 assert_ne!(color_for(kind, &theme), Some(theme.colors.accent));
             }
             assert!(color_for(HighlightKind::Plain, &theme).is_none());

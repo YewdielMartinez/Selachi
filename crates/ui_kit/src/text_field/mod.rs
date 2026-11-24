@@ -39,9 +39,10 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
-    ScrollWheelEvent, SharedString, Subscription, UTF16Selection, Window, div, prelude::*, px,
+    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, EntityInputHandler, EventEmitter,
+    FocusHandle, Focusable, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Render, ScrollWheelEvent, SharedString, Subscription, UTF16Selection, Window,
+    div, prelude::*, px,
 };
 use theme::{Radius, Theme};
 
@@ -440,13 +441,24 @@ impl TextField {
 
     /// Buffer byte offset to display byte offset (they differ only for a password).
     pub(crate) fn offset_to_display(&self, off: usize) -> usize {
-        if self.mapped() { self.buf.text[..off.min(self.buf.text.len())].chars().count() * MASK.len_utf8() } else { off }
+        if self.mapped() {
+            self.buf.text[..off.min(self.buf.text.len())]
+                .chars()
+                .count()
+                * MASK.len_utf8()
+        } else {
+            off
+        }
     }
 
     /// Display byte offset to buffer byte offset.
     pub(crate) fn display_to_offset(&self, d: usize) -> usize {
         if self.mapped() {
-            self.buf.text.char_indices().nth(d / MASK.len_utf8()).map_or(self.buf.text.len(), |(i, _)| i)
+            self.buf
+                .text
+                .char_indices()
+                .nth(d / MASK.len_utf8())
+                .map_or(self.buf.text.len(), |(i, _)| i)
         } else {
             d.min(self.buf.text.len())
         }
@@ -470,9 +482,10 @@ impl TextField {
     fn index_at(&self, p: Point<Pixels>) -> usize {
         if self.multiline {
             return match (&self.last_bounds, self.laid.borrow().as_ref()) {
-                (Some(b), Some(laid)) => {
-                    laid.index_for_position(gpui::point(p.x - b.left(), p.y - b.top() + self.scroll.get()))
-                }
+                (Some(b), Some(laid)) => laid.index_for_position(gpui::point(
+                    p.x - b.left(),
+                    p.y - b.top() + self.scroll.get(),
+                )),
                 _ => self.buf.text.len(),
             };
         }
@@ -500,7 +513,13 @@ impl TextField {
                 laid.index_for_position(gpui::point(here.x, y))
             }
         };
-        self.motion(cx, |b| if select { b.select_to(target) } else { b.move_to(target) });
+        self.motion(cx, |b| {
+            if select {
+                b.select_to(target)
+            } else {
+                b.move_to(target)
+            }
+        });
     }
 
     fn newline(&mut self, cx: &mut Context<Self>) {
@@ -551,13 +570,17 @@ impl TextField {
 
     fn on_copy(&mut self, _: &act::Copy, _: &mut Window, cx: &mut Context<Self>) {
         if !self.buf.sel.is_empty() && !self.password {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.selected_text().to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.buf.selected_text().to_string(),
+            ));
         }
     }
 
     fn on_cut(&mut self, _: &act::Cut, _: &mut Window, cx: &mut Context<Self>) {
         if !self.buf.sel.is_empty() && !self.password && !self.read_only {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.selected_text().to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(
+                self.buf.selected_text().to_string(),
+            ));
             self.edit(cx, |b| {
                 b.replace(None, "");
                 true
@@ -582,7 +605,8 @@ impl TextField {
             }
             n if n >= 3 => {
                 if self.multiline {
-                    self.buf.select_range(self.buf.line_start(i)..self.buf.line_end(i));
+                    self.buf
+                        .select_range(self.buf.line_start(i)..self.buf.line_end(i));
                 } else {
                     self.buf.select_all();
                 }
@@ -609,7 +633,9 @@ impl TextField {
         if !self.multiline {
             return;
         }
-        let (Some(b), Some(laid)) = (self.last_bounds, self.laid.borrow().clone()) else { return };
+        let (Some(b), Some(laid)) = (self.last_bounds, self.laid.borrow().clone()) else {
+            return;
+        };
         let overflow = laid.total_height() - b.size.height;
         if overflow <= px(0.0) {
             return;
@@ -637,8 +663,16 @@ impl EntityInputHandler for TextField {
         Some(self.buf.text[r].to_string())
     }
 
-    fn selected_text_range(&mut self, _: bool, _: &mut Window, _: &mut Context<Self>) -> Option<UTF16Selection> {
-        Some(UTF16Selection { range: self.buf.range_to_utf16(&self.buf.sel), reversed: self.buf.reversed })
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.buf.range_to_utf16(&self.buf.sel),
+            reversed: self.buf.reversed,
+        })
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
@@ -703,27 +737,50 @@ impl EntityInputHandler for TextField {
             let laid = self.laid.borrow();
             let laid = laid.as_ref()?;
             let s = self.scroll.get();
-            let (a, b) = (laid.position_for_index(r.start), laid.position_for_index(r.end));
+            let (a, b) = (
+                laid.position_for_index(r.start),
+                laid.position_for_index(r.end),
+            );
             return Some(Bounds::from_corners(
                 gpui::point(bounds.left() + a.x, bounds.top() + a.y - s),
-                gpui::point(bounds.left() + b.x.max(a.x + px(1.0)), bounds.top() + b.y - s + laid.line_h),
+                gpui::point(
+                    bounds.left() + b.x.max(a.x + px(1.0)),
+                    bounds.top() + b.y - s + laid.line_h,
+                ),
             ));
         }
         let s = self.single.as_ref()?;
-        let (a, b) = (self.offset_to_display(r.start), self.offset_to_display(r.end));
+        let (a, b) = (
+            self.offset_to_display(r.start),
+            self.offset_to_display(r.end),
+        );
         Some(Bounds::from_corners(
-            gpui::point(bounds.left() + s.line.x_for_index(a) - s.scroll_x, bounds.top()),
-            gpui::point(bounds.left() + s.line.x_for_index(b) - s.scroll_x, bounds.bottom()),
+            gpui::point(
+                bounds.left() + s.line.x_for_index(a) - s.scroll_x,
+                bounds.top(),
+            ),
+            gpui::point(
+                bounds.left() + s.line.x_for_index(b) - s.scroll_x,
+                bounds.bottom(),
+            ),
         ))
     }
 
-    fn character_index_for_point(&mut self, p: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+    fn character_index_for_point(
+        &mut self,
+        p: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
         let b = self.last_bounds?;
         if self.multiline {
             let laid = self.laid.borrow();
             let laid = laid.as_ref()?;
             let utf8 = laid
-                .index_for_position(gpui::point(p.x - b.left(), p.y - b.top() + self.scroll.get()))
+                .index_for_position(gpui::point(
+                    p.x - b.left(),
+                    p.y - b.top() + self.scroll.get(),
+                ))
                 .min(self.buf.text.len());
             return Some(self.buf.offset_to_utf16(utf8));
         }
@@ -739,28 +796,40 @@ impl Render for TextField {
         crate::ensure_init(cx);
         if self._blur.is_none() {
             // Needs the window, which the constructor does not have: subscribe on the first frame.
-            self._blur = Some(cx.on_blur(&self.focus, window, |_, _, cx| cx.emit(TextFieldEvent::Blur)));
+            self._blur = Some(cx.on_blur(&self.focus, window, |_, _, cx| {
+                cx.emit(TextFieldEvent::Blur)
+            }));
         }
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let focused = self.focus.is_focused(window);
         let theme = self.theme;
         let multiline = self.multiline;
-        let overflowing = !multiline && !focused && !self.buf.text.is_empty() && self.single.as_ref().is_some_and(|s| s.overflow);
-        let full = (overflowing && !self.password).then(|| SharedString::from(self.buf.text.clone()));
+        let overflowing = !multiline
+            && !focused
+            && !self.buf.text.is_empty()
+            && self.single.as_ref().is_some_and(|s| s.overflow);
+        let full =
+            (overflowing && !self.password).then(|| SharedString::from(self.buf.text.clone()));
         let id = ElementId::from(("ui-kit-text-field", cx.entity_id().as_u64() as usize));
         let invalid = self.error.is_some();
 
         let mut field = div()
             .id(id)
-            .when_some(full, |d, text| d.tooltip(crate::Tooltip::text(&theme, text)))
+            .when_some(full, |d, text| {
+                d.tooltip(crate::Tooltip::text(&theme, text))
+            })
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(|t, _: &act::Backspace, _, cx| t.edit(cx, TextBuf::backspace)))
             .on_action(cx.listener(|t, _: &act::Delete, _, cx| t.edit(cx, TextBuf::delete)))
-            .on_action(cx.listener(|t, _: &act::DeleteWord, _, cx| t.edit(cx, TextBuf::delete_word)))
-            .on_action(cx.listener(|t, _: &act::DeleteWordForward, _, cx| t.edit(cx, TextBuf::delete_word_forward)))
+            .on_action(
+                cx.listener(|t, _: &act::DeleteWord, _, cx| t.edit(cx, TextBuf::delete_word)),
+            )
+            .on_action(cx.listener(|t, _: &act::DeleteWordForward, _, cx| {
+                t.edit(cx, TextBuf::delete_word_forward)
+            }))
             .on_action(cx.listener(|t, _: &act::Left, _, cx| t.motion(cx, TextBuf::left)))
             .on_action(cx.listener(|t, _: &act::Right, _, cx| t.motion(cx, TextBuf::right)))
             .on_action(cx.listener(|t, _: &act::WordLeft, _, cx| {
@@ -787,23 +856,43 @@ impl Render for TextField {
             .on_action(cx.listener(|t, _: &act::SelectDown, _, cx| t.on_down(true, cx)))
             .on_action(cx.listener(|t, _: &act::Home, _, cx| {
                 let multi = t.multiline;
-                t.motion(cx, |b| b.move_to(if multi { b.line_start(b.cursor()) } else { 0 }));
+                t.motion(cx, |b| {
+                    b.move_to(if multi { b.line_start(b.cursor()) } else { 0 })
+                });
             }))
             .on_action(cx.listener(|t, _: &act::End, _, cx| {
                 let multi = t.multiline;
-                t.motion(cx, |b| b.move_to(if multi { b.line_end(b.cursor()) } else { b.text.len() }));
+                t.motion(cx, |b| {
+                    b.move_to(if multi {
+                        b.line_end(b.cursor())
+                    } else {
+                        b.text.len()
+                    })
+                });
             }))
             .on_action(cx.listener(|t, _: &act::SelectHome, _, cx| {
                 let multi = t.multiline;
-                t.motion(cx, |b| b.select_to(if multi { b.line_start(b.cursor()) } else { 0 }));
+                t.motion(cx, |b| {
+                    b.select_to(if multi { b.line_start(b.cursor()) } else { 0 })
+                });
             }))
             .on_action(cx.listener(|t, _: &act::SelectEnd, _, cx| {
                 let multi = t.multiline;
-                t.motion(cx, |b| b.select_to(if multi { b.line_end(b.cursor()) } else { b.text.len() }));
+                t.motion(cx, |b| {
+                    b.select_to(if multi {
+                        b.line_end(b.cursor())
+                    } else {
+                        b.text.len()
+                    })
+                });
             }))
             .on_action(cx.listener(|t, _: &act::DocStart, _, cx| t.motion(cx, |b| b.move_to(0))))
-            .on_action(cx.listener(|t, _: &act::DocEnd, _, cx| t.motion(cx, |b| b.move_to(b.text.len()))))
-            .on_action(cx.listener(|t, _: &act::SelectAll, _, cx| t.motion(cx, TextBuf::select_all)))
+            .on_action(
+                cx.listener(|t, _: &act::DocEnd, _, cx| t.motion(cx, |b| b.move_to(b.text.len()))),
+            )
+            .on_action(
+                cx.listener(|t, _: &act::SelectAll, _, cx| t.motion(cx, TextBuf::select_all)),
+            )
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_cut))
             .on_action(cx.listener(Self::on_paste))
@@ -824,7 +913,11 @@ impl Render for TextField {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
-            .font_family(if self.mono { ty.mono_family } else { ty.ui_family })
+            .font_family(if self.mono {
+                ty.mono_family
+            } else {
+                ty.ui_family
+            })
             .text_color(c.text);
 
         field = if multiline {
@@ -833,15 +926,18 @@ impl Render for TextField {
                 .text_size(px(self.font_size.unwrap_or(ty.ui_size_body)))
                 .line_height(px((self.font_size.unwrap_or(ty.ui_size_body) * 1.5).round()))
                 .when(self.chrome, |d| {
-                    d.px(px(12.0)).py(px(8.0)).rounded(px(Radius::SM)).bg(c.surface_2).border_2().border_color(
-                        if invalid {
+                    d.px(px(12.0))
+                        .py(px(8.0))
+                        .rounded(px(Radius::SM))
+                        .bg(c.surface_2)
+                        .border_2()
+                        .border_color(if invalid {
                             c.error
                         } else if focused {
                             c.accent
                         } else {
                             c.surface_2
-                        },
-                    )
+                        })
                 })
                 .child(element::AreaElement { input: cx.entity() })
         } else {
@@ -853,15 +949,23 @@ impl Render for TextField {
                 .text_size(px(self.font_size.unwrap_or(ty.ui_size_md)))
                 .line_height(px(18.0))
                 .when(self.chrome, |d| {
-                    d.px(px(12.0)).rounded(px(Radius::PILL)).bg(c.surface_2).border_2().border_color(if invalid {
-                        c.error
-                    } else if focused {
-                        c.accent
-                    } else {
-                        c.surface_2
-                    })
+                    d.px(px(12.0))
+                        .rounded(px(Radius::PILL))
+                        .bg(c.surface_2)
+                        .border_2()
+                        .border_color(if invalid {
+                            c.error
+                        } else if focused {
+                            c.accent
+                        } else {
+                            c.surface_2
+                        })
                 })
-                .child(div().w_full().child(element::LineElement { input: cx.entity() }))
+                .child(
+                    div()
+                        .w_full()
+                        .child(element::LineElement { input: cx.entity() }),
+                )
         };
 
         let error = self.chrome.then(|| self.error.clone()).flatten();

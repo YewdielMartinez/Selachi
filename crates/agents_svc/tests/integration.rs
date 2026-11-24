@@ -595,18 +595,46 @@ fn scan_paths_ingests_only_the_given_files() {
     let tmp = tempfile::tempdir().unwrap();
     let a = tmp.path().join("claude/p/a.jsonl");
     let b = tmp.path().join("claude/p/b.jsonl");
-    let line = |m: &str, out: u64| claude_line("2026-03-02T10:00:00.000Z", "s", m, &format!("r-{m}"), out, "main", "C:/p", None);
+    let line = |m: &str, out: u64| {
+        claude_line(
+            "2026-03-02T10:00:00.000Z",
+            "s",
+            m,
+            &format!("r-{m}"),
+            out,
+            "main",
+            "C:/p",
+            None,
+        )
+    };
     write_lines(&a, &[line("m1", 10)]);
     write_lines(&b, &[line("m2", 20)]);
     let mut ing = ing(tmp.path());
 
     // Only `a` is named: `b` is not even looked at.
     let rep = ing.scan_paths(std::slice::from_ref(&a)).unwrap();
-    assert_eq!((rep.files_seen, rep.files_scanned, rep.events_inserted), (1, 1, 1));
+    assert_eq!(
+        (rep.files_seen, rep.files_scanned, rep.events_inserted),
+        (1, 1, 1)
+    );
 
     // Unchanged file: stat only. Unknown / vanished paths are ignored.
-    let rep = ing.scan_paths(&[a.clone(), tmp.path().join("claude/p/gone.jsonl"), tmp.path().join("claude/p/x.txt")]).unwrap();
-    assert_eq!((rep.files_seen, rep.files_scanned, rep.files_unchanged, rep.events_inserted), (1, 0, 1, 0));
+    let rep = ing
+        .scan_paths(&[
+            a.clone(),
+            tmp.path().join("claude/p/gone.jsonl"),
+            tmp.path().join("claude/p/x.txt"),
+        ])
+        .unwrap();
+    assert_eq!(
+        (
+            rep.files_seen,
+            rep.files_scanned,
+            rep.files_unchanged,
+            rep.events_inserted
+        ),
+        (1, 0, 1, 0)
+    );
 
     // Append: only the tail is read.
     append(&a, &format!("{}\n", line("m3", 30)));
@@ -616,7 +644,13 @@ fn scan_paths_ingests_only_the_given_files() {
     // A later full scan picks up the file that was never named, without double counting `a`.
     let rep = ing.scan().unwrap();
     assert_eq!(rep.events_inserted, 1);
-    let total: u64 = ing.store().usage_summary(&Range::All).unwrap().iter().map(|u| u.output).sum();
+    let total: u64 = ing
+        .store()
+        .usage_summary(&Range::All)
+        .unwrap()
+        .iter()
+        .map(|u| u.output)
+        .sum();
     assert_eq!(total, 60);
 }
 
@@ -629,12 +663,35 @@ fn classify_matches_ingested_files_only() {
         opencode_data: Some("C:/h/.local/share/opencode".into()),
         antigravity_data: Some("C:/h/.gemini".into()),
     };
-    assert_eq!(cfg.classify(Path::new("C:/h/.claude/projects/p/s.jsonl")), Some(Claude));
-    assert_eq!(cfg.classify(Path::new("C:/h/.claude/projects/p/s.txt")), None);
-    assert_eq!(cfg.classify(Path::new("C:/h/.codex/sessions/2026/rollout-1.jsonl.zst")), Some(Codex));
-    assert_eq!(cfg.classify(Path::new("C:/h/.codex/sessions/2026/other.jsonl")), None);
-    assert_eq!(cfg.classify(Path::new("C:/h/.local/share/opencode/opencode.db-wal")), Some(OpenCodeDb));
-    assert_eq!(cfg.classify(Path::new("C:/h/.local/share/opencode/log/x.log")), None);
-    assert_eq!(cfg.classify(Path::new("C:/h/.local/share/opencode/storage/message/s/m.json")), Some(OpenCodeJson));
+    assert_eq!(
+        cfg.classify(Path::new("C:/h/.claude/projects/p/s.jsonl")),
+        Some(Claude)
+    );
+    assert_eq!(
+        cfg.classify(Path::new("C:/h/.claude/projects/p/s.txt")),
+        None
+    );
+    assert_eq!(
+        cfg.classify(Path::new("C:/h/.codex/sessions/2026/rollout-1.jsonl.zst")),
+        Some(Codex)
+    );
+    assert_eq!(
+        cfg.classify(Path::new("C:/h/.codex/sessions/2026/other.jsonl")),
+        None
+    );
+    assert_eq!(
+        cfg.classify(Path::new("C:/h/.local/share/opencode/opencode.db-wal")),
+        Some(OpenCodeDb)
+    );
+    assert_eq!(
+        cfg.classify(Path::new("C:/h/.local/share/opencode/log/x.log")),
+        None
+    );
+    assert_eq!(
+        cfg.classify(Path::new(
+            "C:/h/.local/share/opencode/storage/message/s/m.json"
+        )),
+        Some(OpenCodeJson)
+    );
     assert_eq!(cfg.classify(Path::new("C:/elsewhere/s.jsonl")), None);
 }

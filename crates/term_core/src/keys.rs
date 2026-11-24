@@ -126,8 +126,12 @@ pub fn encode_key(input: &KeyInput, app_cursor: bool) -> Option<Vec<u8>> {
         Some(t) if !t.is_empty() => t.to_string(),
         _ => {
             let c = single_char(input.key)?;
-            if input.shift { c.to_uppercase().collect() } else { c.to_string() }
-        },
+            if input.shift {
+                c.to_uppercase().collect()
+            } else {
+                c.to_string()
+            }
+        }
     };
     if text.chars().any(|c| c.is_control()) {
         return None;
@@ -141,7 +145,6 @@ fn with_alt(mut bytes: Vec<u8>, alt: bool) -> Vec<u8> {
     }
     bytes
 }
-
 
 fn single_char(s: &str) -> Option<char> {
     let mut it = s.chars();
@@ -170,7 +173,13 @@ mod tests {
     use super::*;
 
     fn key(k: &str) -> KeyInput<'_> {
-        KeyInput { key: k, key_char: None, ctrl: false, alt: false, shift: false }
+        KeyInput {
+            key: k,
+            key_char: None,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        }
     }
 
     fn enc(i: KeyInput) -> Vec<u8> {
@@ -197,38 +206,189 @@ mod tests {
         assert_eq!(encode_key(&key("up"), false).unwrap(), b"\x1b[A");
         assert_eq!(encode_key(&key("up"), true).unwrap(), b"\x1bOA");
         assert_eq!(encode_key(&key("home"), true).unwrap(), b"\x1bOH");
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("up") }), b"\x1b[1;5A");
-        assert_eq!(enc(KeyInput { shift: true, ..key("left") }), b"\x1b[1;2D");
-        assert_eq!(enc(KeyInput { alt: true, ctrl: true, ..key("right") }), b"\x1b[1;7C");
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("up")
+            }),
+            b"\x1b[1;5A"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                shift: true,
+                ..key("left")
+            }),
+            b"\x1b[1;2D"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                alt: true,
+                ctrl: true,
+                ..key("right")
+            }),
+            b"\x1b[1;7C"
+        );
         // Modifiers override application mode.
-        assert_eq!(encode_key(&KeyInput { ctrl: true, ..key("down") }, true).unwrap(), b"\x1b[1;5B");
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("delete") }), b"\x1b[3;5~");
-        assert_eq!(enc(KeyInput { shift: true, ..key("f1") }), b"\x1b[1;2P");
+        assert_eq!(
+            encode_key(
+                &KeyInput {
+                    ctrl: true,
+                    ..key("down")
+                },
+                true
+            )
+            .unwrap(),
+            b"\x1b[1;5B"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("delete")
+            }),
+            b"\x1b[3;5~"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                shift: true,
+                ..key("f1")
+            }),
+            b"\x1b[1;2P"
+        );
     }
 
     #[test]
     fn ctrl_alt_shift() {
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("a") }), vec![0x01]);
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("c") }), vec![0x03]);
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("z") }), vec![0x1a]);
-        assert_eq!(enc(KeyInput { ctrl: true, shift: true, ..key("a") }), vec![0x01]);
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("[") }), vec![0x1b]);
-        assert_eq!(enc(KeyInput { ctrl: true, ..key("space") }), vec![0x00]);
-        assert!(encode_key(&KeyInput { ctrl: true, ..key("1") }, false).is_none());
-        assert_eq!(enc(KeyInput { alt: true, ..key("b") }), b"\x1bb");
-        assert_eq!(enc(KeyInput { alt: true, ctrl: true, ..key("a") }), b"\x1b\x01");
-        assert_eq!(enc(KeyInput { alt: true, ..key("backspace") }), b"\x1b\x7f");
-        assert_eq!(enc(KeyInput { shift: true, ..key("tab") }), b"\x1b[Z");
-        assert_eq!(enc(KeyInput { alt: true, ..key("enter") }), b"\x1b\r");
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("a")
+            }),
+            vec![0x01]
+        );
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("c")
+            }),
+            vec![0x03]
+        );
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("z")
+            }),
+            vec![0x1a]
+        );
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                shift: true,
+                ..key("a")
+            }),
+            vec![0x01]
+        );
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("[")
+            }),
+            vec![0x1b]
+        );
+        assert_eq!(
+            enc(KeyInput {
+                ctrl: true,
+                ..key("space")
+            }),
+            vec![0x00]
+        );
+        assert!(
+            encode_key(
+                &KeyInput {
+                    ctrl: true,
+                    ..key("1")
+                },
+                false
+            )
+            .is_none()
+        );
+        assert_eq!(
+            enc(KeyInput {
+                alt: true,
+                ..key("b")
+            }),
+            b"\x1bb"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                alt: true,
+                ctrl: true,
+                ..key("a")
+            }),
+            b"\x1b\x01"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                alt: true,
+                ..key("backspace")
+            }),
+            b"\x1b\x7f"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                shift: true,
+                ..key("tab")
+            }),
+            b"\x1b[Z"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                alt: true,
+                ..key("enter")
+            }),
+            b"\x1b\r"
+        );
     }
 
     #[test]
     fn printable_uses_key_char() {
-        assert_eq!(enc(KeyInput { key_char: Some("A"), shift: true, ..key("a") }), b"A");
-        assert_eq!(enc(KeyInput { shift: true, ..key("a") }), b"A");
-        assert_eq!(enc(KeyInput { key_char: Some("!"), shift: true, ..key("1") }), b"!");
-        assert_eq!(enc(KeyInput { key_char: Some("\u{e9}"), ..key("e") }), "\u{e9}".as_bytes());
-        assert_eq!(enc(KeyInput { key_char: Some("x"), alt: true, ..key("x") }), b"\x1bx");
+        assert_eq!(
+            enc(KeyInput {
+                key_char: Some("A"),
+                shift: true,
+                ..key("a")
+            }),
+            b"A"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                shift: true,
+                ..key("a")
+            }),
+            b"A"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                key_char: Some("!"),
+                shift: true,
+                ..key("1")
+            }),
+            b"!"
+        );
+        assert_eq!(
+            enc(KeyInput {
+                key_char: Some("\u{e9}"),
+                ..key("e")
+            }),
+            "\u{e9}".as_bytes()
+        );
+        assert_eq!(
+            enc(KeyInput {
+                key_char: Some("x"),
+                alt: true,
+                ..key("x")
+            }),
+            b"\x1bx"
+        );
         assert!(encode_key(&key("capslock"), false).is_none());
     }
 }

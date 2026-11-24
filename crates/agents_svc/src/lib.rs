@@ -30,10 +30,10 @@ pub mod watch;
 pub use db::{Store, UpsertOutcome};
 pub use ingest::{IngestConfig, Ingestor, ScanReport, SourceKind};
 pub use model::{Agent, FileTouch, RateLimitSnapshot, TokenCounts, UsageEvent, UsageExtras};
-pub use watch::{Changes, LogWatcher};
 pub use pricing::{ModelPrice, PricingTable, COST_LABEL};
 pub use query::{AgentUsage, BranchUsage, BurnRate, FileTouched, Forecast, ReportedCost};
 pub use range::{Bounds, Range};
 pub use statusline::{
     parse_statusline_payload, record_statusline, StatuslineData, StatuslineLimit,
 };
+pub use watch::{Changes, LogWatcher};

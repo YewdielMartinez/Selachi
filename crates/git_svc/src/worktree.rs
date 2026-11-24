@@ -67,7 +67,10 @@ pub struct NewWorktree {
 
 impl NewWorktree {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), ..Self::default() }
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
     }
 }
 
@@ -124,7 +127,12 @@ fn check_component(c: &str, what: &str) -> Result<()> {
     }) {
         return bad(&format!("invalid character {ch:?}"));
     }
-    let stem = c.split('.').next().unwrap_or(c).trim_end().to_ascii_uppercase();
+    let stem = c
+        .split('.')
+        .next()
+        .unwrap_or(c)
+        .trim_end()
+        .to_ascii_uppercase();
     if RESERVED.contains(&stem.as_str()) {
         return bad("reserved device name on Windows");
     }
@@ -136,14 +144,18 @@ fn check_component(c: &str, what: &str) -> Result<()> {
 /// device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9, also with an extension).
 pub fn validate_worktree_name(name: &str) -> Result<()> {
     if name.chars().count() > 80 {
-        return Err(Error::InvalidArgument("worktree name is longer than 80 characters".into()));
+        return Err(Error::InvalidArgument(
+            "worktree name is longer than 80 characters".into(),
+        ));
     }
     check_component(name, "worktree name")
 }
 
 fn validate_branch_name(root: &Path, branch: &str) -> Result<()> {
     if branch.starts_with('-') {
-        return Err(Error::InvalidArgument(format!("branch {branch:?} must not start with '-'")));
+        return Err(Error::InvalidArgument(format!(
+            "branch {branch:?} must not start with '-'"
+        )));
     }
     for part in branch.split('/') {
         // Loose refs are files: each component must be a legal Windows file name too.
@@ -152,7 +164,9 @@ fn validate_branch_name(root: &Path, branch: &str) -> Result<()> {
     let full = format!("refs/heads/{branch}");
     let raw = run_git(root, &["check-ref-format", &full], LOCAL_TIMEOUT)?;
     if !raw.success() {
-        return Err(Error::InvalidArgument(format!("{branch:?} is not a valid branch name")));
+        return Err(Error::InvalidArgument(format!(
+            "{branch:?} is not a valid branch name"
+        )));
     }
     Ok(())
 }
@@ -192,7 +206,9 @@ pub(crate) fn parse_worktree_list(out: &[u8]) -> Result<Vec<Worktree>> {
             continue;
         }
         let Some(w) = cur.as_mut() else {
-            return Err(Error::Parse(format!("worktree attribute {key:?} before any `worktree`")));
+            return Err(Error::Parse(format!(
+                "worktree attribute {key:?} before any `worktree`"
+            )));
         };
         match key {
             "HEAD" => w.head = val.unwrap_or_default(),
@@ -285,7 +301,10 @@ impl Repo {
             .into_iter()
             .find(|w| same_path(&w.path, &path))
             .ok_or_else(|| {
-                Error::InvalidArgument(format!("{} is not a worktree of this repository", path.display()))
+                Error::InvalidArgument(format!(
+                    "{} is not a worktree of this repository",
+                    path.display()
+                ))
             })
     }
 
@@ -310,7 +329,11 @@ impl Repo {
             return Err(Error::InvalidArgument(format!("invalid base {base:?}")));
         }
         let commit_ref = format!("{base}^{{commit}}");
-        let rv = run_git(&self.root, &["rev-parse", "--verify", "-q", &commit_ref], LOCAL_TIMEOUT)?;
+        let rv = run_git(
+            &self.root,
+            &["rev-parse", "--verify", "-q", &commit_ref],
+            LOCAL_TIMEOUT,
+        )?;
         if !rv.success() {
             return Err(Error::InvalidArgument(format!(
                 "base {base:?} does not resolve to a commit (empty repository?)"
@@ -318,11 +341,18 @@ impl Repo {
         }
         let exists = run_git(
             &self.root,
-            &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")],
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
             LOCAL_TIMEOUT,
         )?;
         if exists.success() {
-            return Err(Error::InvalidArgument(format!("branch {branch:?} already exists")));
+            return Err(Error::InvalidArgument(format!(
+                "branch {branch:?} already exists"
+            )));
         }
 
         let main = self.main_worktree()?;
@@ -332,14 +362,16 @@ impl Repo {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .ok_or_else(|| Error::InvalidArgument("repository root has no name".into()))?;
-                let parent = main
-                    .parent()
-                    .ok_or_else(|| Error::InvalidArgument("repository root has no parent".into()))?;
+                let parent = main.parent().ok_or_else(|| {
+                    Error::InvalidArgument("repository root has no parent".into())
+                })?;
                 parent.join(format!("{name}.worktrees")).join(&opts.name)
             }
             WorktreeLocation::Custom(p) => {
                 if has_parent_dir(p) {
-                    return Err(Error::InvalidArgument("custom location must not contain '..'".into()));
+                    return Err(Error::InvalidArgument(
+                        "custom location must not contain '..'".into(),
+                    ));
                 }
                 absolutize(p, &main)
             }
@@ -367,7 +399,9 @@ impl Repo {
         }
         if target.exists() {
             let empty = target.is_dir()
-                && std::fs::read_dir(&target).map(|mut d| d.next().is_none()).unwrap_or(false);
+                && std::fs::read_dir(&target)
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(false);
             if !empty {
                 return Err(Error::InvalidArgument(format!(
                     "{} already exists and is not an empty directory",
@@ -380,27 +414,32 @@ impl Repo {
         }
 
         let target_s = target.to_string_lossy().into_owned();
-        run_git_ok(&self.root, &["worktree", "add", "-b", &branch, "--", &target_s, &base])?;
+        run_git_ok(
+            &self.root,
+            &["worktree", "add", "-b", &branch, "--", &target_s, &base],
+        )?;
 
         let worktree = self
             .worktrees()?
             .into_iter()
             .find(|w| same_path(&w.path, &target))
-            .ok_or_else(|| Error::Parse("created worktree is missing from `git worktree list`".into()))?;
+            .ok_or_else(|| {
+                Error::Parse("created worktree is missing from `git worktree list`".into())
+            })?;
 
         let (copied, skipped) = if specs.is_empty() {
             (Vec::new(), Vec::new())
         } else {
             self.copy_untracked_into(&specs, &worktree.path)?
         };
-        Ok(CreatedWorktree { worktree, copied, skipped })
+        Ok(CreatedWorktree {
+            worktree,
+            copied,
+            skipped,
+        })
     }
 
-    fn copy_untracked_into(
-        &self,
-        specs: &[String],
-        dest: &Path,
-    ) -> Result<CopyOutcome> {
+    fn copy_untracked_into(&self, specs: &[String], dest: &Path) -> Result<CopyOutcome> {
         let mut args: Vec<String> = ["ls-files", "-o", "-z", "--full-name", "--"]
             .iter()
             .map(|s| (*s).to_owned())
@@ -416,7 +455,11 @@ impl Repo {
                 continue; // nested repository marker / duplicate
             }
             let relp = PathBuf::from(&rel);
-            if has_parent_dir(&relp) || relp.is_absolute() || rel == ".git" || rel.starts_with(".git/") {
+            if has_parent_dir(&relp)
+                || relp.is_absolute()
+                || rel == ".git"
+                || rel.starts_with(".git/")
+            {
                 skipped.push((relp, "unsafe path".into()));
                 continue;
             }
@@ -456,7 +499,9 @@ impl Repo {
     pub fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
         let w = self.find_worktree(path)?;
         if w.is_main {
-            return Err(Error::InvalidArgument("the main worktree cannot be removed".into()));
+            return Err(Error::InvalidArgument(
+                "the main worktree cannot be removed".into(),
+            ));
         }
         if same_path(&w.path, &self.root) {
             return Err(Error::InvalidArgument(
@@ -466,7 +511,10 @@ impl Repo {
         if w.locked && !force {
             return Err(Error::InvalidArgument(format!(
                 "worktree is locked{}; use force to remove it",
-                w.lock_reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()
+                w.lock_reason
+                    .as_deref()
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default()
             )));
         }
         let main = self.main_worktree()?;
@@ -499,29 +547,47 @@ impl Repo {
     pub fn preflight_remove_worktree(&self, path: &Path) -> Result<Preflight> {
         let w = self.find_worktree(path)?;
         if w.is_main {
-            return Err(Error::InvalidArgument("the main worktree cannot be removed".into()));
+            return Err(Error::InvalidArgument(
+                "the main worktree cannot be removed".into(),
+            ));
         }
         let mut pf = Preflight::default();
         if w.locked {
             pf.warnings.push(format!(
                 "worktree is locked{}",
-                w.lock_reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()
+                w.lock_reason
+                    .as_deref()
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default()
             ));
         }
         if w.prunable || !w.path.is_dir() {
-            pf.warnings.push("directory is already missing; only stale metadata will be pruned".into());
+            pf.warnings
+                .push("directory is already missing; only stale metadata will be pruned".into());
             pf.requires_confirmation = true;
             return Ok(pf);
         }
-        if let Ok(out) = run_git_ok(&w.path, &["status", "--porcelain", "--untracked-files=normal"]) {
-            let n = out.stdout_string().lines().filter(|l| !l.trim().is_empty()).count();
+        if let Ok(out) = run_git_ok(
+            &w.path,
+            &["status", "--porcelain", "--untracked-files=normal"],
+        ) {
+            let n = out
+                .stdout_string()
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count();
             if n > 0 {
-                pf.warnings.push(format!("{n} file(s) with uncommitted changes will be lost"));
-                pf.diff_stat = run_git(&w.path, &["diff", "--stat", "--no-color", "HEAD"], LOCAL_TIMEOUT)
-                    .ok()
-                    .filter(|r| r.success())
-                    .map(|r| r.stdout_string())
-                    .filter(|s| !s.trim().is_empty());
+                pf.warnings
+                    .push(format!("{n} file(s) with uncommitted changes will be lost"));
+                pf.diff_stat = run_git(
+                    &w.path,
+                    &["diff", "--stat", "--no-color", "HEAD"],
+                    LOCAL_TIMEOUT,
+                )
+                .ok()
+                .filter(|r| r.success())
+                .map(|r| r.stdout_string())
+                .filter(|s| !s.trim().is_empty());
             }
         }
         if let Some(n) = self.unshared_commits(&w).filter(|n| *n > 0) {
@@ -530,7 +596,10 @@ impl Repo {
             } else {
                 "detached HEAD: they become unreachable"
             };
-            let what = w.branch.as_deref().map_or("HEAD".to_owned(), |b| format!("branch {b}"));
+            let what = w
+                .branch
+                .as_deref()
+                .map_or("HEAD".to_owned(), |b| format!("branch {b}"));
             pf.warnings.push(format!(
                 "{n} commit(s) on {what} are not pushed or merged anywhere else ({note})"
             ));
@@ -614,7 +683,9 @@ fn copy_pathspecs(globs: &[String]) -> Result<Vec<String>> {
     for g in globs {
         let g = g.trim().replace('\\', "/");
         if g.is_empty() {
-            return Err(Error::InvalidArgument("empty copy_untracked pattern".into()));
+            return Err(Error::InvalidArgument(
+                "empty copy_untracked pattern".into(),
+            ));
         }
         if g.starts_with('/') || g.contains(':') || g.starts_with('!') {
             return Err(Error::InvalidArgument(format!(
@@ -622,10 +693,16 @@ fn copy_pathspecs(globs: &[String]) -> Result<Vec<String>> {
             )));
         }
         if g.split('/').any(|c| c == "..") {
-            return Err(Error::InvalidArgument(format!("copy_untracked pattern {g:?} contains '..'")));
+            return Err(Error::InvalidArgument(format!(
+                "copy_untracked pattern {g:?} contains '..'"
+            )));
         }
         let g = g.trim_start_matches("./");
-        let anywhere = if g.contains('/') { g.to_owned() } else { format!("**/{g}") };
+        let anywhere = if g.contains('/') {
+            g.to_owned()
+        } else {
+            format!("**/{g}")
+        };
         out.push(format!(":(glob){anywhere}"));
     }
     Ok(out)
@@ -637,7 +714,15 @@ mod tests {
 
     #[test]
     fn names() {
-        for ok in ["feat-x", "fix_1", "añadir", "my feature", "a.b", "v1.2", "console"] {
+        for ok in [
+            "feat-x",
+            "fix_1",
+            "añadir",
+            "my feature",
+            "a.b",
+            "v1.2",
+            "console",
+        ] {
             assert!(validate_worktree_name(ok).is_ok(), "{ok}");
         }
         for bad in [
@@ -676,8 +761,14 @@ worktree C:/gone\0HEAD 123\0detached\0prunable gitdir file points to non-existen
 
     #[test]
     fn pathspecs() {
-        assert_eq!(copy_pathspecs(&[".env".into()]).unwrap(), [":(glob)**/.env"]);
-        assert_eq!(copy_pathspecs(&["config/*.local".into()]).unwrap(), [":(glob)config/*.local"]);
+        assert_eq!(
+            copy_pathspecs(&[".env".into()]).unwrap(),
+            [":(glob)**/.env"]
+        );
+        assert_eq!(
+            copy_pathspecs(&["config/*.local".into()]).unwrap(),
+            [":(glob)config/*.local"]
+        );
         assert!(copy_pathspecs(&["../x".into()]).is_err());
         assert!(copy_pathspecs(&["/abs".into()]).is_err());
         assert!(copy_pathspecs(&[":(top)x".into()]).is_err());

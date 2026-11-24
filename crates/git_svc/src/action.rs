@@ -33,7 +33,15 @@ impl GitAction {
             Self::Fetch => vec!["git", "fetch", "--prune"],
             Self::Switch { branch } => vec!["git", "switch", branch],
             Self::Checkout { target } => vec!["git", "checkout", target],
-            Self::Log => vec!["git", "log", "--oneline", "--graph", "--decorate", "-n", "20"],
+            Self::Log => vec![
+                "git",
+                "log",
+                "--oneline",
+                "--graph",
+                "--decorate",
+                "-n",
+                "20",
+            ],
             Self::Diff => vec!["git", "diff"],
         };
         parts.into_iter().map(str::to_owned).collect()
@@ -115,11 +123,17 @@ mod tests {
     fn argv_shapes() {
         assert_eq!(GitAction::AddAll.argv(), ["git", "add", "-A"]);
         assert_eq!(
-            GitAction::Commit { message: "fix: a b".into() }.argv(),
+            GitAction::Commit {
+                message: "fix: a b".into()
+            }
+            .argv(),
             ["git", "commit", "-m", "fix: a b"]
         );
         assert_eq!(
-            GitAction::Switch { branch: "dev".into() }.argv(),
+            GitAction::Switch {
+                branch: "dev".into()
+            }
+            .argv(),
             ["git", "switch", "dev"]
         );
         assert!(GitAction::Push.argv().starts_with(&["git".to_string()]));
@@ -129,7 +143,10 @@ mod tests {
     fn sensitivity() {
         assert!(GitAction::Push.is_sensitive());
         assert!(GitAction::Pull.is_sensitive());
-        assert!(GitAction::Commit { message: "x".into() }.is_sensitive());
+        assert!(GitAction::Commit {
+            message: "x".into()
+        }
+        .is_sensitive());
         assert!(GitAction::Checkout { target: "x".into() }.is_sensitive());
         assert!(!GitAction::Status.is_sensitive());
         assert!(!GitAction::Fetch.is_sensitive());
@@ -140,9 +157,23 @@ mod tests {
 
     #[test]
     fn validation() {
-        assert!(GitAction::Switch { branch: "--detach".into() }.validate().is_err());
-        assert!(GitAction::Checkout { target: "".into() }.validate().is_err());
-        assert!(GitAction::Commit { message: "  ".into() }.validate().is_err());
-        assert!(GitAction::Switch { branch: "feature/x".into() }.validate().is_ok());
+        assert!(GitAction::Switch {
+            branch: "--detach".into()
+        }
+        .validate()
+        .is_err());
+        assert!(GitAction::Checkout { target: "".into() }
+            .validate()
+            .is_err());
+        assert!(GitAction::Commit {
+            message: "  ".into()
+        }
+        .validate()
+        .is_err());
+        assert!(GitAction::Switch {
+            branch: "feature/x".into()
+        }
+        .validate()
+        .is_ok());
     }
 }

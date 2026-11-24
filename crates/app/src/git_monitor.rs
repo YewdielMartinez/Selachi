@@ -72,16 +72,34 @@ fn code_of(kind: ChangeKind) -> char {
 
 fn info_from(st: &RepoStatus, root: &Path) -> GitInfo {
     let branch = st.branch.clone().unwrap_or_else(|| {
-        st.head_oid.as_deref().map_or_else(|| "HEAD".to_string(), |oid| oid.chars().take(7).collect())
+        st.head_oid
+            .as_deref()
+            .map_or_else(|| "HEAD".to_string(), |oid| oid.chars().take(7).collect())
     });
     let shown = |p: &Path| p.to_string_lossy().replace('\\', "/");
     let marks: Vec<ChangedFile> = st
         .conflicted
         .iter()
-        .map(|p| ChangedFile { code: '!', staged: false, path: shown(p) })
-        .chain(st.staged.iter().map(|c| ChangedFile { code: code_of(c.kind), staged: true, path: shown(&c.path) }))
-        .chain(st.unstaged.iter().map(|c| ChangedFile { code: code_of(c.kind), staged: false, path: shown(&c.path) }))
-        .chain(st.untracked.iter().map(|p| ChangedFile { code: '?', staged: false, path: shown(p) }))
+        .map(|p| ChangedFile {
+            code: '!',
+            staged: false,
+            path: shown(p),
+        })
+        .chain(st.staged.iter().map(|c| ChangedFile {
+            code: code_of(c.kind),
+            staged: true,
+            path: shown(&c.path),
+        }))
+        .chain(st.unstaged.iter().map(|c| ChangedFile {
+            code: code_of(c.kind),
+            staged: false,
+            path: shown(&c.path),
+        }))
+        .chain(st.untracked.iter().map(|p| ChangedFile {
+            code: '?',
+            staged: false,
+            path: shown(p),
+        }))
         .take(MAX_MARKS)
         .collect();
     let files = marks.iter().take(MAX_FILES).cloned().collect();
@@ -116,7 +134,7 @@ fn discover(cwd: &Path) -> Option<Found> {
         Err(e) => {
             log::warn!("git watcher unavailable for {}: {e}", repo.root.display());
             None
-        },
+        }
     };
     Some(Found { repo, info, watch })
 }
@@ -175,8 +193,13 @@ impl GitMonitor {
         }
 
         self.watch_task = Some(cx.spawn(async move |this, cx| {
-            let found = cx.background_executor().spawn(async move { discover(&cwd) }).await;
-            let Some(Found { repo, info, watch }) = found else { return };
+            let found = cx
+                .background_executor()
+                .spawn(async move { discover(&cwd) })
+                .await;
+            let Some(Found { repo, info, watch }) = found else {
+                return;
+            };
             let (handle, rx) = match watch {
                 Some((h, rx)) => (Some(h), Some(rx)),
                 None => (None, None),
@@ -207,7 +230,9 @@ impl GitMonitor {
 
     /// Re-reads the status (after a finished command or a watcher event). Never overlaps.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         if self.refreshing {
             self.refresh_queued = true;
             return;
@@ -253,15 +278,27 @@ mod tests {
         .unwrap();
         let root = Path::new("C:/repo");
         let info = info_from(&st, root);
-        assert_eq!((info.branch.as_str(), info.dirty, info.ahead, info.behind), ("main", false, 2, 1));
+        assert_eq!(
+            (info.branch.as_str(), info.dirty, info.ahead, info.behind),
+            ("main", false, 2, 1)
+        );
         assert_eq!(info.upstream.as_deref(), Some("origin/main"));
         assert!(info.files.is_empty());
-        let st = parse_status(b"# branch.oid abcdef0123456789\0# branch.head main\0? new.txt\0").unwrap();
+        let st = parse_status(b"# branch.oid abcdef0123456789\0# branch.head main\0? new.txt\0")
+            .unwrap();
         let info = info_from(&st, root);
         assert!(info.dirty, "untracked files count as dirty");
         assert_eq!(info.untracked, 1);
-        assert_eq!(info.files, vec![ChangedFile { code: '?', staged: false, path: "new.txt".into() }]);
-        let st = parse_status(b"# branch.oid abcdef0123456789\0# branch.head (detached)\0").unwrap();
+        assert_eq!(
+            info.files,
+            vec![ChangedFile {
+                code: '?',
+                staged: false,
+                path: "new.txt".into()
+            }]
+        );
+        let st =
+            parse_status(b"# branch.oid abcdef0123456789\0# branch.head (detached)\0").unwrap();
         assert_eq!(info_from(&st, root).branch, "abcdef0");
     }
 }

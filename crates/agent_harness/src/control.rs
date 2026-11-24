@@ -53,7 +53,10 @@ impl StatusOut {
             elapsed_secs: ((end - rec.started_ms) / 1000).max(0),
             deadline_ms: rec.deadline_ms,
             cwd: store::paths::clean_display(&rec.cwd.to_string_lossy()),
-            worktree_path: rec.worktree_path.as_ref().map(|p| store::paths::clean_display(&p.to_string_lossy())),
+            worktree_path: rec
+                .worktree_path
+                .as_ref()
+                .map(|p| store::paths::clean_display(&p.to_string_lossy())),
             applied: rec.applied_ms.is_some(),
             runner_pid: rec.runner_pid,
             reason: rec.result.as_ref().and_then(|r| r.reason.clone()),
@@ -71,7 +74,10 @@ impl StatusOut {
             self.status.as_str(),
             self.agent,
             self.elapsed_secs,
-            self.worktree_path.as_ref().map(|w| format!(" · worktree {w}")).unwrap_or_default(),
+            self.worktree_path
+                .as_ref()
+                .map(|w| format!(" · worktree {w}"))
+                .unwrap_or_default(),
             if self.applied { " · applied" } else { "" },
             self.prompt.lines().next().unwrap_or(""),
         )
@@ -92,9 +98,16 @@ pub enum CancelOutcome {
 
 /// Is the process that was running `rec` still the same one?
 fn runner_alive(rec: &RunRecord) -> bool {
-    let Some(started) = proc_svc::start_time_of(rec.runner_pid) else { return false };
-    let Some(expected) = rec.runner_start_ms else { return true };
-    let actual = started.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let Some(started) = proc_svc::start_time_of(rec.runner_pid) else {
+        return false;
+    };
+    let Some(expected) = rec.runner_start_ms else {
+        return true;
+    };
+    let actual = started
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
     (actual - expected).abs() < 2_000
 }
 
@@ -114,7 +127,10 @@ impl Harness {
                 agent: Some(rec.agent.clone()),
                 permission: Some(rec.permission.clone()),
                 thread_id: Some(rec.thread_id),
-                worktree_path: rec.worktree_path.as_ref().map(|p| store::paths::clean_display(&p.to_string_lossy())),
+                worktree_path: rec
+                    .worktree_path
+                    .as_ref()
+                    .map(|p| store::paths::clean_display(&p.to_string_lossy())),
                 ..RunResult::empty(RunStatus::Error)
             });
             if let Err(e) = self.registry.save(&rec) {
@@ -134,7 +150,9 @@ impl Harness {
         let rec = self.record(run_id)?;
         match rec.result {
             Some(r) if rec.status.is_final() => Ok(r),
-            _ => Err(format!("run {run_id} is still running; check `selachi-agent status {run_id}`")),
+            _ => Err(format!(
+                "run {run_id} is still running; check `selachi-agent status {run_id}`"
+            )),
         }
     }
 
@@ -144,7 +162,9 @@ impl Harness {
         if rec.status.is_final() {
             return Ok(CancelOutcome::AlreadyFinished { status: rec.status });
         }
-        self.registry.request_cancel(run_id).map_err(|e| format!("cannot request the cancellation: {e}"))?;
+        self.registry
+            .request_cancel(run_id)
+            .map_err(|e| format!("cannot request the cancellation: {e}"))?;
         let end = Instant::now() + CANCEL_GRACE;
         while Instant::now() < end {
             std::thread::sleep(Duration::from_millis(100));
@@ -163,8 +183,12 @@ impl Harness {
             return Ok(CancelOutcome::AlreadyFinished { status: rec.status });
         }
         if runner_alive(&rec) {
-            proc_svc::terminate_tree(rec.runner_pid, Duration::from_millis(500))
-                .map_err(|e| format!("the runner (pid {}) did not stop and could not be killed: {e}", rec.runner_pid))?;
+            proc_svc::terminate_tree(rec.runner_pid, Duration::from_millis(500)).map_err(|e| {
+                format!(
+                    "the runner (pid {}) did not stop and could not be killed: {e}",
+                    rec.runner_pid
+                )
+            })?;
         }
         rec.status = RunStatus::Cancelled;
         rec.finished_ms = Some(chat_core::now_ms());

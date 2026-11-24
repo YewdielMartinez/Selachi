@@ -17,7 +17,10 @@ pub type DraftKey = (String, String);
 
 /// Root as a comparable string: forward slashes, no trailing slash, lowercase (Windows).
 pub fn root_key(root: &Path) -> String {
-    root.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
+    root.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
 }
 
 pub fn draft_key(source: &ReviewSource) -> DraftKey {
@@ -73,21 +76,35 @@ impl ReviewStore {
         let reviews = self
             .map
             .iter()
-            .map(|((root, source), set)| Entry { root: root.clone(), source: source.clone(), notes: set.notes().to_vec() })
+            .map(|((root, source), set)| Entry {
+                root: root.clone(),
+                source: source.clone(),
+                notes: set.notes().to_vec(),
+            })
             .collect();
-        serde_json::to_string_pretty(&Export { version: 1, reviews }).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string_pretty(&Export {
+            version: 1,
+            reviews,
+        })
+        .unwrap_or_else(|_| "{}".to_string())
     }
 
     /// Merges what [`ReviewStore::export_all`] produced. Returns how many notes were added.
     pub fn import_all(&mut self, json: &str) -> Result<usize, String> {
-        let export: Export = serde_json::from_str(json).map_err(|e| format!("borradores ilegibles: {e}"))?;
+        let export: Export =
+            serde_json::from_str(json).map_err(|e| format!("borradores ilegibles: {e}"))?;
         if export.version != 1 {
-            return Err(format!("versión de borradores no soportada: {}", export.version));
+            return Err(format!(
+                "versión de borradores no soportada: {}",
+                export.version
+            ));
         }
         let mut added = 0;
         for e in export.reviews {
             let set = self.map.entry((e.root, e.source)).or_default();
-            let json = serde_json::to_string(&serde_json::json!({ "version": 1, "notes": e.notes })).map_err(|e| e.to_string())?;
+            let json =
+                serde_json::to_string(&serde_json::json!({ "version": 1, "notes": e.notes }))
+                    .map_err(|e| e.to_string())?;
             added += set.merge_json(&json)?;
         }
         Ok(added)
@@ -117,10 +134,17 @@ mod tests {
 
     #[test]
     fn keys_normalise_the_root() {
-        let a = ReviewSource::Worktree { root: "C:\\Users\\Me\\Repo\\".into() };
-        let b = ReviewSource::Worktree { root: "c:/users/me/repo".into() };
+        let a = ReviewSource::Worktree {
+            root: "C:\\Users\\Me\\Repo\\".into(),
+        };
+        let b = ReviewSource::Worktree {
+            root: "c:/users/me/repo".into(),
+        };
         assert_eq!(draft_key(&a), draft_key(&b));
-        let c = ReviewSource::SinceCheckpoint { root: "c:/users/me/repo".into(), id: "1-a".into() };
+        let c = ReviewSource::SinceCheckpoint {
+            root: "c:/users/me/repo".into(),
+            id: "1-a".into(),
+        };
         assert_ne!(draft_key(&a), draft_key(&c));
     }
 
@@ -145,8 +169,17 @@ mod tests {
         let mut other = ReviewStore::default();
         assert_eq!(other.import_all(&json), Ok(2));
         assert_eq!(other.len(), 2);
-        assert_eq!(other.get(&("r2".to_string(), "checkpoint:9".to_string())).map(|s| s.notes()[0].text.clone()), Some("dos".to_string()));
-        assert_eq!(other.import_all(&json), Ok(0), "importing twice adds nothing");
+        assert_eq!(
+            other
+                .get(&("r2".to_string(), "checkpoint:9".to_string()))
+                .map(|s| s.notes()[0].text.clone()),
+            Some("dos".to_string())
+        );
+        assert_eq!(
+            other.import_all(&json),
+            Ok(0),
+            "importing twice adds nothing"
+        );
         assert!(other.import_all("[]").is_err());
         let _ = NoteId(0);
     }

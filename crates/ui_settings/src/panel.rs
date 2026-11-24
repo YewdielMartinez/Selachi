@@ -45,7 +45,13 @@ impl PanelProvider for SettingsPanelProvider {
         view.into()
     }
 
-    fn context_changed(&self, _view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
+    fn context_changed(
+        &self,
+        _view: &AnyView,
+        ctx: &PanelCtx,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         self.view.update(cx, |v, cx| v.set_theme(ctx.theme, cx));
         true
     }

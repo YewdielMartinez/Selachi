@@ -8,8 +8,8 @@ use std::time::Duration;
 use agents_driver::DetectedAgent;
 use futures::StreamExt;
 use gpui::{
-    App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, PathPromptOptions,
-    ScrollHandle, Subscription, Task, UniformListScrollHandle, Window,
+    App, AppContext as _, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    PathPromptOptions, ScrollHandle, Subscription, Task, UniformListScrollHandle, Window,
 };
 use store::{Config, DiscoveredProject, StateDb};
 use theme::{Mode, Theme};
@@ -140,7 +140,12 @@ impl Drop for OnboardingView {
 ///
 /// `config` is the current configuration (the wizard's starting point and the base its result is
 /// built on); `db` receives the imported projects and favorites and locates the first-run flag.
-pub fn onboarding(config: Config, db: Option<StateDb>, theme: Theme, cx: &mut App) -> Entity<OnboardingView> {
+pub fn onboarding(
+    config: Config,
+    db: Option<StateDb>,
+    theme: Theme,
+    cx: &mut App,
+) -> Entity<OnboardingView> {
     onboarding_with(config, db, theme, Services::default(), Step::Welcome, cx)
 }
 
@@ -165,6 +170,7 @@ impl OnboardingView {
         start: Step,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::init(cx);
         let data_dir = db
             .as_ref()
             .map(flag::data_dir_of)
@@ -177,7 +183,10 @@ impl OnboardingView {
             .map(projects::default_roots)
             .unwrap_or_default()
             .into_iter()
-            .map(|path| Root { path, checked: true })
+            .map(|path| Root {
+                path,
+                checked: true,
+            })
             .collect();
         let reduced_motion = ui_kit::reduced_motion() || config.layout.resolve().reduced_motion;
         Self {
@@ -244,8 +253,16 @@ impl OnboardingView {
         let projects_skipped = self.flow.is_skipped(Step::Projects);
         Outcome {
             config: self.draft.build_config(&self.base, skipped),
-            projects: if projects_skipped { Vec::new() } else { self.projects.selected() },
-            favorites: if projects_skipped { Vec::new() } else { self.projects.favorites() },
+            projects: if projects_skipped {
+                Vec::new()
+            } else {
+                self.projects.selected()
+            },
+            favorites: if projects_skipped {
+                Vec::new()
+            } else {
+                self.projects.favorites()
+            },
         }
     }
 
@@ -282,7 +299,8 @@ impl OnboardingView {
 
     /// The theme of the current theme and accent choices.
     pub(crate) fn preview_theme(&self) -> Theme {
-        Theme::for_mode(self.draft.theme.resolve(self.system_dark)).with_accent_str(&self.draft.accent)
+        Theme::for_mode(self.draft.theme.resolve(self.system_dark))
+            .with_accent_str(&self.draft.accent)
     }
 
     pub(crate) fn restyle(&mut self, cx: &mut Context<Self>) {
@@ -381,7 +399,8 @@ impl OnboardingView {
                     self.release_shark(window);
                 }
                 self.notice = None;
-                self.scroll.set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+                self.scroll
+                    .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
                 self.enter_step(window, cx);
                 cx.notify();
             }
@@ -438,7 +457,10 @@ impl OnboardingView {
         let dir = self.data_dir.clone();
         let db = self.db.clone();
         self.finish_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let marked = cx.background_executor().spawn(async move { flag::mark_done_with(db.as_ref(), &dir) }).await;
+            let marked = cx
+                .background_executor()
+                .spawn(async move { flag::mark_done_with(db.as_ref(), &dir) })
+                .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Err(e) = marked {
                     log::warn!("onboarding: cannot write the first-run flag: {e}");
@@ -477,7 +499,10 @@ impl OnboardingView {
         self.shark_failed = false;
         let animate = !self.reduced_motion;
         self.shark_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let loaded = cx.background_executor().spawn(async move { gif::load(&path) }).await;
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { gif::load(&path) })
+                .await;
             let started = this.update_in(cx, |this, _window, cx| {
                 this.shark_loading = false;
                 if this.flow.step() != Step::Welcome {
@@ -566,7 +591,10 @@ impl OnboardingView {
         self.agents = agents::checking_rows();
         let detect = self.services.detect_agents.clone();
         self.detect_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let found = cx.background_executor().spawn(async move { detect() }).await;
+            let found = cx
+                .background_executor()
+                .spawn(async move { detect() })
+                .await;
             let _ = this.update_in(cx, |this, _window, cx| {
                 this.agents = agents::rows_from_detected(&found);
                 this.detect_task = None;
@@ -577,11 +605,19 @@ impl OnboardingView {
     }
 
     pub(crate) fn open_login(&mut self, cli: AgentCli, cx: &mut Context<Self>) {
-        cx.emit(OnboardingEvent::OpenLoginTerminal { agent: cli, command: cli.login_command().to_string() });
+        cx.emit(OnboardingEvent::OpenLoginTerminal {
+            agent: cli,
+            command: cli.login_command().to_string(),
+        });
     }
 
     /// Copy the install command; the button says "Copiado" for two seconds.
-    pub(crate) fn copy_install(&mut self, cli: AgentCli, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn copy_install(
+        &mut self,
+        cli: AgentCli,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.write_to_clipboard(ClipboardItem::new_string(cli.install_command()));
         self.copied = Some(cli);
         self.copied_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -609,7 +645,12 @@ impl OnboardingView {
         self.scan_started = true;
         self.scan_cancel = CancelFlag::default();
         self.projects.clear_keep_choices();
-        let roots: Vec<PathBuf> = self.roots.iter().filter(|r| r.checked).map(|r| r.path.clone()).collect();
+        let roots: Vec<PathBuf> = self
+            .roots
+            .iter()
+            .filter(|r| r.checked)
+            .map(|r| r.path.clone())
+            .collect();
         if roots.is_empty() {
             self.scan_running = false;
             self.scan_task = None;
@@ -655,18 +696,27 @@ impl OnboardingView {
             prompt: Some("Añadir carpeta".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
             let _ = this.update_in(cx, |this, window, cx| {
                 let mut added = false;
                 for path in paths {
                     let key = store::paths::normalize_key(&path.to_string_lossy());
-                    match this.roots.iter_mut().find(|r| store::paths::normalize_key(&r.path.to_string_lossy()) == key) {
+                    match this
+                        .roots
+                        .iter_mut()
+                        .find(|r| store::paths::normalize_key(&r.path.to_string_lossy()) == key)
+                    {
                         Some(existing) => {
                             added |= !existing.checked;
                             existing.checked = true;
                         }
                         None => {
-                            this.roots.push(Root { path, checked: true });
+                            this.roots.push(Root {
+                                path,
+                                checked: true,
+                            });
                             added = true;
                         }
                     }
@@ -688,8 +738,12 @@ impl OnboardingView {
             prompt: Some("Carpeta de worktrees".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            let Some(path) = paths.into_iter().next() else { return };
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
             let _ = this.update(cx, |this, cx| {
                 this.draft.worktrees = WorktreeLocation::Custom(path);
                 cx.notify();
@@ -707,7 +761,10 @@ impl OnboardingView {
         self.shells_started = true;
         let detect = self.services.detect_shells.clone();
         self.shells_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let found = cx.background_executor().spawn(async move { detect() }).await;
+            let found = cx
+                .background_executor()
+                .spawn(async move { detect() })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 this.shells = Some(found);
                 this.shells_task = None;
@@ -728,25 +785,27 @@ impl OnboardingView {
             prompt: Some("Importar config.toml".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            let Some(path) = paths.into_iter().next() else { return };
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
             let read = path.clone();
             let parsed = cx
                 .background_executor()
                 .spawn(async move { Config::load_from(&read).map_err(|e| e.to_string()) })
                 .await;
-            let _ = this.update(cx, |this, cx| {
-                match parsed {
-                    Ok(p) => {
-                        this.draft = Draft::from_config(&p.config);
-                        this.base = p.config;
-                        this.notice = Some(format!("Configuración importada de {}", path.display()));
-                        this.restyle(cx);
-                    }
-                    Err(e) => {
-                        this.notice = Some(format!("No se pudo importar: {e}"));
-                        cx.notify();
-                    }
+            let _ = this.update(cx, |this, cx| match parsed {
+                Ok(p) => {
+                    this.draft = Draft::from_config(&p.config);
+                    this.base = p.config;
+                    this.notice = Some(format!("Configuración importada de {}", path.display()));
+                    this.restyle(cx);
+                }
+                Err(e) => {
+                    this.notice = Some(format!("No se pudo importar: {e}"));
+                    cx.notify();
                 }
             });
         })
@@ -758,7 +817,8 @@ impl OnboardingView {
     pub(crate) fn shell_label(&self) -> String {
         match (&self.draft.shell, &self.shells) {
             (Some(s), _) => s.name.clone(),
-            (None, Some(list)) => shells::auto_index(list).map_or_else(|| "shell automático".to_string(), |i| list[i].name.clone()),
+            (None, Some(list)) => shells::auto_index(list)
+                .map_or_else(|| "shell automático".to_string(), |i| list[i].name.clone()),
             (None, None) => "shell automático".to_string(),
         }
     }
@@ -768,7 +828,10 @@ impl OnboardingView {
             &self.draft,
             self.flow.skipped(),
             &self.agents,
-            ProjectCounts { selected: self.projects.checked_count(), favorites: self.projects.favorite_count() },
+            ProjectCounts {
+                selected: self.projects.checked_count(),
+                favorites: self.projects.favorite_count(),
+            },
             &self.shell_label(),
         )
     }

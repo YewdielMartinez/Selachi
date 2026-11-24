@@ -21,7 +21,10 @@
 
 pub use gpui::{TestAppContext, VisualTestContext};
 
-use gpui::{Bounds, Context, Entity, FocusHandle, KeyUpEvent, Keystroke, Modifiers, Pixels, Point, Render, Window};
+use gpui::{
+    Bounds, Context, Entity, FocusHandle, KeyUpEvent, Keystroke, Modifiers, Pixels, Point, Render,
+    Window,
+};
 
 /// Registers the kit's key bindings in a test app (windows opened with [`open_window`] get it for free).
 pub fn init(cx: &mut TestAppContext) {
@@ -85,7 +88,8 @@ pub fn bounds_of(cx: &mut VisualTestContext, id: &str) -> Option<Bounds<Pixels>>
 
 /// A left click at the center of the control with element id `id`. Panics when it is not on screen.
 pub fn click_id(cx: &mut VisualTestContext, id: &str) {
-    let b = bounds_of(cx, id).unwrap_or_else(|| panic!("no control with id `{id}` in the last frame"));
+    let b =
+        bounds_of(cx, id).unwrap_or_else(|| panic!("no control with id `{id}` in the last frame"));
     click_at(cx, b.center());
     cx.run_until_parked();
 }

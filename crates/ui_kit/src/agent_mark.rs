@@ -86,7 +86,11 @@ impl AgentMark {
 /// The mark of `mark` drawn at `size` logical px in `color`.
 pub fn agent_icon(mark: AgentMark, size: f32, color: impl Into<Hsla>) -> Svg {
     match mark.name() {
-        Some(_) => svg().path(mark.path()).flex_none().size(px(size)).text_color(color),
+        Some(_) => svg()
+            .path(mark.path())
+            .flex_none()
+            .size(px(size))
+            .text_color(color),
         None => icon(Icon::Agents, size, color),
     }
 }
@@ -107,8 +111,14 @@ mod tests {
         assert_eq!(AgentMark::from_name("GitHub Copilot"), AgentMark::Copilot);
         assert_eq!(AgentMark::from_name("windsurf"), AgentMark::Windsurf);
         assert_eq!(AgentMark::from_name("Antigravity"), AgentMark::Antigravity);
-        assert_eq!(AgentMark::from_name("google-antigravity"), AgentMark::Antigravity);
-        assert_eq!(AgentMark::Antigravity.path(), "icons/agents/antigravity.svg");
+        assert_eq!(
+            AgentMark::from_name("google-antigravity"),
+            AgentMark::Antigravity
+        );
+        assert_eq!(
+            AgentMark::Antigravity.path(),
+            "icons/agents/antigravity.svg"
+        );
         assert_eq!(AgentMark::from_name("aider"), AgentMark::Unknown);
         assert_eq!(AgentMark::from_name(""), AgentMark::Unknown);
     }

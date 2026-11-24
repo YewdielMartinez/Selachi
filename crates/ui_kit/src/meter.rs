@@ -24,7 +24,12 @@ pub struct DitherMeter {
 
 impl DitherMeter {
     pub fn new(theme: &Theme) -> Self {
-        Self { theme: *theme, segments: 8, value: None, accent: None }
+        Self {
+            theme: *theme,
+            segments: 8,
+            value: None,
+            accent: None,
+        }
     }
 
     /// Number of segments (default 8).
@@ -47,10 +52,15 @@ impl DitherMeter {
 
     /// `(solid segments, half-tone segment present)` for the current value.
     pub(crate) fn fill(&self) -> (usize, bool) {
-        let Some(v) = self.value else { return (0, false) };
+        let Some(v) = self.value else {
+            return (0, false);
+        };
         let exact = f64::from(v.clamp(0.0, 1.0)) * self.segments as f64;
         let filled = (exact.floor() as usize).min(self.segments);
-        (filled, filled < self.segments && exact - exact.floor() >= 0.25)
+        (
+            filled,
+            filled < self.segments && exact - exact.floor() >= 0.25,
+        )
     }
 }
 
@@ -79,7 +89,12 @@ impl RenderOnce for DitherMeter {
                 col.bg(c.surface_3)
             }
         };
-        div().flex().flex_row().items_center().gap(px(2.0)).children((0..self.segments).map(seg))
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(2.0))
+            .children((0..self.segments).map(seg))
     }
 }
 
@@ -88,7 +103,10 @@ mod tests {
     use super::*;
 
     fn fill(segments: usize, v: Option<f32>) -> (usize, bool) {
-        DitherMeter::new(&Theme::dark()).segments(segments).value(v).fill()
+        DitherMeter::new(&Theme::dark())
+            .segments(segments)
+            .value(v)
+            .fill()
     }
 
     #[test]

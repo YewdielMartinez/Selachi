@@ -57,13 +57,17 @@ pub fn pwsh_integration_args(script: &Path) -> Vec<String> {
 /// Returns the program and its arguments: `-NoLogo`, plus the shell integration (cwd and prompt
 /// marks, see [`install_pwsh_integration`]) when the script could be written.
 pub fn default_shell() -> (String, Vec<String>) {
-    let program = if on_path("pwsh.exe") { "pwsh.exe" } else { "powershell.exe" };
+    let program = if on_path("pwsh.exe") {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    };
     let args = match install_pwsh_integration() {
         Ok(script) => pwsh_integration_args(&script),
         Err(e) => {
             log::warn!("shell integration disabled, could not write the script: {e}");
             vec!["-NoLogo".to_string()]
-        },
+        }
     };
     (program.to_string(), args)
 }
@@ -76,19 +80,33 @@ mod tests {
     fn args_quote_the_script_path() {
         let args = pwsh_integration_args(Path::new("C:\\Users\\o'brien\\a b\\s.ps1"));
         assert_eq!(&args[..3], ["-NoLogo", "-NoExit", "-Command"]);
-        assert!(args[3].contains("'C:\\Users\\o''brien\\a b\\s.ps1'"), "{}", args[3]);
-        assert!(!args[3].contains('"'), "no double quotes: they would be escaped by CreateProcess");
+        assert!(
+            args[3].contains("'C:\\Users\\o''brien\\a b\\s.ps1'"),
+            "{}",
+            args[3]
+        );
+        assert!(
+            !args[3].contains('"'),
+            "no double quotes: they would be escaped by CreateProcess"
+        );
     }
 
     #[test]
     fn script_is_ascii_and_installs_idempotently() {
-        assert!(PWSH_INTEGRATION.is_ascii(), "Windows PowerShell 5.1 reads BOM-less files as ANSI");
+        assert!(
+            PWSH_INTEGRATION.is_ascii(),
+            "Windows PowerShell 5.1 reads BOM-less files as ANSI"
+        );
         let dir = std::env::temp_dir().join(format!("selachi-test-{}", std::process::id()));
         let a = install_pwsh_integration_in(&dir).unwrap();
         let first = std::fs::metadata(&a).unwrap().modified().unwrap();
         let b = install_pwsh_integration_in(&dir).unwrap();
         assert_eq!(a, b);
-        assert_eq!(std::fs::metadata(&b).unwrap().modified().unwrap(), first, "unchanged file is not rewritten");
+        assert_eq!(
+            std::fs::metadata(&b).unwrap().modified().unwrap(),
+            first,
+            "unchanged file is not rewritten"
+        );
         assert_eq!(std::fs::read_to_string(&a).unwrap(), PWSH_INTEGRATION);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -34,8 +34,9 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, Context, ElementId, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton,
-    Render, ScrollHandle, ScrollStrategy, SharedString, Window, actions, canvas, div, prelude::*, px,
+    AnyElement, App, Context, ElementId, EventEmitter, FocusHandle, Focusable, IntoElement,
+    KeyDownEvent, MouseButton, Render, ScrollHandle, ScrollStrategy, SharedString, Window, actions,
+    canvas, div, prelude::*, px,
 };
 use theme::{Radius, Theme};
 
@@ -101,7 +102,12 @@ pub struct SelectOption {
 
 impl SelectOption {
     pub fn new(value: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
-        Self { value: value.into(), label: label.into(), detail: None, disabled: false }
+        Self {
+            value: value.into(),
+            label: label.into(),
+            detail: None,
+            disabled: false,
+        }
     }
 
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
@@ -172,7 +178,12 @@ pub(crate) fn step(disabled: &[bool], from: Option<usize>, dir: i32) -> Option<u
 
 /// The option a type-ahead `query` points at: one repeated letter cycles through the options that
 /// start with it (from the one after `current`); a longer query matches by prefix from `current`.
-pub(crate) fn typeahead_match(labels: &[&str], disabled: &[bool], current: Option<usize>, query: &str) -> Option<usize> {
+pub(crate) fn typeahead_match(
+    labels: &[&str],
+    disabled: &[bool],
+    current: Option<usize>,
+    query: &str,
+) -> Option<usize> {
     let q = query.to_lowercase();
     let chars: Vec<char> = q.chars().collect();
     let first = *chars.first()?;
@@ -186,7 +197,9 @@ pub(crate) fn typeahead_match(labels: &[&str], disabled: &[bool], current: Optio
     } else {
         (q, current.unwrap_or(0))
     };
-    (0..n).map(|k| (from + k) % n).find(|&i| !disabled[i] && labels[i].to_lowercase().starts_with(&needle))
+    (0..n)
+        .map(|k| (from + k) % n)
+        .find(|&i| !disabled[i] && labels[i].to_lowercase().starts_with(&needle))
 }
 
 impl Select {
@@ -255,7 +268,9 @@ impl Select {
 
     /// The value of the selected option (`None` while nothing is selected).
     pub fn value(&self) -> Option<&SharedString> {
-        self.selected.and_then(|i| self.options.get(i)).map(|o| &o.value)
+        self.selected
+            .and_then(|i| self.options.get(i))
+            .map(|o| &o.value)
     }
 
     pub fn options_len(&self) -> usize {
@@ -278,7 +293,11 @@ impl Select {
     }
 
     /// Replaces the options, keeping the selection when its value is still there. No event.
-    pub fn set_options(&mut self, options: impl IntoIterator<Item = SelectOption>, cx: &mut Context<Self>) {
+    pub fn set_options(
+        &mut self,
+        options: impl IntoIterator<Item = SelectOption>,
+        cx: &mut Context<Self>,
+    ) {
         let keep = self.value().cloned();
         self.options = options.into_iter().collect();
         self.selected = keep.and_then(|v| self.options.iter().position(|o| o.value == v));
@@ -315,7 +334,10 @@ impl Select {
         }
         self.open = true;
         let disabled = self.disabled_flags();
-        self.highlighted = self.selected.filter(|i| !disabled[*i]).or_else(|| step(&disabled, None, 1));
+        self.highlighted = self
+            .selected
+            .filter(|i| !disabled[*i])
+            .or_else(|| step(&disabled, None, 1));
         self.reveal();
         cx.notify();
     }
@@ -379,7 +401,11 @@ impl Select {
             return;
         }
         let flags = self.disabled_flags();
-        let next = if last { step(&flags, None, -1) } else { step(&flags, None, 1) };
+        let next = if last {
+            step(&flags, None, -1)
+        } else {
+            step(&flags, None, 1)
+        };
         self.highlight(next, cx);
         self.reveal();
     }
@@ -394,14 +420,24 @@ impl Select {
 
     fn type_ahead(&mut self, ch: &str, cx: &mut Context<Self>) {
         let now = Instant::now();
-        if self.last_key.is_none_or(|t| now.duration_since(t) > TYPEAHEAD_RESET) {
+        if self
+            .last_key
+            .is_none_or(|t| now.duration_since(t) > TYPEAHEAD_RESET)
+        {
             self.query.clear();
         }
         self.last_key = Some(now);
         self.query.push_str(ch);
         let labels: Vec<&str> = self.options.iter().map(|o| o.label.as_ref()).collect();
-        let current = if self.open { self.highlighted } else { self.selected };
-        let Some(hit) = typeahead_match(&labels, &self.disabled_flags(), current, &self.query) else { return };
+        let current = if self.open {
+            self.highlighted
+        } else {
+            self.selected
+        };
+        let Some(hit) = typeahead_match(&labels, &self.disabled_flags(), current, &self.query)
+        else {
+            return;
+        };
         if self.open {
             self.highlight(Some(hit), cx);
             self.reveal();
@@ -411,7 +447,10 @@ impl Select {
     }
 
     fn typeahead_active(&self) -> bool {
-        !self.query.is_empty() && self.last_key.is_some_and(|t| t.elapsed() <= TYPEAHEAD_RESET)
+        !self.query.is_empty()
+            && self
+                .last_key
+                .is_some_and(|t| t.elapsed() <= TYPEAHEAD_RESET)
     }
 }
 
@@ -467,9 +506,20 @@ fn option_row(
                 .child(opt.label.clone()),
         )
         .when_some(opt.detail.clone(), |d, detail| {
-            d.child(div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(detail))
+            d.child(
+                div()
+                    .flex_none()
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.muted)
+                    .child(detail),
+            )
         })
-        .child(div().size(px(16.0)).flex_none().when(selected, |d| d.child(icon(Icon::Check, 16.0, c.accent))))
+        .child(
+            div()
+                .size(px(16.0))
+                .flex_none()
+                .when(selected, |d| d.child(icon(Icon::Check, 16.0, c.accent))),
+        )
         .into_any_element()
 }
 
@@ -527,7 +577,12 @@ impl Render for Select {
                 if m.control || m.alt || m.platform || m.function {
                     return;
                 }
-                if let Some(ch) = ev.keystroke.key_char.as_deref().filter(|c| c.chars().all(|ch| !ch.is_control())) {
+                if let Some(ch) = ev
+                    .keystroke
+                    .key_char
+                    .as_deref()
+                    .filter(|c| c.chars().all(|ch| !ch.is_control()))
+                {
                     s.type_ahead(ch, cx);
                 }
             }))
@@ -546,7 +601,9 @@ impl Render for Select {
             .when(!self.disabled, |d| d.cursor_pointer())
             .h(px(32.0))
             .when_some(self.width, |d, w| d.w(px(w)))
-            .when(self.width.is_none(), |d| d.min_w(px(120.0)).max_w(px(self.max_w)))
+            .when(self.width.is_none(), |d| {
+                d.min_w(px(120.0)).max_w(px(self.max_w))
+            })
             .px(px(12.0))
             .flex()
             .flex_row()
@@ -568,15 +625,26 @@ impl Render for Select {
             )
             .child(icon(Icon::ChevronDown, 16.0, c.muted))
             .child(
-                canvas(move |b, _, _| track.set(f32::from(b.size.width)), |_, (), _, _| {})
-                    .absolute()
-                    .top(px(0.0))
-                    .left(px(0.0))
-                    .size_full(),
+                canvas(
+                    move |b, _, _| track.set(f32::from(b.size.width)),
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .size_full(),
             )
-            .child(focus::ring_element(handle, trigger_id.to_string(), Radius::PILL, c.accent));
+            .child(focus::ring_element(
+                handle,
+                trigger_id.to_string(),
+                Radius::PILL,
+                c.accent,
+            ));
         let trigger = trigger.debug_selector({
-            let id = format!("{}", ElementId::NamedChild(Box::new(base.clone()), "trigger".into()));
+            let id = format!(
+                "{}",
+                ElementId::NamedChild(Box::new(base.clone()), "trigger".into())
+            );
             move || id
         });
 
@@ -585,7 +653,12 @@ impl Render for Select {
             .placement(Placement::BottomStart)
             .open(self.open && !self.options.is_empty())
             .padding(4.0)
-            .width(self.trigger_w.get().clamp(160.0, 480.0).max(self.width.unwrap_or(0.0).min(480.0)))
+            .width(
+                self.trigger_w
+                    .get()
+                    .clamp(160.0, 480.0)
+                    .max(self.width.unwrap_or(0.0).min(480.0)),
+            )
             .on_dismiss({
                 let this = this.clone();
                 move |_, cx| this.update(cx, |s, cx| s.close(cx))
@@ -604,7 +677,19 @@ impl Render for Select {
                     n,
                     ROW_H,
                     move |range, _, _| {
-                        range.map(|ix| option_row(&theme, &base, &this, ix, &options[ix], hi == Some(ix), sel == Some(ix))).collect()
+                        range
+                            .map(|ix| {
+                                option_row(
+                                    &theme,
+                                    &base,
+                                    &this,
+                                    ix,
+                                    &options[ix],
+                                    hi == Some(ix),
+                                    sel == Some(ix),
+                                )
+                            })
+                            .collect()
                     },
                 )
                 .track_scroll(self.vscroll.clone())
@@ -618,12 +703,9 @@ impl Render for Select {
                     .track_scroll(&self.scroll)
                     .flex()
                     .flex_col()
-                    .children(
-                        self.options
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, o)| option_row(&theme, &base, &this, ix, o, hi == Some(ix), sel == Some(ix))),
-                    )
+                    .children(self.options.iter().enumerate().map(|(ix, o)| {
+                        option_row(&theme, &base, &this, ix, o, hi == Some(ix), sel == Some(ix))
+                    }))
                     .into_any_element()
             };
             popover.child(list)
@@ -643,9 +725,17 @@ mod tests {
     fn step_skips_disabled_and_clamps() {
         let d = [false, true, false, false, true];
         assert_eq!(step(&d, None, 1), Some(0));
-        assert_eq!(step(&d, None, -1), Some(3), "from the end, skipping the disabled last one");
+        assert_eq!(
+            step(&d, None, -1),
+            Some(3),
+            "from the end, skipping the disabled last one"
+        );
         assert_eq!(step(&d, Some(0), 1), Some(2), "skips index 1");
-        assert_eq!(step(&d, Some(3), 1), Some(3), "no wrap, stays on the last enabled");
+        assert_eq!(
+            step(&d, Some(3), 1),
+            Some(3),
+            "no wrap, stays on the last enabled"
+        );
         assert_eq!(step(&d, Some(2), -1), Some(0));
         assert_eq!(step(&d, Some(0), -1), Some(0));
         assert_eq!(step(&[], None, 1), None);
@@ -659,7 +749,11 @@ mod tests {
         // One letter: the next match after the current one, wrapping.
         assert_eq!(typeahead_match(&labels, &off, None, "b"), Some(1));
         assert_eq!(typeahead_match(&labels, &off, Some(1), "b"), Some(2));
-        assert_eq!(typeahead_match(&labels, &off, Some(3), "b"), Some(1), "wraps");
+        assert_eq!(
+            typeahead_match(&labels, &off, Some(3), "b"),
+            Some(1),
+            "wraps"
+        );
         // A repeated letter keeps cycling.
         assert_eq!(typeahead_match(&labels, &off, Some(1), "bb"), Some(2));
         // A longer prefix narrows from the current option.
@@ -668,7 +762,10 @@ mod tests {
         assert_eq!(typeahead_match(&labels, &off, None, "zz"), None);
         assert_eq!(typeahead_match(&labels, &off, None, ""), None);
         // Case-insensitive, and disabled options are never hit.
-        assert_eq!(typeahead_match(&labels, &[false, true, false, false, false], None, "BE"), None);
+        assert_eq!(
+            typeahead_match(&labels, &[false, true, false, false, false], None, "BE"),
+            None
+        );
         assert_eq!(typeahead_match(&labels, &off, None, "CH"), Some(4));
     }
 }

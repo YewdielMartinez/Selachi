@@ -42,7 +42,10 @@ fn status_bucket(status: Option<RowStatus>) -> (u8, &'static str) {
 /// Working / Waiting / Settled (empty buckets are omitted).
 pub fn group_tabs(tabs: &[TabInfo], by: GroupBy) -> Vec<Group> {
     match by {
-        GroupBy::None => vec![Group { label: None, tabs: (0..tabs.len()).collect() }],
+        GroupBy::None => vec![Group {
+            label: None,
+            tabs: (0..tabs.len()).collect(),
+        }],
         GroupBy::Status => {
             let mut buckets: [Vec<usize>; 3] = Default::default();
             for (i, t) in tabs.iter().enumerate() {
@@ -52,15 +55,20 @@ pub fn group_tabs(tabs: &[TabInfo], by: GroupBy) -> Vec<Group> {
                 .into_iter()
                 .zip(buckets)
                 .filter(|(_, v)| !v.is_empty())
-                .map(|(label, tabs)| Group { label: Some(label.into()), tabs })
+                .map(|(label, tabs)| Group {
+                    label: Some(label.into()),
+                    tabs,
+                })
                 .collect()
-        },
+        }
         GroupBy::Project => group_by_key(tabs, |t| match project_key(t) {
             Some(p) => project_name(&p),
             None => "Sin proyecto".to_string(),
         }),
         GroupBy::Agent => group_by_key(tabs, |t| {
-            t.agent.as_ref().map_or_else(|| "Terminal".to_string(), ToString::to_string)
+            t.agent
+                .as_ref()
+                .map_or_else(|| "Terminal".to_string(), ToString::to_string)
         }),
     }
 }
@@ -74,7 +82,13 @@ fn group_by_key(tabs: &[TabInfo], key: impl Fn(&TabInfo) -> String) -> Vec<Group
             None => groups.push((k, vec![i])),
         }
     }
-    groups.into_iter().map(|(k, tabs)| Group { label: Some(k.into()), tabs }).collect()
+    groups
+        .into_iter()
+        .map(|(k, tabs)| Group {
+            label: Some(k.into()),
+            tabs,
+        })
+        .collect()
 }
 
 /// A distinct project among the open tabs.
@@ -95,7 +109,12 @@ pub fn projects(tabs: &[TabInfo]) -> Vec<ProjectEntry> {
         let Some(root) = project_key(t) else { continue };
         match out.iter_mut().find(|p| p.root == root) {
             Some(p) => p.tabs += 1,
-            None => out.push(ProjectEntry { name: project_name(&root), root, tabs: 1, first_tab: i }),
+            None => out.push(ProjectEntry {
+                name: project_name(&root),
+                root,
+                tabs: 1,
+                first_tab: i,
+            }),
         }
     }
     out
@@ -138,12 +157,22 @@ mod tests {
     fn none_is_one_headerless_group() {
         let tabs = [tab("C:/a", None, None), tab("C:/b", None, None)];
         let g = group_tabs(&tabs, GroupBy::None);
-        assert_eq!(g, vec![Group { label: None, tabs: vec![0, 1] }]);
+        assert_eq!(
+            g,
+            vec![Group {
+                label: None,
+                tabs: vec![0, 1]
+            }]
+        );
     }
 
     #[test]
     fn project_groups_by_folder_in_first_use_order() {
-        let tabs = [tab("C:/dev/b", None, None), tab("C:/dev/a", None, None), tab("C:/dev/b", None, None)];
+        let tabs = [
+            tab("C:/dev/b", None, None),
+            tab("C:/dev/a", None, None),
+            tab("C:/dev/b", None, None),
+        ];
         let g = group_tabs(&tabs, GroupBy::Project);
         assert_eq!(g.len(), 2);
         assert_eq!(lbl(&g[0]), Some("b"));
@@ -175,7 +204,11 @@ mod tests {
 
     #[test]
     fn projects_are_distinct_and_counted() {
-        let tabs = [tab("C:/dev/a", None, None), tab("C:/dev/b", None, None), tab("C:/dev/a", None, None)];
+        let tabs = [
+            tab("C:/dev/a", None, None),
+            tab("C:/dev/b", None, None),
+            tab("C:/dev/a", None, None),
+        ];
         let p = projects(&tabs);
         assert_eq!(p.len(), 2);
         assert_eq!((p[0].name.as_str(), p[0].tabs, p[0].first_tab), ("a", 2, 0));
@@ -184,7 +217,10 @@ mod tests {
     #[test]
     fn aggregate_picks_the_most_urgent() {
         use RowStatus::*;
-        assert_eq!(aggregate_status([Some(Done), Some(Working), None]), Some(Working));
+        assert_eq!(
+            aggregate_status([Some(Done), Some(Working), None]),
+            Some(Working)
+        );
         assert_eq!(aggregate_status([Some(Done), Some(Error)]), Some(Error));
         assert_eq!(aggregate_status([None, None]), None);
     }

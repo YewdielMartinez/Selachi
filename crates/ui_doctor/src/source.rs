@@ -32,7 +32,11 @@ impl DoctorSource for SystemSource {
             .into_iter()
             .filter(|p| *p != pid)
             .filter_map(|p| procs.iter().find(|i| i.pid == p))
-            .map(|i| ChildProc { pid: i.pid, name: i.name.clone(), working_set: i.working_set })
+            .map(|i| ChildProc {
+                pid: i.pid,
+                name: i.name.clone(),
+                working_set: i.working_set,
+            })
             .collect();
         RawSample {
             at: Instant::now(),
@@ -41,7 +45,13 @@ impl DoctorSource for SystemSource {
             cpu_time: me.map_or_else(Default::default, |p| p.cpu_time),
             threads: me.map_or(0, |p| p.threads),
             children,
-            dbs: dbs.iter().map(|(label, path)| DbSize { label: label.clone(), bytes: db_size(path) }).collect(),
+            dbs: dbs
+                .iter()
+                .map(|(label, path)| DbSize {
+                    label: label.clone(),
+                    bytes: db_size(path),
+                })
+                .collect(),
             started: me.and_then(|p| p.start_time),
             cores: logical_cores(),
             pid,
@@ -55,17 +65,26 @@ mod tests {
 
     #[test]
     fn measures_this_test_process() {
-        let child = std::process::Command::new("cmd").args(["/c", "ping", "-n", "5", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn();
+        let child = std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "5", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn();
         let dir = std::env::temp_dir().join("ui_doctor_test.db");
         std::fs::write(&dir, vec![0u8; 2048]).unwrap();
-        let s = SystemSource.sample(&[("t.db".into(), dir.clone()), ("missing.db".into(), PathBuf::from(r"C:\nope\x.db"))]);
+        let s = SystemSource.sample(&[
+            ("t.db".into(), dir.clone()),
+            ("missing.db".into(), PathBuf::from(r"C:\nope\x.db")),
+        ]);
         assert_eq!(s.pid, std::process::id());
         assert!(s.working_set > 1 << 20 && s.private_bytes > 0 && s.threads >= 1);
         assert_eq!(s.dbs[0].bytes, Some(2048));
         assert_eq!(s.dbs[1].bytes, None);
         assert!(s.started.is_some());
         if let Ok(mut c) = child {
-            assert!(s.children.iter().any(|ch| ch.pid == c.id()), "own child must be listed");
+            assert!(
+                s.children.iter().any(|ch| ch.pid == c.id()),
+                "own child must be listed"
+            );
             let _ = c.kill();
             let _ = c.wait();
         }

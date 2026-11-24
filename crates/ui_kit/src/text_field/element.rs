@@ -3,9 +3,10 @@
 //! measured layout, vertical scroll). Both register the input handler and paint the caret.
 
 use gpui::{
-    App, AvailableSpace, Bounds, ContentMask, ElementId, ElementInputHandler, Entity, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextAlign, TextRun, UnderlineStyle,
-    Window, WrappedLine, fill, point, px, relative, size,
+    App, AvailableSpace, Bounds, ContentMask, ElementId, ElementInputHandler, Entity,
+    GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
+    ShapedLine, SharedString, Style, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine, fill,
+    point, px, relative, size,
 };
 
 use super::{MASK, TextField};
@@ -36,7 +37,9 @@ impl Laid {
     }
 
     pub fn total_height(&self) -> Pixels {
-        (0..self.lines.len()).map(|i| self.height_of(i)).fold(px(0.0), |a, b| a + b)
+        (0..self.lines.len())
+            .map(|i| self.height_of(i))
+            .fold(px(0.0), |a, b| a + b)
     }
 
     pub fn position_for_index(&self, offset: usize) -> Point<Pixels> {
@@ -49,7 +52,9 @@ impl Laid {
             let end = start + line.len();
             if offset <= end || i + 1 == self.lines.len() {
                 let local = offset.saturating_sub(start).min(line.len());
-                let p = line.position_for_index(local, self.line_h).unwrap_or_default();
+                let p = line
+                    .position_for_index(local, self.line_h)
+                    .unwrap_or_default();
                 return point(p.x, y + p.y);
             }
             y += self.height_of(i);
@@ -79,16 +84,29 @@ impl Laid {
 
 /// Text runs for `shown`, underlining the IME composition `marked` (already in `shown` offsets).
 fn runs(shown_len: usize, base: &TextRun, marked: Option<std::ops::Range<usize>>) -> Vec<TextRun> {
-    let base = TextRun { len: shown_len, ..base.clone() };
+    let base = TextRun {
+        len: shown_len,
+        ..base.clone()
+    };
     match marked {
         Some(m) if m.end <= shown_len && m.start < m.end => [
-            TextRun { len: m.start, ..base.clone() },
             TextRun {
-                len: m.end - m.start,
-                underline: Some(UnderlineStyle { color: Some(base.color), thickness: px(1.0), wavy: false }),
+                len: m.start,
                 ..base.clone()
             },
-            TextRun { len: shown_len - m.end, ..base },
+            TextRun {
+                len: m.end - m.start,
+                underline: Some(UnderlineStyle {
+                    color: Some(base.color),
+                    thickness: px(1.0),
+                    wavy: false,
+                }),
+                ..base.clone()
+            },
+            TextRun {
+                len: shown_len - m.end,
+                ..base
+            },
         ]
         .into_iter()
         .filter(|r| r.len > 0)
@@ -172,7 +190,13 @@ impl gpui::Element for LineElement {
         let shown: SharedString = if empty {
             input.placeholder.clone()
         } else if input.password {
-            input.buf.text.chars().map(|_| MASK).collect::<String>().into()
+            input
+                .buf
+                .text
+                .chars()
+                .map(|_| MASK)
+                .collect::<String>()
+                .into()
         } else {
             input.buf.text.clone().into()
         };
@@ -185,7 +209,9 @@ impl gpui::Element for LineElement {
             .filter(|_| !empty)
             .map(|m| input.offset_to_display(m.start)..input.offset_to_display(m.end));
         let run_list = runs(shown.len(), &base, marked);
-        let mut line = window.text_system().shape_line(shown.clone(), font_size, &run_list, None);
+        let mut line = window
+            .text_system()
+            .shape_line(shown.clone(), font_size, &run_list, None);
         let overflow = line.width > bounds.size.width;
         let mut ellipsized = false;
         let mut scroll = px(0.0);
@@ -206,22 +232,46 @@ impl gpui::Element for LineElement {
             } else if !input.password {
                 // Not being edited: the middle is elided so both the start and the end stay readable.
                 let measure = |t: &str| -> f32 {
-                    let r = [TextRun { len: t.len(), ..base.clone() }];
-                    f32::from(window.text_system().shape_line(t.to_string().into(), font_size, &r, None).width)
+                    let r = [TextRun {
+                        len: t.len(),
+                        ..base.clone()
+                    }];
+                    f32::from(
+                        window
+                            .text_system()
+                            .shape_line(t.to_string().into(), font_size, &r, None)
+                            .width,
+                    )
                 };
                 let text = super::middle_ellipsis(&shown, f32::from(bounds.size.width), &measure);
-                let r = [TextRun { len: text.len(), ..base.clone() }];
-                line = window.text_system().shape_line(text.into(), font_size, &r, None);
+                let r = [TextRun {
+                    len: text.len(),
+                    ..base.clone()
+                }];
+                line = window
+                    .text_system()
+                    .shape_line(text.into(), font_size, &r, None);
                 ellipsized = true;
             }
         }
-        let sel = input.offset_to_display(input.buf.sel.start)..input.offset_to_display(input.buf.sel.end);
+        let sel = input.offset_to_display(input.buf.sel.start)
+            ..input.offset_to_display(input.buf.sel.end);
         let origin_x = bounds.left() - scroll;
         let (selection, cursor) = if ellipsized && !empty {
             (None, None)
         } else if sel.is_empty() {
-            let x = if empty { px(0.0) } else { line.x_for_index(cursor_disp) };
-            let quad = fill(Bounds::new(point(origin_x + x, bounds.top()), size(px(1.5), bounds.size.height)), c.accent);
+            let x = if empty {
+                px(0.0)
+            } else {
+                line.x_for_index(cursor_disp)
+            };
+            let quad = fill(
+                Bounds::new(
+                    point(origin_x + x, bounds.top()),
+                    size(px(1.5), bounds.size.height),
+                ),
+                c.accent,
+            );
             (None, Some(quad))
         } else {
             let mut sel_color = c.accent;
@@ -235,7 +285,16 @@ impl gpui::Element for LineElement {
             );
             (Some(quad), None)
         };
-        LinePrepaint { layout: SingleLayout { line, scroll_x: scroll, ellipsized, overflow }, cursor, selection }
+        LinePrepaint {
+            layout: SingleLayout {
+                line,
+                scroll_x: scroll,
+                ellipsized,
+                overflow,
+            },
+            cursor,
+            selection,
+        }
     }
 
     fn paint(
@@ -249,13 +308,22 @@ impl gpui::Element for LineElement {
         cx: &mut App,
     ) {
         let focus = self.input.read(cx).focus.clone();
-        window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
+        window.handle_input(
+            &focus,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
         let (scroll, line_h) = (pre.layout.scroll_x, window.line_height());
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             if let Some(sel) = pre.selection.take() {
                 window.paint_quad(sel);
             }
-            let _ = pre.layout.line.paint(point(bounds.origin.x - scroll, bounds.origin.y), line_h, window, cx);
+            let _ = pre.layout.line.paint(
+                point(bounds.origin.x - scroll, bounds.origin.y),
+                line_h,
+                window,
+                cx,
+            );
             if focus.is_focused(window)
                 && let Some(cursor) = pre.cursor.take()
             {
@@ -264,7 +332,8 @@ impl gpui::Element for LineElement {
         });
         let layout = pre.layout.clone();
         self.input.update(cx, |input, cx| {
-            let tooltip_changed = input.single.as_ref().is_none_or(|s| s.overflow) != layout.overflow;
+            let tooltip_changed =
+                input.single.as_ref().is_none_or(|s| s.overflow) != layout.overflow;
             input.last_bounds = Some(bounds);
             input.single = Some(layout);
             if tooltip_changed {
@@ -312,10 +381,18 @@ impl gpui::Element for AreaElement {
         let c = input.theme.colors;
         let style = window.text_style();
         let empty = input.buf.text.is_empty();
-        let shown: SharedString = if empty { input.placeholder.clone() } else { input.buf.text.clone().into() };
+        let shown: SharedString = if empty {
+            input.placeholder.clone()
+        } else {
+            input.buf.text.clone().into()
+        };
         let color = if empty { c.muted } else { c.text };
         let base = base_run(&style, color);
-        let run_list = runs(shown.len(), &base, input.buf.marked.clone().filter(|_| !empty));
+        let run_list = runs(
+            shown.len(),
+            &base,
+            input.buf.marked.clone().filter(|_| !empty),
+        );
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_h = window.line_height();
         let min_h = line_h * input.min_lines as f32;
@@ -324,40 +401,52 @@ impl gpui::Element for AreaElement {
         let scroll = input.scroll.clone();
         let caret = input.buf.cursor();
 
-        let measure =
-            move |known: gpui::Size<Option<Pixels>>, avail: gpui::Size<AvailableSpace>, window: &mut Window, _: &mut App| {
-                let width = known.width.or(match avail.width {
-                    AvailableSpace::Definite(w) => Some(w),
-                    _ => None,
-                });
-                let shaped = window
-                    .text_system()
-                    .shape_text(shown.clone(), font_size, &run_list, width, None)
-                    .map(|l| l.into_vec())
-                    .unwrap_or_default();
-                let mut starts = Vec::with_capacity(shaped.len());
-                let mut at = 0usize;
-                for l in &shaped {
-                    starts.push(at);
-                    at += l.len() + 1;
-                }
-                let l = Laid { lines: shaped, starts, line_h, placeholder: empty };
-                let total = l.total_height();
-                let h = total.max(min_h).min(max_h);
-                // Keep the caret inside the visible part.
-                let mut s = scroll.get();
-                let cy = l.position_for_index(caret).y;
-                if cy < s {
-                    s = cy;
-                }
-                if cy + line_h > s + h {
-                    s = cy + line_h - h;
-                }
-                scroll.set(s.max(px(0.0)).min((total - h).max(px(0.0))));
-                let w = width.unwrap_or_else(|| l.lines.iter().map(|x| x.width()).fold(px(0.0), |a, b| a.max(b)));
-                *laid.borrow_mut() = Some(l);
-                size(w, h)
+        let measure = move |known: gpui::Size<Option<Pixels>>,
+                            avail: gpui::Size<AvailableSpace>,
+                            window: &mut Window,
+                            _: &mut App| {
+            let width = known.width.or(match avail.width {
+                AvailableSpace::Definite(w) => Some(w),
+                _ => None,
+            });
+            let shaped = window
+                .text_system()
+                .shape_text(shown.clone(), font_size, &run_list, width, None)
+                .map(|l| l.into_vec())
+                .unwrap_or_default();
+            let mut starts = Vec::with_capacity(shaped.len());
+            let mut at = 0usize;
+            for l in &shaped {
+                starts.push(at);
+                at += l.len() + 1;
+            }
+            let l = Laid {
+                lines: shaped,
+                starts,
+                line_h,
+                placeholder: empty,
             };
+            let total = l.total_height();
+            let h = total.max(min_h).min(max_h);
+            // Keep the caret inside the visible part.
+            let mut s = scroll.get();
+            let cy = l.position_for_index(caret).y;
+            if cy < s {
+                s = cy;
+            }
+            if cy + line_h > s + h {
+                s = cy + line_h - h;
+            }
+            scroll.set(s.max(px(0.0)).min((total - h).max(px(0.0))));
+            let w = width.unwrap_or_else(|| {
+                l.lines
+                    .iter()
+                    .map(|x| x.width())
+                    .fold(px(0.0), |a, b| a.max(b))
+            });
+            *laid.borrow_mut() = Some(l);
+            size(w, h)
+        };
         let mut layout_style = Style::default();
         layout_style.size.width = relative(1.0).into();
         (window.request_measured_layout(layout_style, measure), ())
@@ -386,9 +475,20 @@ impl gpui::Element for AreaElement {
     ) {
         let (focus, theme, sel, caret, laid_rc, scroll) = {
             let i = self.input.read(cx);
-            (i.focus.clone(), i.theme, i.buf.sel.clone(), i.buf.cursor(), i.laid.clone(), i.scroll.get())
+            (
+                i.focus.clone(),
+                i.theme,
+                i.buf.sel.clone(),
+                i.buf.cursor(),
+                i.laid.clone(),
+                i.scroll.get(),
+            )
         };
-        window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
+        window.handle_input(
+            &focus,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
         let c = theme.colors;
         let laid = laid_rc.borrow().clone();
         if let Some(laid) = &laid {
@@ -407,7 +507,10 @@ impl gpui::Element for AreaElement {
                         let b = laid.position_for_index(sel.end.min(le));
                         let row = |x0: Pixels, x1: Pixels, y: Pixels| {
                             fill(
-                                Bounds::new(point(bounds.left() + x0, top + y), size((x1 - x0).max(px(2.0)), laid.line_h)),
+                                Bounds::new(
+                                    point(bounds.left() + x0, top + y),
+                                    size((x1 - x0).max(px(2.0)), laid.line_h),
+                                ),
                                 tint,
                             )
                         };
@@ -426,18 +529,29 @@ impl gpui::Element for AreaElement {
                 }
                 let mut y = px(0.0);
                 for (i, line) in laid.lines.iter().enumerate() {
-                    let _ = line.paint(point(bounds.left(), top + y), laid.line_h, TextAlign::Left, Some(bounds), window, cx);
+                    let _ = line.paint(
+                        point(bounds.left(), top + y),
+                        laid.line_h,
+                        TextAlign::Left,
+                        Some(bounds),
+                        window,
+                        cx,
+                    );
                     y += laid.height_of(i);
                 }
                 if sel.is_empty() && focus.is_focused(window) {
                     let p = laid.position_for_index(caret);
                     window.paint_quad(fill(
-                        Bounds::new(point(bounds.left() + p.x, top + p.y), size(px(1.5), laid.line_h)),
+                        Bounds::new(
+                            point(bounds.left() + p.x, top + p.y),
+                            size(px(1.5), laid.line_h),
+                        ),
                         c.accent,
                     ));
                 }
             });
         }
-        self.input.update(cx, |input, _| input.last_bounds = Some(bounds));
+        self.input
+            .update(cx, |input, _| input.last_bounds = Some(bounds));
     }
 }

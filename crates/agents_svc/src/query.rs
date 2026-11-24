@@ -326,7 +326,9 @@ impl Store {
         let mut out = vec![];
         for row in rows {
             let (agent, model, source, cost_usd, events) = row?;
-            let Some(agent) = Agent::parse(&agent) else { continue };
+            let Some(agent) = Agent::parse(&agent) else {
+                continue;
+            };
             out.push(ReportedCost {
                 source: source.unwrap_or_else(|| agent.as_str().to_string()),
                 agent,

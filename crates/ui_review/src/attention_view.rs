@@ -10,8 +10,8 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Context, Entity, FontWeight, Hsla, SharedString, Subscription, Task,
-    Window, div, prelude::*, px,
+    AnyElement, AnyView, App, AppContext as _, Context, Entity, FontWeight, Hsla, SharedString,
+    Subscription, Task, Window, div, prelude::*, px,
 };
 use panel_api::{PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
 use theme::{Radius, Theme};
@@ -43,9 +43,24 @@ pub struct AttentionView {
 }
 
 impl AttentionView {
-    pub fn new(model: Entity<AttentionModel>, theme: Theme, width: WidthClass, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        model: Entity<AttentionModel>,
+        theme: Theme,
+        width: WidthClass,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let observe = cx.observe(&model, |_, _, cx| cx.notify());
-        Self { model, theme, width, header: true, rendered: false, ticking: false, task: None, ticks: 0, _observe: observe }
+        Self {
+            model,
+            theme,
+            width,
+            header: true,
+            rendered: false,
+            ticking: false,
+            task: None,
+            ticks: 0,
+            _observe: observe,
+        }
     }
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
@@ -77,7 +92,13 @@ impl AttentionView {
     }
 
     fn interval(&self, cx: &App) -> Duration {
-        let youngest = self.model.read(cx).items().iter().map(|i| i.since.elapsed()).min();
+        let youngest = self
+            .model
+            .read(cx)
+            .items()
+            .iter()
+            .map(|i| i.since.elapsed())
+            .min();
         match youngest {
             Some(age) if age < Duration::from_secs(60) => FAST_TICK,
             _ => SLOW_TICK,
@@ -92,7 +113,9 @@ impl AttentionView {
         self.ticking = true;
         self.task = Some(cx.spawn(async move |this, cx| {
             loop {
-                let Ok(wait) = this.update(cx, |v, cx| v.interval(cx)) else { break };
+                let Ok(wait) = this.update(cx, |v, cx| v.interval(cx)) else {
+                    break;
+                };
                 cx.background_executor().timer(wait).await;
                 match this.update(cx, |v, cx| v.on_tick(cx)) {
                     Ok(true) => {}
@@ -119,7 +142,10 @@ impl AttentionView {
         let c = theme.colors;
         let ty = theme.typography;
         let compact = self.width == WidthClass::Compact;
-        let mark = item.agent.as_deref().map_or(AgentMark::Unknown, AgentMark::from_name);
+        let mark = item
+            .agent
+            .as_deref()
+            .map_or(AgentMark::Unknown, AgentMark::from_name);
         let lead: AnyElement = match (&item.agent, mark) {
             (Some(_), m) => agent_icon(m, 16.0, c.muted).into_any_element(),
             (None, _) => icon(Icon::Terminal, 16.0, c.muted).into_any_element(),
@@ -187,7 +213,13 @@ impl AttentionView {
                         )
                     }),
             )
-            .child(div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(elapsed))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.muted)
+                    .child(elapsed),
+            )
             .child(
                 IconButton::new(format!("attention-x-{}", item.id), &theme, Icon::Close)
                     .size(24.0)
@@ -210,7 +242,16 @@ impl Render for AttentionView {
         let ty = theme.typography;
         let items: Vec<AttentionItem> = self.model.read(cx).items().into_iter().cloned().collect();
 
-        let mut list = div().id("attention-list").flex_1().min_h_0().overflow_y_scroll().flex().flex_col().gap(px(2.0)).px(px(6.0)).pb(px(8.0));
+        let mut list = div()
+            .id("attention-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .px(px(6.0))
+            .pb(px(8.0));
         if items.is_empty() {
             list = list.child(
                 div()
@@ -304,10 +345,17 @@ impl PanelProvider for AttentionPanelProvider {
 
     fn build(&self, ctx: PanelCtx, _window: &mut Window, cx: &mut App) -> AnyView {
         let model = self.model.clone();
-        cx.new(|cx| AttentionView::new(model, ctx.theme, ctx.width_class, cx)).into()
+        cx.new(|cx| AttentionView::new(model, ctx.theme, ctx.width_class, cx))
+            .into()
     }
 
-    fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
+    fn context_changed(
+        &self,
+        view: &AnyView,
+        ctx: &PanelCtx,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         match view.clone().downcast::<AttentionView>() {
             Ok(v) => {
                 v.update(cx, |v, cx| {
@@ -324,7 +372,7 @@ impl PanelProvider for AttentionPanelProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention::{FocusTarget, AttentionItem};
+    use crate::attention::{AttentionItem, FocusTarget};
     use gpui::TestAppContext;
     use std::time::Instant;
 
@@ -339,10 +387,18 @@ mod tests {
         }
     }
 
-    fn setup(cx: &mut TestAppContext) -> (Entity<AttentionModel>, Entity<AttentionView>, &mut gpui::VisualTestContext) {
+    fn setup(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<AttentionModel>,
+        Entity<AttentionView>,
+        &mut gpui::VisualTestContext,
+    ) {
         let model = cx.new(|_| AttentionModel::new());
         let m = model.clone();
-        let (view, vcx) = cx.add_window_view(move |_, cx| AttentionView::new(m, Theme::dark(), WidthClass::Regular, cx));
+        let (view, vcx) = cx.add_window_view(move |_, cx| {
+            AttentionView::new(m, Theme::dark(), WidthClass::Regular, cx)
+        });
         (model, view, vcx)
     }
 
@@ -350,7 +406,9 @@ mod tests {
     fn no_timer_when_nothing_to_count(cx: &mut TestAppContext) {
         let (_model, view, vcx) = setup(cx);
         vcx.run_until_parked();
-        view.read_with(vcx, |v, _| assert!(!v.tick_active(), "empty queue: no timer"));
+        view.read_with(vcx, |v, _| {
+            assert!(!v.tick_active(), "empty queue: no timer")
+        });
         vcx.executor().advance_clock(Duration::from_secs(120));
         vcx.run_until_parked();
         view.read_with(vcx, |v, _| assert_eq!(v.ticks(), 0));
@@ -361,7 +419,9 @@ mod tests {
         let (model, view, vcx) = setup(cx);
         model.update(vcx, |m, cx| m.upsert(waiting("a", 5), cx));
         vcx.run_until_parked();
-        view.read_with(vcx, |v, _| assert!(v.tick_active(), "visible + item: ticking"));
+        view.read_with(vcx, |v, _| {
+            assert!(v.tick_active(), "visible + item: ticking")
+        });
 
         // Visible: every second refreshes the view (render marks it painted again).
         for _ in 0..3 {
@@ -375,11 +435,15 @@ mod tests {
         view.update(vcx, |v, _| v.rendered = false);
         vcx.executor().advance_clock(Duration::from_millis(1_100));
         vcx.run_until_parked();
-        view.read_with(vcx, |v, _| assert!(!v.tick_active(), "hidden: timer stopped"));
+        view.read_with(vcx, |v, _| {
+            assert!(!v.tick_active(), "hidden: timer stopped")
+        });
         let after = view.read_with(vcx, |v, _| v.ticks());
         vcx.executor().advance_clock(Duration::from_secs(60));
         vcx.run_until_parked();
-        view.read_with(vcx, |v, _| assert_eq!(v.ticks(), after, "no more ticks while hidden"));
+        view.read_with(vcx, |v, _| {
+            assert_eq!(v.ticks(), after, "no more ticks while hidden")
+        });
     }
 
     #[gpui::test]
@@ -404,7 +468,9 @@ mod tests {
         view.read_with(vcx, |v, _| assert!(v.tick_active()));
         vcx.executor().advance_clock(Duration::from_secs(5));
         vcx.run_until_parked();
-        view.read_with(vcx, |v, _| assert_eq!(v.ticks(), 0, "no 1 s tick when the text counts minutes"));
+        view.read_with(vcx, |v, _| {
+            assert_eq!(v.ticks(), 0, "no 1 s tick when the text counts minutes")
+        });
         vcx.executor().advance_clock(Duration::from_secs(11));
         vcx.run_until_parked();
         view.read_with(vcx, |v, _| assert!(v.ticks() >= 1));

@@ -35,28 +35,43 @@ fn class(c: char) -> Class {
 impl TextBuf {
     /// A buffer holding `text` with the caret at the end.
     pub fn with_text(text: &str) -> Self {
-        let mut b = Self { text: text.to_string(), ..Self::default() };
+        let mut b = Self {
+            text: text.to_string(),
+            ..Self::default()
+        };
         b.move_to(text.len());
         b
     }
 
     pub fn cursor(&self) -> usize {
-        if self.reversed { self.sel.start } else { self.sel.end }
+        if self.reversed {
+            self.sel.start
+        } else {
+            self.sel.end
+        }
     }
 
     pub fn prev_boundary(&self, offset: usize) -> usize {
-        self.text[..offset].char_indices().next_back().map_or(0, |(i, _)| i)
+        self.text[..offset]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i)
     }
 
     pub fn next_boundary(&self, offset: usize) -> usize {
-        self.text[offset..].chars().next().map_or(self.text.len(), |c| offset + c.len_utf8())
+        self.text[offset..]
+            .chars()
+            .next()
+            .map_or(self.text.len(), |c| offset + c.len_utf8())
     }
 
     /// Start of the word before `offset` (skips spaces, then one run of word or punctuation).
     pub fn prev_word(&self, offset: usize) -> usize {
         let mut it = self.text[..offset].char_indices().rev().peekable();
         while it.next_if(|(_, c)| class(*c) == Class::Space).is_some() {}
-        let Some(&(mut start, first)) = it.peek() else { return 0 };
+        let Some(&(mut start, first)) = it.peek() else {
+            return 0;
+        };
         let k = class(first);
         while let Some(&(i, c)) = it.peek() {
             if class(c) != k {
@@ -84,8 +99,13 @@ impl TextBuf {
     /// The word (or run of spaces / punctuation) around `offset`.
     pub fn word_at(&self, offset: usize) -> Range<usize> {
         let offset = offset.min(self.text.len());
-        let probe = self.text[offset..].chars().next().or_else(|| self.text[..offset].chars().next_back());
-        let Some(k) = probe.map(class) else { return offset..offset };
+        let probe = self.text[offset..]
+            .chars()
+            .next()
+            .or_else(|| self.text[..offset].chars().next_back());
+        let Some(k) = probe.map(class) else {
+            return offset..offset;
+        };
         let mut start = offset;
         for (i, c) in self.text[..offset].char_indices().rev() {
             if class(c) != k {
@@ -108,7 +128,9 @@ impl TextBuf {
     }
 
     pub fn line_end(&self, offset: usize) -> usize {
-        self.text[offset..].find('\n').map_or(self.text.len(), |i| offset + i)
+        self.text[offset..]
+            .find('\n')
+            .map_or(self.text.len(), |i| offset + i)
     }
 
     pub fn move_to(&mut self, offset: usize) {
@@ -157,7 +179,9 @@ impl TextBuf {
     /// Replace `range` (default: the marked text, else the selection) with `new`; the caret ends
     /// after it. Offsets are clamped to the text.
     pub fn replace(&mut self, range: Option<Range<usize>>, new: &str) {
-        let range = range.or_else(|| self.marked.clone()).unwrap_or_else(|| self.sel.clone());
+        let range = range
+            .or_else(|| self.marked.clone())
+            .unwrap_or_else(|| self.sel.clone());
         let end = range.end.min(self.text.len());
         let range = range.start.min(end)..end;
         self.text.replace_range(range.clone(), new);
@@ -295,7 +319,10 @@ mod tests {
     use super::*;
 
     fn buf(text: &str, caret: usize) -> TextBuf {
-        let mut b = TextBuf { text: text.into(), ..TextBuf::default() };
+        let mut b = TextBuf {
+            text: text.into(),
+            ..TextBuf::default()
+        };
         b.move_to(caret);
         b
     }
@@ -434,7 +461,8 @@ mod tests {
     #[test]
     fn middle_ellipsis_fits_and_keeps_both_ends() {
         let w = |t: &str| t.chars().count() as f32 * 10.0;
-        let url = "https://github.com/YewdielMartinez/Selachi/releases/latest/download/grammars.toml";
+        let url =
+            "https://github.com/YewdielMartinez/Selachi/releases/latest/download/grammars.toml";
         let out = middle_ellipsis(url, 300.0, &w);
         assert!(w(&out) <= 300.0, "{out}");
         assert!(out.starts_with("https://git"), "{out}");

@@ -47,7 +47,10 @@ pub(crate) fn spawn_in_job(cmd: &mut Command, job: usize) -> io::Result<Child> {
     // (created with PROCESS_ALL_ACCESS); both are only borrowed for the call.
     let assigned = unsafe { AssignProcessToJobObject(job_handle, HANDLE(child.as_raw_handle())) };
     if let Err(e) = assigned {
-        log::warn!("agents_driver: could not assign pid {} to the job object: {e}", child.id());
+        log::warn!(
+            "agents_driver: could not assign pid {} to the job object: {e}",
+            child.id()
+        );
     }
     if let Err(e) = resume(child.id()) {
         let _ = child.kill();
@@ -65,13 +68,19 @@ fn resume(pid: u32) -> io::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(10 * (attempt + 1)));
     }
-    Err(io::Error::other(format!("no thread of pid {pid} could be resumed")))
+    Err(io::Error::other(format!(
+        "no thread of pid {pid} could be resumed"
+    )))
 }
 
 fn resume_threads(pid: u32) -> io::Result<u32> {
     // SAFETY: system-wide thread snapshot; the handle is closed below.
-    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }.map_err(io::Error::other)?;
-    let mut entry = THREADENTRY32 { dwSize: size_of::<THREADENTRY32>() as u32, ..Default::default() };
+    let snap =
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }.map_err(io::Error::other)?;
+    let mut entry = THREADENTRY32 {
+        dwSize: size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
     let mut resumed = 0;
     // SAFETY: `entry.dwSize` is set; documented iteration protocol.
     let mut more = unsafe { Thread32First(snap, &mut entry) }.is_ok();

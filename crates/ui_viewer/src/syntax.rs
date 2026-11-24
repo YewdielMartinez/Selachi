@@ -55,7 +55,11 @@ mod tests {
 
     fn lin(c: f32) -> f64 {
         let c = f64::from(c);
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     }
 
     fn luminance(c: Rgba) -> f64 {
@@ -74,7 +78,11 @@ mod tests {
                 if let Some(c) = color_for(kind, &theme) {
                     let ratio = contrast(c, theme.colors.surface_0);
                     // Punctuation is deliberately quiet, everything else must be easy to read.
-                    let min = if kind == HighlightKind::Punctuation { 3.0 } else { 4.0 };
+                    let min = if kind == HighlightKind::Punctuation {
+                        3.0
+                    } else {
+                        4.0
+                    };
                     assert!(ratio >= min, "{:?} {:?}: {ratio:.2}", theme.mode, kind);
                 }
             }

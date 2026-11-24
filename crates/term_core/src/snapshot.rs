@@ -106,7 +106,11 @@ pub(crate) fn build_snapshot_into<L: EventListener>(
             if is_dim {
                 fg = dim(fg);
             }
-            let ch = if cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c };
+            let ch = if cell.flags.contains(Flags::HIDDEN) {
+                ' '
+            } else {
+                cell.c
+            };
             let flags = CellFlags {
                 bold: cell.flags.contains(Flags::BOLD),
                 italic: cell.flags.contains(Flags::ITALIC),
@@ -137,7 +141,11 @@ pub(crate) fn build_snapshot_into<L: EventListener>(
         let row = p.line.0 + offset as i32;
         let mut col = p.column.0;
         // Show the cursor on the head of a wide character, not on its spacer.
-        if col > 0 && grid[p.line][p.column].flags.contains(Flags::WIDE_CHAR_SPACER) {
+        if col > 0
+            && grid[p.line][p.column]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+        {
             col -= 1;
         }
         if row >= 0 && (row as usize) < rows && col < cols {
@@ -160,7 +168,11 @@ impl Snapshot {
         self.lines
             .get(row)
             .map(|l| {
-                let s: String = l.iter().filter(|c| !c.flags.wide_spacer).map(|c| c.ch).collect();
+                let s: String = l
+                    .iter()
+                    .filter(|c| !c.flags.wide_spacer)
+                    .map(|c| c.ch)
+                    .collect();
                 s.trim_end().to_string()
             })
             .unwrap_or_default()
@@ -168,7 +180,10 @@ impl Snapshot {
 
     /// Returns the whole viewport as text, one line per row, trailing spaces trimmed.
     pub fn text(&self) -> String {
-        (0..self.rows).map(|r| self.line_text(r)).collect::<Vec<_>>().join("\n")
+        (0..self.rows)
+            .map(|r| self.line_text(r))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -204,11 +219,24 @@ mod tests {
     fn row_hash_tracks_content_and_style() {
         let palette = Palette::default();
         let mut snap = Snapshot::default();
-        build_snapshot_into(&term_with("abc\r\nabc\r\n\x1b[31mabc\x1b[0m"), &palette, &mut snap);
+        build_snapshot_into(
+            &term_with("abc\r\nabc\r\n\x1b[31mabc\x1b[0m"),
+            &palette,
+            &mut snap,
+        );
         assert_eq!(snap.row_hash.len(), 4);
-        assert_eq!(snap.row_hash[0], snap.row_hash[1], "identical rows hash equally");
-        assert_ne!(snap.row_hash[1], snap.row_hash[2], "a color change changes the hash");
-        assert_ne!(snap.row_hash[0], snap.row_hash[3], "blank row differs from text row");
+        assert_eq!(
+            snap.row_hash[0], snap.row_hash[1],
+            "identical rows hash equally"
+        );
+        assert_ne!(
+            snap.row_hash[1], snap.row_hash[2],
+            "a color change changes the hash"
+        );
+        assert_ne!(
+            snap.row_hash[0], snap.row_hash[3],
+            "blank row differs from text row"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
 use proc_svc::{
-    CpuSampler, Tracker, TerminateOptions, check_safe, heuristic_from, listening_ports,
+    CpuSampler, TerminateOptions, Tracker, check_safe, heuristic_from, listening_ports,
     logical_cores, ports_by_pid, snapshot, start_time_of, terminate_tree_with,
 };
 
@@ -79,7 +79,10 @@ impl TrackerSource {
     pub fn new(tracker: SharedTracker) -> Self {
         Self {
             tracker,
-            agent_names: Self::DEFAULT_AGENTS.iter().map(ToString::to_string).collect(),
+            agent_names: Self::DEFAULT_AGENTS
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             cpu: Mutex::new(CpuSampler::new()),
             options: TerminateOptions::default(),
         }
@@ -107,16 +110,36 @@ impl ProcSource for TrackerSource {
         let (reports, tracked, tree_owners) = {
             let t = lock(&self.tracker);
             let reports = t.report_from(&procs, &by_pid);
-            let tracked = t.owners().into_iter().filter_map(|o| t.job(o)).flat_map(|j| j.members()).collect();
-            let tree_owners =
-                t.owners().into_iter().filter(|o| t.attachment_hint(*o) == proc_svc::TrackingMode::TreeOnly).collect();
+            let tracked = t
+                .owners()
+                .into_iter()
+                .filter_map(|o| t.job(o))
+                .flat_map(|j| j.members())
+                .collect();
+            let tree_owners = t
+                .owners()
+                .into_iter()
+                .filter(|o| t.attachment_hint(*o) == proc_svc::TrackingMode::TreeOnly)
+                .collect();
             (reports, tracked, tree_owners)
         };
         let names: Vec<&str> = self.agent_names.iter().map(String::as_str).collect();
         let untracked = heuristic_from(&procs, &by_pid, &tracked, &names, std::process::id());
         let cores = logical_cores() as f32;
-        let cpu = lock(&self.cpu).sample(&procs).into_iter().map(|(pid, v)| (pid, v / cores)).collect();
-        Collected { reports, untracked, ports, procs, cpu, now: Some(SystemTime::now()), tree_owners }
+        let cpu = lock(&self.cpu)
+            .sample(&procs)
+            .into_iter()
+            .map(|(pid, v)| (pid, v / cores))
+            .collect();
+        Collected {
+            reports,
+            untracked,
+            ports,
+            procs,
+            cpu,
+            now: Some(SystemTime::now()),
+            tree_owners,
+        }
     }
 
     fn check_stop(&self, pid: u32) -> Result<(), String> {
@@ -127,14 +150,18 @@ impl ProcSource for TrackerSource {
         let mut out = StopResult::default();
         for root in &plan.roots {
             if let Some(owner) = root.owner {
-                let member = lock(&self.tracker).job(owner).is_some_and(|j| j.contains(root.pid));
+                let member = lock(&self.tracker)
+                    .job(owner)
+                    .is_some_and(|j| j.contains(root.pid));
                 if !member {
-                    out.skipped.push((root.pid, "ya no pertenece al job de su pestaña".into()));
+                    out.skipped
+                        .push((root.pid, "ya no pertenece al job de su pestaña".into()));
                     continue;
                 }
             }
             if root.start.is_some() && start_time_of(root.pid) != root.start {
-                out.skipped.push((root.pid, "ya terminó o el pid lo usa otro proceso".into()));
+                out.skipped
+                    .push((root.pid, "ya terminó o el pid lo usa otro proceso".into()));
                 continue;
             }
             match terminate_tree_with(root.pid, &self.options) {

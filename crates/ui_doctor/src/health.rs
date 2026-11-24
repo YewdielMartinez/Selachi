@@ -15,11 +15,18 @@ const GIB: u64 = MIB * 1024;
 pub fn format_bytes(bytes: u64) -> String {
     if bytes >= GIB {
         let gb = bytes as f64 / GIB as f64;
-        if gb >= 10.0 { format!("{} GB", gb.round() as u64) } else { format!("{} GB", format!("{gb:.1}").replace('.', ",")) }
+        if gb >= 10.0 {
+            format!("{} GB", gb.round() as u64)
+        } else {
+            format!("{} GB", format!("{gb:.1}").replace('.', ","))
+        }
     } else if bytes >= 10 * MIB {
         format!("{} MB", bytes / MIB)
     } else if bytes >= MIB {
-        format!("{} MB", format!("{:.1}", bytes as f64 / MIB as f64).replace('.', ","))
+        format!(
+            "{} MB",
+            format!("{:.1}", bytes as f64 / MIB as f64).replace('.', ",")
+        )
     } else {
         format!("{} KB", bytes / KIB)
     }
@@ -189,13 +196,19 @@ impl Health {
         let mut s = String::new();
         s.push_str(&format!("## Selachi doctor ({version})\n\n"));
         s.push_str(&format!("- **PID:** {}\n", self.pid));
-        s.push_str(&format!("- **Tiempo activo:** {}\n", self.uptime.map_or(na.to_string(), format_uptime)));
+        s.push_str(&format!(
+            "- **Tiempo activo:** {}\n",
+            self.uptime.map_or(na.to_string(), format_uptime)
+        ));
         s.push_str(&format!(
             "- **RAM:** {} (working set) · {} (privada)\n",
             format_bytes(self.working_set),
             format_bytes(self.private_bytes)
         ));
-        s.push_str(&format!("- **CPU:** {}\n", self.cpu.map_or(na.to_string(), format_pct)));
+        s.push_str(&format!(
+            "- **CPU:** {}\n",
+            self.cpu.map_or(na.to_string(), format_pct)
+        ));
         s.push_str(&format!("- **Hilos:** {}\n", self.threads));
         s.push_str(&format!(
             "- **Procesos hijos:** {} · {}\n",
@@ -203,22 +216,44 @@ impl Health {
             format_bytes(self.children_ram())
         ));
         for c in &self.children {
-            s.push_str(&format!("  - {} (pid {}) · {}\n", c.name, c.pid, format_bytes(c.working_set)));
+            s.push_str(&format!(
+                "  - {} (pid {}) · {}\n",
+                c.name,
+                c.pid,
+                format_bytes(c.working_set)
+            ));
         }
-        s.push_str(&format!("- **Fotogramas desde que se abrió el doctor:** {}\n", format_count(self.frames.since_open)));
-        s.push_str(&format!("- **Último fotograma:** {}\n", self.frames.last.map_or(na.to_string(), format_ms)));
-        s.push_str(&format!("- **Fotograma más lento (último intervalo):** {}\n", self.frames.slowest.map_or(na.to_string(), format_ms)));
+        s.push_str(&format!(
+            "- **Fotogramas desde que se abrió el doctor:** {}\n",
+            format_count(self.frames.since_open)
+        ));
+        s.push_str(&format!(
+            "- **Último fotograma:** {}\n",
+            self.frames.last.map_or(na.to_string(), format_ms)
+        ));
+        s.push_str(&format!(
+            "- **Fotograma más lento (último intervalo):** {}\n",
+            self.frames.slowest.map_or(na.to_string(), format_ms)
+        ));
         s.push_str(&format!(
             "- **Shells / agentes:** {} / {}\n",
             self.stats.shells.map_or(na.to_string(), |n| n.to_string()),
             self.stats.agents.map_or(na.to_string(), |n| n.to_string())
         ));
         for d in &self.dbs {
-            s.push_str(&format!("- **{}:** {}\n", d.label, d.bytes.map_or("no existe".to_string(), format_bytes)));
+            s.push_str(&format!(
+                "- **{}:** {}\n",
+                d.label,
+                d.bytes.map_or("no existe".to_string(), format_bytes)
+            ));
         }
         s.push_str(&format!(
             "- **Gramáticas cargadas:** {}\n",
-            if self.stats.grammars.is_empty() { "ninguna".to_string() } else { self.stats.grammars.join(", ") }
+            if self.stats.grammars.is_empty() {
+                "ninguna".to_string()
+            } else {
+                self.stats.grammars.join(", ")
+            }
         ));
         s
     }
@@ -242,7 +277,11 @@ impl Ring {
 }
 
 /// CPU % of the whole machine from two cumulative CPU times.
-pub fn cpu_percent(prev: (std::time::Instant, Duration), now: (std::time::Instant, Duration), cores: usize) -> Option<f32> {
+pub fn cpu_percent(
+    prev: (std::time::Instant, Duration),
+    now: (std::time::Instant, Duration),
+    cores: usize,
+) -> Option<f32> {
     let wall = now.0.checked_duration_since(prev.0)?;
     if wall < Duration::from_millis(100) || now.1 < prev.1 {
         return None;
@@ -271,7 +310,10 @@ mod tests {
         assert_eq!(format_count(1_240), "1 240");
         assert_eq!(format_count(12), "12");
         assert_eq!(format_count(1_234_567), "1 234 567");
-        assert_eq!(format_uptime(Duration::from_secs(2 * 3_600 + 300)), "2h 05m");
+        assert_eq!(
+            format_uptime(Duration::from_secs(2 * 3_600 + 300)),
+            "2h 05m"
+        );
     }
 
     #[test]
@@ -290,9 +332,21 @@ mod tests {
         let t0 = Instant::now();
         let t1 = t0 + Duration::from_secs(1);
         // 0.5 s of CPU in 1 s on 4 cores = 12.5 %.
-        let p = cpu_percent((t0, Duration::from_secs(10)), (t1, Duration::from_millis(10_500)), 4).unwrap();
+        let p = cpu_percent(
+            (t0, Duration::from_secs(10)),
+            (t1, Duration::from_millis(10_500)),
+            4,
+        )
+        .unwrap();
         assert!((p - 12.5).abs() < 0.01);
-        assert!(cpu_percent((t0, Duration::ZERO), (t0 + Duration::from_millis(10), Duration::ZERO), 4).is_none());
+        assert!(
+            cpu_percent(
+                (t0, Duration::ZERO),
+                (t0 + Duration::from_millis(10), Duration::ZERO),
+                4
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -303,18 +357,50 @@ mod tests {
             private_bytes: 31 * MIB,
             cpu: Some(0.3),
             threads: 17,
-            children: vec![ChildProc { pid: 7, name: "pwsh.exe".into(), working_set: 90 * MIB }],
-            frames: FrameInfo { since_open: 1_240, last: Some(Duration::from_micros(2_300)), slowest: None },
-            stats: AppStats { shells: Some(2), agents: None, grammars: vec!["rust".into(), "toml".into()], tree_tracked: 0 },
-            dbs: vec![DbSize { label: "selachi.db".into(), bytes: Some(MIB) }, DbSize { label: "state.db".into(), bytes: None }],
+            children: vec![ChildProc {
+                pid: 7,
+                name: "pwsh.exe".into(),
+                working_set: 90 * MIB,
+            }],
+            frames: FrameInfo {
+                since_open: 1_240,
+                last: Some(Duration::from_micros(2_300)),
+                slowest: None,
+            },
+            stats: AppStats {
+                shells: Some(2),
+                agents: None,
+                grammars: vec!["rust".into(), "toml".into()],
+                tree_tracked: 0,
+            },
+            dbs: vec![
+                DbSize {
+                    label: "selachi.db".into(),
+                    bytes: Some(MIB),
+                },
+                DbSize {
+                    label: "state.db".into(),
+                    bytes: None,
+                },
+            ],
             uptime: Some(Duration::from_secs(125)),
             ..Health::default()
         };
         let md = h.to_markdown("0.0.1");
         for needle in [
-            "## Selachi doctor (0.0.1)", "**RAM:** 58 MB (working set) · 31 MB (privada)", "**CPU:** 0,3%", "**Hilos:** 17",
-            "**Procesos hijos:** 1 · 90 MB", "pwsh.exe (pid 7)", "1 240", "2,3 ms", "**Shells / agentes:** 2 / —",
-            "**selachi.db:** 1,0 MB", "**state.db:** no existe", "rust, toml", "**Tiempo activo:** 2m",
+            "## Selachi doctor (0.0.1)",
+            "**RAM:** 58 MB (working set) · 31 MB (privada)",
+            "**CPU:** 0,3%",
+            "**Hilos:** 17",
+            "**Procesos hijos:** 1 · 90 MB",
+            "pwsh.exe (pid 7)",
+            "1 240",
+            "2,3 ms",
+            "**Shells / agentes:** 2 / —",
+            "**selachi.db:** 1,0 MB",
+            "**state.db:** no existe",
+            "rust, toml",
+            "**Tiempo activo:** 2m",
         ] {
             assert!(md.contains(needle), "missing {needle:?} in\n{md}");
         }

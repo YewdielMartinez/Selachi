@@ -56,7 +56,11 @@ impl RowText {
             text.push(if cell.ch.is_control() { ' ' } else { cell.ch });
             end_col = col + if cell.flags.wide { 2 } else { 1 };
         }
-        Self { text, starts, end_col }
+        Self {
+            text,
+            starts,
+            end_col,
+        }
     }
 
     /// Column of the character that starts at (or first after) byte `b`.
@@ -78,7 +82,13 @@ pub struct LinkCache {
 
 impl LinkCache {
     /// The existing path under column `col` of a row whose cells are `cells`.
-    pub fn hit(&mut self, row_hash: u64, cells: &[CellView], col: usize, cwd: &Path) -> Option<LinkHit> {
+    pub fn hit(
+        &mut self,
+        row_hash: u64,
+        cells: &[CellView],
+        col: usize,
+        cwd: &Path,
+    ) -> Option<LinkHit> {
         if self.rows.len() > CACHE_ROWS {
             self.rows.clear();
         }
@@ -87,11 +97,18 @@ impl LinkCache {
             let row = RowText::of(cells);
             viewer_svc::find_paths(&row.text, cwd)
                 .into_iter()
-                .map(|m| RowMatch { cols: row.cols(&m.range), found: m, resolved: None })
+                .map(|m| RowMatch {
+                    cols: row.cols(&m.range),
+                    found: m,
+                    resolved: None,
+                })
                 .collect()
         });
         let m = matches.iter_mut().find(|m| m.cols.contains(&col))?;
-        let resolved = m.resolved.get_or_insert_with(|| m.found.resolve()).clone()?;
+        let resolved = m
+            .resolved
+            .get_or_insert_with(|| m.found.resolve())
+            .clone()?;
         Some(LinkHit {
             cols: m.cols.clone(),
             path: resolved.path,
@@ -123,14 +140,20 @@ mod tests {
                 ch,
                 fg: Rgb8::default(),
                 bg: Rgb8::default(),
-                flags: CellFlags { wide, ..CellFlags::default() },
+                flags: CellFlags {
+                    wide,
+                    ..CellFlags::default()
+                },
             });
             if wide {
                 out.push(CellView {
                     ch: ' ',
                     fg: Rgb8::default(),
                     bg: Rgb8::default(),
-                    flags: CellFlags { wide_spacer: true, ..CellFlags::default() },
+                    flags: CellFlags {
+                        wide_spacer: true,
+                        ..CellFlags::default()
+                    },
                 });
             }
         }

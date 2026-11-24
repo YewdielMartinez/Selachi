@@ -58,7 +58,9 @@ fn syntax_color(theme: &Theme, kind: HighlightKind) -> Option<Hsla> {
         HighlightKind::Comment | HighlightKind::Operator | HighlightKind::Punctuation => c.muted,
         HighlightKind::Function | HighlightKind::Property => ansi(theme, 4),
         HighlightKind::Type => ansi(theme, 6),
-        HighlightKind::Number | HighlightKind::Constant | HighlightKind::Attribute => ansi(theme, 3),
+        HighlightKind::Number | HighlightKind::Constant | HighlightKind::Attribute => {
+            ansi(theme, 3)
+        }
         HighlightKind::Tag => ansi(theme, 1),
         HighlightKind::Variable | HighlightKind::Plain => return None,
     };
@@ -161,8 +163,22 @@ pub fn section_header(
         .items_center()
         .gap(px(4.0))
         .cursor_pointer()
-        .child(icon(if collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, 16.0, c.muted))
-        .child(div().text_size(px(theme.typography.ui_size_sm)).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(title.to_string()))
+        .child(icon(
+            if collapsed {
+                Icon::ChevronRight
+            } else {
+                Icon::ChevronDown
+            },
+            16.0,
+            c.muted,
+        ))
+        .child(
+            div()
+                .text_size(px(theme.typography.ui_size_sm))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(c.muted)
+                .child(title.to_string()),
+        )
         .when_some(count, |d, n| {
             d.child(
                 div()
@@ -178,12 +194,20 @@ pub fn section_header(
             )
         })
         .on_click(move |e, w, cx| on_toggle(e, w, cx));
-    div().w_full().flex_none().flex().flex_row().items_center().gap(px(4.0)).child(toggle).when_some(action, |d, (label, f)| {
-        d.child(
-            GhostButton::new(SharedString::from(format!("{id}-action")), theme, label)
-                .on_click(move |e, w, cx| f(e, w, cx)),
-        )
-    })
+    div()
+        .w_full()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.0))
+        .child(toggle)
+        .when_some(action, |d, (label, f)| {
+            d.child(
+                GhostButton::new(SharedString::from(format!("{id}-action")), theme, label)
+                    .on_click(move |e, w, cx| f(e, w, cx)),
+            )
+        })
 }
 
 /// Truncated path, directory muted and file name strong.
@@ -196,7 +220,13 @@ fn path_text(theme: &Theme, text: &str, budget: usize) -> impl IntoElement + use
         .overflow_hidden()
         .whitespace_nowrap()
         .text_size(px(theme.typography.ui_size_md))
-        .child(div().flex().flex_row().child(div().text_color(c.muted).child(l.dir)).child(div().text_color(c.text).child(l.name)))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .child(div().text_color(c.muted).child(l.dir))
+                .child(div().text_color(c.text).child(l.name)),
+        )
 }
 
 fn counts_text(theme: &Theme, row: &FileRow) -> Option<AnyElement> {
@@ -210,11 +240,22 @@ fn counts_text(theme: &Theme, row: &FileRow) -> Option<AnyElement> {
                 .gap(px(6.0))
                 .font_family(mono)
                 .text_size(px(theme.typography.ui_size_xs))
-                .child(div().text_color(theme.colors.success).child(format!("+{a}")))
+                .child(
+                    div()
+                        .text_color(theme.colors.success)
+                        .child(format!("+{a}")),
+                )
                 .child(div().text_color(theme.colors.error).child(format!("−{d}")))
                 .into_any_element(),
         ),
-        (None, true) => Some(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(theme.colors.muted).child("bin").into_any_element()),
+        (None, true) => Some(
+            div()
+                .flex_none()
+                .text_size(px(theme.typography.ui_size_xs))
+                .text_color(theme.colors.muted)
+                .child("bin")
+                .into_any_element(),
+        ),
         (None, false) => None,
     }
 }
@@ -244,9 +285,13 @@ pub fn file_row(
         .gap(px(8.0))
         .cursor_pointer()
         .child(letter_pill(theme, row.letter))
-        .when(!compact, |d| d.child(file_icon(FileIcon::for_path(&row.path), 16.0, c.muted)))
+        .when(!compact, |d| {
+            d.child(file_icon(FileIcon::for_path(&row.path), 16.0, c.muted))
+        })
         .child(path_text(theme, &row.text, budget))
-        .when(!compact, |d| d.when_some(counts_text(theme, row), |d, t| d.child(t)))
+        .when(!compact, |d| {
+            d.when_some(counts_text(theme, row), |d, t| d.child(t))
+        })
         .on_click(move |e, w, cx| on_open(e, w, cx));
     div()
         .w_full()
@@ -272,20 +317,45 @@ pub fn file_row(
 fn diff_line(theme: &Theme, row: &DiffRow) -> AnyElement {
     let c = theme.colors;
     let mono = theme.typography.mono_family;
-    let base = div().w_full().h(px(DIFF_ROW_H)).flex().flex_row().items_center().font_family(mono).text_size(px(theme.typography.ui_size_sm));
+    let base = div()
+        .w_full()
+        .h(px(DIFF_ROW_H))
+        .flex()
+        .flex_row()
+        .items_center()
+        .font_family(mono)
+        .text_size(px(theme.typography.ui_size_sm));
     match row {
-        DiffRow::Hunk(h) => base.px(px(8.0)).text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(h.clone()).into_any_element(),
+        DiffRow::Hunk(h) => base
+            .px(px(8.0))
+            .text_size(px(theme.typography.ui_size_xs))
+            .text_color(c.muted)
+            .child(h.clone())
+            .into_any_element(),
         DiffRow::More(n) => base
             .px(px(8.0))
             .text_size(px(theme.typography.ui_size_xs))
             .text_color(c.muted)
             .child(format!("… {n} líneas más (usa «Ampliar»)"))
             .into_any_element(),
-        DiffRow::Line(PreviewLine { kind, num, text, spans }) => {
+        DiffRow::Line(PreviewLine {
+            kind,
+            num,
+            text,
+            spans,
+        }) => {
             let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
                 .iter()
                 .filter_map(|(r, k)| {
-                    syntax_color(theme, *k).map(|color| (r.clone(), HighlightStyle { color: Some(color), ..HighlightStyle::default() }))
+                    syntax_color(theme, *k).map(|color| {
+                        (
+                            r.clone(),
+                            HighlightStyle {
+                                color: Some(color),
+                                ..HighlightStyle::default()
+                            },
+                        )
+                    })
                 })
                 .collect();
             let tint = diff_tint(theme, *kind);
@@ -308,7 +378,14 @@ fn diff_line(theme: &Theme, row: &DiffRow) -> AnyElement {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_color(c.text)
-                        .child(StyledText::new(if text.is_empty() { " ".to_string() } else { text.clone() }).with_highlights(highlights)),
+                        .child(
+                            StyledText::new(if text.is_empty() {
+                                " ".to_string()
+                            } else {
+                                text.clone()
+                            })
+                            .with_highlights(highlights),
+                        ),
                 )
                 .into_any_element()
         }
@@ -316,13 +393,41 @@ fn diff_line(theme: &Theme, row: &DiffRow) -> AnyElement {
 }
 
 /// The inline diff of the selected file, with "Abrir", "Ampliar" and "Agente".
-pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<GitModel>) -> AnyElement {
+pub fn diff_card(
+    theme: &Theme,
+    slot: &DiffSlot,
+    compact: bool,
+    model: &Entity<GitModel>,
+) -> AnyElement {
     let c = theme.colors;
-    let shell = div().w_full().flex_none().flex().flex_col().gap(px(6.0)).p(px(8.0)).rounded(px(Radius::PILL)).bg(c.surface_0);
-    let note = |text: String| div().px(px(6.0)).py(px(4.0)).text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(text);
+    let shell = div()
+        .w_full()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .p(px(8.0))
+        .rounded(px(Radius::PILL))
+        .bg(c.surface_0);
+    let note = |text: String| {
+        div()
+            .px(px(6.0))
+            .py(px(4.0))
+            .text_size(px(theme.typography.ui_size_sm))
+            .text_color(c.muted)
+            .child(text)
+    };
     let preview = match &slot.state {
-        DiffState::Loading => return shell.child(note("Cargando diff…".into())).into_any_element(),
-        DiffState::Failed(e) => return shell.child(note(format!("No se pudo leer el diff: {e}"))).into_any_element(),
+        DiffState::Loading => {
+            return shell
+                .child(note("Cargando diff…".into()))
+                .into_any_element();
+        }
+        DiffState::Failed(e) => {
+            return shell
+                .child(note(format!("No se pudo leer el diff: {e}")))
+                .into_any_element();
+        }
         DiffState::Ready(p) => p.clone(),
     };
     let path = slot.target.path().to_path_buf();
@@ -347,16 +452,28 @@ pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<G
                     .gap(px(8.0))
                     .font_family(theme.typography.mono_family)
                     .text_size(px(theme.typography.ui_size_xs))
-                    .child(div().text_color(c.success).child(format!("+{}", preview.added)))
-                    .child(div().text_color(c.error).child(format!("−{}", preview.removed))),
+                    .child(
+                        div()
+                            .text_color(c.success)
+                            .child(format!("+{}", preview.added)),
+                    )
+                    .child(
+                        div()
+                            .text_color(c.error)
+                            .child(format!("−{}", preview.removed)),
+                    ),
             )
-            .child(GhostButton::new("diff-open", theme, "Abrir").on_click(move |_, _, cx| {
-                m1.update(cx, |m, cx| m.open_file(&p1, line, cx));
-            }))
+            .child(
+                GhostButton::new("diff-open", theme, "Abrir").on_click(move |_, _, cx| {
+                    m1.update(cx, |m, cx| m.open_file(&p1, line, cx));
+                }),
+            )
             .when(!compact, |d| {
-                d.child(GhostButton::new("diff-expand", theme, "Ampliar").on_click(move |_, _, cx| {
-                    m2.update(cx, |m, cx| m.open_diff(&p2, cx));
-                }))
+                d.child(GhostButton::new("diff-expand", theme, "Ampliar").on_click(
+                    move |_, _, cx| {
+                        m2.update(cx, |m, cx| m.open_diff(&p2, cx));
+                    },
+                ))
             })
             .child(
                 GhostButton::new("diff-agent", theme, "Agente")
@@ -365,17 +482,26 @@ pub fn diff_card(theme: &Theme, slot: &DiffSlot, compact: bool, model: &Entity<G
             )
     };
     if preview.binary {
-        return shell.child(header).child(note("Archivo binario: no hay vista previa".into())).into_any_element();
+        return shell
+            .child(header)
+            .child(note("Archivo binario: no hay vista previa".into()))
+            .into_any_element();
     }
     if preview.is_empty() {
-        return shell.child(header).child(note("Sin diferencias".into())).into_any_element();
+        return shell
+            .child(header)
+            .child(note("Sin diferencias".into()))
+            .into_any_element();
     }
     let rows = preview.rows.clone();
     let visible = rows.len().min(DIFF_MAX_VISIBLE);
     let t = *theme;
     let list_id: SharedString = format!("diff-{}", slot.target.path().display()).into();
     let list = VirtualList::new(list_id, rows.len(), DIFF_ROW_H, move |range, _, _| {
-        range.filter_map(|i| rows.get(i)).map(|r| diff_line(&t, r)).collect()
+        range
+            .filter_map(|i| rows.get(i))
+            .map(|r| diff_line(&t, r))
+            .collect()
     })
     .w_full()
     .h(px(visible as f32 * DIFF_ROW_H))
@@ -414,13 +540,26 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
         let of_kind: Vec<_> = review.lines.iter().filter(|l| l.kind == kind).collect();
         let (label, color) = kind_label(theme, kind);
         for l in of_kind.iter().take(REVIEW_MAX) {
-            let row = div().w_full().flex().flex_row().items_start().gap(px(8.0)).text_size(px(theme.typography.ui_size_sm));
+            let row = div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap(px(8.0))
+                .text_size(px(theme.typography.ui_size_sm));
             let row = match kind {
                 ReviewKind::Warn => row
                     .text_color(c.text)
-                    .child(div().pt(px(1.0)).flex_none().child(icon(Icon::Alert, 16.0, color)))
+                    .child(
+                        div()
+                            .pt(px(1.0))
+                            .flex_none()
+                            .child(icon(Icon::Alert, 16.0, color)),
+                    )
                     .child(div().flex_1().min_w_0().child(l.text.clone())),
-                ReviewKind::Info => row.text_color(c.muted).child(div().flex_1().min_w_0().child(l.text.clone())),
+                ReviewKind::Info => row
+                    .text_color(c.muted)
+                    .child(div().flex_1().min_w_0().child(l.text.clone())),
                 _ => row
                     .child(div().w(px(70.0)).flex_none().text_color(color).child(label))
                     .child(
@@ -440,7 +579,11 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
         if of_kind.len() > REVIEW_MAX {
             out.push(
                 div()
-                    .pl(px(if matches!(kind, ReviewKind::Warn | ReviewKind::Info) { 24.0 } else { 78.0 }))
+                    .pl(px(if matches!(kind, ReviewKind::Warn | ReviewKind::Info) {
+                        24.0
+                    } else {
+                        78.0
+                    }))
                     .text_size(px(theme.typography.ui_size_xs))
                     .text_color(c.muted)
                     .child(format!("… y {} más", of_kind.len() - REVIEW_MAX))
@@ -453,15 +596,38 @@ fn review_lines(theme: &Theme, review: &Review) -> Vec<AnyElement> {
 
 fn card_shell(theme: &Theme, danger: bool) -> gpui::Div {
     let c = theme.colors;
-    let bg = if danger { alpha(c.error, 0.10) } else { c.surface_2 };
-    div().w_full().flex_none().flex().flex_col().gap(px(8.0)).p(px(12.0)).rounded(px(Radius::SM)).bg(bg)
+    let bg = if danger {
+        alpha(c.error, 0.10)
+    } else {
+        c.surface_2
+    };
+    div()
+        .w_full()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(12.0))
+        .rounded(px(Radius::SM))
+        .bg(bg)
 }
 
 /// The confirmation card, the "comprobando" / "ejecutando" states and the result banner of the
 /// operation in `gate`, when it belongs in `slot`.
-pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Entity<GitModel>) -> Option<AnyElement> {
+pub fn gate_card(
+    theme: &Theme,
+    gate: &Gate,
+    slot: crate::cmd::Slot,
+    model: &Entity<GitModel>,
+) -> Option<AnyElement> {
     let c = theme.colors;
-    let title = |text: String| div().text_size(px(theme.typography.ui_size_md)).font_weight(FontWeight::SEMIBOLD).text_color(c.text).child(text);
+    let title = |text: String| {
+        div()
+            .text_size(px(theme.typography.ui_size_md))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(c.text)
+            .child(text)
+    };
     match gate {
         Gate::Idle => None,
         Gate::Preflighting { op, .. } if op.slot() == slot => Some(
@@ -473,7 +639,12 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                         .items_center()
                         .gap(px(8.0))
                         .child(Spinner::new(c.accent))
-                        .child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(format!("Comprobando {}…", op.title().to_lowercase()))),
+                        .child(
+                            div()
+                                .text_size(px(theme.typography.ui_size_sm))
+                                .text_color(c.muted)
+                                .child(format!("Comprobando {}…", op.title().to_lowercase())),
+                        ),
                 )
                 .into_any_element(),
         ),
@@ -486,14 +657,21 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                         .items_center()
                         .gap(px(8.0))
                         .child(Spinner::new(c.accent))
-                        .child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(format!("{}…", op.title()))),
+                        .child(
+                            div()
+                                .text_size(px(theme.typography.ui_size_sm))
+                                .text_color(c.muted)
+                                .child(format!("{}…", op.title())),
+                        ),
                 )
                 .into_any_element(),
         ),
         Gate::Confirm { op, review } if op.slot() == slot => {
             let (m_ok, m_no) = (model.clone(), model.clone());
             let blocked = review.blocked.clone();
-            let mut card = card_shell(theme, review.danger).child(title(review.title.clone())).children(review_lines(theme, review));
+            let mut card = card_shell(theme, review.danger)
+                .child(title(review.title.clone()))
+                .children(review_lines(theme, review));
             if let Some(stat) = &review.stat {
                 let lines: Vec<&str> = stat.lines().collect();
                 let shown = lines.iter().take(6).copied().collect::<Vec<_>>().join("\n");
@@ -508,17 +686,38 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                         .font_family(theme.typography.mono_family)
                         .text_size(px(theme.typography.ui_size_xs))
                         .text_color(c.muted)
-                        .child(if more > 0 { format!("{shown}\n… y {more} líneas más") } else { shown }),
+                        .child(if more > 0 {
+                            format!("{shown}\n… y {more} líneas más")
+                        } else {
+                            shown
+                        }),
                 );
             }
             if let Some(why) = blocked.clone() {
-                card = card.child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.error).child(why));
+                card = card.child(
+                    div()
+                        .text_size(px(theme.typography.ui_size_sm))
+                        .text_color(c.error)
+                        .child(why),
+                );
             }
             let confirm = Button::primary("gate-confirm", theme, review.confirm_label.clone())
                 .disabled(blocked.is_some())
                 .on_click(move |_, _, cx| m_ok.update(cx, |m, cx| m.confirm(cx)));
-            let cancel = GhostButton::new("gate-cancel", theme, "Cancelar").on_click(move |_, _, cx| m_no.update(cx, |m, cx| m.dismiss(cx)));
-            Some(card.child(div().flex().flex_row().items_center().gap(px(6.0)).child(confirm).child(cancel)).into_any_element())
+            let cancel = GhostButton::new("gate-cancel", theme, "Cancelar")
+                .on_click(move |_, _, cx| m_no.update(cx, |m, cx| m.dismiss(cx)));
+            Some(
+                card.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(confirm)
+                        .child(cancel),
+                )
+                .into_any_element(),
+            )
         }
         Gate::Done { op, outcome } if op.slot() == slot => {
             let (m_close, m_retry) = (model.clone(), model.clone());
@@ -529,8 +728,19 @@ pub fn gate_card(theme: &Theme, gate: &Gate, slot: crate::cmd::Slot, model: &Ent
                     .flex_row()
                     .items_start()
                     .gap(px(8.0))
-                    .child(div().pt(px(1.0)).flex_none().child(icon(if outcome.ok { Icon::Check } else { Icon::Alert }, 16.0, color)))
-                    .child(div().flex_1().min_w_0().text_size(px(theme.typography.ui_size_sm)).text_color(c.text).child(outcome.summary.clone())),
+                    .child(div().pt(px(1.0)).flex_none().child(icon(
+                        if outcome.ok { Icon::Check } else { Icon::Alert },
+                        16.0,
+                        color,
+                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(theme.typography.ui_size_sm))
+                            .text_color(c.text)
+                            .child(outcome.summary.clone()),
+                    ),
             );
             if !outcome.detail.is_empty() {
                 card = card.child(
@@ -579,9 +789,27 @@ pub fn quiet_error_card(theme: &Theme, text: &str, model: &Entity<GitModel>) -> 
                 .flex_row()
                 .items_start()
                 .gap(px(8.0))
-                .child(div().pt(px(1.0)).flex_none().child(icon(Icon::Alert, 16.0, c.error)))
-                .child(div().flex_1().min_w_0().text_size(px(theme.typography.ui_size_sm)).text_color(c.text).child(text.to_string()))
-                .child(mini_button("quiet-close", theme, "×", "Cerrar", move |_, _, cx| m.update(cx, |m, cx| m.dismiss(cx)))),
+                .child(
+                    div()
+                        .pt(px(1.0))
+                        .flex_none()
+                        .child(icon(Icon::Alert, 16.0, c.error)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(theme.typography.ui_size_sm))
+                        .text_color(c.text)
+                        .child(text.to_string()),
+                )
+                .child(mini_button(
+                    "quiet-close",
+                    theme,
+                    "×",
+                    "Cerrar",
+                    move |_, _, cx| m.update(cx, |m, cx| m.dismiss(cx)),
+                )),
         )
         .into_any_element()
 }
@@ -597,12 +825,26 @@ pub fn empty_state(theme: &Theme, title: &str, hint: &str) -> AnyElement {
         .flex_col()
         .items_center()
         .gap(px(4.0))
-        .child(div().text_size(px(theme.typography.ui_size_md)).text_color(c.text).child(title.to_string()))
-        .child(div().px(px(12.0)).text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(hint.to_string()))
+        .child(
+            div()
+                .text_size(px(theme.typography.ui_size_md))
+                .text_color(c.text)
+                .child(title.to_string()),
+        )
+        .child(
+            div()
+                .px(px(12.0))
+                .text_size(px(theme.typography.ui_size_sm))
+                .text_color(c.muted)
+                .child(hint.to_string()),
+        )
         .into_any_element()
 }
 
 /// Target a file row opens.
 pub fn working_target(row: &FileRow) -> DiffTarget {
-    DiffTarget::Working { section: row.section, path: row.path.clone() }
+    DiffTarget::Working {
+        section: row.section,
+        path: row.path.clone(),
+    }
 }

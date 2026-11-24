@@ -61,11 +61,13 @@ pub mod run;
 pub mod slots;
 pub mod usage;
 
-pub use agents::{agent_name, canonical_name, list_agents, AgentList, AgentResolver, SystemResolver};
+pub use agents::{
+    agent_name, canonical_name, list_agents, AgentList, AgentResolver, SystemResolver,
+};
 pub use apply::{ApplyPlan, ApplyReport, Confirmation, Risk};
 pub use approvals::{
-    default_pipe_path, pipe_path_for, ApprovalBroker, ApprovalRequest, ClientMessage, Decision, DenyAll, PipeBroker,
-    ServerMessage, Verdict, PROTOCOL_VERSION,
+    default_pipe_path, pipe_path_for, ApprovalBroker, ApprovalRequest, ClientMessage, Decision,
+    DenyAll, PipeBroker, ServerMessage, Verdict, PROTOCOL_VERSION,
 };
 pub use control::{CancelOutcome, StatusOut};
 pub use output::{DiffStat, RunResult, RunStatus, UsageOut};

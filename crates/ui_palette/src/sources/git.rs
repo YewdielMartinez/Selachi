@@ -20,25 +20,69 @@ pub struct GitSource;
 /// `(key, title, spanish keywords, action or form)`.
 enum Entry {
     Direct(&'static str, &'static str, &'static str, GitAction),
-    Form(&'static str, &'static str, &'static str, fn() -> FormSpec, GitAction),
+    Form(
+        &'static str,
+        &'static str,
+        &'static str,
+        fn() -> FormSpec,
+        GitAction,
+    ),
 }
 
 fn entries() -> Vec<Entry> {
     vec![
         Entry::Direct("status", "Git: estado", "status cambios", GitAction::Status),
-        Entry::Direct("add", "Git: añadir todo", "add stage preparar", GitAction::AddAll),
-        Entry::Form("commit", "Git: commit…", "confirmar guardar mensaje", FormSpec::git_commit, GitAction::Commit {
-            message: String::new(),
-        }),
-        Entry::Direct("push", "Git: push", "subir publicar enviar", GitAction::Push),
-        Entry::Direct("pull", "Git: pull", "bajar traer actualizar", GitAction::Pull),
-        Entry::Direct("fetch", "Git: fetch", "traer remoto prune", GitAction::Fetch),
-        Entry::Form("switch", "Git: cambiar de rama…", "switch rama branch", FormSpec::git_switch, GitAction::Switch {
-            branch: String::new(),
-        }),
-        Entry::Form("checkout", "Git: checkout…", "rama commit destino", FormSpec::git_checkout, GitAction::Checkout {
-            target: String::new(),
-        }),
+        Entry::Direct(
+            "add",
+            "Git: añadir todo",
+            "add stage preparar",
+            GitAction::AddAll,
+        ),
+        Entry::Form(
+            "commit",
+            "Git: commit…",
+            "confirmar guardar mensaje",
+            FormSpec::git_commit,
+            GitAction::Commit {
+                message: String::new(),
+            },
+        ),
+        Entry::Direct(
+            "push",
+            "Git: push",
+            "subir publicar enviar",
+            GitAction::Push,
+        ),
+        Entry::Direct(
+            "pull",
+            "Git: pull",
+            "bajar traer actualizar",
+            GitAction::Pull,
+        ),
+        Entry::Direct(
+            "fetch",
+            "Git: fetch",
+            "traer remoto prune",
+            GitAction::Fetch,
+        ),
+        Entry::Form(
+            "switch",
+            "Git: cambiar de rama…",
+            "switch rama branch",
+            FormSpec::git_switch,
+            GitAction::Switch {
+                branch: String::new(),
+            },
+        ),
+        Entry::Form(
+            "checkout",
+            "Git: checkout…",
+            "rama commit destino",
+            FormSpec::git_checkout,
+            GitAction::Checkout {
+                target: String::new(),
+            },
+        ),
         Entry::Direct("log", "Git: log", "historial commits grafo", GitAction::Log),
         Entry::Direct("diff", "Git: diff", "cambios diferencias", GitAction::Diff),
     ]
@@ -77,7 +121,9 @@ impl PaletteSource for GitSource {
     }
 
     fn query(&self, q: &SourceQuery<'_>) -> Vec<PaletteItem> {
-        let Some(root) = q.ctx.root() else { return Vec::new() };
+        let Some(root) = q.ctx.root() else {
+            return Vec::new();
+        };
         if !in_repo(root) {
             return Vec::new();
         }
@@ -102,15 +148,19 @@ impl PaletteSource for GitSource {
             let score = if needle.is_empty() {
                 Some(super::ordered_score(i))
             } else {
-                matcher.score(&needle, &[(title, 1.0), (keywords, 0.7), (&argv, 0.5)]).map(|s| s + super::ordered_score(i) * 0.05)
+                matcher
+                    .score(&needle, &[(title, 1.0), (keywords, 0.7), (&argv, 0.5)])
+                    .map(|s| s + super::ordered_score(i) * 0.05)
             };
             let Some(score) = score else { continue };
             let primary = match form {
                 Some(f) => ItemAction::form("Pedir datos", f()),
                 None => ItemAction::emit("Ejecutar", PaletteEvent::GitAction(action.clone())),
             };
-            let mut item =
-                PaletteItem::new(format!("git:{key}"), title, primary).subtitle(argv).icon(Icon::GitBranch).score(score);
+            let mut item = PaletteItem::new(format!("git:{key}"), title, primary)
+                .subtitle(argv)
+                .icon(Icon::GitBranch)
+                .score(score);
             if action.is_sensitive() {
                 item.meta = Some("requiere confirmación".into());
             }

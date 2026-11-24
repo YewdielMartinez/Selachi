@@ -17,10 +17,10 @@ use gpui::{
 };
 use theme::{Mode, Theme, rgb};
 use ui_kit::{
-    ActionSize, Assets, Button, Card, CardTone, Checkbox, DitherMeter, GhostButton, Icon, IconButton, ListRow, Logo,
-    Pill, Placement, Popover, RadioGroup, RowStatus, SectionLabel, SegmentedControl, Select, SelectOption, Slider,
-    Spinner, SwatchRow, TextArea, TextField, Toggle, Tooltip, UniformListScrollHandle, VirtualList, WirePreset,
-    Wireframe,
+    ActionSize, Assets, Button, Card, CardTone, Checkbox, DitherMeter, GhostButton, Icon,
+    IconButton, ListRow, Logo, Pill, Placement, Popover, RadioGroup, RowStatus, SectionLabel,
+    SegmentedControl, Select, SelectOption, Slider, Spinner, SwatchRow, TextArea, TextField,
+    Toggle, Tooltip, UniformListScrollHandle, VirtualList, WirePreset, Wireframe,
 };
 
 struct Gallery {
@@ -49,16 +49,26 @@ struct Gallery {
 impl Gallery {
     fn new(mode: Mode, popover_open: bool, cx: &mut Context<Self>) -> Self {
         let t = Theme::for_mode(mode);
-        let name = cx.new(|cx| TextField::new(t, cx).placeholder("Nombre del preset").with_text("Orquestador"));
-        let long_path = cx.new(|cx| {
+        let name = cx.new(|cx| {
             TextField::new(t, cx)
-                .monospace(true)
-                .with_text("C:\\Users\\venta\\Desktop\\Terminal\\crates\\ui_kit\\src\\text_field\\element.rs")
+                .placeholder("Nombre del preset")
+                .with_text("Orquestador")
+        });
+        let long_path = cx.new(|cx| {
+            TextField::new(t, cx).monospace(true).with_text(
+                "C:\\Users\\venta\\Desktop\\Terminal\\crates\\ui_kit\\src\\text_field\\element.rs",
+            )
         });
         let invalid = cx.new(|cx| TextField::new(t, cx).with_text("feat/ui kit"));
-        invalid.update(cx, |f, cx| f.set_error(Some("Los nombres de rama no llevan espacios"), cx));
+        invalid.update(cx, |f, cx| {
+            f.set_error(Some("Los nombres de rama no llevan espacios"), cx)
+        });
         let secret = cx.new(|cx| TextField::new(t, cx).password(true).with_text("hunter2"));
-        let frozen = cx.new(|cx| TextField::new(t, cx).read_only(true).with_text("selachi.toml (solo lectura)"));
+        let frozen = cx.new(|cx| {
+            TextField::new(t, cx)
+                .read_only(true)
+                .with_text("selachi.toml (solo lectura)")
+        });
         let notes = cx.new(|cx| {
             TextArea::area(t, cx)
                 .placeholder("Nota para el agente")
@@ -81,7 +91,9 @@ impl Gallery {
                 .options((0..120).map(|i| {
                     SelectOption::new(
                         format!("font-{i}"),
-                        format!("Una familia tipografica con un nombre absurdamente largo numero {i}"),
+                        format!(
+                            "Una familia tipografica con un nombre absurdamente largo numero {i}"
+                        ),
                     )
                 }))
                 .with_value("font-7")
@@ -132,9 +144,22 @@ impl Gallery {
             "selachi · store",
             "selachi · viewer_svc",
         ];
-        const META: [&str; 6] = ["opus-5.5 49m", "sonnet-5.5 12m", "opus-5.5 2h", "haiku 3m", "sonnet-5.5 1h", "opus-5.5 8m"];
-        const ST: [RowStatus; 6] =
-            [RowStatus::Working, RowStatus::Waiting, RowStatus::Done, RowStatus::Error, RowStatus::Done, RowStatus::Working];
+        const META: [&str; 6] = [
+            "opus-5.5 49m",
+            "sonnet-5.5 12m",
+            "opus-5.5 2h",
+            "haiku 3m",
+            "sonnet-5.5 1h",
+            "opus-5.5 8m",
+        ];
+        const ST: [RowStatus; 6] = [
+            RowStatus::Working,
+            RowStatus::Waiting,
+            RowStatus::Done,
+            RowStatus::Error,
+            RowStatus::Done,
+            RowStatus::Working,
+        ];
         let i = ix % 6;
         (TITLES[i], SUBS[i], META[i], ST[i])
     }
@@ -145,7 +170,13 @@ impl Render for Gallery {
         let t = self.theme;
         let c = t.colors;
         let this = cx.entity();
-        for f in [&self.name, &self.long_path, &self.invalid, &self.secret, &self.frozen] {
+        for f in [
+            &self.name,
+            &self.long_path,
+            &self.invalid,
+            &self.secret,
+            &self.frozen,
+        ] {
             f.update(cx, |f, cx| f.set_theme(t, cx));
         }
         self.notes.update(cx, |f, cx| f.set_theme(t, cx));
@@ -159,10 +190,29 @@ impl Render for Gallery {
             .flex_row()
             .items_center()
             .gap(px(4.0))
-            .child(Pill::new("t0", &t).icon(Icon::Terminal).label("crates").active(true))
-            .child(Pill::new("t1", &t).icon(Icon::Agents).label("claude").on_click(|_, _, _| {}))
-            .child(Pill::new("t2", &t).icon(Icon::Files).label("docs").on_click(|_, _, _| {}))
-            .child(IconButton::new("plus", &t, Icon::Plus).size(28.0).emphasize_on_hover(true));
+            .child(
+                Pill::new("t0", &t)
+                    .icon(Icon::Terminal)
+                    .label("crates")
+                    .active(true),
+            )
+            .child(
+                Pill::new("t1", &t)
+                    .icon(Icon::Agents)
+                    .label("claude")
+                    .on_click(|_, _, _| {}),
+            )
+            .child(
+                Pill::new("t2", &t)
+                    .icon(Icon::Files)
+                    .label("docs")
+                    .on_click(|_, _, _| {}),
+            )
+            .child(
+                IconButton::new("plus", &t, Icon::Plus)
+                    .size(28.0)
+                    .emphasize_on_hover(true),
+            );
 
         let chips = div()
             .flex()
@@ -180,7 +230,13 @@ impl Render for Gallery {
 
         let rail = (0..5).fold(div().flex().flex_row().gap(px(4.0)), |row, i| {
             let this = this.clone();
-            let icons = [Icon::Terminal, Icon::Files, Icon::GitBranch, Icon::Agents, Icon::History];
+            let icons = [
+                Icon::Terminal,
+                Icon::Files,
+                Icon::GitBranch,
+                Icon::Agents,
+                Icon::History,
+            ];
             row.child(
                 IconButton::new(format!("rail{i}"), &t, icons[i])
                     .active(self.active_rail == i)
@@ -202,7 +258,11 @@ impl Render for Gallery {
             .child(Button::primary("b0", &t, "Primary").on_click(|_, _, _| {}))
             .child(Button::tonal("b1", &t, "Tonal").on_click(|_, _, _| {}))
             .child(Button::ghost("b2", &t, "Ghost").on_click(|_, _, _| {}))
-            .child(GhostButton::new("b3", &t, "Limpiar").icon(Icon::Close).on_click(|_, _, _| {}));
+            .child(
+                GhostButton::new("b3", &t, "Limpiar")
+                    .icon(Icon::Close)
+                    .on_click(|_, _, _| {}),
+            );
         let buttons2 = div()
             .flex()
             .flex_row()
@@ -226,7 +286,11 @@ impl Render for Gallery {
             .items_center()
             .gap(px(12.0))
             .child(Button::action("a0", &t, "Nueva cita").on_click(|_, _, _| {}))
-            .child(Button::action("a1", &t, "Commit").no_icon().size(ActionSize::Lg))
+            .child(
+                Button::action("a1", &t, "Commit")
+                    .no_icon()
+                    .size(ActionSize::Lg),
+            )
             .child(Button::action("a2", &t, "Deshabilitado").disabled(true));
         let action_tones = div()
             .flex()
@@ -238,40 +302,51 @@ impl Render for Gallery {
             .child(tone_chip("press", c.accent_strong_press))
             .child(tone_chip("señal", c.accent));
 
-        let meters = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .children([None, Some(0.0), Some(0.3), Some(0.55), Some(1.0)].into_iter().map(|v| {
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.0))
-                    .child(div().w(px(64.0)).text_size(px(12.0)).text_color(c.muted).child(
-                        v.map_or("sin dato".to_string(), |v| format!("{:.0} %", v * 100.0)),
-                    ))
-                    .child(DitherMeter::new(&t).value(v))
-            }));
-
-        let status = div().flex().flex_row().items_center().gap(px(20.0)).children(
-            [
-                (RowStatus::Working, "working"),
-                (RowStatus::Waiting, "waiting"),
-                (RowStatus::Done, "done"),
-                (RowStatus::Error, "error"),
-            ]
-            .into_iter()
-            .map(|(s, l)| {
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(ui_kit::StatusGlyph::new(&t, s))
-                    .child(div().text_size(px(12.0)).text_color(c.muted).child(l))
-            }),
+        let meters = div().flex().flex_col().gap(px(8.0)).children(
+            [None, Some(0.0), Some(0.3), Some(0.55), Some(1.0)]
+                .into_iter()
+                .map(|v| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .w(px(64.0))
+                                .text_size(px(12.0))
+                                .text_color(c.muted)
+                                .child(v.map_or("sin dato".to_string(), |v| {
+                                    format!("{:.0} %", v * 100.0)
+                                })),
+                        )
+                        .child(DitherMeter::new(&t).value(v))
+                }),
         );
+
+        let status = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(20.0))
+            .children(
+                [
+                    (RowStatus::Working, "working"),
+                    (RowStatus::Waiting, "waiting"),
+                    (RowStatus::Done, "done"),
+                    (RowStatus::Error, "error"),
+                ]
+                .into_iter()
+                .map(|(s, l)| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(ui_kit::StatusGlyph::new(&t, s))
+                        .child(div().text_size(px(12.0)).text_color(c.muted).child(l))
+                }),
+            );
 
         let col1 = div()
             .flex()
@@ -287,7 +362,10 @@ impl Render for Gallery {
             .child(SectionLabel::new(&t, "Button"))
             .child(buttons)
             .child(buttons2)
-            .child(SectionLabel::new(&t, "Acción (accent_strong · máx. 1 por vista)"))
+            .child(SectionLabel::new(
+                &t,
+                "Acción (accent_strong · máx. 1 por vista)",
+            ))
             .child(actions)
             .child(action_tones)
             .child(SectionLabel::new(&t, "DitherMeter"))
@@ -446,14 +524,23 @@ impl Render for Gallery {
             .flex_col()
             .gap(px(12.0))
             .w(px(380.0))
-            .child(SectionLabel::new(&t, "SegmentedControl · Toggle · Slider · Swatch"))
+            .child(SectionLabel::new(
+                &t,
+                "SegmentedControl · Toggle · Slider · Swatch",
+            ))
             .child(settings)
-            .child(SectionLabel::new(&t, "Popover (origen físico, Esc / clic fuera)"))
+            .child(SectionLabel::new(
+                &t,
+                "Popover (origen físico, Esc / clic fuera)",
+            ))
             .child(popover)
             // Reserve the room the open popover covers so the layout does not jump.
             .child(div().h(px(150.0)))
             .child(SectionLabel::new(&t, "Tooltip"))
-            .child(Tooltip::bubble(&t, "Facturables: 12.4M\nCaché (lecturas): 84M\nestimado"));
+            .child(Tooltip::bubble(
+                &t,
+                "Facturables: 12.4M\nCaché (lecturas): 84M\nestimado",
+            ));
 
         // --- column 3: lists + wireframes -------------------------------------------------
         let sel = self.row_sel;
@@ -493,8 +580,17 @@ impl Render for Gallery {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_pointer()
-                    .child(Wireframe::preset(&t, *p).cell(3.0).selected(self.preset == i))
-                    .child(div().text_size(px(12.0)).text_color(if self.preset == i { c.text } else { c.muted }).child(SharedString::from(p.label())))
+                    .child(
+                        Wireframe::preset(&t, *p)
+                            .cell(3.0)
+                            .selected(self.preset == i),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(if self.preset == i { c.text } else { c.muted })
+                            .child(SharedString::from(p.label())),
+                    )
                     .on_click(move |_, _, cx| {
                         this.update(cx, |g, cx| {
                             g.preset = i;
@@ -508,27 +604,34 @@ impl Render for Gallery {
             .flex_col()
             .gap(px(12.0))
             .w(px(340.0))
-            .child(SectionLabel::new(&t, "VirtualList · ListRow (10 000 filas)"))
+            .child(SectionLabel::new(
+                &t,
+                "VirtualList · ListRow (10 000 filas)",
+            ))
             .child(Card::new(&t).p(px(6.0)).child(list))
             .child(SectionLabel::new(&t, "Wireframe · presets de layout"))
             .child(wires)
             .child(SectionLabel::new(&t, "Card"))
             .child(
                 div().flex().flex_row().gap(px(8.0)).children(
-                    [("surface_0", CardTone::Base), ("surface_1", CardTone::Raised), ("surface_2", CardTone::High)]
-                        .into_iter()
-                        .map(|(l, tone)| {
-                            Card::new(&t)
-                                .tone(tone, &t)
-                                .w(px(120.0))
-                                .h(px(56.0))
-                                .items_center()
-                                .justify_center()
-                                .flex()
-                                .text_size(px(12.0))
-                                .text_color(c.muted)
-                                .child(l)
-                        }),
+                    [
+                        ("surface_0", CardTone::Base),
+                        ("surface_1", CardTone::Raised),
+                        ("surface_2", CardTone::High),
+                    ]
+                    .into_iter()
+                    .map(|(l, tone)| {
+                        Card::new(&t)
+                            .tone(tone, &t)
+                            .w(px(120.0))
+                            .h(px(56.0))
+                            .items_center()
+                            .justify_center()
+                            .flex()
+                            .text_size(px(12.0))
+                            .text_color(c.muted)
+                            .child(l)
+                    }),
                 ),
             );
 
@@ -538,7 +641,10 @@ impl Render for Gallery {
             .flex_col()
             .gap(px(12.0))
             .w(px(340.0))
-            .child(SectionLabel::new(&t, "TextField · foco, valor, ellipsis, error"))
+            .child(SectionLabel::new(
+                &t,
+                "TextField · foco, valor, ellipsis, error",
+            ))
             .child(self.name.clone())
             .child(self.long_path.clone())
             .child(self.invalid.clone())
@@ -546,20 +652,26 @@ impl Render for Gallery {
             .child(self.frozen.clone())
             .child(SectionLabel::new(&t, "TextArea"))
             .child(self.notes.clone())
-            .child(SectionLabel::new(&t, "Select · max_w + ellipsis · >50 virtualizado"))
+            .child(SectionLabel::new(
+                &t,
+                "Select · max_w + ellipsis · >50 virtualizado",
+            ))
             .child(self.select.clone())
             .child(self.select_long.clone())
             .child(SectionLabel::new(&t, "Checkbox · RadioGroup"))
             .child(
-                Checkbox::new("gal-ck", &t).label("Enviar diagnósticos").checked(self.agreed).on_change({
-                    let this = this.clone();
-                    move |v, _, cx| {
-                        this.update(cx, |g, cx| {
-                            g.agreed = v;
-                            cx.notify();
-                        });
-                    }
-                }),
+                Checkbox::new("gal-ck", &t)
+                    .label("Enviar diagnósticos")
+                    .checked(self.agreed)
+                    .on_change({
+                        let this = this.clone();
+                        move |v, _, cx| {
+                            this.update(cx, |g, cx| {
+                                g.agreed = v;
+                                cx.notify();
+                            });
+                        }
+                    }),
             )
             .child(
                 RadioGroup::new("gal-rg", &t, ["Compacta", "Cómoda", "Amplia"])
@@ -574,7 +686,10 @@ impl Render for Gallery {
                         }
                     }),
             )
-            .child(SectionLabel::new(&t, "Foco de teclado (Tab) · anillo accent a 2 px"))
+            .child(SectionLabel::new(
+                &t,
+                "Foco de teclado (Tab) · anillo accent a 2 px",
+            ))
             .child(
                 div()
                     .flex()
@@ -584,9 +699,18 @@ impl Render for Gallery {
                     .gap(px(14.0))
                     .child(Button::tonal("f-btn", &t, "Button").on_click(|_, _, _| {}))
                     .child(IconButton::new("f-icon", &t, Icon::Settings).on_click(|_, _, _| {}))
-                    .child(Pill::new("f-pill", &t).label("Pill").active(true).on_click(|_, _, _| {}))
+                    .child(
+                        Pill::new("f-pill", &t)
+                            .label("Pill")
+                            .active(true)
+                            .on_click(|_, _, _| {}),
+                    )
                     .child(Toggle::new("f-toggle", &t).on(true).on_change(|_, _, _| {}))
-                    .child(Button::tonal("f-off", &t, "focusable(false)").focusable(false).on_click(|_, _, _| {})),
+                    .child(
+                        Button::tonal("f-off", &t, "focusable(false)")
+                            .focusable(false)
+                            .on_click(|_, _, _| {}),
+                    ),
             );
 
         div()
@@ -605,10 +729,29 @@ impl Render for Gallery {
                     .items_center()
                     .gap(px(12.0))
                     .child(Logo::new(t.mode).size(40.0))
-                    .child(div().text_size(px(15.0)).font_weight(gpui::FontWeight::MEDIUM).child("Selachi · ui_kit"))
-                    .child(div().text_size(px(12.0)).text_color(c.muted).child(format!("{:?}", t.mode))),
+                    .child(
+                        div()
+                            .text_size(px(15.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child("Selachi · ui_kit"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(c.muted)
+                            .child(format!("{:?}", t.mode)),
+                    ),
             )
-            .child(div().flex().flex_row().gap(px(28.0)).child(col1).child(col2).child(col3).child(col4))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(28.0))
+                    .child(col1)
+                    .child(col2)
+                    .child(col3)
+                    .child(col4),
+            )
     }
 }
 
@@ -625,40 +768,52 @@ fn main() {
     let rings = args.iter().any(|a| a == "--rings");
     let select_open = args.iter().any(|a| a == "--select-open");
 
-    Application::new().with_assets(Assets).run(move |cx: &mut App| {
-        if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
-            eprintln!("fonts: {e}");
-        }
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    Application::new()
+        .with_assets(Assets)
+        .run(move |cx: &mut App| {
+            if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
+                eprintln!("fonts: {e}");
             }
-        })
-        .detach();
-        ui_kit::init(cx);
-        if rings {
-            // The ring shows after keyboard focus; forcing it lets a screenshot show it without input.
-            ui_kit::debug_force_focus_ring(&[
-                "f-btn", "f-icon", "f-pill", "f-toggle", "gal-ck", "gal-rg-1", "gal-select-trigger", "b1", "rail2", "crumb", "alpha",
-            ]);
-        }
-        let bounds = Bounds::centered(None, size(px(1640.0), px(940.0)), cx);
-        let opened = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(|cx| Gallery::new(mode, open, cx)),
-        );
-        let Ok(handle) = opened else { return };
-        let _ = handle.update(cx, |g, window, cx| {
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            ui_kit::init(cx);
             if rings {
-                g.name.read(cx).focus(window);
+                // The ring shows after keyboard focus; forcing it lets a screenshot show it without input.
+                ui_kit::debug_force_focus_ring(&[
+                    "f-btn",
+                    "f-icon",
+                    "f-pill",
+                    "f-toggle",
+                    "gal-ck",
+                    "gal-rg-1",
+                    "gal-select-trigger",
+                    "b1",
+                    "rail2",
+                    "crumb",
+                    "alpha",
+                ]);
             }
-            if select_open {
-                g.select.update(cx, |s, cx| s.open(cx));
-            }
+            let bounds = Bounds::centered(None, size(px(1640.0), px(940.0)), cx);
+            let opened = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|cx| Gallery::new(mode, open, cx)),
+            );
+            let Ok(handle) = opened else { return };
+            let _ = handle.update(cx, |g, window, cx| {
+                if rings {
+                    g.name.read(cx).focus(window);
+                }
+                if select_open {
+                    g.select.update(cx, |s, cx| s.open(cx));
+                }
+            });
+            cx.activate(true);
         });
-        cx.activate(true);
-    });
 }

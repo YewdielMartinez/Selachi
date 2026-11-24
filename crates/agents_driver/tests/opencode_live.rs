@@ -17,7 +17,8 @@ fn live_opencode_handshake_without_prompt() {
     eprintln!("opencode executable: {}", exe.display());
     let cfg = ThreadConfig::new(env!("CARGO_MANIFEST_DIR"));
     let (tx, mut rx) = unbounded();
-    let mut d = agents_driver::acp::AcpDriver::spawn_opencode(&cfg, tx).expect("spawn opencode acp");
+    let mut d =
+        agents_driver::acp::AcpDriver::spawn_opencode(&cfg, tx).expect("spawn opencode acp");
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut started = None;
     while Instant::now() < deadline {
@@ -42,8 +43,14 @@ fn live_opencode_handshake_without_prompt() {
 #[ignore = "needs opencode installed"]
 fn live_detect_finds_opencode() {
     let found = agents_driver::detect();
-    let oc = found.iter().find(|a| a.kind == AgentKind::OpenCode).expect("opencode not detected");
+    let oc = found
+        .iter()
+        .find(|a| a.kind == AgentKind::OpenCode)
+        .expect("opencode not detected");
     eprintln!("{oc:?}");
     assert!(oc.path.is_file());
-    assert!(oc.version.as_deref().is_some_and(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit())));
+    assert!(oc
+        .version
+        .as_deref()
+        .is_some_and(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit())));
 }

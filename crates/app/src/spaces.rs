@@ -39,7 +39,11 @@ impl Space {
 
     /// A stable key for the collapsed set (the root, or the label for non-project groups).
     pub fn key(&self) -> PathBuf {
-        if self.root.as_os_str().is_empty() { PathBuf::from(format!("group:{}", self.name)) } else { self.root.clone() }
+        if self.root.as_os_str().is_empty() {
+            PathBuf::from(format!("group:{}", self.name))
+        } else {
+            self.root.clone()
+        }
     }
 }
 
@@ -65,13 +69,23 @@ pub fn build_spaces(
                 match out.iter_mut().find(|s| s.root == root) {
                     Some(s) => s.tabs.push(i),
                     None => {
-                        let name = key.as_deref().map_or_else(|| "Sin proyecto".to_string(), project_name);
+                        let name = key
+                            .as_deref()
+                            .map_or_else(|| "Sin proyecto".to_string(), project_name);
                         let (branch, dirty) = git
                             .iter()
                             .find(|(r, _)| key.as_deref().is_some_and(|k| same_path(r, k)))
                             .map_or((None, false), |(_, (b, d))| (Some(b.clone()), *d));
-                        out.push(Space { root, name, tabs: vec![i], branch, dirty, status: None, headless: key.is_none() });
-                    },
+                        out.push(Space {
+                            root,
+                            name,
+                            tabs: vec![i],
+                            branch,
+                            dirty,
+                            status: None,
+                            headless: key.is_none(),
+                        });
+                    }
                 }
             }
             for s in &mut out {
@@ -81,8 +95,20 @@ pub fn build_spaces(
                 if out.iter().any(|s| same_path(&s.root, path)) {
                     continue;
                 }
-                let name = if label.trim().is_empty() { project_name(path) } else { label.clone() };
-                out.push(Space { root: path.clone(), name, tabs: Vec::new(), branch: None, dirty: false, status: None, headless: false });
+                let name = if label.trim().is_empty() {
+                    project_name(path)
+                } else {
+                    label.clone()
+                };
+                out.push(Space {
+                    root: path.clone(),
+                    name,
+                    tabs: Vec::new(),
+                    branch: None,
+                    dirty: false,
+                    status: None,
+                    headless: false,
+                });
             }
             // Project-less tabs go last, after the favorites.
             out.sort_by_key(|s| s.headless);
@@ -95,14 +121,26 @@ pub fn build_spaces(
                 closed += 1;
                 closed <= MAX_CLOSED_SPACES
             });
-        },
+        }
         GroupBy::Status | GroupBy::Agent => {
             for g in group_tabs(tabs, group_by) {
-                let name = g.label.as_ref().map(ToString::to_string).unwrap_or_default();
+                let name = g
+                    .label
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
                 let status = aggregate_status(g.tabs.iter().map(|i| tabs[*i].status));
-                out.push(Space { root: PathBuf::new(), name, tabs: g.tabs, branch: None, dirty: false, status, headless: false });
+                out.push(Space {
+                    root: PathBuf::new(),
+                    name,
+                    tabs: g.tabs,
+                    branch: None,
+                    dirty: false,
+                    status,
+                    headless: false,
+                });
             }
-        },
+        }
     }
     out
 }
@@ -142,7 +180,8 @@ pub fn row_time(info: &TabInfo, row_time: bool, now: Instant) -> Option<String> 
     if !row_time {
         return None;
     }
-    info.last_activity.map(|t| format_elapsed(now.saturating_duration_since(t).as_secs()))
+    info.last_activity
+        .map(|t| format_elapsed(now.saturating_duration_since(t).as_secs()))
 }
 
 #[cfg(test)]
@@ -166,7 +205,11 @@ mod tests {
 
     #[test]
     fn open_tabs_nest_under_their_project_in_first_use_order() {
-        let tabs = [tab("C:/dev/b", None, None), tab("C:/dev/a", Some(RowStatus::Working), None), tab("C:/dev/b", Some(RowStatus::Done), None)];
+        let tabs = [
+            tab("C:/dev/b", None, None),
+            tab("C:/dev/a", Some(RowStatus::Working), None),
+            tab("C:/dev/b", Some(RowStatus::Done), None),
+        ];
         let s = build_spaces(&tabs, GroupBy::Project, &HashMap::new(), &[]);
         assert_eq!(s.len(), 2);
         assert_eq!((s[0].name.as_str(), s[0].tabs.clone()), ("b", vec![0, 2]));
@@ -195,7 +238,10 @@ mod tests {
         let s = build_spaces(&tabs, GroupBy::Project, &HashMap::new(), &known);
         assert_eq!(s.len(), 3);
         assert!(s[0].is_open() && !s[1].is_open());
-        assert_eq!((s[1].name.as_str(), s[2].name.as_str()), ("Favorito", "recent"));
+        assert_eq!(
+            (s[1].name.as_str(), s[2].name.as_str()),
+            ("Favorito", "recent")
+        );
     }
 
     #[test]
@@ -213,7 +259,9 @@ mod tests {
     #[test]
     fn closed_projects_are_capped() {
         let tabs = [tab("C:/dev/a", None, None)];
-        let known: Vec<_> = (0..20).map(|i| (PathBuf::from(format!(r"C:\dev\p{i}")), String::new())).collect();
+        let known: Vec<_> = (0..20)
+            .map(|i| (PathBuf::from(format!(r"C:\dev\p{i}")), String::new()))
+            .collect();
         let s = build_spaces(&tabs, GroupBy::Project, &HashMap::new(), &known);
         assert_eq!(s.iter().filter(|s| !s.is_open()).count(), MAX_CLOSED_SPACES);
         assert_eq!(s.iter().filter(|s| s.is_open()).count(), 1);
@@ -221,7 +269,10 @@ mod tests {
 
     #[test]
     fn status_grouping_makes_label_spaces() {
-        let tabs = [tab("C:/a", Some(RowStatus::Done), None), tab("C:/a", Some(RowStatus::Working), None)];
+        let tabs = [
+            tab("C:/a", Some(RowStatus::Done), None),
+            tab("C:/a", Some(RowStatus::Working), None),
+        ];
         let s = build_spaces(&tabs, GroupBy::Status, &HashMap::new(), &[]);
         assert_eq!(s[0].name, "Working");
         assert_eq!(s[0].key(), PathBuf::from("group:Working"));
@@ -230,7 +281,10 @@ mod tests {
     #[test]
     fn subtitle_joins_model_and_state() {
         let t = tab("C:/a", Some(RowStatus::Working), Some("Opus 5.5"));
-        assert_eq!(row_subtitle(&t, true).as_deref(), Some("Opus 5.5 · Working"));
+        assert_eq!(
+            row_subtitle(&t, true).as_deref(),
+            Some("Opus 5.5 · Working")
+        );
         assert_eq!(row_subtitle(&t, false).as_deref(), Some("Working"));
         let done = tab("C:/a", Some(RowStatus::Done), Some("main"));
         assert_eq!(row_subtitle(&done, true).as_deref(), Some("main"));

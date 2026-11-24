@@ -72,10 +72,17 @@ impl PaletteSource for HistorySource {
                     line,
                     ItemAction::emit(
                         "Ejecutar",
-                        PaletteEvent::RunCommand { line: h.command.clone(), cwd: q.ctx.cwd.clone(), new_tab: false },
+                        PaletteEvent::RunCommand {
+                            line: h.command.clone(),
+                            cwd: q.ctx.cwd.clone(),
+                            new_tab: false,
+                        },
                     ),
                 )
-                .alt(ItemAction::emit("Insertar", PaletteEvent::InsertText(h.command.clone())))
+                .alt(ItemAction::emit(
+                    "Insertar",
+                    PaletteEvent::InsertText(h.command.clone()),
+                ))
                 .subtitle(display_path(&h.last_cwd))
                 .meta(meta)
                 .icon(Icon::History)

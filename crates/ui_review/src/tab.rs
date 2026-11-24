@@ -6,7 +6,10 @@
 
 use std::path::PathBuf;
 
-use gpui::{AnyView, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, SharedString, Subscription, Window};
+use gpui::{
+    AnyView, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, SharedString,
+    Subscription, Window,
+};
 use panel_api::{CloseCheck, TabEvent, TabHandle, TabIcon, TabModel};
 use theme::Theme;
 use ui_kit::{Icon, RowStatus};
@@ -36,7 +39,11 @@ impl ReviewTab {
                 cx.emit(TabEvent::StatusChanged);
             }
         });
-        Self { view, source, _subs: vec![forward] }
+        Self {
+            view,
+            source,
+            _subs: vec![forward],
+        }
     }
 
     /// The view (to drive it: `refresh`, `select_path`, `begin_note`...).
@@ -85,7 +92,17 @@ impl TabModel for ReviewTab {
     fn subtitle(&self, cx: &App) -> Option<SharedString> {
         let (total, _) = self.view.read(cx).counts();
         let title = self.source.title();
-        Some(if total == 0 { title } else { format!("{title} · {total} {}", if total == 1 { "nota" } else { "notas" }) }.into())
+        Some(
+            if total == 0 {
+                title
+            } else {
+                format!(
+                    "{title} · {total} {}",
+                    if total == 1 { "nota" } else { "notas" }
+                )
+            }
+            .into(),
+        )
     }
 
     fn status(&self, cx: &App) -> Option<RowStatus> {

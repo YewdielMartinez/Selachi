@@ -43,7 +43,10 @@ pub struct General {
 
 impl Default for General {
     fn default() -> Self {
-        Self { language: "es".to_string(), confirm_close_running: true }
+        Self {
+            language: "es".to_string(),
+            confirm_close_running: true,
+        }
     }
 }
 
@@ -63,7 +66,11 @@ impl Plugins {
     /// The index URL in effect.
     pub fn effective_index_url(&self) -> &str {
         let u = self.index_url.trim();
-        if u.is_empty() { DEFAULT_PLUGIN_INDEX_URL } else { u }
+        if u.is_empty() {
+            DEFAULT_PLUGIN_INDEX_URL
+        } else {
+            u
+        }
     }
 }
 
@@ -342,12 +349,26 @@ impl Completion {
     pub fn env(&self) -> Vec<(String, String)> {
         let key = self.accept_word_key.trim();
         vec![
-            ("SELACHI_TAB_MODE".to_string(), self.tab.env_value().to_string()),
-            ("SELACHI_PREDICTION".to_string(), self.prediction.env_value().to_string()),
-            ("SELACHI_PREDICTION_VIEW".to_string(), self.prediction_view.env_value().to_string()),
+            (
+                "SELACHI_TAB_MODE".to_string(),
+                self.tab.env_value().to_string(),
+            ),
+            (
+                "SELACHI_PREDICTION".to_string(),
+                self.prediction.env_value().to_string(),
+            ),
+            (
+                "SELACHI_PREDICTION_VIEW".to_string(),
+                self.prediction_view.env_value().to_string(),
+            ),
             (
                 "SELACHI_ACCEPT_WORD_KEY".to_string(),
-                if key.is_empty() { "Ctrl+RightArrow" } else { key }.to_string(),
+                if key.is_empty() {
+                    "Ctrl+RightArrow"
+                } else {
+                    key
+                }
+                .to_string(),
             ),
         ]
     }
@@ -537,7 +558,9 @@ impl Config {
         }
         let url = self.plugins.index_url.trim();
         if !url.is_empty() && !url.starts_with("https://") {
-            problems.push(format!("plugins.index_url = {url:?} must start with https://"));
+            problems.push(format!(
+                "plugins.index_url = {url:?} must start with https://"
+            ));
         }
         if self.git.external_editor.chars().any(char::is_control) {
             problems.push("git.external_editor must not contain line breaks".to_string());

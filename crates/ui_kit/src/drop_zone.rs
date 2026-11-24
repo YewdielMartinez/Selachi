@@ -37,7 +37,15 @@ pub fn debug_forced() -> bool {
 impl DropZone {
     /// `label` completes "Soltar para ...": pass the whole text, e.g. `"Soltar para pegar las rutas"`.
     pub fn new(id: impl Into<ElementId>, theme: &Theme, label: impl Into<SharedString>) -> Self {
-        Self { id: id.into(), theme: *theme, label: label.into(), radius: 12.0, compact: false, on_drop: None, forced: debug_forced() }
+        Self {
+            id: id.into(),
+            theme: *theme,
+            label: label.into(),
+            radius: 12.0,
+            compact: false,
+            on_drop: None,
+            forced: debug_forced(),
+        }
     }
 
     /// Corner radius of the outline (match the container's).
@@ -93,7 +101,11 @@ impl RenderOnce for DropZone {
                 .bg(c.surface_3)
                 .text_color(c.text)
                 .font_family(ty.ui_family)
-                .text_size(px(if self.compact { ty.ui_size_sm } else { ty.ui_size_md }))
+                .text_size(px(if self.compact {
+                    ty.ui_size_sm
+                } else {
+                    ty.ui_size_md
+                }))
                 .font_weight(FontWeight::MEDIUM)
                 .child(self.label);
             let slot = div().size_full().flex().items_center().justify_center();
@@ -101,7 +113,9 @@ impl RenderOnce for DropZone {
                 slot.child(pill)
             } else {
                 // Only painted while files are over the zone.
-                slot.opacity(0.0).drag_over::<ExternalPaths>(|s, _, _, _| s.opacity(1.0)).child(pill)
+                slot.opacity(0.0)
+                    .drag_over::<ExternalPaths>(|s, _, _, _| s.opacity(1.0))
+                    .child(pill)
             }
         };
         let mut zone = div()

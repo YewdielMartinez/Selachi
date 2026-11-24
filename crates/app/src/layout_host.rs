@@ -60,7 +60,14 @@ impl Global for HostGlobal {}
 /// `ui_layout::LayoutPanel` and calls `set_config` / `set_theme` / `set_cwd` on it while open.
 pub fn ui_layout_host(args: LayoutPanelArgs, _window: &mut Window, cx: &mut App) -> AnyView {
     let on_change = args.on_change.clone();
-    ui_layout::layout_panel(args.layout, args.cwd, args.theme, move |layout, _, cx| on_change(layout, cx), cx).into()
+    ui_layout::layout_panel(
+        args.layout,
+        args.cwd,
+        args.theme,
+        move |layout, _, cx| on_change(layout, cx),
+        cx,
+    )
+    .into()
 }
 
 /// Registers the popover content (call once at startup, before the window opens).

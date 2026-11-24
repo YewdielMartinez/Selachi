@@ -4,8 +4,8 @@
 
 use chrono::NaiveDate;
 use gpui::{
-    Bounds, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, StatefulInteractiveElement,
-    SharedString, Styled, Window, canvas, div, fill, point, px, size,
+    Bounds, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, SharedString,
+    StatefulInteractiveElement, Styled, Window, canvas, div, fill, point, px, size,
 };
 use theme::Theme;
 use ui_kit::Tooltip;
@@ -26,8 +26,17 @@ const SLOT_OPACITY: [f32; SLOTS] = [1.0, 0.62, 0.40, 0.24];
 
 /// The tone of stack `slot`: muted for past days, accent for today.
 pub fn slot_tone(theme: &Theme, slot: usize, today: bool) -> Hsla {
-    let base: Hsla = if today { theme.colors.accent.into() } else { theme.colors.muted.into() };
-    base.opacity(SLOT_OPACITY.get(slot).copied().unwrap_or(SLOT_OPACITY[SLOTS - 1]))
+    let base: Hsla = if today {
+        theme.colors.accent.into()
+    } else {
+        theme.colors.muted.into()
+    };
+    base.opacity(
+        SLOT_OPACITY
+            .get(slot)
+            .copied()
+            .unwrap_or(SLOT_OPACITY[SLOTS - 1]),
+    )
 }
 
 /// Geometry of one bar inside a column of `col_w` x `col_h`: `(bar_w, rows)`.
@@ -47,8 +56,10 @@ pub fn bar_chart(
 ) -> impl IntoElement + use<> {
     let c = theme.colors;
     let max_total = days.iter().map(DayUsage::total).max().unwrap_or(0);
-    let tones: Vec<[Hsla; SLOTS]> =
-        [false, true].into_iter().map(|today| std::array::from_fn(|slot| slot_tone(theme, slot, today))).collect();
+    let tones: Vec<[Hsla; SLOTS]> = [false, true]
+        .into_iter()
+        .map(|today| std::array::from_fn(|slot| slot_tone(theme, slot, today)))
+        .collect();
     let baseline = c.surface_4;
 
     let columns = days.iter().map(|day| {
@@ -109,7 +120,10 @@ fn paint_bar(
     let bottom = bounds.origin.y + bounds.size.height;
     if values.iter().sum::<u64>() == 0 {
         // A thin baseline so quiet days still read as columns.
-        window.paint_quad(fill(Bounds::new(point(x, bottom - px(2.0)), size(px(bar_w), px(2.0))), baseline));
+        window.paint_quad(fill(
+            Bounds::new(point(x, bottom - px(2.0)), size(px(bar_w), px(2.0))),
+            baseline,
+        ));
         return;
     }
     let cells = stack_cells(values, max_total, rows);
@@ -117,7 +131,10 @@ fn paint_bar(
     for (slot, n) in cells.iter().enumerate() {
         for _ in 0..*n {
             let y = bottom - px(CELL_H + PITCH * level as f32);
-            window.paint_quad(fill(Bounds::new(point(x, y), size(px(bar_w), px(CELL_H))), tone[slot]));
+            window.paint_quad(fill(
+                Bounds::new(point(x, y), size(px(bar_w), px(CELL_H))),
+                tone[slot],
+            ));
             level += 1;
         }
     }

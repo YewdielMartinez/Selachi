@@ -127,7 +127,10 @@ pub struct StatusGlyph {
 
 impl StatusGlyph {
     pub fn new(theme: &Theme, status: RowStatus) -> Self {
-        Self { theme: *theme, status }
+        Self {
+            theme: *theme,
+            status,
+        }
     }
 }
 
@@ -136,7 +139,9 @@ impl RenderOnce for StatusGlyph {
         let t = self.theme;
         match self.status {
             RowStatus::Working => Spinner::new(t.colors.accent).into_any_element(),
-            RowStatus::Waiting => icon(Icon::Dots, 16.0, rgb(t.terminal.ansi[3])).into_any_element(),
+            RowStatus::Waiting => {
+                icon(Icon::Dots, 16.0, rgb(t.terminal.ansi[3])).into_any_element()
+            }
             RowStatus::Done => icon(Icon::Check, 16.0, rgb(t.terminal.ansi[2])).into_any_element(),
             RowStatus::Error => icon(Icon::Alert, 16.0, t.colors.error).into_any_element(),
         }
@@ -159,7 +164,9 @@ thread_local! {
 static EPOCH_MS: AtomicU64 = AtomicU64::new(0);
 
 fn now_ms() -> u64 {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
     // Keep the numbers small and stable across calls.
     let _ = EPOCH_MS.compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed);
     now - EPOCH_MS.load(Ordering::Relaxed)
@@ -374,7 +381,8 @@ impl RenderOnce for ListRow {
             (None, None, Some(i)) => Some(icon(i, 16.0, c.muted).into_any_element()),
             (None, None, None) => None,
         };
-        let focus = (self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &self.id));
+        let focus = (self.focusable && self.on_click.is_some())
+            .then(|| focus::handle(window, cx, &self.id));
         let id = self.id;
         let mut el = div()
             .id(id.clone())
@@ -390,10 +398,18 @@ impl RenderOnce for ListRow {
             .rounded(px(Radius::PILL))
             .font_family(ty.ui_family)
             .when(self.selected, |d| {
-                d.bg(if self.glass { crate::glass_selected(&theme) } else { c.surface_3.into() })
+                d.bg(if self.glass {
+                    crate::glass_selected(&theme)
+                } else {
+                    c.surface_3.into()
+                })
             })
             .when(!self.selected, |d| {
-                let hover: gpui::Hsla = if self.glass { crate::glass_hover(&theme) } else { c.surface_2.into() };
+                let hover: gpui::Hsla = if self.glass {
+                    crate::glass_hover(&theme)
+                } else {
+                    c.surface_2.into()
+                };
                 d.hover(move |s| s.bg(hover))
             })
             .when_some(lead, |d, l| d.child(l))

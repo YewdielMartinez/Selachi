@@ -49,7 +49,12 @@ fn make_file() -> std::path::PathBuf {
 fn flood(
     label: &str,
     pace: Duration,
-    spawn: impl FnOnce(SessionConfig) -> (Session, futures::channel::mpsc::UnboundedReceiver<SessionEvent>),
+    spawn: impl FnOnce(
+        SessionConfig,
+    ) -> (
+        Session,
+        futures::channel::mpsc::UnboundedReceiver<SessionEvent>,
+    ),
 ) -> Duration {
     let path = make_file();
     let cmd = format!("type {} & echo FLOOD-DONE", path.display());
@@ -75,9 +80,9 @@ fn flood(
                 }
                 last = Instant::now();
                 session.snapshot_into(&mut snap);
-            },
+            }
             Some(SessionEvent::Exit) | None => exited = true,
-            Some(_) => {},
+            Some(_) => {}
         }
     }
     session.snapshot_into(&mut snap);
@@ -99,14 +104,17 @@ fn flood(
 /// A snapshot after every wakeup (worst case for the consumer).
 #[test]
 fn type_20mb_snapshot_per_wakeup() {
-    let elapsed = flood("per-wakeup", Duration::ZERO, |cfg| Session::spawn(cfg).expect("spawn cmd"));
+    let elapsed = flood("per-wakeup", Duration::ZERO, |cfg| {
+        Session::spawn(cfg).expect("spawn cmd")
+    });
     assert!(elapsed < Duration::from_secs(90), "too slow: {elapsed:?}");
 }
 
 /// A snapshot at most every 16 ms, like a 60 Hz UI.
 #[test]
 fn type_20mb_snapshot_at_60hz() {
-    let elapsed =
-        flood("60hz", Duration::from_millis(16), |cfg| Session::spawn(cfg).expect("spawn cmd"));
+    let elapsed = flood("60hz", Duration::from_millis(16), |cfg| {
+        Session::spawn(cfg).expect("spawn cmd")
+    });
     assert!(elapsed < Duration::from_secs(60), "too slow: {elapsed:?}");
 }

@@ -40,15 +40,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, KeyBinding, Size, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px,
-    size,
+    App, Application, Bounds, KeyBinding, Size, TitlebarOptions, WindowBounds, WindowOptions,
+    prelude::*, px, size,
 };
 use panel_api::PanelRegistry;
 use store::{Config, ConfigWatcher, StateDb};
 
 use crate::app_shell::{
-    AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, SessionBoot, ToggleFullscreen, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7,
-    Jump8, Jump9, NewTab, NewTerminalTab, NextAttention, NextTab, OpenSettings, PrevTab, ToggleLayoutPanel, ToggleSidebar, ToggleTheme,
+    AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, Jump1, Jump2, Jump3,
+    Jump4, Jump5, Jump6, Jump7, Jump8, Jump9, NewTab, NewTerminalTab, NextAttention, NextTab,
+    OpenSettings, PrevTab, SessionBoot, ToggleFullscreen, ToggleLayoutPanel, ToggleSidebar,
+    ToggleTheme,
 };
 use crate::git_panel::ContextPanelProvider;
 use crate::services::Services;
@@ -74,11 +76,15 @@ fn boot_config() -> ConfigBoot {
             Err(e) => {
                 log::warn!("config hot reload unavailable: {e}");
                 None
-            },
+            }
         }
     };
     let restore = config.session.restore;
-    ConfigBoot { config, watcher, session: boot_session(restore) }
+    ConfigBoot {
+        config,
+        watcher,
+        session: boot_session(restore),
+    }
 }
 
 /// Opens the state database and, if `[session] restore` is not false, loads the saved session.
@@ -89,7 +95,7 @@ fn boot_session(restore_enabled: bool) -> SessionBoot {
         Err(e) => {
             log::warn!("state database unavailable, the session will not be saved: {e}");
             None
-        },
+        }
     };
     let restore = if restore_enabled {
         db.as_ref()
@@ -111,10 +117,15 @@ fn register_panels(cx: &mut App) {
     registry.register(ui_git::GitPanelProvider::new(services.git.clone()));
     registry.register(ContextPanelProvider);
     registry.register(ui_usage::UsagePanelProvider::new(services.usage.clone()));
-    registry.register(ui_review::AttentionPanelProvider::new(services.attention.clone()));
+    registry.register(ui_review::AttentionPanelProvider::new(
+        services.attention.clone(),
+    ));
     registry.register(ui_procs::ProcsPanelProvider::new(services.procs.clone()));
     registry.register(chat_host::ThreadsProvider);
-    registry.register(ui_doctor::DoctorPanelProvider::new(services.doctor.clone(), env!("CARGO_PKG_VERSION")));
+    registry.register(ui_doctor::DoctorPanelProvider::new(
+        services.doctor.clone(),
+        env!("CARGO_PKG_VERSION"),
+    ));
     cx.set_global(services);
     cx.set_global(registry);
 }
@@ -152,54 +163,59 @@ fn bind_keys(cx: &mut App) {
 fn main() {
     env_logger::init();
     // `ui_procs::Assets` forwards to `ui_kit::Assets` and adds the runtime icons of the panels.
-    Application::new().with_assets(ui_procs::Assets).run(|cx: &mut App| {
-        if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
-            log::error!("failed to register embedded fonts: {e}");
-        }
-
-        bind_keys(cx);
-        ui_git::init(cx);
-        ui_viewer::bind_keys(cx);
-        ui_review::init(cx);
-        ui_chat::init(cx);
-        ui_settings::init(cx);
-        register_panels(cx);
-        // The layout popover's content: the real `ui_layout` panel.
-        ui_layout::init(cx);
-        ui_palette::init(cx);
-        ui_palette::bind_toggle_key(cx);
-        layout_host::register_layout_panel_host(cx, layout_host::ui_layout_host);
-
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    Application::new()
+        .with_assets(ui_procs::Assets)
+        .run(|cx: &mut App| {
+            if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
+                log::error!("failed to register embedded fonts: {e}");
             }
-        })
-        .detach();
 
-        let boot = boot_config();
-        let theme = crate::app_shell::theme_for(&boot.config);
-        let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
-        let opened = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                // Custom chrome: the system titlebar is hidden, `titlebar.rs` draws our own.
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Selachi".into()),
-                    appears_transparent: true,
+            bind_keys(cx);
+            ui_git::init(cx);
+            ui_viewer::bind_keys(cx);
+            ui_review::init(cx);
+            ui_chat::init(cx);
+            ui_settings::init(cx);
+            register_panels(cx);
+            // The layout popover's content: the real `ui_layout` panel.
+            ui_layout::init(cx);
+            ui_palette::init(cx);
+            ui_palette::bind_toggle_key(cx);
+            layout_host::register_layout_panel_host(cx, layout_host::ui_layout_host);
+
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+
+            let boot = boot_config();
+            let theme = crate::app_shell::theme_for(&boot.config);
+            let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
+            let opened = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    // Custom chrome: the system titlebar is hidden, `titlebar.rs` draws our own.
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Selachi".into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
+                    window_min_size: Some(Size {
+                        width: px(480.0),
+                        height: px(320.0),
+                    }),
                     ..Default::default()
-                }),
-                window_min_size: Some(Size { width: px(480.0), height: px(320.0) }),
-                ..Default::default()
-            },
-            |window, cx| cx.new(|cx| AppShell::new(theme, boot, window, cx)),
-        );
-        match opened {
-            Ok(_) => cx.activate(true),
-            Err(e) => {
-                log::error!("failed to open window: {e}");
-                cx.quit();
+                },
+                |window, cx| cx.new(|cx| AppShell::new(theme, boot, window, cx)),
+            );
+            match opened {
+                Ok(_) => cx.activate(true),
+                Err(e) => {
+                    log::error!("failed to open window: {e}");
+                    cx.quit();
+                }
             }
-        }
-    });
+        });
 }

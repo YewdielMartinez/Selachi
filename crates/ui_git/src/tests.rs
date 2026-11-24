@@ -12,8 +12,8 @@ use panel_api::{PanelCtx, PanelZone, WidthClass};
 use theme::Theme;
 
 use crate::cmd::GitOp;
-use crate::data::testing::{git, temp_repo};
 use crate::data::DiffTarget;
+use crate::data::testing::{git, temp_repo};
 use crate::gate::Gate;
 use crate::model::{DiffState, ExecMode, GitModel, GitPanelEvent, Load};
 use crate::sections::Section;
@@ -27,14 +27,25 @@ fn model_for(cx: &mut TestAppContext, dir: &std::path::Path) -> Entity<GitModel>
 }
 
 fn commit_count(dir: &std::path::Path) -> usize {
-    let out = std::process::Command::new("git").args(["rev-list", "--count", "HEAD"]).current_dir(dir).output().unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+    let out = std::process::Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0)
 }
 
 fn events(cx: &mut TestAppContext, model: &Entity<GitModel>) -> Rc<RefCell<Vec<GitPanelEvent>>> {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let sink = seen.clone();
-    let sub = cx.update(|cx| cx.subscribe(model, move |_, ev: &GitPanelEvent, _| sink.borrow_mut().push(ev.clone())));
+    let sub = cx.update(|cx| {
+        cx.subscribe(model, move |_, ev: &GitPanelEvent, _| {
+            sink.borrow_mut().push(ev.clone())
+        })
+    });
     std::mem::forget(sub);
     seen
 }
@@ -45,7 +56,11 @@ async fn nothing_runs_while_hidden(cx: &mut TestAppContext) {
     let model = model_for(cx, dir.path());
     cx.run_until_parked();
     model.read_with(cx, |m, _| {
-        assert_eq!(m.stats().reads, 0, "a hidden panel must not read the repository");
+        assert_eq!(
+            m.stats().reads,
+            0,
+            "a hidden panel must not read the repository"
+        );
         assert!(!m.has_watcher());
         assert_eq!(m.load_state(), &Load::Idle);
         assert!(m.data().is_none());
@@ -70,7 +85,9 @@ async fn visible_reads_and_watches_hidden_drops_the_watcher(cx: &mut TestAppCont
     });
 
     model.update(cx, |m, cx| m.set_visible(false, cx));
-    model.read_with(cx, |m, _| assert!(!m.has_watcher(), "the watcher is dropped when hidden"));
+    model.read_with(cx, |m, _| {
+        assert!(!m.has_watcher(), "the watcher is dropped when hidden")
+    });
     // Files change while hidden: nothing reads.
     std::fs::write(dir.path().join("a.txt"), "changed while hidden\n").unwrap();
     cx.run_until_parked();
@@ -98,7 +115,10 @@ async fn last_view_dropping_hides_the_panel(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     model.update(cx, |m, cx| m.detach_view(cx));
-    assert!(model.read_with(cx, |m, _| m.has_watcher()), "one view is still open");
+    assert!(
+        model.read_with(cx, |m, _| m.has_watcher()),
+        "one view is still open"
+    );
     model.update(cx, |m, cx| m.detach_view(cx));
     assert!(!model.read_with(cx, |m, _| m.has_watcher()));
     assert!(!model.read_with(cx, |m, _| m.is_visible()));
@@ -119,7 +139,11 @@ async fn refresh_bursts_cost_two_reads_at_most(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let after = model.read_with(cx, |m, _| m.stats().reads);
-    assert_eq!(after - before, 2, "one in flight plus exactly one queued follow-up");
+    assert_eq!(
+        after - before,
+        2,
+        "one in flight plus exactly one queued follow-up"
+    );
     assert!(!model.read_with(cx, |m, _| m.refresh_in_flight()));
 }
 
@@ -134,7 +158,11 @@ async fn unchanged_data_does_not_notify(cx: &mut TestAppContext) {
     let _sub = cx.update(|cx| cx.observe(&model, move |_, _| *n.borrow_mut() += 1));
     model.update(cx, |m, cx| m.refresh(false, cx));
     cx.run_until_parked();
-    assert_eq!(*notified.borrow(), 0, "a read that finds nothing new must not redraw");
+    assert_eq!(
+        *notified.borrow(),
+        0,
+        "a read that finds nothing new must not redraw"
+    );
     std::fs::write(dir.path().join("a.txt"), "x\n").unwrap();
     model.update(cx, |m, cx| m.refresh(false, cx));
     cx.run_until_parked();
@@ -155,13 +183,22 @@ async fn a_commit_never_runs_without_confirm(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(commit_count(dir.path()), 1);
 
-    let op = GitOp::Action(GitAction::Commit { message: "feat: x".into() });
+    let op = GitOp::Action(GitAction::Commit {
+        message: "feat: x".into(),
+    });
     model.update(cx, |m, cx| m.request(op.clone(), cx));
     // While the preflight is computing, confirming still does nothing.
     model.update(cx, |m, cx| m.confirm(cx));
     cx.run_until_parked();
-    assert!(matches!(model.read_with(cx, |m, _| m.gate().clone()), Gate::Confirm { .. }));
-    assert_eq!(commit_count(dir.path()), 1, "the card is showing, nothing ran");
+    assert!(matches!(
+        model.read_with(cx, |m, _| m.gate().clone()),
+        Gate::Confirm { .. }
+    ));
+    assert_eq!(
+        commit_count(dir.path()),
+        1,
+        "the card is showing, nothing ran"
+    );
 
     // Cancelling releases nothing either.
     model.update(cx, |m, cx| m.dismiss(cx));
@@ -175,8 +212,14 @@ async fn a_commit_never_runs_without_confirm(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(commit_count(dir.path()), 2, "confirmed: the commit ran");
     let g = model.read_with(cx, |m, _| m.gate().clone());
-    assert!(matches!(g, Gate::Done { ref outcome, .. } if outcome.ok), "{g:?}");
-    assert!(model.read_with(cx, |m, _| m.data().unwrap().status.staged.is_empty()), "refreshed after the op");
+    assert!(
+        matches!(g, Gate::Done { ref outcome, .. } if outcome.ok),
+        "{g:?}"
+    );
+    assert!(
+        model.read_with(cx, |m, _| m.data().unwrap().status.staged.is_empty()),
+        "refreshed after the op"
+    );
 }
 
 #[gpui::test]
@@ -186,12 +229,25 @@ async fn blocked_commit_cannot_be_confirmed(cx: &mut TestAppContext) {
     let model = model_for(cx, dir.path());
     model.update(cx, |m, cx| m.set_visible(true, cx));
     cx.run_until_parked();
-    model.update(cx, |m, cx| m.request(GitOp::Action(GitAction::Commit { message: "x".into() }), cx));
+    model.update(cx, |m, cx| {
+        m.request(
+            GitOp::Action(GitAction::Commit {
+                message: "x".into(),
+            }),
+            cx,
+        )
+    });
     cx.run_until_parked();
     model.update(cx, |m, cx| m.confirm(cx));
     cx.run_until_parked();
-    assert_eq!(commit_count(dir.path()), 1, "nothing staged: the review is blocked");
-    assert!(matches!(model.read_with(cx, |m, _| m.gate().clone()), Gate::Confirm { review, .. } if review.blocked.is_some()));
+    assert_eq!(
+        commit_count(dir.path()),
+        1,
+        "nothing staged: the review is blocked"
+    );
+    assert!(
+        matches!(model.read_with(cx, |m, _| m.gate().clone()), Gate::Confirm { review, .. } if review.blocked.is_some())
+    );
 }
 
 #[gpui::test]
@@ -204,14 +260,22 @@ async fn read_only_refuses_every_operation(cx: &mut TestAppContext) {
         m.set_visible(true, cx);
     });
     cx.run_until_parked();
-    for op in [GitOp::Stage("a.txt".into()), GitOp::StageAll, GitOp::CreateCheckpoint { label: "x".into() }, GitOp::Action(GitAction::Push)] {
+    for op in [
+        GitOp::Stage("a.txt".into()),
+        GitOp::StageAll,
+        GitOp::CreateCheckpoint { label: "x".into() },
+        GitOp::Action(GitAction::Push),
+    ] {
         model.update(cx, |m, cx| m.request(op, cx));
         cx.run_until_parked();
     }
     model.read_with(cx, |m, _| {
         assert_eq!(m.gate(), &Gate::Idle);
         assert!(m.quiet_error().unwrap().contains("Solo lectura"));
-        assert!(m.data().unwrap().status.staged.is_empty(), "nothing was staged");
+        assert!(
+            m.data().unwrap().status.staged.is_empty(),
+            "nothing was staged"
+        );
         assert!(m.data().unwrap().checkpoints.is_empty());
     });
 }
@@ -230,13 +294,28 @@ async fn staging_updates_the_status(cx: &mut TestAppContext) {
         assert_eq!((st.staged.len(), st.unstaged.len()), (1, 0));
         assert_eq!(m.gate(), &Gate::Idle, "a quiet success leaves no banner");
     });
-    model.update(cx, |m, cx| m.request(GitOp::Unstage { path: "a.txt".into(), unborn: false }, cx));
+    model.update(cx, |m, cx| {
+        m.request(
+            GitOp::Unstage {
+                path: "a.txt".into(),
+                unborn: false,
+            },
+            cx,
+        )
+    });
     cx.run_until_parked();
-    assert_eq!(model.read_with(cx, |m, _| m.data().unwrap().status.staged.len()), 0);
+    assert_eq!(
+        model.read_with(cx, |m, _| m.data().unwrap().status.staged.len()),
+        0
+    );
     // A failing quiet op surfaces as an error line, not silently.
-    model.update(cx, |m, cx| m.request(GitOp::Stage("does-not-exist.txt".into()), cx));
+    model.update(cx, |m, cx| {
+        m.request(GitOp::Stage("does-not-exist.txt".into()), cx)
+    });
     cx.run_until_parked();
-    let shown = model.read_with(cx, |m, _| matches!(m.gate(), Gate::Done { outcome, .. } if !outcome.ok) || m.quiet_error().is_some());
+    let shown = model.read_with(cx, |m, _| {
+        matches!(m.gate(), Gate::Done { outcome, .. } if !outcome.ok) || m.quiet_error().is_some()
+    });
     assert!(shown);
 }
 
@@ -249,10 +328,15 @@ async fn events_reach_the_host(cx: &mut TestAppContext) {
     model.update(cx, |m, cx| m.set_visible(true, cx));
     cx.run_until_parked();
 
-    let target = DiffTarget::Working { section: Section::Changes, path: "a.txt".into() };
+    let target = DiffTarget::Working {
+        section: Section::Changes,
+        path: "a.txt".into(),
+    };
     model.update(cx, |m, cx| m.toggle_diff(target.clone(), cx));
     cx.run_until_parked();
-    let ready = model.read_with(cx, |m, _| matches!(m.diff().map(|d| &d.state), Some(DiffState::Ready(_))));
+    let ready = model.read_with(cx, |m, _| {
+        matches!(m.diff().map(|d| &d.state), Some(DiffState::Ready(_)))
+    });
     assert!(ready);
 
     model.update(cx, |m, cx| {
@@ -262,10 +346,19 @@ async fn events_reach_the_host(cx: &mut TestAppContext) {
     });
     let got = seen.borrow().clone();
     let root = dir.path().to_path_buf();
-    assert!(matches!(&got[0], GitPanelEvent::OpenFile { path, line: Some(2) } if path.ends_with("a.txt") && path.starts_with(&root) || path.file_name().is_some_and(|n| n == "a.txt")));
-    assert!(matches!(&got[1], GitPanelEvent::OpenDiff { path } if path.file_name().is_some_and(|n| n == "a.txt")));
-    let GitPanelEvent::AskAgent { context_markdown } = &got[2] else { panic!("{:?}", got[2]) };
-    assert!(context_markdown.contains("a.txt") && context_markdown.contains("+TWO"), "{context_markdown}");
+    assert!(
+        matches!(&got[0], GitPanelEvent::OpenFile { path, line: Some(2) } if path.ends_with("a.txt") && path.starts_with(&root) || path.file_name().is_some_and(|n| n == "a.txt"))
+    );
+    assert!(
+        matches!(&got[1], GitPanelEvent::OpenDiff { path } if path.file_name().is_some_and(|n| n == "a.txt"))
+    );
+    let GitPanelEvent::AskAgent { context_markdown } = &got[2] else {
+        panic!("{:?}", got[2])
+    };
+    assert!(
+        context_markdown.contains("a.txt") && context_markdown.contains("+TWO"),
+        "{context_markdown}"
+    );
 
     // Toggling the same file closes the diff.
     model.update(cx, |m, cx| m.toggle_diff(target, cx));
@@ -284,16 +377,32 @@ async fn terminal_mode_emits_the_command_instead_of_running_it(cx: &mut TestAppC
     });
     let seen = events(cx, &model);
     cx.run_until_parked();
-    model.update(cx, |m, cx| m.request(GitOp::Action(GitAction::Commit { message: "feat: visible".into() }), cx));
+    model.update(cx, |m, cx| {
+        m.request(
+            GitOp::Action(GitAction::Commit {
+                message: "feat: visible".into(),
+            }),
+            cx,
+        )
+    });
     cx.run_until_parked();
-    assert!(seen.borrow().is_empty(), "nothing is emitted before the confirmation");
+    assert!(
+        seen.borrow().is_empty(),
+        "nothing is emitted before the confirmation"
+    );
     model.update(cx, |m, cx| m.confirm(cx));
     cx.run_until_parked();
     let got = seen.borrow().clone();
-    let [GitPanelEvent::RunInTerminal { argv, cwd }] = got.as_slice() else { panic!("{got:?}") };
+    let [GitPanelEvent::RunInTerminal { argv, cwd }] = got.as_slice() else {
+        panic!("{got:?}")
+    };
     assert_eq!(argv, &["git", "commit", "-m", "feat: visible"]);
     assert!(cwd.ends_with(dir.path().file_name().unwrap()) || cwd == &PathBuf::from(dir.path()));
-    assert_eq!(commit_count(dir.path()), 1, "the host runs it, not the panel");
+    assert_eq!(
+        commit_count(dir.path()),
+        1,
+        "the host runs it, not the panel"
+    );
 }
 
 #[gpui::test]
@@ -312,12 +421,18 @@ async fn changing_the_root_drops_the_old_repository(cx: &mut TestAppContext) {
     assert!(model.read_with(cx, |m, _| m.has_watcher()));
 
     model.update(cx, |m, cx| m.set_root(None, cx));
-    assert_eq!(model.read_with(cx, |m, _| m.load_state().clone()), Load::NoRoot);
+    assert_eq!(
+        model.read_with(cx, |m, _| m.load_state().clone()),
+        Load::NoRoot
+    );
     // A folder that is not a repository is reported, not an error.
     let plain = tempfile::tempdir().unwrap();
     model.update(cx, |m, cx| m.set_root(Some(plain.path().to_path_buf()), cx));
     cx.run_until_parked();
-    assert_eq!(model.read_with(cx, |m, _| m.load_state().clone()), Load::NotARepo);
+    assert_eq!(
+        model.read_with(cx, |m, _| m.load_state().clone()),
+        Load::NotARepo
+    );
 }
 
 #[gpui::test]
@@ -327,24 +442,47 @@ async fn checkpoint_flow_through_the_model(cx: &mut TestAppContext) {
     model.update(cx, |m, cx| m.set_visible(true, cx));
     cx.run_until_parked();
     std::fs::write(dir.path().join("a.txt"), "v1\n").unwrap();
-    model.update(cx, |m, cx| m.request(GitOp::CreateCheckpoint { label: "uno".into() }, cx));
+    model.update(cx, |m, cx| {
+        m.request(
+            GitOp::CreateCheckpoint {
+                label: "uno".into(),
+            },
+            cx,
+        )
+    });
     cx.run_until_parked();
-    let id = model.read_with(cx, |m, _| m.data().unwrap().checkpoints.first().map(|c| c.id.clone())).expect("a checkpoint");
+    let id = model
+        .read_with(cx, |m, _| {
+            m.data().unwrap().checkpoints.first().map(|c| c.id.clone())
+        })
+        .expect("a checkpoint");
     std::fs::write(dir.path().join("a.txt"), "v2\n").unwrap();
 
     model.update(cx, |m, cx| m.toggle_checkpoint_view(id.clone(), cx));
     cx.run_until_parked();
-    let files = model.read_with(cx, |m, _| m.checkpoint_view().cloned()).unwrap();
+    let files = model
+        .read_with(cx, |m, _| m.checkpoint_view().cloned())
+        .unwrap();
     assert!(matches!(files.state, crate::model::CheckpointFiles::Ready(ref f) if f.len() == 1));
 
     model.update(cx, |m, cx| m.request(GitOp::RestoreCheckpoint { id }, cx));
     cx.run_until_parked();
-    assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "v2\n", "the card is waiting, nothing restored yet");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "v2\n",
+        "the card is waiting, nothing restored yet"
+    );
     model.update(cx, |m, cx| m.confirm(cx));
     cx.run_until_parked();
-    assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "v1\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+        "v1\n"
+    );
     let cps = model.read_with(cx, |m, _| m.data().unwrap().checkpoints.clone());
-    assert!(cps.iter().any(|c| c.auto), "the pre-restore checkpoint is listed");
+    assert!(
+        cps.iter().any(|c| c.auto),
+        "the pre-restore checkpoint is listed"
+    );
 }
 
 fn ctx(class: WidthClass, root: &std::path::Path) -> PanelCtx {
@@ -360,7 +498,11 @@ fn ctx(class: WidthClass, root: &std::path::Path) -> PanelCtx {
 #[test]
 fn layout_selection() {
     assert_eq!(layout_for(WidthClass::Compact, 250.0), Layout::Tabs);
-    assert_eq!(layout_for(WidthClass::Compact, 900.0), Layout::Tabs, "the class decides, not the pixels");
+    assert_eq!(
+        layout_for(WidthClass::Compact, 900.0),
+        Layout::Tabs,
+        "the class decides, not the pixels"
+    );
     assert_eq!(layout_for(WidthClass::Regular, 420.0), Layout::Stacked);
     assert_eq!(layout_for(WidthClass::Regular, 900.0), Layout::Columns);
 }
@@ -379,8 +521,14 @@ async fn compact_collapses_to_tabs_and_regular_stacks(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert_eq!(panel.read_with(vcx, |p, _| p.layout()), Layout::Tabs);
     assert!(panel.read_with(vcx, |p, _| p.is_compact()));
-    assert!(model.read_with(vcx, |m, _| m.is_visible()), "painting makes the panel visible");
-    assert_eq!(model.read_with(vcx, |m, _| m.load_state().clone()), Load::Ready);
+    assert!(
+        model.read_with(vcx, |m, _| m.is_visible()),
+        "painting makes the panel visible"
+    );
+    assert_eq!(
+        model.read_with(vcx, |m, _| m.load_state().clone()),
+        Load::Ready
+    );
 
     for tab in Tab::ALL {
         panel.update(vcx, |p, cx| p.select_tab(tab, cx));
@@ -391,7 +539,10 @@ async fn compact_collapses_to_tabs_and_regular_stacks(cx: &mut TestAppContext) {
     panel.update(vcx, |p, cx| p.retarget(ctx(WidthClass::Regular, &root), cx));
     vcx.run_until_parked();
     // The test window is wide, so the measured width may promote Regular to two columns.
-    assert!(matches!(panel.read_with(vcx, |p, _| p.layout()), Layout::Stacked | Layout::Columns));
+    assert!(matches!(
+        panel.read_with(vcx, |p, _| p.layout()),
+        Layout::Stacked | Layout::Columns
+    ));
     assert!(!panel.read_with(vcx, |p, _| p.is_compact()));
 
     // Back to compact (the shell resized the zone).
@@ -415,8 +566,19 @@ async fn every_state_paints_without_panicking(cx: &mut TestAppContext) {
     });
     vcx.run_until_parked();
     model.update(vcx, |m, cx| {
-        m.toggle_diff(DiffTarget::Working { section: Section::Changes, path: "a.txt".into() }, cx);
-        m.request(GitOp::CreateCheckpoint { label: "uno".into() }, cx);
+        m.toggle_diff(
+            DiffTarget::Working {
+                section: Section::Changes,
+                path: "a.txt".into(),
+            },
+            cx,
+        );
+        m.request(
+            GitOp::CreateCheckpoint {
+                label: "uno".into(),
+            },
+            cx,
+        );
     });
     vcx.run_until_parked();
     model.update(vcx, |m, cx| m.request(GitOp::Action(GitAction::Push), cx));
@@ -433,7 +595,10 @@ async fn every_state_paints_without_panicking(cx: &mut TestAppContext) {
             vcx.run_until_parked();
         }
     }
-    assert_eq!(panel.read_with(vcx, |p, cx| p.message(cx)), "feat: hola\n\ncuerpo");
+    assert_eq!(
+        panel.read_with(vcx, |p, cx| p.message(cx)),
+        "feat: hola\n\ncuerpo"
+    );
 }
 
 // ---- the commit box through the keyboard (a real window, no desktop input) -----------------------
@@ -442,10 +607,19 @@ async fn every_state_paints_without_panicking(cx: &mut TestAppContext) {
 fn commit_window(
     cx: &mut TestAppContext,
     stage: bool,
-) -> (tempfile::TempDir, Entity<GitModel>, Entity<GitPanel>, &mut VisualTestContext) {
+) -> (
+    tempfile::TempDir,
+    Entity<GitModel>,
+    Entity<GitPanel>,
+    &mut VisualTestContext,
+) {
     let dir = temp_repo();
-    std::fs::write(dir.path().join("a.txt"), "changed
-").unwrap();
+    std::fs::write(
+        dir.path().join("a.txt"),
+        "changed
+",
+    )
+    .unwrap();
     if stage {
         git(dir.path(), &["add", "a.txt"]);
     }
@@ -456,7 +630,10 @@ fn commit_window(
         GitPanel::new(c, m, cx)
     });
     vcx.run_until_parked();
-    assert_eq!(model.read_with(vcx, |m, _| m.load_state().clone()), Load::Ready);
+    assert_eq!(
+        model.read_with(vcx, |m, _| m.load_state().clone()),
+        Load::Ready
+    );
     (dir, model, panel, vcx)
 }
 
@@ -465,13 +642,19 @@ fn gate(model: &Entity<GitModel>, vcx: &VisualTestContext) -> Gate {
 }
 
 #[gpui::test]
-async fn enter_in_the_subject_opens_the_review_and_commits_only_after_confirm(cx: &mut TestAppContext) {
+async fn enter_in_the_subject_opens_the_review_and_commits_only_after_confirm(
+    cx: &mut TestAppContext,
+) {
     let (dir, model, panel, vcx) = commit_window(cx, true);
     panel.update_in(vcx, |p, window, cx| p.focus_field(false, window, cx));
     ui_kit::testing::type_text(vcx, "feat: from the keyboard");
     ui_kit::testing::press(vcx, "enter");
     vcx.run_until_parked();
-    assert!(matches!(gate(&model, vcx), Gate::Confirm { .. }), "Enter shows the review card: {:?}", gate(&model, vcx));
+    assert!(
+        matches!(gate(&model, vcx), Gate::Confirm { .. }),
+        "Enter shows the review card: {:?}",
+        gate(&model, vcx)
+    );
     assert_eq!(commit_count(dir.path()), 1, "Enter alone never commits");
     // Pressing Enter again with the card open does not run it either.
     ui_kit::testing::press(vcx, "enter");
@@ -480,7 +663,11 @@ async fn enter_in_the_subject_opens_the_review_and_commits_only_after_confirm(cx
     ui_kit::testing::click_id(vcx, "gate-confirm");
     vcx.run_until_parked();
     assert_eq!(commit_count(dir.path()), 2, "the confirm button ran it");
-    assert_eq!(panel.read_with(vcx, |p, cx| p.message(cx)), "", "the box is cleared after a commit");
+    assert_eq!(
+        panel.read_with(vcx, |p, cx| p.message(cx)),
+        "",
+        "the box is cleared after a commit"
+    );
 }
 
 #[gpui::test]
@@ -491,7 +678,11 @@ async fn commit_needs_a_subject_and_staged_files(cx: &mut TestAppContext) {
     ui_kit::testing::type_text(vcx, "feat: x");
     ui_kit::testing::press(vcx, "enter");
     vcx.run_until_parked();
-    assert_eq!(gate(&model, vcx), Gate::Idle, "nothing staged: no review card");
+    assert_eq!(
+        gate(&model, vcx),
+        Gate::Idle,
+        "nothing staged: no review card"
+    );
     assert_eq!(commit_count(dir.path()), 1);
 }
 
@@ -515,11 +706,18 @@ async fn description_is_multiline_and_ctrl_enter_starts_the_commit(cx: &mut Test
     ui_kit::testing::press(vcx, "enter");
     ui_kit::testing::type_text(vcx, "linea dos");
     vcx.run_until_parked();
-    assert_eq!(gate(&model, vcx), Gate::Idle, "Enter in the description is a newline");
-    assert_eq!(panel.read_with(vcx, |p, cx| p.message(cx)), "feat: x
+    assert_eq!(
+        gate(&model, vcx),
+        Gate::Idle,
+        "Enter in the description is a newline"
+    );
+    assert_eq!(
+        panel.read_with(vcx, |p, cx| p.message(cx)),
+        "feat: x
 
 linea uno
-linea dos");
+linea dos"
+    );
     ui_kit::testing::press(vcx, "ctrl-enter");
     vcx.run_until_parked();
     assert!(matches!(gate(&model, vcx), Gate::Confirm { .. }));

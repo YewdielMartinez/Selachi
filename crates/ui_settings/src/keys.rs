@@ -20,7 +20,11 @@ pub struct KeyAction {
 
 impl KeyAction {
     pub fn new(id: &str, label: &str, default: &str) -> Self {
-        Self { id: id.into(), label: label.into(), default: default.into() }
+        Self {
+            id: id.into(),
+            label: label.into(),
+            default: default.into(),
+        }
     }
 }
 
@@ -36,7 +40,11 @@ pub fn default_catalog() -> Vec<KeyAction> {
         KeyAction::new("theme.toggle", "Cambiar tema", "ctrl+shift+t"),
         KeyAction::new("window.fullscreen", "Pantalla completa", "f11"),
         KeyAction::new("settings.open", "Abrir Ajustes", "ctrl+,"),
-        KeyAction::new("attention.next", "Siguiente agente que espera", "ctrl+shift+a"),
+        KeyAction::new(
+            "attention.next",
+            "Siguiente agente que espera",
+            "ctrl+shift+a",
+        ),
         KeyAction::new("block.prev", "Bloque anterior", "ctrl+up"),
         KeyAction::new("block.next", "Bloque siguiente", "ctrl+down"),
     ]
@@ -60,14 +68,24 @@ impl ChordError {
     }
 }
 
-const MODIFIER_KEYS: &[&str] = &["control", "ctrl", "shift", "alt", "platform", "win", "super", "meta", "function"];
+const MODIFIER_KEYS: &[&str] = &[
+    "control", "ctrl", "shift", "alt", "platform", "win", "super", "meta", "function",
+];
 
 fn is_function_key(key: &str) -> bool {
-    key.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (1..=24).contains(&n))
+    key.strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n))
 }
 
 /// Build the normalized chord (`ctrl+alt+shift+win+key`, lowercase) from a keystroke.
-pub fn chord_from_keystroke(ctrl: bool, alt: bool, shift: bool, win: bool, key: &str) -> Result<String, ChordError> {
+pub fn chord_from_keystroke(
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    win: bool,
+    key: &str,
+) -> Result<String, ChordError> {
     let key = key.trim().to_lowercase();
     if key.is_empty() || MODIFIER_KEYS.contains(&key.as_str()) {
         return Err(ChordError::ModifierOnly);
@@ -182,7 +200,11 @@ pub fn effective(catalog: &[KeyAction], overrides: &BTreeMap<String, String>, id
     if let Some(c) = overrides.get(id).and_then(|c| normalize_chord(c)) {
         return c;
     }
-    catalog.iter().find(|a| a.id == id).map(|a| a.default.clone()).unwrap_or_default()
+    catalog
+        .iter()
+        .find(|a| a.id == id)
+        .map(|a| a.default.clone())
+        .unwrap_or_default()
 }
 
 /// The *other* action already using `chord`, if any.
@@ -192,12 +214,23 @@ pub fn find_conflict<'a>(
     id: &str,
     chord: &str,
 ) -> Option<&'a KeyAction> {
-    catalog.iter().find(|a| a.id != id && effective(catalog, overrides, &a.id) == chord)
+    catalog
+        .iter()
+        .find(|a| a.id != id && effective(catalog, overrides, &a.id) == chord)
 }
 
 /// Bind `id` to `chord`. A chord equal to the default removes the override.
-pub fn set_binding(catalog: &[KeyAction], overrides: &mut BTreeMap<String, String>, id: &str, chord: &str) {
-    let default = catalog.iter().find(|a| a.id == id).map(|a| a.default.as_str()).unwrap_or("");
+pub fn set_binding(
+    catalog: &[KeyAction],
+    overrides: &mut BTreeMap<String, String>,
+    id: &str,
+    chord: &str,
+) {
+    let default = catalog
+        .iter()
+        .find(|a| a.id == id)
+        .map(|a| a.default.as_str())
+        .unwrap_or("");
     if chord == default {
         overrides.remove(id);
     } else {
@@ -206,7 +239,13 @@ pub fn set_binding(catalog: &[KeyAction], overrides: &mut BTreeMap<String, Strin
 }
 
 /// Give `chord` to `id` and hand `id`'s previous chord to the action that held `chord`.
-pub fn swap_bindings(catalog: &[KeyAction], overrides: &mut BTreeMap<String, String>, id: &str, other: &str, chord: &str) {
+pub fn swap_bindings(
+    catalog: &[KeyAction],
+    overrides: &mut BTreeMap<String, String>,
+    id: &str,
+    other: &str,
+    chord: &str,
+) {
     let previous = effective(catalog, overrides, id);
     set_binding(catalog, overrides, id, chord);
     set_binding(catalog, overrides, other, &previous);
@@ -223,24 +262,54 @@ mod tests {
 
     #[test]
     fn chords_are_built_in_canonical_order() {
-        assert_eq!(chord_from_keystroke(true, false, true, false, "T").unwrap(), "ctrl+shift+t");
-        assert_eq!(chord_from_keystroke(true, true, true, true, "x").unwrap(), "ctrl+alt+shift+win+x");
-        assert_eq!(chord_from_keystroke(false, false, false, false, "F11").unwrap(), "f11");
-        assert_eq!(chord_from_keystroke(true, false, false, false, "tab").unwrap(), "ctrl+tab");
+        assert_eq!(
+            chord_from_keystroke(true, false, true, false, "T").unwrap(),
+            "ctrl+shift+t"
+        );
+        assert_eq!(
+            chord_from_keystroke(true, true, true, true, "x").unwrap(),
+            "ctrl+alt+shift+win+x"
+        );
+        assert_eq!(
+            chord_from_keystroke(false, false, false, false, "F11").unwrap(),
+            "f11"
+        );
+        assert_eq!(
+            chord_from_keystroke(true, false, false, false, "tab").unwrap(),
+            "ctrl+tab"
+        );
     }
 
     #[test]
     fn captures_that_cannot_be_shortcuts_are_rejected() {
-        assert_eq!(chord_from_keystroke(true, false, false, false, "shift"), Err(ChordError::ModifierOnly));
-        assert_eq!(chord_from_keystroke(false, false, false, false, ""), Err(ChordError::ModifierOnly));
-        assert_eq!(chord_from_keystroke(false, false, false, false, "a"), Err(ChordError::NeedsModifier));
-        assert_eq!(chord_from_keystroke(false, false, true, false, "a"), Err(ChordError::NeedsModifier));
+        assert_eq!(
+            chord_from_keystroke(true, false, false, false, "shift"),
+            Err(ChordError::ModifierOnly)
+        );
+        assert_eq!(
+            chord_from_keystroke(false, false, false, false, ""),
+            Err(ChordError::ModifierOnly)
+        );
+        assert_eq!(
+            chord_from_keystroke(false, false, false, false, "a"),
+            Err(ChordError::NeedsModifier)
+        );
+        assert_eq!(
+            chord_from_keystroke(false, false, true, false, "a"),
+            Err(ChordError::NeedsModifier)
+        );
     }
 
     #[test]
     fn hand_written_chords_normalize() {
-        assert_eq!(normalize_chord("Ctrl + Shift + T").as_deref(), Some("ctrl+shift+t"));
-        assert_eq!(normalize_chord("shift-ctrl-t").as_deref(), Some("ctrl+shift+t"));
+        assert_eq!(
+            normalize_chord("Ctrl + Shift + T").as_deref(),
+            Some("ctrl+shift+t")
+        );
+        assert_eq!(
+            normalize_chord("shift-ctrl-t").as_deref(),
+            Some("ctrl+shift+t")
+        );
         assert_eq!(normalize_chord("Control+,").as_deref(), Some("ctrl+,"));
         assert_eq!(normalize_chord("F11").as_deref(), Some("f11"));
         assert_eq!(normalize_chord("ctrl+"), None);
@@ -269,14 +338,22 @@ mod tests {
         let cat = default_catalog();
         let mut ov = BTreeMap::new();
         // ctrl+w is tab.close by default.
-        assert_eq!(find_conflict(&cat, &ov, "tab.new", "ctrl+w").unwrap().id, "tab.close");
+        assert_eq!(
+            find_conflict(&cat, &ov, "tab.new", "ctrl+w").unwrap().id,
+            "tab.close"
+        );
         // Rebinding to its own chord is not a conflict.
         assert!(find_conflict(&cat, &ov, "tab.close", "ctrl+w").is_none());
         assert!(find_conflict(&cat, &ov, "tab.new", "ctrl+alt+9").is_none());
         // Once tab.close moves away, ctrl+w is free and its new chord is taken.
         ov.insert("tab.close".into(), "ctrl+alt+w".into());
         assert!(find_conflict(&cat, &ov, "tab.new", "ctrl+w").is_none());
-        assert_eq!(find_conflict(&cat, &ov, "tab.new", "ctrl+alt+w").unwrap().id, "tab.close");
+        assert_eq!(
+            find_conflict(&cat, &ov, "tab.new", "ctrl+alt+w")
+                .unwrap()
+                .id,
+            "tab.close"
+        );
     }
 
     #[test]
@@ -295,7 +372,11 @@ mod tests {
         // No two actions share a chord afterwards.
         let mut seen = std::collections::HashSet::new();
         for a in &cat {
-            assert!(seen.insert(effective(&cat, &ov, &a.id)), "duplicate chord for {}", a.id);
+            assert!(
+                seen.insert(effective(&cat, &ov, &a.id)),
+                "duplicate chord for {}",
+                a.id
+            );
         }
     }
 
@@ -307,7 +388,10 @@ mod tests {
         for a in &cat {
             assert!(ids.insert(a.id.clone()));
             assert!(chords.insert(a.default.clone()), "{} repeats a chord", a.id);
-            assert_eq!(normalize_chord(&a.default).as_deref(), Some(a.default.as_str()));
+            assert_eq!(
+                normalize_chord(&a.default).as_deref(),
+                Some(a.default.as_str())
+            );
         }
     }
 }

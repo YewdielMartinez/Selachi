@@ -16,7 +16,9 @@ pub struct LongCommandPolicy {
 
 impl Default for LongCommandPolicy {
     fn default() -> Self {
-        Self { min_duration: Duration::from_secs(10) }
+        Self {
+            min_duration: Duration::from_secs(10),
+        }
     }
 }
 
@@ -85,7 +87,11 @@ fn inline_code(s: &str) -> String {
 impl AgentContext {
     /// A Spanish prompt: what ran, where, how it ended, the output, and the request.
     pub fn to_prompt_markdown(&self) -> String {
-        let command = if self.command.is_empty() { "(sin texto)" } else { &self.command };
+        let command = if self.command.is_empty() {
+            "(sin texto)"
+        } else {
+            &self.command
+        };
         let outcome = match self.exit_code {
             Some(0) => "terminó con código 0".to_string(),
             Some(n) => format!("falló con código {n}"),
@@ -106,7 +112,10 @@ impl AgentContext {
             out.push_str(" No produjo salida.");
         } else {
             let fence = "`".repeat(longest_backtick_run(&self.output).max(2) + 1);
-            out.push_str(&format!(" Salida:\n{fence}\n{}\n{fence}\n", self.output.trim_end()));
+            out.push_str(&format!(
+                " Salida:\n{fence}\n{}\n{fence}\n",
+                self.output.trim_end()
+            ));
         }
         out.push_str(" Ayúdame a arreglarlo.");
         out
@@ -146,11 +155,19 @@ mod tests {
         let long = block(BlockState::Failed, Some(12));
         assert!(should_notify(&long, false, &p));
         assert!(!should_notify(&long, true, &p), "window focused");
-        assert!(!should_notify(&block(BlockState::Succeeded, Some(9)), false, &p), "too short");
-        assert!(should_notify(&block(BlockState::Succeeded, Some(10)), false, &p), "threshold is inclusive");
+        assert!(
+            !should_notify(&block(BlockState::Succeeded, Some(9)), false, &p),
+            "too short"
+        );
+        assert!(
+            should_notify(&block(BlockState::Succeeded, Some(10)), false, &p),
+            "threshold is inclusive"
+        );
         assert!(!should_notify(&block(BlockState::Running, None), false, &p));
         assert!(!should_notify(&block(BlockState::Unknown, None), false, &p));
-        let strict = LongCommandPolicy { min_duration: Duration::from_secs(60) };
+        let strict = LongCommandPolicy {
+            min_duration: Duration::from_secs(60),
+        };
         assert!(!should_notify(&long, false, &strict));
     }
 
@@ -162,7 +179,10 @@ mod tests {
         assert_eq!(ctx.redactions, 2);
         let md = ctx.to_prompt_markdown();
         assert!(md.starts_with("El comando `deploy --token [REDACTED]` falló con código 101 en `C:\\proj` (rama `feature/x`)."), "{md}");
-        assert!(md.contains("Salida:\n```\nerror: boom\nAPI_KEY=[REDACTED]\n```\n"), "{md}");
+        assert!(
+            md.contains("Salida:\n```\nerror: boom\nAPI_KEY=[REDACTED]\n```\n"),
+            "{md}"
+        );
         assert!(md.ends_with("Ayúdame a arreglarlo."), "{md}");
         assert!(!md.contains("hunter2") && !md.contains("abc123"));
     }

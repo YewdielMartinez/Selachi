@@ -59,7 +59,11 @@ thread_local! {
 
 /// Zero-size probe: put it first in the root element.
 pub fn frame_begin() -> impl IntoElement {
-    canvas(|_, _, _| START.with(|s| s.set(Some(Instant::now()))), |_, (), _, _| {}).size(px(0.0))
+    canvas(
+        |_, _, _| START.with(|s| s.set(Some(Instant::now()))),
+        |_, (), _, _| {},
+    )
+    .size(px(0.0))
 }
 
 /// Zero-size probe: put it last in the root element.

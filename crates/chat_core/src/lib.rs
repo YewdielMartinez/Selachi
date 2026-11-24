@@ -32,22 +32,25 @@ mod runtime;
 pub mod state;
 
 pub use chat_store::{
-    slugify, worktree_name, ChatStore, ChatStoreBuilder, DeleteOptions, DeletePreview, DeleteReport,
-    WorktreePreview,
+    slugify, worktree_name, ChatStore, ChatStoreBuilder, DeleteOptions, DeletePreview,
+    DeleteReport, WorktreePreview,
 };
-pub use db::{default_db_path, latest_version, migrate, ChatDb, StoredApproval, StoredMessage, StoredToolRun};
+pub use db::{
+    default_db_path, latest_version, migrate, ChatDb, StoredApproval, StoredMessage, StoredToolRun,
+};
 pub use error::{ChatError, Result};
 pub use hooks::{
-    AgentControl, DefaultDriverFactory, DriverFactory, JobHandle, OwnerInfo, ProcessHooks, SpawnedAgent,
+    AgentControl, DefaultDriverFactory, DriverFactory, JobHandle, OwnerInfo, ProcessHooks,
+    SpawnedAgent,
 };
 pub use model::{
-    agent_label, group_by_project, now_ms, should_checkpoint, ApprovalDecision, Archived, CostSource, Role,
-    ThreadFilter, ThreadGroup, ThreadGroups, ThreadId, ThreadLink, ThreadRecord, ThreadSpec, ThreadStatus,
-    UNTITLED,
+    agent_label, group_by_project, now_ms, should_checkpoint, ApprovalDecision, Archived,
+    CostSource, Role, ThreadFilter, ThreadGroup, ThreadGroups, ThreadId, ThreadLink, ThreadRecord,
+    ThreadSpec, ThreadStatus, UNTITLED,
 };
 pub use runtime::{ThreadHandle, ThreadRuntime, ThreadUpdate, MIN_UPDATE_INTERVAL};
 pub use state::{
-    classify, Block, Changed, CheckpointRef, ContextUsage, CostPolicy, ExploreCounts, ExploreGroup, Message,
-    MessageCost, MessageUsage, Plan, PlanItem, ThinkingBlock, ThreadState, ToolClass, ToolRun, ToolStatus,
-    UsageTotals, ApprovalRow, ApprovalState, MAX_TOOL_INPUT_BYTES,
+    classify, ApprovalRow, ApprovalState, Block, Changed, CheckpointRef, ContextUsage, CostPolicy,
+    ExploreCounts, ExploreGroup, Message, MessageCost, MessageUsage, Plan, PlanItem, ThinkingBlock,
+    ThreadState, ToolClass, ToolRun, ToolStatus, UsageTotals, MAX_TOOL_INPUT_BYTES,
 };

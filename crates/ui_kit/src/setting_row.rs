@@ -32,7 +32,12 @@ pub struct RowGeometry {
 
 impl RowGeometry {
     pub const fn new(stacked: bool) -> Self {
-        Self { text_flexes: true, control_fixed: !stacked, gap: if stacked { 10.0 } else { SETTING_ROW_GAP }, stacked }
+        Self {
+            text_flexes: true,
+            control_fixed: !stacked,
+            gap: if stacked { 10.0 } else { SETTING_ROW_GAP },
+            stacked,
+        }
     }
 }
 
@@ -130,10 +135,26 @@ impl RenderOnce for SettingRow {
                     .child(self.label),
             )
             .when_some(self.description, |d, t| {
-                d.child(div().text_size(px(ty.ui_size_sm)).line_height(px(17.0)).text_color(c.muted).child(t))
+                d.child(
+                    div()
+                        .text_size(px(ty.ui_size_sm))
+                        .line_height(px(17.0))
+                        .text_color(c.muted)
+                        .child(t),
+                )
             })
-            .when_some(self.error, |d, e| d.child(div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(e)));
-        let control: Div = div().when(g.control_fixed, |d| d.flex_none()).when(g.stacked, |d| d.max_w_full()).child(self.control);
+            .when_some(self.error, |d, e| {
+                d.child(
+                    div()
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.error)
+                        .child(e),
+                )
+            });
+        let control: Div = div()
+            .when(g.control_fixed, |d| d.flex_none())
+            .when(g.stacked, |d| d.max_w_full())
+            .child(self.control);
         div()
             .flex()
             .w_full()

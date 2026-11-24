@@ -48,8 +48,14 @@ const ERROR_PIPE_NOT_CONNECTED: i32 = 233;
 
 /// Pipe path for `user` (`\\.\pipe\selachi-approvals-<user>`).
 pub fn pipe_path_for(user: &str) -> String {
-    let clean: String = user.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
-    format!(r"\\.\pipe\selachi-approvals-{}", if clean.is_empty() { "user" } else { &clean })
+    let clean: String = user
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    format!(
+        r"\\.\pipe\selachi-approvals-{}",
+        if clean.is_empty() { "user" } else { &clean }
+    )
 }
 
 /// Pipe path for the current user (`%USERNAME%`).
@@ -99,9 +105,20 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Pong { v: u32, accepts_approvals: bool },
-    ApprovalResponse { v: u32, request_id: String, decision: Decision, reason: Option<String> },
-    Error { v: u32, reason: String },
+    Pong {
+        v: u32,
+        accepts_approvals: bool,
+    },
+    ApprovalResponse {
+        v: u32,
+        request_id: String,
+        decision: Decision,
+        reason: Option<String>,
+    },
+    Error {
+        v: u32,
+        reason: String,
+    },
 }
 
 /// The answer the harness acts on.
@@ -116,7 +133,11 @@ pub struct Verdict {
 
 impl Verdict {
     pub fn deny(reason: impl Into<String>) -> Verdict {
-        Verdict { decision: Decision::Deny, reason: Some(reason.into()), forwarded: false }
+        Verdict {
+            decision: Decision::Deny,
+            reason: Some(reason.into()),
+            forwarded: false,
+        }
     }
 }
 
@@ -148,7 +169,10 @@ pub struct PipeBroker {
 
 impl PipeBroker {
     pub fn new(path: impl Into<String>) -> PipeBroker {
-        PipeBroker { path: path.into(), connect_timeout: Duration::from_secs(2) }
+        PipeBroker {
+            path: path.into(),
+            connect_timeout: Duration::from_secs(2),
+        }
     }
 
     /// The broker for the current user's pipe.
@@ -177,7 +201,9 @@ impl PipeBroker {
         })?;
         let mut line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
         line.push('\n');
-        file.write_all(line.as_bytes()).and_then(|()| file.flush()).map_err(|e| format!("writing to Selachi failed: {e}"))?;
+        file.write_all(line.as_bytes())
+            .and_then(|()| file.flush())
+            .map_err(|e| format!("writing to Selachi failed: {e}"))?;
         // Synchronous pipe handles cannot be read and cancelled: read on a helper thread and give up
         // on the timeout (the thread ends when the server closes or the process exits).
         let (tx, rx) = channel();
@@ -190,24 +216,39 @@ impl PipeBroker {
             })
             .map_err(|e| e.to_string())?;
         match rx.recv_timeout(wait) {
-            Ok(Ok(reply)) if !reply.trim().is_empty() => {
-                serde_json::from_str(reply.trim()).map_err(|e| format!("Selachi sent an unreadable reply: {e}"))
-            }
+            Ok(Ok(reply)) if !reply.trim().is_empty() => serde_json::from_str(reply.trim())
+                .map_err(|e| format!("Selachi sent an unreadable reply: {e}")),
             Ok(Ok(_)) => Err("Selachi closed the connection without answering".into()),
             // the server dropped the pipe instance before replying
-            Ok(Err(e)) if matches!(e.raw_os_error(), Some(ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED)) => {
+            Ok(Err(e))
+                if matches!(
+                    e.raw_os_error(),
+                    Some(ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED)
+                ) =>
+            {
                 Err("Selachi closed the connection without answering".into())
             }
             Ok(Err(e)) => Err(format!("reading from Selachi failed: {e}")),
-            Err(_) => Err(format!("the user did not answer within {} s", wait.as_secs())),
+            Err(_) => Err(format!(
+                "the user did not answer within {} s",
+                wait.as_secs()
+            )),
         }
     }
 
     /// Is a Selachi window serving approvals right now?
     pub fn ping(&self) -> bool {
         matches!(
-            self.round_trip(&ClientMessage::Ping { v: PROTOCOL_VERSION }, Duration::from_secs(2)),
-            Ok(ServerMessage::Pong { accepts_approvals: true, .. })
+            self.round_trip(
+                &ClientMessage::Ping {
+                    v: PROTOCOL_VERSION
+                },
+                Duration::from_secs(2)
+            ),
+            Ok(ServerMessage::Pong {
+                accepts_approvals: true,
+                ..
+            })
         )
     }
 }
@@ -216,17 +257,30 @@ impl ApprovalBroker for PipeBroker {
     fn decide(&self, req: &ApprovalRequest) -> Verdict {
         let wait = Duration::from_secs(req.timeout_secs.max(1));
         match self.round_trip(&ClientMessage::ApprovalRequest(req.clone()), wait) {
-            Ok(ServerMessage::ApprovalResponse { request_id, decision, reason, .. }) => {
+            Ok(ServerMessage::ApprovalResponse {
+                request_id,
+                decision,
+                reason,
+                ..
+            }) => {
                 if request_id != req.request_id {
                     return Verdict::deny(format!(
                         "Selachi answered a different request ({request_id}, expected {}); denied",
                         req.request_id
                     ));
                 }
-                Verdict { decision, reason: reason.filter(|_| decision == Decision::Deny), forwarded: true }
+                Verdict {
+                    decision,
+                    reason: reason.filter(|_| decision == Decision::Deny),
+                    forwarded: true,
+                }
             }
-            Ok(ServerMessage::Error { reason, .. }) => Verdict::deny(format!("Selachi refused the request: {reason}")),
-            Ok(ServerMessage::Pong { .. }) => Verdict::deny("Selachi answered with a pong instead of a decision; denied"),
+            Ok(ServerMessage::Error { reason, .. }) => {
+                Verdict::deny(format!("Selachi refused the request: {reason}"))
+            }
+            Ok(ServerMessage::Pong { .. }) => {
+                Verdict::deny("Selachi answered with a pong instead of a decision; denied")
+            }
             Err(reason) => Verdict::deny(reason),
         }
     }
@@ -239,7 +293,10 @@ mod tests {
     #[test]
     fn pipe_name_is_per_user_and_sanitized() {
         assert_eq!(pipe_path_for("venta"), r"\\.\pipe\selachi-approvals-venta");
-        assert_eq!(pipe_path_for(r"DOM\us er!"), r"\\.\pipe\selachi-approvals-DOMuser");
+        assert_eq!(
+            pipe_path_for(r"DOM\us er!"),
+            r"\\.\pipe\selachi-approvals-DOMuser"
+        );
         assert_eq!(pipe_path_for(""), r"\\.\pipe\selachi-approvals-user");
     }
 
@@ -265,12 +322,20 @@ mod tests {
         let back: ClientMessage = serde_json::from_value(json).unwrap();
         assert_eq!(back, ClientMessage::ApprovalRequest(req));
 
-        assert_eq!(serde_json::to_string(&ClientMessage::Ping { v: 1 }).unwrap(), r#"{"type":"ping","v":1}"#);
+        assert_eq!(
+            serde_json::to_string(&ClientMessage::Ping { v: 1 }).unwrap(),
+            r#"{"type":"ping","v":1}"#
+        );
         let r: ServerMessage =
             serde_json::from_str(r#"{"type":"approval_response","v":1,"request_id":"a","decision":"always","reason":null}"#).unwrap();
         assert_eq!(
             r,
-            ServerMessage::ApprovalResponse { v: 1, request_id: "a".into(), decision: Decision::Always, reason: None }
+            ServerMessage::ApprovalResponse {
+                v: 1,
+                request_id: "a".into(),
+                decision: Decision::Always,
+                reason: None
+            }
         );
     }
 

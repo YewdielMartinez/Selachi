@@ -97,19 +97,44 @@ impl Tree {
         c
     }
     fn cfg(&self) -> IngestConfig {
-        IngestConfig { antigravity_data: Some(self.gemini.clone()), ..Default::default() }
+        IngestConfig {
+            antigravity_data: Some(self.gemini.clone()),
+            ..Default::default()
+        }
     }
 }
 
 fn add_gen(c: &Connection, idx: i64, model: &str, u: [u64; 6], ts: u64) {
-    c.execute("INSERT INTO gen_metadata(idx, data) VALUES (?1, ?2)", params![idx, gen_blob(model, u)]).unwrap();
+    c.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES (?1, ?2)",
+        params![idx, gen_blob(model, u)],
+    )
+    .unwrap();
     // a plain step first, then the model-response step carrying the same usage and the time
-    c.execute("INSERT INTO steps(idx, metadata) VALUES (?1, ?2)", params![idx * 2, step_blob(ts - 1, None)]).unwrap();
-    c.execute("INSERT INTO steps(idx, metadata) VALUES (?1, ?2)", params![idx * 2 + 1, step_blob(ts, Some(u))]).unwrap();
+    c.execute(
+        "INSERT INTO steps(idx, metadata) VALUES (?1, ?2)",
+        params![idx * 2, step_blob(ts - 1, None)],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO steps(idx, metadata) VALUES (?1, ?2)",
+        params![idx * 2 + 1, step_blob(ts, Some(u))],
+    )
+    .unwrap();
 }
 
 /// `agent, model, ts, input, output, cache_read, reasoning, cwd, reported_cost`
-type Row = (String, String, i64, i64, i64, i64, i64, Option<String>, Option<f64>);
+type Row = (
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    Option<f64>,
+);
 
 const T0: u64 = 1_795_000_000;
 const A: [u64; 6] = [1401, 11_276, 221, 8_401, 0, 221];
@@ -148,9 +173,15 @@ fn ingests_generations_with_model_time_cwd_and_no_cost() {
         .collect();
     assert_eq!(rows.len(), 2);
     let (agent, model, ts, input, output, cache_read, reasoning, cwd, cost) = rows[1].clone();
-    assert_eq!((agent.as_str(), model.as_str()), ("antigravity", "claude-opus-5-5-medium"));
+    assert_eq!(
+        (agent.as_str(), model.as_str()),
+        ("antigravity", "claude-opus-5-5-medium")
+    );
     assert_eq!(ts, (T0 as i64 + 60) * 1000);
-    assert_eq!((input, output, cache_read, reasoning), (1_965, 1_830, 18_459, 803));
+    assert_eq!(
+        (input, output, cache_read, reasoning),
+        (1_965, 1_830, 18_459, 803)
+    );
     assert_eq!(cwd.as_deref(), Some("c:/work/my proj"));
     assert_eq!(cost, None, "Antigravity reports no cost");
 
@@ -172,21 +203,51 @@ fn second_scan_is_incremental_and_picks_up_appended_generations() {
     assert_eq!(ing.scan().unwrap().events_inserted, 1);
 
     let r = ing.scan().unwrap();
-    assert_eq!((r.files_unchanged, r.files_scanned, r.events_inserted), (1, 0, 0), "unchanged db is skipped");
+    assert_eq!(
+        (r.files_unchanged, r.files_scanned, r.events_inserted),
+        (1, 0, 0),
+        "unchanged db is skipped"
+    );
 
     add_gen(&c, 1, "gemini-4-argon", B, T0 + 5);
     let r = ing.scan().unwrap();
     assert_eq!(r.files_scanned, 1);
     assert_eq!(r.events_inserted, 1, "only the new generation is new");
-    assert_eq!(r.duplicates_skipped, 1, "the boundary generation is re-read idempotently");
-    let n: i64 = ing.store().conn().query_row("SELECT count(*) FROM usage_events WHERE agent='antigravity'", [], |r| r.get(0)).unwrap();
+    assert_eq!(
+        r.duplicates_skipped, 1,
+        "the boundary generation is re-read idempotently"
+    );
+    let n: i64 = ing
+        .store()
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM usage_events WHERE agent='antigravity'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(n, 2);
 
     // a generation rewritten in place (streaming) is replaced, not duplicated
-    c.execute("UPDATE gen_metadata SET data = ?1 WHERE idx = 1", params![gen_blob("gemini-4-argon", [1401, 1_965, 2_500, 18_459, 803, 1_697])]).unwrap();
+    c.execute(
+        "UPDATE gen_metadata SET data = ?1 WHERE idx = 1",
+        params![gen_blob(
+            "gemini-4-argon",
+            [1401, 1_965, 2_500, 18_459, 803, 1_697]
+        )],
+    )
+    .unwrap();
     let r = ing.scan().unwrap();
     assert_eq!(r.events_updated, 1);
-    let out: i64 = ing.store().conn().query_row("SELECT output FROM usage_events WHERE msg_key LIKE '%conv-2:1'", [], |r| r.get(0)).unwrap();
+    let out: i64 = ing
+        .store()
+        .conn()
+        .query_row(
+            "SELECT output FROM usage_events WHERE msg_key LIKE '%conv-2:1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(out, 2_500);
 }
 
@@ -196,18 +257,32 @@ fn unnamed_models_and_zero_rows_and_foreign_schemas_are_handled() {
     let t = Tree::new(tmp.path(), "antigravity-cli");
     let c = t.conv("conv-3");
     // no model name -> enum label; all-zero row -> skipped; undecodable row -> skipped
-    c.execute("INSERT INTO gen_metadata(idx, data) VALUES (0, ?1)", params![{
-        let mut g = vec![];
-        f_bytes(4, &usage(A), &mut g);
-        let mut top = vec![];
-        f_bytes(1, &g, &mut top);
-        top
-    }]).unwrap();
-    c.execute("INSERT INTO gen_metadata(idx, data) VALUES (1, ?1)", params![gen_blob("m", [1, 0, 0, 0, 0, 0])]).unwrap();
-    c.execute("INSERT INTO gen_metadata(idx, data) VALUES (2, ?1)", params![vec![0xffu8, 0xff, 0xff]]).unwrap();
+    c.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES (0, ?1)",
+        params![{
+            let mut g = vec![];
+            f_bytes(4, &usage(A), &mut g);
+            let mut top = vec![];
+            f_bytes(1, &g, &mut top);
+            top
+        }],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES (1, ?1)",
+        params![gen_blob("m", [1, 0, 0, 0, 0, 0])],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES (2, ?1)",
+        params![vec![0xffu8, 0xff, 0xff]],
+    )
+    .unwrap();
     // a database from another product / version: error for that file only
     let other = Connection::open(t.db("foreign")).unwrap();
-    other.execute_batch("CREATE TABLE message (id text)").unwrap();
+    other
+        .execute_batch("CREATE TABLE message (id text)")
+        .unwrap();
     drop(other);
     drop(c);
     let mut ing = ingestor(tmp.path(), t.cfg());
@@ -216,10 +291,18 @@ fn unnamed_models_and_zero_rows_and_foreign_schemas_are_handled() {
     assert_eq!(rep.synthetic_skipped, 2);
     assert_eq!(rep.errors.len(), 1, "{:?}", rep.errors);
     assert!(rep.errors[0].contains("foreign"));
-    let m: String = ing.store().conn().query_row("SELECT model FROM usage_events", [], |r| r.get(0)).unwrap();
+    let m: String = ing
+        .store()
+        .conn()
+        .query_row("SELECT model FROM usage_events", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(m, "antigravity-model-1401");
     // time unknown anywhere -> the database's mtime, never 0
-    let ts: i64 = ing.store().conn().query_row("SELECT ts FROM usage_events", [], |r| r.get(0)).unwrap();
+    let ts: i64 = ing
+        .store()
+        .conn()
+        .query_row("SELECT ts FROM usage_events", [], |r| r.get(0))
+        .unwrap();
     assert!(ts > 1_700_000_000_000);
 }
 
@@ -237,16 +320,27 @@ fn watch_dirs_classify_and_scan_paths_cover_antigravity() {
     let mut wal = db.clone().into_os_string();
     wal.push("-wal");
     assert_eq!(cfg.classify(&db), Some(SourceKind::AntigravityDb));
-    assert_eq!(cfg.classify(&PathBuf::from(&wal)), Some(SourceKind::AntigravityDb));
+    assert_eq!(
+        cfg.classify(&PathBuf::from(&wal)),
+        Some(SourceKind::AntigravityDb)
+    );
     assert_eq!(cfg.classify(&t.app.join("conversation_summaries.db")), None);
-    assert_eq!(cfg.classify(&t.app.join("conversations").join("x.pb")), None);
+    assert_eq!(
+        cfg.classify(&t.app.join("conversations").join("x.pb")),
+        None
+    );
 
     let mut ing = ingestor(tmp.path(), cfg);
     // a -wal event resolves to the database; the same db twice is read once
-    let rep = ing.scan_paths(&[PathBuf::from(&wal), db, tmp.path().join("nothing.db")]).unwrap();
+    let rep = ing
+        .scan_paths(&[PathBuf::from(&wal), db, tmp.path().join("nothing.db")])
+        .unwrap();
     assert_eq!((rep.antigravity_files, rep.events_inserted), (1, 1));
     // absent directory: no watch entry, no scan error
-    let none = IngestConfig { antigravity_data: Some(tmp.path().join("missing")), ..Default::default() };
+    let none = IngestConfig {
+        antigravity_data: Some(tmp.path().join("missing")),
+        ..Default::default()
+    };
     assert!(none.watch_dirs().is_empty());
     assert!(ingestor(tmp.path(), none).scan().unwrap().errors.is_empty());
 }
@@ -289,7 +383,18 @@ fn live_scan_of_the_real_gemini_dir() {
     eprintln!("models: {models:?}");
     let t = std::time::Instant::now();
     let again = ing.scan().unwrap();
-    eprintln!("second scan {:?}: scanned {} unchanged {} inserted {}", t.elapsed(), again.files_scanned, again.files_unchanged, again.events_inserted);
+    eprintln!(
+        "second scan {:?}: scanned {} unchanged {} inserted {}",
+        t.elapsed(),
+        again.files_scanned,
+        again.files_unchanged,
+        again.events_inserted
+    );
     // an IDE may be writing right now, so only unrelated failures are asserted
-    assert!(rep.errors.is_empty() && again.errors.is_empty(), "{:?} {:?}", rep.errors, again.errors);
+    assert!(
+        rep.errors.is_empty() && again.errors.is_empty(),
+        "{:?} {:?}",
+        rep.errors,
+        again.errors
+    );
 }

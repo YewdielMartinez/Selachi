@@ -374,14 +374,18 @@ pub struct TitlebarLayout {
 impl Default for TitlebarLayout {
     /// Only the layout popover button: the classic presets keep their rail for the panels.
     fn default() -> Self {
-        Self { panel_buttons: vec![PanelId::new(panel_ids::LAYOUT)] }
+        Self {
+            panel_buttons: vec![PanelId::new(panel_ids::LAYOUT)],
+        }
     }
 }
 
 impl TitlebarLayout {
     /// Every button of [`DEFAULT_TITLEBAR_BUTTONS`] (the unified preset).
     pub fn all_buttons() -> Self {
-        Self { panel_buttons: DEFAULT_TITLEBAR_BUTTONS.iter().map(PanelId::new).collect() }
+        Self {
+            panel_buttons: DEFAULT_TITLEBAR_BUTTONS.iter().map(PanelId::new).collect(),
+        }
     }
 
     pub fn has(&self, id: &str) -> bool {
@@ -539,7 +543,10 @@ impl ResolvedLayout {
                 continue;
             }
             if buttons.contains(b) {
-                w.push(format!("titlebar.panel_buttons lists \"{}\" more than once; keeping the first", b.as_str()));
+                w.push(format!(
+                    "titlebar.panel_buttons lists \"{}\" more than once; keeping the first",
+                    b.as_str()
+                ));
             } else {
                 buttons.push(b.clone());
             }
@@ -707,7 +714,11 @@ impl LayoutOverrides {
                 }
             }
         }
-        if let Some(v) = self.titlebar.as_ref().and_then(|t| t.panel_buttons.as_ref()) {
+        if let Some(v) = self
+            .titlebar
+            .as_ref()
+            .and_then(|t| t.panel_buttons.as_ref())
+        {
             layout.titlebar.panel_buttons = v.clone();
         }
         if let Some(v) = self.rail {
@@ -1895,13 +1906,27 @@ path = ""
         let s = &u.sidebar;
         assert!(s.show_actions && !s.panel_icons && s.nested_tabs && s.footer_usage);
         assert!(s.row_model && s.row_time);
-        let ids: Vec<&str> = u.titlebar.panel_buttons.iter().map(PanelId::as_str).collect();
+        let ids: Vec<&str> = u
+            .titlebar
+            .panel_buttons
+            .iter()
+            .map(PanelId::as_str)
+            .collect();
         assert_eq!(ids, DEFAULT_TITLEBAR_BUTTONS);
         let mut n = u.clone();
         assert!(n.normalize().is_empty());
-        assert_eq!(BuiltinPreset::from_id("ESPACIOS_UNIFICADOS"), Some(BuiltinPreset::EspaciosUnificados));
+        assert_eq!(
+            BuiltinPreset::from_id("ESPACIOS_UNIFICADOS"),
+            Some(BuiltinPreset::EspaciosUnificados)
+        );
         // The classic presets keep the old chrome.
-        for b in [BuiltinPreset::Terminal, BuiltinPreset::Espacios, BuiltinPreset::Orquestador, BuiltinPreset::Chat, BuiltinPreset::Zen] {
+        for b in [
+            BuiltinPreset::Terminal,
+            BuiltinPreset::Espacios,
+            BuiltinPreset::Orquestador,
+            BuiltinPreset::Chat,
+            BuiltinPreset::Zen,
+        ] {
             let l = ResolvedLayout::builtin(b);
             assert!(!l.sidebar.nested_tabs && !l.sidebar.show_actions, "{b:?}");
             assert_eq!(l.titlebar.panel_buttons, vec![PanelId::new("layout")]);
@@ -1932,7 +1957,11 @@ path = ""
             o.titlebar.as_ref().unwrap().panel_buttons,
             Some(vec![PanelId::new("git"), PanelId::new("layout")])
         );
-        let text = toml::to_string(&Config { layout: c.clone(), ..Config::default() }).unwrap();
+        let text = toml::to_string(&Config {
+            layout: c.clone(),
+            ..Config::default()
+        })
+        .unwrap();
         assert!(text.contains("footer_usage = false"), "{text}");
         assert!(text.contains("panel_buttons"), "{text}");
         assert_eq!(Config::parse(&text).unwrap().config.layout, c);
@@ -1951,7 +1980,8 @@ path = ""
         assert!(!c.agents.oauth_usage_endpoint);
         assert_eq!(c.git.worktrees, WorktreeLocation::Beside);
         assert_eq!(c.plugins.effective_index_url(), DEFAULT_PLUGIN_INDEX_URL);
-        assert!(DEFAULT_PLUGIN_INDEX_URL.starts_with("https://github.com/YewdielMartinez/Selachi/releases/"));
+        assert!(DEFAULT_PLUGIN_INDEX_URL
+            .starts_with("https://github.com/YewdielMartinez/Selachi/releases/"));
         assert!(!DEFAULT_PLUGIN_INDEX_URL.contains("OWNER"));
         let p = Config::parse(
             "[general]
@@ -1971,12 +2001,28 @@ oauth_usage_endpoint = true
         assert!(!p.config.general.confirm_close_running);
         assert_eq!(p.config.git.external_editor, "code -g");
         assert_eq!(p.config.git.worktrees, WorktreeLocation::Inside);
-        assert_eq!(p.config.plugins.effective_index_url(), "https://x.test/g.toml");
+        assert_eq!(
+            p.config.plugins.effective_index_url(),
+            "https://x.test/g.toml"
+        );
         assert!(p.config.agents.oauth_usage_endpoint);
         let custom = Config::parse("[git]\nworktrees = 'D:\\wt'").unwrap().config;
-        assert_eq!(custom.git.worktrees, WorktreeLocation::Custom(r"D:\wt".into()));
+        assert_eq!(
+            custom.git.worktrees,
+            WorktreeLocation::Custom(r"D:\wt".into())
+        );
         assert!(Config::parse("[plugins]\nindex_url = \"http://insecure\"").is_err());
-        let text = toml::to_string(&Config { git: GitConfig { worktrees: custom.git.worktrees.clone(), ..GitConfig::default() }, ..Config::default() }).unwrap();
-        assert_eq!(Config::parse(&text).unwrap().config.git.worktrees, custom.git.worktrees);
+        let text = toml::to_string(&Config {
+            git: GitConfig {
+                worktrees: custom.git.worktrees.clone(),
+                ..GitConfig::default()
+            },
+            ..Config::default()
+        })
+        .unwrap();
+        assert_eq!(
+            Config::parse(&text).unwrap().config.git.worktrees,
+            custom.git.worktrees
+        );
     }
 }

@@ -13,20 +13,28 @@ use panel_api::{TabIcon, TabInfo};
 use store::{BuiltinPreset, NewCommand, NewSnippet, PresetId, StateDb};
 use ui_kit::Icon;
 use ui_palette::{
-    ActionEntry, Cancel, Confirmed, Effect, ItemAction, Latency, LayoutRow, PaletteEvent, PaletteItem, PaletteModel,
-    PaletteSource, Query, Results, Scope, Section, SourceCtx, SourceQuery, plan, run_blocking, run_source,
-    standard_sources,
+    ActionEntry, Cancel, Confirmed, Effect, ItemAction, Latency, LayoutRow, PaletteEvent,
+    PaletteItem, PaletteModel, PaletteSource, Query, Results, Scope, Section, SourceCtx,
+    SourceQuery, plan, run_blocking, run_source, standard_sources,
 };
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
 }
 
 fn actions() -> Vec<ActionEntry> {
     vec![
-        ActionEntry::new("tab.new", "Nueva pestaña").shortcut("Ctrl+T").icon(Icon::Plus).keywords("crear terminal"),
+        ActionEntry::new("tab.new", "Nueva pestaña")
+            .shortcut("Ctrl+T")
+            .icon(Icon::Plus)
+            .keywords("crear terminal"),
         ActionEntry::new("tab.close", "Cerrar pestaña").shortcut("Ctrl+W"),
-        ActionEntry::new("layout.toggle", "Abrir panel de diseño").shortcut("Ctrl+Shift+L").icon(Icon::Layout),
+        ActionEntry::new("layout.toggle", "Abrir panel de diseño")
+            .shortcut("Ctrl+Shift+L")
+            .icon(Icon::Layout),
         ActionEntry::new("settings.open", "Ajustes").icon(Icon::Settings),
     ]
 }
@@ -44,7 +52,12 @@ fn db() -> (tempfile::TempDir, StateDb) {
 }
 
 fn ctx() -> SourceCtx {
-    SourceCtx { cwd: Some(repo_root()), project_root: Some(repo_root()), tabs: tabs(), active_tab: None }
+    SourceCtx {
+        cwd: Some(repo_root()),
+        project_root: Some(repo_root()),
+        tabs: tabs(),
+        active_tab: None,
+    }
 }
 
 fn titles(model: &PaletteModel) -> Vec<String> {
@@ -79,7 +92,11 @@ fn select(model: &mut PaletteModel, title: &str) {
 }
 
 fn meta(m: &PaletteModel) -> Option<String> {
-    m.selected_item().unwrap().meta.as_ref().map(|s| s.to_string())
+    m.selected_item()
+        .unwrap()
+        .meta
+        .as_ref()
+        .map(|s| s.to_string())
 }
 
 fn standard(db: &StateDb) -> Vec<Arc<dyn PaletteSource>> {
@@ -93,7 +110,10 @@ fn prefixes_route_to_their_sources_only() {
     let (_d, db) = db();
     let sources = standard(&db);
     let ids = |raw: &str| -> Vec<&'static str> {
-        let mut v: Vec<_> = plan(&sources, &Query::parse(raw)).iter().map(|(s, _)| s.id()).collect();
+        let mut v: Vec<_> = plan(&sources, &Query::parse(raw))
+            .iter()
+            .map(|(s, _)| s.id())
+            .collect();
         v.sort_unstable();
         v
     };
@@ -112,7 +132,8 @@ fn prefixes_route_to_their_sources_only() {
 #[test]
 fn scoped_results_only_contain_that_scope() {
     let (_d, db) = db();
-    db.record_command(NewCommand::new("git status", repo_root().to_string_lossy())).unwrap();
+    db.record_command(NewCommand::new("git status", repo_root().to_string_lossy()))
+        .unwrap();
     db.flush().unwrap();
     let sources = standard(&db);
 
@@ -135,7 +156,10 @@ fn actions_scope_includes_git_and_layout_presets() {
     let sources = standard(&db);
     let m = run_blocking(&sources, ">", &ctx());
     let h = headers(&m);
-    assert!(h.contains(&"Acciones") && h.contains(&"Git") && h.contains(&"Diseño"), "{h:?}");
+    assert!(
+        h.contains(&"Acciones") && h.contains(&"Git") && h.contains(&"Diseño"),
+        "{h:?}"
+    );
     assert!(titles(&m).contains(&"Diseño: Mi flujo".to_string()));
 }
 
@@ -146,24 +170,38 @@ fn actions_emit_the_action_id() {
     let (_d, db) = db();
     let mut m = run_blocking(&standard(&db), ">cerrar", &ctx());
     assert_eq!(titles(&m)[0], "Cerrar pestaña");
-    assert_eq!(m.confirm(false), Confirmed::Emit(PaletteEvent::Action("tab.close".into()), None));
+    assert_eq!(
+        m.confirm(false),
+        Confirmed::Emit(PaletteEvent::Action("tab.close".into()), None)
+    );
     assert_eq!(meta(&m).as_deref(), Some("Ctrl+W"));
 }
 
 #[test]
 fn history_runs_with_enter_and_inserts_with_ctrl_enter() {
     let (_d, db) = db();
-    db.record_command(NewCommand::new("cargo test -p store", repo_root().to_string_lossy())).unwrap();
+    db.record_command(NewCommand::new(
+        "cargo test -p store",
+        repo_root().to_string_lossy(),
+    ))
+    .unwrap();
     db.flush().unwrap();
     let mut m = run_blocking(&standard(&db), "#cargo test", &ctx());
     assert_eq!(
         m.confirm(false),
         Confirmed::Emit(
-            PaletteEvent::RunCommand { line: "cargo test -p store".into(), cwd: Some(repo_root()), new_tab: false },
+            PaletteEvent::RunCommand {
+                line: "cargo test -p store".into(),
+                cwd: Some(repo_root()),
+                new_tab: false
+            },
             None
         )
     );
-    assert_eq!(m.confirm(true), Confirmed::Emit(PaletteEvent::InsertText("cargo test -p store".into()), None));
+    assert_eq!(
+        m.confirm(true),
+        Confirmed::Emit(PaletteEvent::InsertText("cargo test -p store".into()), None)
+    );
 }
 
 #[test]
@@ -175,11 +213,25 @@ fn projects_open_in_new_tab_or_here() {
     let mut m = run_blocking(&standard(&db), "@terminal", &ctx());
     let name = titles(&m)[0].clone();
     assert_eq!(name, "Terminal");
-    let effect = Some(Effect::PathOpened(root.to_string_lossy().trim_start_matches(r"\\?\").to_string()));
-    let Confirmed::Emit(ev, eff) = m.confirm(false) else { panic!("expected emit") };
-    assert!(matches!(ev, PaletteEvent::OpenPath { new_tab: true, .. }), "{ev:?}");
-    assert!(matches!(eff, Some(Effect::PathOpened(_))), "{eff:?} vs {effect:?}");
-    let Confirmed::Emit(ev, _) = m.confirm(true) else { panic!("expected emit") };
+    let effect = Some(Effect::PathOpened(
+        root.to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_string(),
+    ));
+    let Confirmed::Emit(ev, eff) = m.confirm(false) else {
+        panic!("expected emit")
+    };
+    assert!(
+        matches!(ev, PaletteEvent::OpenPath { new_tab: true, .. }),
+        "{ev:?}"
+    );
+    assert!(
+        matches!(eff, Some(Effect::PathOpened(_))),
+        "{eff:?} vs {effect:?}"
+    );
+    let Confirmed::Emit(ev, _) = m.confirm(true) else {
+        panic!("expected emit")
+    };
     assert!(matches!(ev, PaletteEvent::OpenPath { new_tab: false, .. }));
 }
 
@@ -189,11 +241,15 @@ fn tasks_of_this_repo_run_in_new_or_current_tab() {
     let mut m = run_blocking(&standard(&db), "!cargo build", &ctx());
     assert_eq!(headers(&m), ["Tareas"]);
     let item = m.selected_item().unwrap().clone();
-    let PaletteEvent::RunCommand { line, new_tab, cwd } = emitted(&item.primary) else { panic!() };
+    let PaletteEvent::RunCommand { line, new_tab, cwd } = emitted(&item.primary) else {
+        panic!()
+    };
     assert!(line.contains("cargo") && line.contains("build"), "{line}");
     assert!(new_tab);
     assert!(cwd.is_some());
-    let Confirmed::Emit(PaletteEvent::RunCommand { new_tab, .. }, _) = m.confirm(true) else { panic!() };
+    let Confirmed::Emit(PaletteEvent::RunCommand { new_tab, .. }, _) = m.confirm(true) else {
+        panic!()
+    };
     assert!(!new_tab);
 }
 
@@ -209,14 +265,29 @@ fn presets_and_sensitive_git_actions() {
     let (_d, db) = db();
     let mut m = run_blocking(&standard(&db), ">diseño zen", &ctx());
     assert_eq!(titles(&m)[0], "Diseño: Zen");
-    assert_eq!(m.confirm(false), Confirmed::Emit(PaletteEvent::ApplyPreset(PresetId::Builtin(BuiltinPreset::Zen)), None));
+    assert_eq!(
+        m.confirm(false),
+        Confirmed::Emit(
+            PaletteEvent::ApplyPreset(PresetId::Builtin(BuiltinPreset::Zen)),
+            None
+        )
+    );
     let mut m = run_blocking(&standard(&db), ">mi flujo", &ctx());
-    assert_eq!(m.confirm(false), Confirmed::Emit(PaletteEvent::ApplyPreset(PresetId::Custom("Mi flujo".into())), None));
+    assert_eq!(
+        m.confirm(false),
+        Confirmed::Emit(
+            PaletteEvent::ApplyPreset(PresetId::Custom("Mi flujo".into())),
+            None
+        )
+    );
 
     let mut m = run_blocking(&standard(&db), ">git push", &ctx());
     select(&mut m, "Git: push");
     assert_eq!(meta(&m).as_deref(), Some("requiere confirmación"));
-    assert_eq!(m.confirm(false), Confirmed::Emit(PaletteEvent::GitAction(GitAction::Push), None));
+    assert_eq!(
+        m.confirm(false),
+        Confirmed::Emit(PaletteEvent::GitAction(GitAction::Push), None)
+    );
     // Read-only actions are not flagged.
     let mut m = run_blocking(&standard(&db), ">git status", &ctx());
     select(&mut m, "Git: estado");
@@ -228,7 +299,12 @@ fn presets_and_sensitive_git_actions() {
 fn git_is_hidden_outside_a_repository() {
     let (_d, db) = db();
     let outside = tempfile::tempdir().unwrap();
-    let c = SourceCtx { cwd: Some(outside.path().into()), project_root: None, tabs: vec![], active_tab: None };
+    let c = SourceCtx {
+        cwd: Some(outside.path().into()),
+        project_root: None,
+        tabs: vec![],
+        active_tab: None,
+    };
     let m = run_blocking(&standard(&db), ">git", &c);
     assert!(!headers(&m).contains(&"Git"));
 }
@@ -238,13 +314,20 @@ fn git_is_hidden_outside_a_repository() {
 #[test]
 fn snippet_without_params_inserts_or_runs_and_records_use() {
     let (_d, db) = db();
-    let id = db.add_snippet(NewSnippet::new("Estado corto", "git status -sb")).unwrap();
+    let id = db
+        .add_snippet(NewSnippet::new("Estado corto", "git status -sb"))
+        .unwrap();
     let mut m = run_blocking(&standard(&db), "$estado corto", &ctx());
     assert_eq!(
         m.confirm(false),
-        Confirmed::Emit(PaletteEvent::InsertText("git status -sb".into()), Some(Effect::SnippetUsed(id)))
+        Confirmed::Emit(
+            PaletteEvent::InsertText("git status -sb".into()),
+            Some(Effect::SnippetUsed(id))
+        )
     );
-    let Confirmed::Emit(PaletteEvent::RunCommand { line, .. }, Some(Effect::SnippetUsed(i))) = m.confirm(true) else {
+    let Confirmed::Emit(PaletteEvent::RunCommand { line, .. }, Some(Effect::SnippetUsed(i))) =
+        m.confirm(true)
+    else {
         panic!()
     };
     assert_eq!((line.as_str(), i), ("git status -sb", id));
@@ -260,13 +343,37 @@ fn snippet_with_params_opens_the_form_then_emits_quoted_text() {
 
     // Required value missing.
     assert_eq!(m.confirm(false), Confirmed::FormInvalid);
-    assert_eq!(m.form.as_ref().unwrap().error.as_deref(), Some("Falta «nombre»"));
+    assert_eq!(
+        m.form.as_ref().unwrap().error.as_deref(),
+        Some("Falta «nombre»")
+    );
 
-    m.form.as_mut().unwrap().set_active_value("Agregar usuarios");
-    assert_eq!(m.form.as_ref().unwrap().preview().unwrap(), "dotnet ef migrations add 'Agregar usuarios'");
-    let Confirmed::Emit(ev, Some(Effect::SnippetUsed(_))) = m.confirm(false) else { panic!() };
-    assert_eq!(ev, PaletteEvent::InsertText("dotnet ef migrations add 'Agregar usuarios'".into()));
-    let Confirmed::Emit(PaletteEvent::RunCommand { line, new_tab: false, .. }, _) = m.confirm(true) else { panic!() };
+    m.form
+        .as_mut()
+        .unwrap()
+        .set_active_value("Agregar usuarios");
+    assert_eq!(
+        m.form.as_ref().unwrap().preview().unwrap(),
+        "dotnet ef migrations add 'Agregar usuarios'"
+    );
+    let Confirmed::Emit(ev, Some(Effect::SnippetUsed(_))) = m.confirm(false) else {
+        panic!()
+    };
+    assert_eq!(
+        ev,
+        PaletteEvent::InsertText("dotnet ef migrations add 'Agregar usuarios'".into())
+    );
+    let Confirmed::Emit(
+        PaletteEvent::RunCommand {
+            line,
+            new_tab: false,
+            ..
+        },
+        _,
+    ) = m.confirm(true)
+    else {
+        panic!()
+    };
     assert_eq!(line, "dotnet ef migrations add 'Agregar usuarios'");
 
     // Esc: back to the list.
@@ -277,7 +384,11 @@ fn snippet_with_params_opens_the_form_then_emits_quoted_text() {
 #[test]
 fn snippet_with_defaults_and_choices_walks_the_fields_with_enter() {
     let (_d, db) = db();
-    db.add_snippet(NewSnippet::new("Compilar", "dotnet build -c {cfg|Debug|Release} -v {v:minimal}")).unwrap();
+    db.add_snippet(NewSnippet::new(
+        "Compilar",
+        "dotnet build -c {cfg|Debug|Release} -v {v:minimal}",
+    ))
+    .unwrap();
     let mut m = run_blocking(&standard(&db), "$compilar", &ctx());
     assert_eq!(m.confirm(false), Confirmed::FormOpened);
     {
@@ -287,8 +398,13 @@ fn snippet_with_defaults_and_choices_walks_the_fields_with_enter() {
     }
     // Enter on the first field moves on, on the last field it submits.
     assert_eq!(m.confirm(false), Confirmed::NextField);
-    let Confirmed::Emit(ev, _) = m.confirm(false) else { panic!() };
-    assert_eq!(ev, PaletteEvent::InsertText("dotnet build -c Release -v minimal".into()));
+    let Confirmed::Emit(ev, _) = m.confirm(false) else {
+        panic!()
+    };
+    assert_eq!(
+        ev,
+        PaletteEvent::InsertText("dotnet build -c Release -v minimal".into())
+    );
 }
 
 #[test]
@@ -302,7 +418,12 @@ fn git_commit_asks_for_a_message_through_the_same_form() {
     m.form.as_mut().unwrap().set_active_value("fix: palette");
     assert_eq!(
         m.confirm(false),
-        Confirmed::Emit(PaletteEvent::GitAction(GitAction::Commit { message: "fix: palette".into() }), None)
+        Confirmed::Emit(
+            PaletteEvent::GitAction(GitAction::Commit {
+                message: "fix: palette".into()
+            }),
+            None
+        )
     );
 }
 
@@ -311,19 +432,29 @@ fn git_commit_asks_for_a_message_through_the_same_form() {
 #[test]
 fn empty_query_orders_sections_by_declared_order_and_hides_git() {
     let (_d, db) = db();
-    db.record_command(NewCommand::new("ls", repo_root().to_string_lossy())).unwrap();
+    db.record_command(NewCommand::new("ls", repo_root().to_string_lossy()))
+        .unwrap();
     db.flush().unwrap();
     let m = run_blocking(&standard(&db), "", &ctx());
     let h = headers(&m);
     let pos = |n| h.iter().position(|x| *x == n);
-    assert!(pos("Acciones") < pos("Tareas") && pos("Tareas") < pos("Snippets") && pos("Snippets") < pos("Historial"), "{h:?}");
+    assert!(
+        pos("Acciones") < pos("Tareas")
+            && pos("Tareas") < pos("Snippets")
+            && pos("Snippets") < pos("Historial"),
+        "{h:?}"
+    );
     assert!(!h.contains(&"Git"));
 }
 
 #[test]
 fn typed_query_ranks_the_best_section_first_and_history_below_equals() {
     let (_d, db) = db();
-    db.record_command(NewCommand::new("nueva pestana", repo_root().to_string_lossy())).unwrap();
+    db.record_command(NewCommand::new(
+        "nueva pestana",
+        repo_root().to_string_lossy(),
+    ))
+    .unwrap();
     db.flush().unwrap();
     let m = run_blocking(&standard(&db), "nueva pestaña", &ctx());
     let h = headers(&m);
@@ -338,7 +469,10 @@ fn selection_wraps_pages_and_survives_late_results() {
     assert!(n > 8);
     assert_eq!(m.selected_row(), Some(1), "first item is under the header");
     m.move_selection(-1);
-    assert_eq!(m.selected_row(), m.rows.iter().rposition(|r| matches!(r, LayoutRow::Item(_))));
+    assert_eq!(
+        m.selected_row(),
+        m.rows.iter().rposition(|r| matches!(r, LayoutRow::Item(_)))
+    );
     m.move_selection(1);
     m.page_selection(1000);
     assert_eq!(m.selected_item().unwrap().key, last_key(&m));
@@ -379,8 +513,12 @@ fn last_key(m: &PaletteModel) -> String {
 }
 
 fn item(key: &str, title: &str, score: f32) -> PaletteItem {
-    PaletteItem::new(key, title.to_string(), ItemAction::emit("Ir", PaletteEvent::Action(key.to_string().into())))
-        .score(score)
+    PaletteItem::new(
+        key,
+        title.to_string(),
+        ItemAction::emit("Ir", PaletteEvent::Action(key.to_string().into())),
+    )
+    .score(score)
 }
 
 #[test]
@@ -399,11 +537,38 @@ fn tab_rows_are_built_from_the_snapshot_with_status() {
 fn results_of_an_older_generation_are_dropped() {
     let mut r = Results::default();
     r.begin(1, |_| true);
-    assert!(r.push(1, Section { id: "a", title: "A", order: 0, weight: 0.0, items: vec![item("a1", "uno", 1.0)] }));
+    assert!(r.push(
+        1,
+        Section {
+            id: "a",
+            title: "A",
+            order: 0,
+            weight: 0.0,
+            items: vec![item("a1", "uno", 1.0)]
+        }
+    ));
     r.begin(2, |_| true);
     // A late answer to query 1 must not overwrite or add anything.
-    assert!(!r.push(1, Section { id: "a", title: "A", order: 0, weight: 0.0, items: vec![item("a9", "viejo", 1.0)] }));
-    assert!(!r.push(1, Section { id: "b", title: "B", order: 1, weight: 0.0, items: vec![item("b1", "viejo", 1.0)] }));
+    assert!(!r.push(
+        1,
+        Section {
+            id: "a",
+            title: "A",
+            order: 0,
+            weight: 0.0,
+            items: vec![item("a9", "viejo", 1.0)]
+        }
+    ));
+    assert!(!r.push(
+        1,
+        Section {
+            id: "b",
+            title: "B",
+            order: 1,
+            weight: 0.0,
+            items: vec![item("b1", "viejo", 1.0)]
+        }
+    ));
     assert_eq!(r.item_count(), 1);
     // Sources that stop applying disappear at once; the rest keep their rows until replaced.
     r.begin(3, |id| id == "b");
@@ -441,7 +606,9 @@ impl PaletteSource for Stuck {
 #[test]
 fn a_newer_query_cancels_the_running_source_promptly() {
     let started = Arc::new(AtomicBool::new(false));
-    let source = Arc::new(Stuck { started: started.clone() });
+    let source = Arc::new(Stuck {
+        started: started.clone(),
+    });
     let cancel = Cancel::new();
     let c = cancel.clone();
     let s = source;
@@ -454,7 +621,11 @@ fn a_newer_query_cancels_the_running_source_promptly() {
     let t = Instant::now();
     cancel.cancel();
     let section = handle.join().unwrap();
-    assert!(t.elapsed() < Duration::from_millis(500), "took {:?}", t.elapsed());
+    assert!(
+        t.elapsed() < Duration::from_millis(500),
+        "took {:?}",
+        t.elapsed()
+    );
     // The view drops this answer: it belongs to a generation that is gone.
     let mut r = Results::default();
     r.begin(2, |_| true);
@@ -482,11 +653,16 @@ fn latency_budget_in_memory_and_history() {
     // 5 000 history rows (distinct commands) to make the FTS query realistic.
     let cwd = repo_root().to_string_lossy().into_owned();
     for i in 0..5000 {
-        db.record_command(NewCommand::new(format!("cargo test -p crate{} --lib -- case_{i}", i % 40), cwd.clone())).unwrap();
+        db.record_command(NewCommand::new(
+            format!("cargo test -p crate{} --lib -- case_{i}", i % 40),
+            cwd.clone(),
+        ))
+        .unwrap();
     }
     db.flush().unwrap();
-    let many_actions: Vec<ActionEntry> =
-        (0..300).map(|i| ActionEntry::new(format!("a.{i}"), format!("Acción número {i}")).keywords("demo")).collect();
+    let many_actions: Vec<ActionEntry> = (0..300)
+        .map(|i| ActionEntry::new(format!("a.{i}"), format!("Acción número {i}")).keywords("demo"))
+        .collect();
     let sources = standard_sources(Some(db), many_actions, vec![]);
     let c = ctx();
     let query = Query::parse("cargo");

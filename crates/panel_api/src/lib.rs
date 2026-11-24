@@ -76,7 +76,11 @@ impl WidthClass {
     pub const COMPACT_BELOW_PX: f32 = 320.0;
 
     pub fn from_width(width_px: f32) -> Self {
-        if width_px < Self::COMPACT_BELOW_PX { Self::Compact } else { Self::Regular }
+        if width_px < Self::COMPACT_BELOW_PX {
+            Self::Compact
+        } else {
+            Self::Regular
+        }
     }
 }
 
@@ -100,7 +104,13 @@ impl PanelCtx {
     /// field then does not break the caller (the struct will become `#[non_exhaustive]` once every
     /// host builds it this way).
     pub fn new(zone: PanelZone, width_class: WidthClass, theme: Theme) -> Self {
-        Self { zone, width_class, cwd: None, project_root: None, theme }
+        Self {
+            zone,
+            width_class,
+            cwd: None,
+            project_root: None,
+            theme,
+        }
     }
 
     pub fn with_cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
@@ -203,7 +213,11 @@ impl PanelRegistry {
 
     /// The providers that may be mounted in `zone`.
     pub fn for_zone(&self, zone: PanelZone) -> Vec<Rc<dyn PanelProvider>> {
-        self.providers.iter().filter(|p| p.allowed_zones().contains(&zone)).cloned().collect()
+        self.providers
+            .iter()
+            .filter(|p| p.allowed_zones().contains(&zone))
+            .cloned()
+            .collect()
     }
 
     pub fn len(&self) -> usize {
@@ -488,7 +502,11 @@ impl TabHandle {
     }
 
     /// Calls `f` for every [`TabEvent`] the model emits, until the subscription is dropped.
-    pub fn subscribe(&self, cx: &mut App, f: impl FnMut(TabEvent, &mut App) + 'static) -> Subscription {
+    pub fn subscribe(
+        &self,
+        cx: &mut App,
+        f: impl FnMut(TabEvent, &mut App) + 'static,
+    ) -> Subscription {
         self.0.subscribe(cx, Box::new(f))
     }
 
@@ -536,7 +554,11 @@ mod tests {
         let ctx = ctx.with_cwd("C:/p/a/src");
         assert_eq!(ctx.base_dir(), Some(std::path::Path::new("C:/p/a/src")));
         let ctx = ctx.with_project_root("C:/p/a");
-        assert_eq!(ctx.base_dir(), Some(std::path::Path::new("C:/p/a")), "the project root wins over cwd");
+        assert_eq!(
+            ctx.base_dir(),
+            Some(std::path::Path::new("C:/p/a")),
+            "the project root wins over cwd"
+        );
         // Same value as the struct literal it replaces.
         assert_eq!(
             ctx,
@@ -554,12 +576,21 @@ mod tests {
     fn tab_info_builder_and_group_dir() {
         let id = EntityId::from(1u64);
         let info = TabInfo::new(id, "main", TabIcon::Kind(Icon::Terminal));
-        assert_eq!((info.subtitle.clone(), info.status, info.agent.clone()), (None, None, None));
+        assert_eq!(
+            (info.subtitle.clone(), info.status, info.agent.clone()),
+            (None, None, None)
+        );
         assert_eq!(info.group_dir(), None);
-        let info = info.with_cwd("C:/p/a/src").with_agent("claude").with_subtitle("rama");
+        let info = info
+            .with_cwd("C:/p/a/src")
+            .with_agent("claude")
+            .with_subtitle("rama");
         assert_eq!(info.group_dir(), Some(std::path::Path::new("C:/p/a/src")));
         assert_eq!(info.agent.as_ref().map(|a| a.as_ref()), Some("claude"));
-        assert_eq!(info.with_project_root("C:/p/a").group_dir(), Some(std::path::Path::new("C:/p/a")));
+        assert_eq!(
+            info.with_project_root("C:/p/a").group_dir(),
+            Some(std::path::Path::new("C:/p/a"))
+        );
     }
 
     #[test]

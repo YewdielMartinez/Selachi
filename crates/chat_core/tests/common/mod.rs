@@ -13,14 +13,17 @@ use agents_driver::claude::ClaudeParser;
 use agents_driver::codex::CodexSession;
 use agents_driver::{AgentEvent, AgentKind, DriverError, ThreadConfig};
 use chat_core::{
-    AgentControl, ApprovalDecision, ChatStore, DriverFactory, JobHandle, OwnerInfo, ProcessHooks, SpawnedAgent,
-    ThreadId,
+    AgentControl, ApprovalDecision, ChatStore, DriverFactory, JobHandle, OwnerInfo, ProcessHooks,
+    SpawnedAgent, ThreadId,
 };
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 
-pub const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../agents_driver/tests/fixtures");
+pub const FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../agents_driver/tests/fixtures"
+);
 
 pub fn fixture_lines(name: &str) -> Vec<String> {
     std::fs::read_to_string(format!("{FIXTURES}/{name}"))
@@ -34,7 +37,10 @@ pub fn fixture_lines(name: &str) -> Vec<String> {
 /// Events the real Claude parser produces for a recorded stream.
 pub fn claude_events(name: &str) -> Vec<AgentEvent> {
     let mut p = ClaudeParser::default();
-    fixture_lines(name).iter().flat_map(|l| p.parse_line(l)).collect()
+    fixture_lines(name)
+        .iter()
+        .flat_map(|l| p.parse_line(l))
+        .collect()
 }
 
 /// Events the real Codex state machine produces for the recorded `codex_basic.jsonl`. The
@@ -67,7 +73,9 @@ pub fn codex_events(name: &str) -> Vec<AgentEvent> {
                 Some(4) => Some("turn/start"),
                 _ => None,
             };
-            let Some(real) = method.and_then(|m| ids.get(m)) else { continue };
+            let Some(real) = method.and_then(|m| ids.get(m)) else {
+                continue;
+            };
             v["id"] = json!(real);
         }
         let step = s.on_message(&v);
@@ -114,7 +122,9 @@ pub struct FakeFactory {
 }
 
 impl FakeFactory {
-    pub fn new(script: impl Fn(usize, &str) -> Vec<AgentEvent> + Send + Sync + 'static) -> Arc<Self> {
+    pub fn new(
+        script: impl Fn(usize, &str) -> Vec<AgentEvent> + Send + Sync + 'static,
+    ) -> Arc<Self> {
         Arc::new(Self {
             rec: Arc::new(Mutex::new(Rec::default())),
             script: Arc::new(Box::new(script)),
@@ -192,7 +202,12 @@ impl AgentControl for FakeControl {
 pub struct FactoryHandle(pub Arc<FakeFactory>);
 
 impl DriverFactory for FactoryHandle {
-    fn spawn(&self, kind: &AgentKind, cfg: &ThreadConfig, job: Option<JobHandle>) -> agents_driver::Result<SpawnedAgent> {
+    fn spawn(
+        &self,
+        kind: &AgentKind,
+        cfg: &ThreadConfig,
+        job: Option<JobHandle>,
+    ) -> agents_driver::Result<SpawnedAgent> {
         let f = &self.0;
         if f.fail_spawn.load(Ordering::SeqCst) {
             return Err(DriverError::NotFound("claude".into()));
@@ -204,7 +219,12 @@ impl DriverFactory for FactoryHandle {
             r.txs.push(tx.clone());
         }
         Ok(SpawnedAgent {
-            control: Box::new(FakeControl { rec: f.rec.clone(), script: f.script.clone(), tx, owner: f.clone() }),
+            control: Box::new(FakeControl {
+                rec: f.rec.clone(),
+                script: f.script.clone(),
+                tx,
+                owner: f.clone(),
+            }),
             events,
             pid: Some(4242),
         })
@@ -235,8 +255,14 @@ impl ProcessHooks for FakeHooks {
     }
 }
 
-pub fn store_at(dir: &Path, factory: &Arc<FakeFactory>, hooks: Option<Arc<FakeHooks>>) -> ChatStore {
-    let mut b = ChatStore::builder().path(dir.join("chat.db")).factory(Arc::new(FactoryHandle(factory.clone())));
+pub fn store_at(
+    dir: &Path,
+    factory: &Arc<FakeFactory>,
+    hooks: Option<Arc<FakeHooks>>,
+) -> ChatStore {
+    let mut b = ChatStore::builder()
+        .path(dir.join("chat.db"))
+        .factory(Arc::new(FactoryHandle(factory.clone())));
     if let Some(h) = hooks {
         b = b.hooks(h);
     }
@@ -254,7 +280,12 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("spawn git");
-    assert!(out.status.success(), "git {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 

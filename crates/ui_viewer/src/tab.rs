@@ -6,7 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{AnyView, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, SharedString, Subscription, Window};
+use gpui::{
+    AnyView, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, SharedString,
+    Subscription, Window,
+};
 use panel_api::{CloseCheck, TabEvent, TabHandle, TabIcon, TabModel};
 use theme::Theme;
 use ui_kit::Icon;
@@ -30,8 +33,15 @@ impl EventEmitter<TabEvent> for ViewerTab {}
 impl EventEmitter<ViewerEvent> for ViewerTab {}
 
 fn title_for(path: &Path, diff: bool) -> SharedString {
-    let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
-    if diff { format!("{name} (diff)").into() } else { name.into() }
+    let name = path.file_name().map_or_else(
+        || path.to_string_lossy().into_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    if diff {
+        format!("{name} (diff)").into()
+    } else {
+        name.into()
+    }
 }
 
 impl ViewerTab {
@@ -49,7 +59,13 @@ impl ViewerTab {
                 cx.emit(TabEvent::TitleChanged);
             }
         });
-        Self { title: title_for(&path, false), viewer, path, root, _subs: vec![forward, observe] }
+        Self {
+            title: title_for(&path, false),
+            viewer,
+            path,
+            root,
+            _subs: vec![forward, observe],
+        }
     }
 
     /// The viewer entity (to drive it: `toggle_diff`, `goto_line`...).
@@ -117,7 +133,13 @@ mod tests {
 
     #[test]
     fn titles() {
-        assert_eq!(title_for(Path::new("C:/p/src/main.rs"), false).as_ref(), "main.rs");
-        assert_eq!(title_for(Path::new("C:/p/src/main.rs"), true).as_ref(), "main.rs (diff)");
+        assert_eq!(
+            title_for(Path::new("C:/p/src/main.rs"), false).as_ref(),
+            "main.rs"
+        );
+        assert_eq!(
+            title_for(Path::new("C:/p/src/main.rs"), true).as_ref(),
+            "main.rs (diff)"
+        );
     }
 }

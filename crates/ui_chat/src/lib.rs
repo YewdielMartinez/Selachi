@@ -65,18 +65,21 @@ mod fake;
 mod tests;
 
 pub use chat_view::{ChatView, ChatViewEvent, DraftSpec, READING_WIDTH_XL, ViewMode, XL_FROM};
-pub use composer::{ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode};
+pub use composer::{
+    ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode,
+};
 pub use hub::{ChatEvent, ChatHub, FilesReady, ModelsReady};
 pub use md::{MdBody, ParsedMd, parse_markdown};
 pub use mentions::{MentionQuery, filter_files, mention_at, walk_files};
 pub use options::{
-    AgentOption, EFFORTS, ModelOption, PERMISSION_ORDER, agent_mark, default_agents, effort_label, efforts_for, model_effort_label,
-    model_label, models_for, permission_hint, permission_label, pretty_model,
+    AgentOption, EFFORTS, ModelOption, PERMISSION_ORDER, agent_mark, default_agents, effort_label,
+    efforts_for, model_effort_label, model_label, models_for, permission_hint, permission_label,
+    pretty_model,
 };
 pub use tab::ChatTab;
 pub use thread_list::{
-    DeleteDialog, GroupKey, GroupMode, ListItem, PANEL_ID as THREADS_PANEL_ID, ThreadListView, ThreadsPanelProvider, build_items,
-    subtitle,
+    DeleteDialog, GroupKey, GroupMode, ListItem, PANEL_ID as THREADS_PANEL_ID, ThreadListView,
+    ThreadsPanelProvider, build_items, subtitle,
 };
 pub use util::{format_cost, format_duration_ms, format_tokens, read_branch};
 
@@ -90,10 +93,25 @@ pub fn init(cx: &mut gpui::App) {
 /// until they exist.
 pub fn needed_svgs() -> &'static [(&'static str, &'static str)] {
     &[
-        ("stop.svg", "round stop button of the composer while a turn runs (placeholder: a rounded square drawn with a div)"),
-        ("copy.svg", "copy button of code blocks (placeholder: the word \"Copiar\")"),
-        ("archive.svg", "archive action of a thread row (placeholder: the folder icon)"),
-        ("attach.svg", "attach files: the + menu entry (placeholder: files.svg)"),
-        ("chevron-up.svg", "plan bar and popovers that open upwards (placeholder: chevron-right / chevron-down)"),
+        (
+            "stop.svg",
+            "round stop button of the composer while a turn runs (placeholder: a rounded square drawn with a div)",
+        ),
+        (
+            "copy.svg",
+            "copy button of code blocks (placeholder: the word \"Copiar\")",
+        ),
+        (
+            "archive.svg",
+            "archive action of a thread row (placeholder: the folder icon)",
+        ),
+        (
+            "attach.svg",
+            "attach files: the + menu entry (placeholder: files.svg)",
+        ),
+        (
+            "chevron-up.svg",
+            "plan bar and popovers that open upwards (placeholder: chevron-right / chevron-down)",
+        ),
     ]
 }

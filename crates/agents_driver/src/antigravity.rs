@@ -48,7 +48,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::proc;
-use crate::types::{AgentKind, DriverError, ModelInfo, PermissionMode, Result, ThreadConfig, EFFORT_LEVELS};
+use crate::types::{
+    AgentKind, DriverError, ModelInfo, PermissionMode, Result, ThreadConfig, EFFORT_LEVELS,
+};
 
 /// `agy` writes its installer here and does not touch the PATH of the running session.
 pub fn default_bin() -> Option<PathBuf> {
@@ -101,7 +103,9 @@ impl AgentKind {
     /// executable is recognised by [`crate::is_antigravity`], so every existing exhaustive match
     /// (chat core, UI) keeps compiling and already treats it as a generic ACP agent.
     pub fn antigravity(exe: &Path, agent: Option<&str>, add_dirs: &[PathBuf]) -> AgentKind {
-        AgentKind::Acp { command: acp_command_line(exe, agent, add_dirs) }
+        AgentKind::Acp {
+            command: acp_command_line(exe, agent, add_dirs),
+        }
     }
 }
 
@@ -116,7 +120,10 @@ pub fn finalize_args(mut parts: Vec<String>, cfg: &ThreadConfig) -> Vec<String> 
     if parts.first().map(String::as_str) != Some("acp") {
         parts.insert(0, "acp".to_string());
     }
-    if !parts.iter().any(|p| p == "--disable-telemetry" || p == "--disable_telemetry") {
+    if !parts
+        .iter()
+        .any(|p| p == "--disable-telemetry" || p == "--disable_telemetry")
+    {
         parts.insert(1, "--disable-telemetry".to_string());
     }
     if cfg.permission_mode == PermissionMode::Full {
@@ -153,7 +160,13 @@ pub fn thought_level_for<'a>(want: &str, offered: &'a [String]) -> Option<&'a st
 /// Label without the trailing ` (High)` effort tag.
 fn strip_label_effort(label: &str) -> &str {
     match label.rsplit_once(" (") {
-        Some((head, tail)) if tail.strip_suffix(')').is_some_and(|t| EFFORT_SUFFIXES.contains(&t.to_ascii_lowercase().as_str())) => head,
+        Some((head, tail))
+            if tail
+                .strip_suffix(')')
+                .is_some_and(|t| EFFORT_SUFFIXES.contains(&t.to_ascii_lowercase().as_str())) =>
+        {
+            head
+        }
         _ => label,
     }
 }
@@ -172,7 +185,8 @@ pub fn group_models(rows: &[(String, String)]) -> Vec<ModelInfo> {
         }
     }
     for (id, label) in rows {
-        let grouped = split_effort_suffix(id).filter(|(b, _)| counts.iter().any(|(c, n)| c == b && *n > 1));
+        let grouped =
+            split_effort_suffix(id).filter(|(b, _)| counts.iter().any(|(c, n)| c == b && *n > 1));
         match grouped {
             Some((base, eff)) => {
                 let pos = out.iter().position(|m| m.id == base).unwrap_or_else(|| {
@@ -188,14 +202,23 @@ pub fn group_models(rows: &[(String, String)]) -> Vec<ModelInfo> {
             }
             None => out.push(ModelInfo {
                 id: id.clone(),
-                label: if label.is_empty() { id.clone() } else { label.clone() },
+                label: if label.is_empty() {
+                    id.clone()
+                } else {
+                    label.clone()
+                },
                 efforts: Vec::new(),
                 default_effort: None,
             }),
         }
     }
     for m in &mut out {
-        m.efforts.sort_by_key(|e| EFFORT_LEVELS.iter().position(|l| l == e).unwrap_or(usize::MAX));
+        m.efforts.sort_by_key(|e| {
+            EFFORT_LEVELS
+                .iter()
+                .position(|l| l == e)
+                .unwrap_or(usize::MAX)
+        });
     }
     out
 }
@@ -209,7 +232,8 @@ pub fn parse_models_output(stdout: &str) -> Vec<ModelInfo> {
             let l = l.trim_end_matches('\r');
             let (id, label) = l.split_once('\t')?;
             let id = id.trim();
-            (!id.is_empty() && !id.contains(char::is_whitespace)).then(|| (id.to_string(), label.trim().to_string()))
+            (!id.is_empty() && !id.contains(char::is_whitespace))
+                .then(|| (id.to_string(), label.trim().to_string()))
         })
         .collect();
     group_models(&rows)
@@ -230,7 +254,11 @@ pub fn parse_agents_output(stdout: &str) -> Vec<AgentProfile> {
         .map(|l| l.trim_end_matches('\r').trim())
         .filter(|l| !l.is_empty() && !l.to_ascii_lowercase().starts_with("fetching"))
         .filter_map(|l| {
-            let (id, rest) = l.split_once('\t').or_else(|| l.split_once("  ")).or_else(|| l.split_once(" - ")).unwrap_or((l, ""));
+            let (id, rest) = l
+                .split_once('\t')
+                .or_else(|| l.split_once("  "))
+                .or_else(|| l.split_once(" - "))
+                .unwrap_or((l, ""));
             let id = id.trim();
             (!id.is_empty() && !id.contains(char::is_whitespace)).then(|| AgentProfile {
                 id: id.to_string(),
@@ -243,7 +271,9 @@ pub fn parse_agents_output(stdout: &str) -> Vec<AgentProfile> {
 fn run(exe: &Path, args: &[&str], timeout: Duration) -> Result<String> {
     let mut cmd = proc::command_for(exe);
     cmd.args(args);
-    proc::run_capture(cmd, timeout).ok_or_else(|| DriverError::Protocol(format!("`agy {}` gave no output in time", args.join(" "))))
+    proc::run_capture(cmd, timeout).ok_or_else(|| {
+        DriverError::Protocol(format!("`agy {}` gave no output in time", args.join(" ")))
+    })
 }
 
 /// `agy models` (no prompt, no session): the models grouped by base id with their efforts.
@@ -285,29 +315,57 @@ gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\r\n";
         assert_eq!(m[0].label, "Gemini 4 Neon");
         assert_eq!(m[0].efforts, ["low", "medium", "high", "xhigh"]);
         // no effort suffix: kept as is
-        assert_eq!((m[1].id.as_str(), m[1].efforts.len()), ("gemini-pro-orchestrator-neon", 0));
-        assert_eq!((m[2].id.as_str(), m[2].efforts.as_slice()), ("claude-opus-5-5", ["low".to_string(), "high".to_string()].as_slice()));
+        assert_eq!(
+            (m[1].id.as_str(), m[1].efforts.len()),
+            ("gemini-pro-orchestrator-neon", 0)
+        );
+        assert_eq!(
+            (m[2].id.as_str(), m[2].efforts.as_slice()),
+            (
+                "claude-opus-5-5",
+                ["low".to_string(), "high".to_string()].as_slice()
+            )
+        );
         // a single variant is not a family: the full id is what the agent wants back
-        assert_eq!((m[3].id.as_str(), m[3].label.as_str()), ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"));
+        assert_eq!(
+            (m[3].id.as_str(), m[3].label.as_str()),
+            ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)")
+        );
         assert!(parse_models_output("Fetching available models...\n").is_empty());
     }
 
     #[test]
     fn agents_output_is_parsed_leniently() {
         assert!(parse_agents_output("").is_empty());
-        let a = parse_agents_output("Fetching agents...\nreviewer\tReviews diffs\nbuilder\nplanner  Plans work\n");
+        let a = parse_agents_output(
+            "Fetching agents...\nreviewer\tReviews diffs\nbuilder\nplanner  Plans work\n",
+        );
         assert_eq!(a.len(), 3);
-        assert_eq!(a[0], AgentProfile { id: "reviewer".into(), description: "Reviews diffs".into() });
+        assert_eq!(
+            a[0],
+            AgentProfile {
+                id: "reviewer".into(),
+                description: "Reviews diffs".into()
+            }
+        );
         assert_eq!(a[1].description, "");
         assert_eq!(a[2].id, "planner");
     }
 
     #[test]
     fn effort_suffix_and_thought_level_mapping() {
-        assert_eq!(split_effort_suffix("claude-opus-5-5-high"), Some(("claude-opus-5-5", "high")));
-        assert_eq!(split_effort_suffix("gemini-4-neon-xhigh"), Some(("gemini-4-neon", "xhigh")));
+        assert_eq!(
+            split_effort_suffix("claude-opus-5-5-high"),
+            Some(("claude-opus-5-5", "high"))
+        );
+        assert_eq!(
+            split_effort_suffix("gemini-4-neon-xhigh"),
+            Some(("gemini-4-neon", "xhigh"))
+        );
         assert_eq!(split_effort_suffix("gemini-4-neon"), None);
-        let offered: Vec<String> = ["low", "medium", "high", "xhigh"].map(String::from).to_vec();
+        let offered: Vec<String> = ["low", "medium", "high", "xhigh"]
+            .map(String::from)
+            .to_vec();
         assert_eq!(thought_level_for("high", &offered), Some("high"));
         assert_eq!(thought_level_for("max", &offered), Some("xhigh"));
         assert_eq!(thought_level_for("MAX", &offered[..3]), Some("high"));
@@ -320,20 +378,35 @@ gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\r\n";
 
     #[test]
     fn command_line_carries_flags_and_quotes() {
-        let s = acp_command_line(Path::new("C:/Users/a b/agy.exe"), Some("my agent"), &[PathBuf::from("D:/x y"), PathBuf::from("E:/z")]);
-        assert_eq!(s, r#""C:/Users/a b/agy.exe" acp --disable-telemetry --agent "my agent" --add-dir "D:/x y" --add-dir E:/z"#);
+        let s = acp_command_line(
+            Path::new("C:/Users/a b/agy.exe"),
+            Some("my agent"),
+            &[PathBuf::from("D:/x y"), PathBuf::from("E:/z")],
+        );
+        assert_eq!(
+            s,
+            r#""C:/Users/a b/agy.exe" acp --disable-telemetry --agent "my agent" --add-dir "D:/x y" --add-dir E:/z"#
+        );
         assert!(crate::is_antigravity(&s));
         let parts = crate::acp::split_command(&s);
         assert_eq!(parts[0], "C:/Users/a b/agy.exe");
         assert_eq!(parts[4], "my agent");
-        assert!(matches!(AgentKind::antigravity(Path::new("agy.exe"), None, &[]), AgentKind::Acp { command } if command == "\"agy.exe\" acp --disable-telemetry"));
+        assert!(
+            matches!(AgentKind::antigravity(Path::new("agy.exe"), None, &[]), AgentKind::Acp { command } if command == "\"agy.exe\" acp --disable-telemetry")
+        );
     }
 
     #[test]
     fn skip_permissions_only_in_full_mode() {
         let mut cfg = ThreadConfig::new(".");
-        let args = |c: &ThreadConfig, p: &[&str]| finalize_args(p.iter().map(|s| s.to_string()).collect(), c);
-        for mode in [PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::ReadOnly] {
+        let args = |c: &ThreadConfig, p: &[&str]| {
+            finalize_args(p.iter().map(|s| s.to_string()).collect(), c)
+        };
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::ReadOnly,
+        ] {
             cfg.permission_mode = mode;
             let a = args(&cfg, &["--dangerously-skip-permissions"]);
             assert_eq!(a, ["acp", "--disable-telemetry"], "{mode:?}");
@@ -341,18 +414,32 @@ gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\r\n";
         cfg.permission_mode = PermissionMode::Full;
         cfg.extra_args = vec!["--add-dir".into(), "D:/x".into()];
         let a = args(&cfg, &["acp", "--disable-telemetry"]);
-        assert_eq!(a, ["acp", "--disable-telemetry", "--add-dir", "D:/x", "--dangerously-skip-permissions"]);
+        assert_eq!(
+            a,
+            [
+                "acp",
+                "--disable-telemetry",
+                "--add-dir",
+                "D:/x",
+                "--dangerously-skip-permissions"
+            ]
+        );
         // a bare `agy` command line still becomes `agy acp --disable-telemetry`
         cfg.permission_mode = PermissionMode::Ask;
         cfg.extra_args.clear();
         assert_eq!(args(&cfg, &[]), ["acp", "--disable-telemetry"]);
-        assert_eq!(args(&cfg, &["acp", "--disable_telemetry"]), ["acp", "--disable_telemetry"]);
+        assert_eq!(
+            args(&cfg, &["acp", "--disable_telemetry"]),
+            ["acp", "--disable_telemetry"]
+        );
     }
 
     #[test]
     fn login_markers_are_in_the_shared_gemini_dir() {
         let f = login_files(Path::new("H"));
-        assert!(f.iter().all(|p| p.starts_with(Path::new("H").join(".gemini"))));
+        assert!(f
+            .iter()
+            .all(|p| p.starts_with(Path::new("H").join(".gemini"))));
         assert!(f.iter().any(|p| p.ends_with("oauth_creds.json")));
         assert!(CREDENTIAL_ENV.contains(&"GEMINI_API_KEY"));
     }
@@ -360,7 +447,13 @@ gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\r\n";
     #[test]
     fn default_bin_lives_under_localappdata() {
         if let Some(p) = default_bin() {
-            assert!(p.ends_with(Path::new("agy").join("bin").join(if cfg!(windows) { "agy.exe" } else { "agy" })));
+            assert!(
+                p.ends_with(Path::new("agy").join("bin").join(if cfg!(windows) {
+                    "agy.exe"
+                } else {
+                    "agy"
+                }))
+            );
         }
     }
 }

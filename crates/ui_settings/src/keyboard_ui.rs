@@ -1,6 +1,8 @@
 //! Keyboard section: the action list, chord capture, conflict prompt and reset.
 
-use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui::{
+    AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
+};
 use theme::Radius;
 use ui_kit::{Button, GhostButton};
 
@@ -14,14 +16,22 @@ impl SettingsView {
     /// shortcuts (Ctrl+Tab, F11...) can be captured instead of firing.
     pub(crate) fn start_capture(&mut self, action: &str, cx: &mut Context<Self>) {
         self.cancel_capture();
-        self.capture = Some(Capture { action: action.to_string(), conflict: None, error: None, captured: false });
+        self.capture = Some(Capture {
+            action: action.to_string(),
+            conflict: None,
+            error: None,
+            captured: false,
+        });
         let this = cx.weak_entity();
         self.capture_sub = Some(cx.intercept_keystrokes(move |ev, _window, cx| {
             let ks = &ev.keystroke;
             let m = &ks.modifiers;
-            let (ctrl, alt, shift, win, key) = (m.control, m.alt, m.shift, m.platform, ks.key.clone());
+            let (ctrl, alt, shift, win, key) =
+                (m.control, m.alt, m.shift, m.platform, ks.key.clone());
             let handled = this
-                .update(cx, |s, cx| s.on_capture_key(ctrl, alt, shift, win, &key, cx))
+                .update(cx, |s, cx| {
+                    s.on_capture_key(ctrl, alt, shift, win, &key, cx)
+                })
                 .unwrap_or(false);
             if handled {
                 cx.stop_propagation();
@@ -51,7 +61,9 @@ impl SettingsView {
         key: &str,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(cap) = self.capture.clone() else { return false };
+        let Some(cap) = self.capture.clone() else {
+            return false;
+        };
         if cap.captured {
             return false;
         }
@@ -92,16 +104,22 @@ impl SettingsView {
             return;
         }
         let (catalog, id, chord) = (self.catalog.clone(), action.to_string(), chord.to_string());
-        self.edit_cfg(cx, move |c| keys::set_binding(&catalog, &mut c.keybindings, &id, &chord));
+        self.edit_cfg(cx, move |c| {
+            keys::set_binding(&catalog, &mut c.keybindings, &id, &chord)
+        });
         self.cancel_capture();
         cx.notify();
     }
 
     fn resolve_conflict(&mut self, cx: &mut Context<Self>) {
-        let Some(cap) = self.capture.clone() else { return };
+        let Some(cap) = self.capture.clone() else {
+            return;
+        };
         if let Some((chord, other)) = cap.conflict {
             let catalog = self.catalog.clone();
-            self.edit_cfg(cx, move |c| keys::swap_bindings(&catalog, &mut c.keybindings, &cap.action, &other, &chord));
+            self.edit_cfg(cx, move |c| {
+                keys::swap_bindings(&catalog, &mut c.keybindings, &cap.action, &other, &chord)
+            });
         }
         self.cancel_capture();
         cx.notify();
@@ -132,7 +150,11 @@ impl SettingsView {
         for a in &catalog {
             let chord = keys::effective(&catalog, &self.cfg.keybindings, &a.id);
             let overridden = keys::is_overridden(&self.cfg.keybindings, &a.id);
-            let capturing = self.capture.as_ref().filter(|cap| cap.action == a.id).cloned();
+            let capturing = self
+                .capture
+                .as_ref()
+                .filter(|cap| cap.action == a.id)
+                .cloned();
             let id = a.id.clone();
 
             let chord_el: AnyElement = match &capturing {
@@ -151,29 +173,50 @@ impl SettingsView {
                     .into_any_element(),
                 _ => status_pill(
                     &t,
-                    if chord.is_empty() { "Sin asignar".to_string() } else { keys::display_chord(&chord) },
+                    if chord.is_empty() {
+                        "Sin asignar".to_string()
+                    } else {
+                        keys::display_chord(&chord)
+                    },
                     PillTone::Neutral,
                 )
                 .into_any_element(),
             };
             let change = {
                 let id = id.clone();
-                GhostButton::new(SharedString::from(format!("key-change-{}", a.id)), &t, "Cambiar")
-                    .on_click(cx.listener(move |s, _, _, cx| s.start_capture(&id, cx)))
+                GhostButton::new(
+                    SharedString::from(format!("key-change-{}", a.id)),
+                    &t,
+                    "Cambiar",
+                )
+                .on_click(cx.listener(move |s, _, _, cx| s.start_capture(&id, cx)))
             };
             let reset = overridden.then(|| {
                 let id = id.clone();
-                GhostButton::new(SharedString::from(format!("key-reset-{}", a.id)), &t, "Restablecer")
-                    .on_click(cx.listener(move |s, _, _, cx| s.reset_binding(&id, cx)))
+                GhostButton::new(
+                    SharedString::from(format!("key-reset-{}", a.id)),
+                    &t,
+                    "Restablecer",
+                )
+                .on_click(cx.listener(move |s, _, _, cx| s.reset_binding(&id, cx)))
             });
 
             let mut message: Option<AnyElement> = None;
             if let Some(cap) = &capturing {
                 if let Some(e) = &cap.error {
-                    message = Some(div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(SharedString::from(e.clone())).into_any_element());
+                    message = Some(
+                        div()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.error)
+                            .child(SharedString::from(e.clone()))
+                            .into_any_element(),
+                    );
                 }
                 if let Some((chord, other)) = &cap.conflict {
-                    let other_label = catalog.iter().find(|x| &x.id == other).map_or(other.clone(), |x| x.label.clone());
+                    let other_label = catalog
+                        .iter()
+                        .find(|x| &x.id == other)
+                        .map_or(other.clone(), |x| x.label.clone());
                     message = Some(
                         div()
                             .flex()
@@ -182,21 +225,24 @@ impl SettingsView {
                             .items_center()
                             .gap(px(10.0))
                             .child(
-                                div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(SharedString::from(format!(
-                                    "{} ya es el atajo de «{other_label}».",
-                                    keys::display_chord(chord)
-                                ))),
+                                div()
+                                    .text_size(px(ty.ui_size_sm))
+                                    .text_color(c.error)
+                                    .child(SharedString::from(format!(
+                                        "{} ya es el atajo de «{other_label}».",
+                                        keys::display_chord(chord)
+                                    ))),
                             )
                             .child(
                                 Button::tonal("key-swap", &t, "Intercambiar")
                                     .on_click(cx.listener(|s, _, _, cx| s.resolve_conflict(cx))),
                             )
-                            .child(
-                                GhostButton::new("key-cancel", &t, "Cancelar").on_click(cx.listener(|s, _, _, cx| {
+                            .child(GhostButton::new("key-cancel", &t, "Cancelar").on_click(
+                                cx.listener(|s, _, _, cx| {
                                     s.cancel_capture();
                                     cx.notify();
-                                })),
-                            )
+                                }),
+                            ))
                             .into_any_element(),
                     );
                 }

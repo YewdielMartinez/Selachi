@@ -124,5 +124,9 @@ impl Icon {
 /// ui_kit::icon(Icon::Terminal, 16.0, theme.colors.muted)
 /// ```
 pub fn icon(icon: Icon, size: f32, color: impl Into<Hsla>) -> Svg {
-    svg().path(icon.path()).flex_none().size(px(size)).text_color(color)
+    svg()
+        .path(icon.path())
+        .flex_none()
+        .size(px(size))
+        .text_color(color)
 }

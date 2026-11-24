@@ -27,7 +27,10 @@ impl MeasuredWidth {
 
     /// Several breakpoints (the first one is the narrow threshold).
     pub fn with_breaks(breaks: &[f32]) -> Self {
-        Self { width: Rc::new(Cell::new(None)), breaks: breaks.into() }
+        Self {
+            width: Rc::new(Cell::new(None)),
+            breaks: breaks.into(),
+        }
     }
 
     /// The last measured width.
@@ -37,7 +40,11 @@ impl MeasuredWidth {
 
     /// Narrow by the measured width (the window's while nothing was measured yet).
     pub fn narrow(&self, window: &Window) -> bool {
-        is_narrow(self.width.get(), f32::from(window.viewport_size().width), self.breaks.first().copied().unwrap_or(0.0))
+        is_narrow(
+            self.width.get(),
+            f32::from(window.viewport_size().width),
+            self.breaks.first().copied().unwrap_or(0.0),
+        )
     }
 
     /// Invisible full-size child of the (relative) root that measures it.
@@ -76,7 +83,11 @@ impl WidthClass {
     pub const COMPACT_BELOW_PX: f32 = 320.0;
 
     pub fn from_width(width_px: f32) -> Self {
-        if width_px < Self::COMPACT_BELOW_PX { Self::Compact } else { Self::Regular }
+        if width_px < Self::COMPACT_BELOW_PX {
+            Self::Compact
+        } else {
+            Self::Regular
+        }
     }
 
     pub fn is_compact(self) -> bool {
@@ -120,7 +131,11 @@ impl MeasuredWidth {
     /// The class of the measured width (the window's while nothing was measured yet). Use it with
     /// [`MeasuredWidth::panel`], or any probe, to branch on the real zone width.
     pub fn class(&self, window: &Window) -> WidthClass {
-        WidthClass::from_width(self.width.get().unwrap_or_else(|| f32::from(window.viewport_size().width)))
+        WidthClass::from_width(
+            self.width
+                .get()
+                .unwrap_or_else(|| f32::from(window.viewport_size().width)),
+        )
     }
 }
 
@@ -161,6 +176,10 @@ mod tests {
     fn a_panel_probe_has_the_panel_breakpoint() {
         let m = MeasuredWidth::panel();
         assert_eq!(m.width(), None);
-        assert!(m.breaks.first().is_some_and(|b| (*b - WidthClass::COMPACT_BELOW_PX).abs() < f32::EPSILON));
+        assert!(
+            m.breaks
+                .first()
+                .is_some_and(|b| (*b - WidthClass::COMPACT_BELOW_PX).abs() < f32::EPSILON)
+        );
     }
 }

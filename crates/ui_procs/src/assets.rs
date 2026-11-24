@@ -12,7 +12,10 @@ use proc_svc::RuntimeKind;
 
 macro_rules! asset {
     ($path:literal) => {
-        ($path, include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/", $path)).as_slice())
+        (
+            $path,
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/", $path)).as_slice(),
+        )
     };
 }
 
@@ -54,7 +57,10 @@ pub const fn runtime_icon_path(kind: RuntimeKind) -> &'static str {
 
 /// The bytes of one of this crate's assets.
 pub fn load(path: &str) -> Option<&'static [u8]> {
-    ASSETS.iter().find(|(p, _)| *p == path).map(|(_, data)| *data)
+    ASSETS
+        .iter()
+        .find(|(p, _)| *p == path)
+        .map(|(_, data)| *data)
 }
 
 /// `ui_kit::Assets` plus the runtime icons. Use it as the app's asset source.
@@ -74,7 +80,12 @@ impl AssetSource for Assets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut out = ui_kit::Assets.list(path)?;
-        out.extend(ASSETS.iter().filter(|(p, _)| p.starts_with(path)).map(|(p, _)| SharedString::from(*p)));
+        out.extend(
+            ASSETS
+                .iter()
+                .filter(|(p, _)| p.starts_with(path))
+                .map(|(p, _)| SharedString::from(*p)),
+        );
         Ok(out)
     }
 }

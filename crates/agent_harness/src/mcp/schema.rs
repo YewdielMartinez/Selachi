@@ -5,8 +5,15 @@
 
 use serde_json::{json, Value};
 
-pub const TOOL_NAMES: [&str; 7] =
-    ["list_agents", "run_agent", "agent_status", "agent_result", "cancel_agent", "get_diff", "apply_changes"];
+pub const TOOL_NAMES: [&str; 7] = [
+    "list_agents",
+    "run_agent",
+    "agent_status",
+    "agent_result",
+    "cancel_agent",
+    "get_diff",
+    "apply_changes",
+];
 
 fn run_id_prop() -> Value {
     json!({
@@ -160,7 +167,10 @@ pub fn tools() -> Vec<Value> {
 
 /// The `inputSchema` of `name`.
 pub fn input_schema(name: &str) -> Option<Value> {
-    tools().into_iter().find(|t| t["name"] == name).map(|t| t["inputSchema"].clone())
+    tools()
+        .into_iter()
+        .find(|t| t["name"] == name)
+        .map(|t| t["inputSchema"].clone())
 }
 
 fn type_name(v: &Value) -> &'static str {
@@ -179,7 +189,10 @@ fn type_name(v: &Value) -> &'static str {
 /// `type` / `enum` / `minimum` / `maximum` / `minLength`. Returns the first problem as a sentence.
 pub fn validate(schema: &Value, args: &Value) -> Result<(), String> {
     let Some(obj) = args.as_object() else {
-        return Err(format!("the arguments must be an object, not {}", type_name(args)));
+        return Err(format!(
+            "the arguments must be an object, not {}",
+            type_name(args)
+        ));
     };
     let empty = serde_json::Map::new();
     let props = schema["properties"].as_object().unwrap_or(&empty);
@@ -195,11 +208,18 @@ pub fn validate(schema: &Value, args: &Value) -> Result<(), String> {
         let Some(p) = props.get(k) else {
             if schema["additionalProperties"] == Value::Bool(false) {
                 let known: Vec<&str> = props.keys().map(String::as_str).collect();
-                return Err(format!("unknown argument `{k}` (accepted: {})", known.join(", ")));
+                return Err(format!(
+                    "unknown argument `{k}` (accepted: {})",
+                    known.join(", ")
+                ));
             }
             continue;
         };
-        if v.is_null() && !schema["required"].as_array().is_some_and(|r| r.iter().any(|x| x == k.as_str())) {
+        if v.is_null()
+            && !schema["required"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|x| x == k.as_str()))
+        {
             continue; // an explicit null for an optional argument means "not given"
         }
         if let Some(t) = p["type"].as_str() {
@@ -244,21 +264,38 @@ mod tests {
     #[test]
     fn every_tool_has_a_well_formed_schema() {
         let all = tools();
-        assert_eq!(all.iter().map(|t| t["name"].as_str().unwrap()).collect::<Vec<_>>(), TOOL_NAMES);
+        assert_eq!(
+            all.iter()
+                .map(|t| t["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            TOOL_NAMES
+        );
         for t in &all {
             let name = t["name"].as_str().unwrap();
-            assert!(name.len() <= 128 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{name}");
-            assert!(t["title"].is_string() && t["description"].as_str().unwrap().contains("ES:"), "{name} needs a Spanish hint");
+            assert!(
+                name.len() <= 128 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "{name}"
+            );
+            assert!(
+                t["title"].is_string() && t["description"].as_str().unwrap().contains("ES:"),
+                "{name} needs a Spanish hint"
+            );
             let s = &t["inputSchema"];
             assert_eq!(s["type"], "object", "{name}");
             assert_eq!(s["additionalProperties"], false, "{name}");
             let props = s["properties"].as_object().unwrap();
             for (k, p) in props {
                 assert!(p["type"].is_string(), "{name}.{k} needs a type");
-                assert!(p["description"].as_str().is_some_and(|d| d.contains("ES:")), "{name}.{k} needs an EN+ES description");
+                assert!(
+                    p["description"].as_str().is_some_and(|d| d.contains("ES:")),
+                    "{name}.{k} needs an EN+ES description"
+                );
             }
             for r in s["required"].as_array().into_iter().flatten() {
-                assert!(props.contains_key(r.as_str().unwrap()), "{name}: required {r} is not a property");
+                assert!(
+                    props.contains_key(r.as_str().unwrap()),
+                    "{name}: required {r} is not a property"
+                );
             }
             assert!(t["annotations"]["readOnlyHint"].is_boolean());
         }
@@ -271,15 +308,37 @@ mod tests {
         assert!(validate(&s, &ok).is_ok());
         let bad = |v: Value| validate(&s, &v).unwrap_err();
         assert!(bad(json!({"prompt": "x", "cwd": "C:/p"})).contains("`agent` is required"));
-        assert!(bad(json!({"agent": "codex", "prompt": "  ", "cwd": "C:/p"})).contains("`prompt` must not be empty"));
-        assert!(bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "permission": "full"})).contains("one of"));
-        assert!(bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "timeout_s": 0})).contains("at least 1"));
-        assert!(bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "timeout_s": "5"})).contains("must be of type integer"));
-        assert!(bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "worktree": 1})).contains("boolean"));
-        assert!(bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "bogus": 1})).contains("unknown argument `bogus`"));
+        assert!(
+            bad(json!({"agent": "codex", "prompt": "  ", "cwd": "C:/p"}))
+                .contains("`prompt` must not be empty")
+        );
+        assert!(
+            bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "permission": "full"}))
+                .contains("one of")
+        );
+        assert!(
+            bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "timeout_s": 0}))
+                .contains("at least 1")
+        );
+        assert!(
+            bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "timeout_s": "5"}))
+                .contains("must be of type integer")
+        );
+        assert!(
+            bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "worktree": 1}))
+                .contains("boolean")
+        );
+        assert!(
+            bad(json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "bogus": 1}))
+                .contains("unknown argument `bogus`")
+        );
         assert!(bad(json!(["x"])).contains("must be an object"));
         // an explicit null for an optional argument is "not given"
-        assert!(validate(&s, &json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "model": null})).is_ok());
+        assert!(validate(
+            &s,
+            &json!({"agent": "codex", "prompt": "x", "cwd": "C:/p", "model": null})
+        )
+        .is_ok());
         assert!(validate(&input_schema("list_agents").unwrap(), &json!({})).is_ok());
     }
 }

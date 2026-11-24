@@ -101,7 +101,10 @@ fn probe(name: &'static str) -> Option<DetectedAgent> {
         .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
         .filter(|s| !s.is_empty());
     let home = home_dir();
-    let logged_in = logged_in_from(&credential_files(name, home.as_deref()), credential_env(name));
+    let logged_in = logged_in_from(
+        &credential_files(name, home.as_deref()),
+        credential_env(name),
+    );
     Some(DetectedAgent {
         kind: kind_for(name, &path),
         path,
@@ -114,7 +117,8 @@ fn probe(name: &'static str) -> Option<DetectedAgent> {
 /// parallel (hidden windows, 5 s timeout each); blocking, call it off the UI thread.
 pub fn detect() -> Vec<DetectedAgent> {
     // Array `map` is eager: every probe thread starts before the first join.
-    let handles = ["claude", "codex", "opencode", "gemini", "agy"].map(|n| std::thread::spawn(move || probe(n)));
+    let handles = ["claude", "codex", "opencode", "gemini", "agy"]
+        .map(|n| std::thread::spawn(move || probe(n)));
     handles
         .into_iter()
         .filter_map(|h| h.join().ok().flatten())
@@ -129,7 +133,10 @@ mod tests {
     fn logged_in_requires_evidence() {
         assert_eq!(logged_in_from(&[], &[]), None);
         let missing = std::env::temp_dir().join("agents_driver_no_such_cred.json");
-        assert_eq!(logged_in_from(&[missing], &["AGENTS_DRIVER_NO_SUCH_ENV"]), None);
+        assert_eq!(
+            logged_in_from(&[missing], &["AGENTS_DRIVER_NO_SUCH_ENV"]),
+            None
+        );
         let f = std::env::temp_dir().join("agents_driver_cred_probe.json");
         std::fs::write(&f, b"").unwrap();
         assert_eq!(logged_in_from(std::slice::from_ref(&f), &[]), Some(true));
@@ -143,7 +150,9 @@ mod tests {
         assert_eq!(kind_for("opencode", &p), AgentKind::OpenCode);
         assert_eq!(
             kind_for("gemini", &p),
-            AgentKind::Acp { command: "\"C:/x y/gemini.cmd\"".into() }
+            AgentKind::Acp {
+                command: "\"C:/x y/gemini.cmd\"".into()
+            }
         );
     }
 
@@ -152,7 +161,9 @@ mod tests {
         let p = PathBuf::from("C:/x y/agy.exe");
         assert_eq!(
             kind_for("agy", &p),
-            AgentKind::Acp { command: "\"C:/x y/agy.exe\" acp --disable-telemetry".into() }
+            AgentKind::Acp {
+                command: "\"C:/x y/agy.exe\" acp --disable-telemetry".into()
+            }
         );
         assert!(crate::is_antigravity(&match kind_for("agy", &p) {
             AgentKind::Acp { command } => command,
@@ -161,7 +172,10 @@ mod tests {
         let files = credential_files("agy", Some(Path::new("H")));
         assert!(files.iter().any(|f| f.ends_with("oauth_creds.json")));
         assert!(credential_env("agy").contains(&"GEMINI_API_KEY"));
-        assert_eq!(logged_in_from(&[PathBuf::from("Z:/no/such/oauth_creds.json")], &[]), None);
+        assert_eq!(
+            logged_in_from(&[PathBuf::from("Z:/no/such/oauth_creds.json")], &[]),
+            None
+        );
     }
 
     #[test]
@@ -170,7 +184,10 @@ mod tests {
         assert!(files.iter().all(|f| f.ends_with("auth.json")));
         assert!(credential_env("opencode").contains(&"OPENCODE_API_KEY"));
         // nothing readable -> unknown (never "logged out")
-        assert_eq!(logged_in_from(&[PathBuf::from("Z:/no/such/auth.json")], &[]), None);
+        assert_eq!(
+            logged_in_from(&[PathBuf::from("Z:/no/such/auth.json")], &[]),
+            None
+        );
     }
 
     #[test]

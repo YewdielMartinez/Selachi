@@ -79,10 +79,15 @@ impl Render for Root {
         if !self.painted.replace(true) {
             log::info!("first render at {} ms", self.t0.elapsed().as_millis());
         }
-        let base = div().size_full().bg(rgb(0x101114)).text_color(rgb(0xdddddd));
+        let base = div()
+            .size_full()
+            .bg(rgb(0x101114))
+            .text_color(rgb(0xdddddd));
         match &self.body {
             Body::Empty => base,
-            Body::Text => base.font_family("Geist Mono").child("hello selachi 0123456789"),
+            Body::Text => base
+                .font_family("Geist Mono")
+                .child("hello selachi 0123456789"),
             Body::Term(t) => base.child(t.clone()),
         }
     }
@@ -139,7 +144,11 @@ fn main() {
                 if term {
                     log::info!("terminal view built at {} ms", t0.elapsed().as_millis());
                 }
-                cx.new(|_| Root { body, t0, painted: std::cell::Cell::new(false) })
+                cx.new(|_| Root {
+                    body,
+                    t0,
+                    painted: std::cell::Cell::new(false),
+                })
             },
         );
         if opened.is_err() {

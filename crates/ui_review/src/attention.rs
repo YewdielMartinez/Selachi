@@ -65,7 +65,9 @@ impl AttentionKind {
     pub fn text(&self) -> String {
         match self {
             AttentionKind::WaitingInput => "Espera tu respuesta".to_string(),
-            AttentionKind::Approval { tool, .. } if tool.is_empty() => "Pide tu aprobación".to_string(),
+            AttentionKind::Approval { tool, .. } if tool.is_empty() => {
+                "Pide tu aprobación".to_string()
+            }
             AttentionKind::Approval { tool, .. } => format!("Pide aprobación: {tool}"),
             AttentionKind::Failed { exit_code } => format!("Falló (código {exit_code})"),
             AttentionKind::LongCommandDone => "Terminó un comando largo".to_string(),
@@ -88,9 +90,14 @@ impl AttentionKind {
     /// request: use the same item id for both ([`AttentionModel::upsert`] keeps the approval).
     pub fn from_agent_event(event: &AgentEvent) -> Option<Self> {
         match event {
-            AgentEvent::ApprovalRequest { tool, detail, .. } => Some(Self::Approval { tool: tool.clone(), detail: detail.clone() }),
+            AgentEvent::ApprovalRequest { tool, detail, .. } => Some(Self::Approval {
+                tool: tool.clone(),
+                detail: detail.clone(),
+            }),
             AgentEvent::Status(AgentStatus::WaitingForInput) => Some(Self::WaitingInput),
-            AgentEvent::Exited { code: Some(code) } if *code != 0 => Some(Self::Failed { exit_code: *code }),
+            AgentEvent::Exited { code: Some(code) } if *code != 0 => {
+                Some(Self::Failed { exit_code: *code })
+            }
             _ => None,
         }
     }
@@ -104,7 +111,11 @@ pub fn agent_label(kind: &AgentKind) -> String {
         AgentKind::OpenCode => "opencode".to_string(),
         AgentKind::Acp { command } => {
             let c = command.to_lowercase();
-            if c.contains("gemini") { "gemini".to_string() } else { "acp".to_string() }
+            if c.contains("gemini") {
+                "gemini".to_string()
+            } else {
+                "acp".to_string()
+            }
         }
     }
 }
@@ -154,7 +165,9 @@ impl AttentionModel {
     /// `WaitingInput` (the ACP driver emits both for one request).
     pub fn upsert(&mut self, mut item: AttentionItem, cx: &mut Context<Self>) {
         if let Some(old) = self.items.iter_mut().find(|i| i.id == item.id) {
-            if matches!(old.kind, AttentionKind::Approval { .. }) && item.kind == AttentionKind::WaitingInput {
+            if matches!(old.kind, AttentionKind::Approval { .. })
+                && item.kind == AttentionKind::WaitingInput
+            {
                 item.kind = old.kind.clone();
             }
             if old.kind == item.kind {
@@ -222,7 +235,11 @@ impl AttentionModel {
     /// continues after the last item jumped to, even if the host removed that item meanwhile (it
     /// then takes the item that moved into its place).
     pub fn next_target(&mut self) -> Option<FocusTarget> {
-        let order: Vec<(AttentionId, FocusTarget)> = self.items().into_iter().map(|i| (i.id.clone(), i.focus_target.clone())).collect();
+        let order: Vec<(AttentionId, FocusTarget)> = self
+            .items()
+            .into_iter()
+            .map(|i| (i.id.clone(), i.focus_target.clone()))
+            .collect();
         if order.is_empty() {
             self.cursor = None;
             return None;
@@ -252,7 +269,9 @@ impl AttentionModel {
     /// The user picked item `id`: emits `Jump` and remembers it for cycling.
     pub fn jump(&mut self, id: &str, cx: &mut Context<Self>) {
         let order = self.items();
-        let Some(ix) = order.iter().position(|i| i.id.as_ref() == id) else { return };
+        let Some(ix) = order.iter().position(|i| i.id.as_ref() == id) else {
+            return;
+        };
         let (item_id, target) = (order[ix].id.clone(), order[ix].focus_target.clone());
         self.cursor = Some((item_id, ix));
         cx.emit(AttentionEvent::Jump(target));
@@ -267,7 +286,9 @@ impl AttentionModel {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
-        cx.emit(AttentionEvent::Changed { count: self.items.len() });
+        cx.emit(AttentionEvent::Changed {
+            count: self.items.len(),
+        });
         cx.notify();
     }
 }
@@ -300,7 +321,10 @@ mod tests {
     }
 
     fn approval() -> AttentionKind {
-        AttentionKind::Approval { tool: "Bash".into(), detail: "rm -rf build".into() }
+        AttentionKind::Approval {
+            tool: "Bash".into(),
+            detail: "rm -rf build".into(),
+        }
     }
 
     fn ids(m: &AttentionModel) -> Vec<String> {
@@ -346,7 +370,10 @@ mod tests {
         m.update(cx, |m, cx| {
             m.upsert(item("a", approval(), 3), cx);
             m.upsert(item("a", AttentionKind::WaitingInput, 0), cx);
-            assert!(matches!(m.get("a").map(|i| &i.kind), Some(AttentionKind::Approval { .. })));
+            assert!(matches!(
+                m.get("a").map(|i| &i.kind),
+                Some(AttentionKind::Approval { .. })
+            ));
             assert_eq!(m.count(), 1);
         });
     }
@@ -380,7 +407,11 @@ mod tests {
         let m = cx.new(|_| AttentionModel::new());
         let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let log = events.clone();
-        let _sub = cx.update(|cx| cx.subscribe(&m, move |_, e: &AttentionEvent, _| log.borrow_mut().push(e.clone())));
+        let _sub = cx.update(|cx| {
+            cx.subscribe(&m, move |_, e: &AttentionEvent, _| {
+                log.borrow_mut().push(e.clone())
+            })
+        });
         m.update(cx, |m, cx| {
             m.upsert(item("a", AttentionKind::WaitingInput, 5), cx);
             m.upsert(item("b", approval(), 5), cx);
@@ -395,7 +426,10 @@ mod tests {
         assert_eq!(log[1], AttentionEvent::Changed { count: 2 });
         assert!(log.contains(&AttentionEvent::Jump(FocusTarget::from("target-a"))));
         assert!(log.contains(&AttentionEvent::Dismiss("b".into())));
-        assert!(!log.iter().any(|e| matches!(e, AttentionEvent::Dismiss(id) if id.as_ref() == "zzz")));
+        assert!(
+            !log.iter()
+                .any(|e| matches!(e, AttentionEvent::Dismiss(id) if id.as_ref() == "zzz"))
+        );
         m.read_with(cx, |m, _| assert_eq!(m.count(), 1));
     }
 
@@ -419,25 +453,61 @@ mod tests {
 
     #[test]
     fn agent_events_map_to_kinds() {
-        let req = AgentEvent::ApprovalRequest { id: "1".into(), tool: "Bash".into(), detail: "ls".into() };
-        assert_eq!(AttentionKind::from_agent_event(&req), Some(AttentionKind::Approval { tool: "Bash".into(), detail: "ls".into() }));
-        assert_eq!(AttentionKind::from_agent_event(&AgentEvent::Status(AgentStatus::WaitingForInput)), Some(AttentionKind::WaitingInput));
-        assert_eq!(AttentionKind::from_agent_event(&AgentEvent::Exited { code: Some(3) }), Some(AttentionKind::Failed { exit_code: 3 }));
-        assert_eq!(AttentionKind::from_agent_event(&AgentEvent::Exited { code: Some(0) }), None);
-        assert_eq!(AttentionKind::from_agent_event(&AgentEvent::Exited { code: None }), None);
-        assert_eq!(AttentionKind::from_agent_event(&AgentEvent::Status(AgentStatus::Working)), None);
-        assert_eq!(AttentionKind::from_agent_event(&AgentEvent::Status(AgentStatus::Done)), None);
+        let req = AgentEvent::ApprovalRequest {
+            id: "1".into(),
+            tool: "Bash".into(),
+            detail: "ls".into(),
+        };
+        assert_eq!(
+            AttentionKind::from_agent_event(&req),
+            Some(AttentionKind::Approval {
+                tool: "Bash".into(),
+                detail: "ls".into()
+            })
+        );
+        assert_eq!(
+            AttentionKind::from_agent_event(&AgentEvent::Status(AgentStatus::WaitingForInput)),
+            Some(AttentionKind::WaitingInput)
+        );
+        assert_eq!(
+            AttentionKind::from_agent_event(&AgentEvent::Exited { code: Some(3) }),
+            Some(AttentionKind::Failed { exit_code: 3 })
+        );
+        assert_eq!(
+            AttentionKind::from_agent_event(&AgentEvent::Exited { code: Some(0) }),
+            None
+        );
+        assert_eq!(
+            AttentionKind::from_agent_event(&AgentEvent::Exited { code: None }),
+            None
+        );
+        assert_eq!(
+            AttentionKind::from_agent_event(&AgentEvent::Status(AgentStatus::Working)),
+            None
+        );
+        assert_eq!(
+            AttentionKind::from_agent_event(&AgentEvent::Status(AgentStatus::Done)),
+            None
+        );
     }
 
     #[test]
     fn labels_and_times() {
         assert_eq!(agent_label(&AgentKind::ClaudeCode), "claude");
-        assert_eq!(agent_label(&AgentKind::Acp { command: "C:/x/Gemini.exe --acp".into() }), "gemini");
+        assert_eq!(
+            agent_label(&AgentKind::Acp {
+                command: "C:/x/Gemini.exe --acp".into()
+            }),
+            "gemini"
+        );
         assert_eq!(format_wait(5), "5 s");
         assert_eq!(format_wait(60), "1 min");
         assert_eq!(format_wait(3_900), "1 h 05");
         assert_eq!(format_wait(2 * 86_400), "2 d");
-        assert_eq!(AttentionKind::Failed { exit_code: 2 }.text(), "Falló (código 2)");
+        assert_eq!(
+            AttentionKind::Failed { exit_code: 2 }.text(),
+            "Falló (código 2)"
+        );
         assert_eq!(approval().detail(), Some("rm -rf build"));
         assert_eq!(AttentionKind::WaitingInput.detail(), None);
     }

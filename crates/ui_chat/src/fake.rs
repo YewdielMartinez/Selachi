@@ -109,7 +109,9 @@ impl AgentControl for FakeControl {
         let steps = (self.owner.script)(n, text);
         if steps.iter().all(|s| s.delay_ms == 0) {
             for s in steps {
-                self.tx.unbounded_send(s.event).map_err(|_| DriverError::Closed)?;
+                self.tx
+                    .unbounded_send(s.event)
+                    .map_err(|_| DriverError::Closed)?;
             }
         } else {
             let tx = self.tx.clone();
@@ -137,7 +139,12 @@ impl AgentControl for FakeControl {
     }
 
     fn approve(&mut self, id: &str, decision: ApprovalDecision) -> agents_driver::Result<()> {
-        self.owner.rec.lock().unwrap().approvals.push((id.to_string(), decision));
+        self.owner
+            .rec
+            .lock()
+            .unwrap()
+            .approvals
+            .push((id.to_string(), decision));
         let steps = self.owner.on_approve.lock().unwrap().clone();
         if !steps.is_empty() {
             let tx = self.tx.clone();
@@ -165,7 +172,12 @@ impl AgentControl for FakeControl {
 pub struct FactoryHandle(pub Arc<FakeFactory>);
 
 impl DriverFactory for FactoryHandle {
-    fn spawn(&self, kind: &AgentKind, cfg: &ThreadConfig, job: Option<JobHandle>) -> agents_driver::Result<SpawnedAgent> {
+    fn spawn(
+        &self,
+        kind: &AgentKind,
+        cfg: &ThreadConfig,
+        job: Option<JobHandle>,
+    ) -> agents_driver::Result<SpawnedAgent> {
         let f = &self.0;
         if f.fail_spawn.load(Ordering::SeqCst) {
             return Err(DriverError::NotFound("claude".into()));
@@ -176,6 +188,13 @@ impl DriverFactory for FactoryHandle {
             r.spawns.push((kind.clone(), cfg.clone(), job));
             r.txs.push(tx.clone());
         }
-        Ok(SpawnedAgent { control: Box::new(FakeControl { owner: f.clone(), tx }), events, pid: Some(4242) })
+        Ok(SpawnedAgent {
+            control: Box::new(FakeControl {
+                owner: f.clone(),
+                tx,
+            }),
+            events,
+            pid: Some(4242),
+        })
     }
 }

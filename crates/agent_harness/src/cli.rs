@@ -65,13 +65,33 @@ EXIT CODES
 pub enum Command {
     Help,
     Version,
-    List { json: bool, models: bool },
+    List {
+        json: bool,
+        models: bool,
+    },
     Run(RunArgs),
-    Status { id: String, json: bool },
-    Result { id: String, json: bool },
-    Cancel { id: String, json: bool },
-    Diff { id: String, stat: bool },
-    Apply { id: String, dry_run: bool, yes: bool, json: bool },
+    Status {
+        id: String,
+        json: bool,
+    },
+    Result {
+        id: String,
+        json: bool,
+    },
+    Cancel {
+        id: String,
+        json: bool,
+    },
+    Diff {
+        id: String,
+        stat: bool,
+    },
+    Apply {
+        id: String,
+        dry_run: bool,
+        yes: bool,
+        json: bool,
+    },
     /// MCP server on stdio.
     Mcp,
 }
@@ -102,7 +122,10 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
         Some('h') => (&s[..s.len() - 1], 3600),
         _ => (s, 1),
     };
-    let n: u64 = num.trim().parse().map_err(|_| format!("`{s}` is not a duration (use 90, 90s, 15m or 1h)"))?;
+    let n: u64 = num
+        .trim()
+        .parse()
+        .map_err(|_| format!("`{s}` is not a duration (use 90, 90s, 15m or 1h)"))?;
     if n == 0 {
         return Err("the timeout must be greater than zero".into());
     }
@@ -112,7 +135,9 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 /// Parse the arguments after the program name.
 pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut it = args.iter().peekable();
-    let Some(sub) = it.next() else { return Ok(Command::Help) };
+    let Some(sub) = it.next() else {
+        return Ok(Command::Help);
+    };
     let sub = sub.as_str();
     if matches!(sub, "-h" | "--help" | "help") {
         return Ok(Command::Help);
@@ -124,7 +149,13 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     // flags: `--name value` or `--name=value`; everything else is positional
     let mut positional: Vec<String> = Vec::new();
     let mut flags: Vec<(String, Option<String>)> = Vec::new();
-    let value_flags = ["--cwd", "--model", "--permission", "--timeout", "--budget-tokens"];
+    let value_flags = [
+        "--cwd",
+        "--model",
+        "--permission",
+        "--timeout",
+        "--budget-tokens",
+    ];
     let mut only_positional = false;
     while let Some(a) = it.next() {
         if only_positional || !a.starts_with("--") {
@@ -142,7 +173,10 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         if value_flags.contains(&name.as_str()) {
             let v = match inline {
                 Some(v) => v,
-                None => it.next().cloned().ok_or_else(|| format!("{name} needs a value"))?,
+                None => it
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| format!("{name} needs a value"))?,
             };
             flags.push((name, Some(v)));
         } else {
@@ -153,15 +187,34 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         }
     }
     let has = |n: &str| flags.iter().any(|(f, _)| f == n);
-    let val = |n: &str| flags.iter().rev().find(|(f, _)| f == n).and_then(|(_, v)| v.clone());
+    let val = |n: &str| {
+        flags
+            .iter()
+            .rev()
+            .find(|(f, _)| f == n)
+            .and_then(|(_, v)| v.clone())
+    };
     let allowed: &[&str] = match sub {
         "list" => &["--json", "--models"],
-        "run" => &["--cwd", "--model", "--permission", "--worktree", "--timeout", "--budget-tokens", "--json", "--announce-run-id"],
+        "run" => &[
+            "--cwd",
+            "--model",
+            "--permission",
+            "--worktree",
+            "--timeout",
+            "--budget-tokens",
+            "--json",
+            "--announce-run-id",
+        ],
         "status" | "result" | "cancel" => &["--json"],
         "diff" => &["--stat"],
         "apply" => &["--dry-run", "--yes", "--json"],
         "mcp" => &[],
-        other => return Err(format!("unknown command `{other}`; see `selachi-agent --help`")),
+        other => {
+            return Err(format!(
+                "unknown command `{other}`; see `selachi-agent --help`"
+            ))
+        }
     };
     if let Some((bad, _)) = flags.iter().find(|(f, _)| !allowed.contains(&f.as_str())) {
         return Err(format!("`{sub}` does not take {bad}"));
@@ -179,17 +232,24 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             if !positional.is_empty() {
                 return Err("`list` takes no arguments".into());
             }
-            Command::List { json: has("--json"), models: has("--models") }
+            Command::List {
+                json: has("--json"),
+                models: has("--models"),
+            }
         }
         "run" => {
             let mut p = positional.into_iter();
-            let agent = p.next().ok_or("`run` needs an agent (claude, codex, opencode, gemini, agy) and a prompt")?;
+            let agent = p.next().ok_or(
+                "`run` needs an agent (claude, codex, opencode, gemini, agy) and a prompt",
+            )?;
             let prompt = p.collect::<Vec<_>>().join(" ");
             if prompt.trim().is_empty() {
                 return Err("`run` needs a prompt (use - to read it from stdin)".into());
             }
             let permission = match val("--permission") {
-                Some(v) => Permission::parse(&v).ok_or_else(|| format!("unknown permission `{v}` (read-only, ask, accept-edits)"))?,
+                Some(v) => Permission::parse(&v).ok_or_else(|| {
+                    format!("unknown permission `{v}` (read-only, ask, accept-edits)")
+                })?,
                 None => Permission::ReadOnly,
             };
             Command::Run(RunArgs {
@@ -201,7 +261,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 worktree: has("--worktree"),
                 timeout: val("--timeout").map(|v| parse_duration(&v)).transpose()?,
                 budget_tokens: val("--budget-tokens")
-                    .map(|v| v.replace('_', "").parse::<u64>().map_err(|_| format!("--budget-tokens `{v}` is not a number")))
+                    .map(|v| {
+                        v.replace('_', "")
+                            .parse::<u64>()
+                            .map_err(|_| format!("--budget-tokens `{v}` is not a number"))
+                    })
                     .transpose()?,
                 json: has("--json"),
                 announce_run_id: has("--announce-run-id"),
@@ -213,11 +277,28 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             }
             Command::Mcp
         }
-        "status" => Command::Status { id: one_id(&positional)?, json: has("--json") },
-        "result" => Command::Result { id: one_id(&positional)?, json: has("--json") },
-        "cancel" => Command::Cancel { id: one_id(&positional)?, json: has("--json") },
-        "diff" => Command::Diff { id: one_id(&positional)?, stat: has("--stat") },
-        "apply" => Command::Apply { id: one_id(&positional)?, dry_run: has("--dry-run"), yes: has("--yes"), json: has("--json") },
+        "status" => Command::Status {
+            id: one_id(&positional)?,
+            json: has("--json"),
+        },
+        "result" => Command::Result {
+            id: one_id(&positional)?,
+            json: has("--json"),
+        },
+        "cancel" => Command::Cancel {
+            id: one_id(&positional)?,
+            json: has("--json"),
+        },
+        "diff" => Command::Diff {
+            id: one_id(&positional)?,
+            stat: has("--stat"),
+        },
+        "apply" => Command::Apply {
+            id: one_id(&positional)?,
+            dry_run: has("--dry-run"),
+            yes: has("--yes"),
+            json: has("--json"),
+        },
         _ => unreachable!("filtered above"),
     })
 }
@@ -274,9 +355,18 @@ fn execute(cmd: Command) -> Result<i32, String> {
         Command::List { json, models } => {
             let h = harness(false)?;
             warn_config(&h);
-            let list = list_agents(h.config(), h.caller(), h.usage_probe().as_ref(), h.data_dir(), models);
+            let list = list_agents(
+                h.config(),
+                h.caller(),
+                h.usage_probe().as_ref(),
+                h.data_dir(),
+                models,
+            );
             if json {
-                println!("{}", serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?
+                );
             } else {
                 print!("{}", list.to_text());
             }
@@ -288,7 +378,9 @@ fn execute(cmd: Command) -> Result<i32, String> {
             warn_config(&h);
             let prompt = if a.prompt.trim() == "-" {
                 let mut s = String::new();
-                std::io::stdin().read_to_string(&mut s).map_err(|e| format!("cannot read the prompt from stdin: {e}"))?;
+                std::io::stdin()
+                    .read_to_string(&mut s)
+                    .map_err(|e| format!("cannot read the prompt from stdin: {e}"))?;
                 s
             } else {
                 a.prompt.clone()
@@ -307,7 +399,11 @@ fn execute(cmd: Command) -> Result<i32, String> {
             // not println!: when the caller (the MCP server) is gone the run is already saved, and a
             // closed pipe must not turn into a panic
             let mut out = std::io::stdout();
-            let _ = if a.json { writeln!(out, "{}", result.to_json()) } else { write!(out, "{}", result.to_text()) };
+            let _ = if a.json {
+                writeln!(out, "{}", result.to_json())
+            } else {
+                write!(out, "{}", result.to_text())
+            };
             let _ = out.flush();
             Ok(result.status.exit_code())
         }
@@ -327,19 +423,28 @@ fn execute(cmd: Command) -> Result<i32, String> {
             } else {
                 print!("{}", r.to_text());
             }
-            Ok(if r.status == RunStatus::Done { 0 } else { r.status.exit_code() })
+            Ok(if r.status == RunStatus::Done {
+                0
+            } else {
+                r.status.exit_code()
+            })
         }
         Command::Cancel { id, json } => {
             let out = harness(false)?.cancel(&id)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
+                );
             } else {
                 println!(
                     "{}",
                     match &out {
-                        CancelOutcome::AlreadyFinished { status } => format!("run {id} had already finished ({})", status.as_str()),
+                        CancelOutcome::AlreadyFinished { status } =>
+                            format!("run {id} had already finished ({})", status.as_str()),
                         CancelOutcome::Cancelled => format!("run {id} cancelled"),
-                        CancelOutcome::Killed => format!("run {id} cancelled (its runner had to be killed)"),
+                        CancelOutcome::Killed =>
+                            format!("run {id} cancelled (its runner had to be killed)"),
                     }
                 );
             }
@@ -356,7 +461,12 @@ fn execute(cmd: Command) -> Result<i32, String> {
             }
             Ok(0)
         }
-        Command::Apply { id, dry_run, yes, json } => apply_command(&harness(false)?, &id, dry_run, yes, json),
+        Command::Apply {
+            id,
+            dry_run,
+            yes,
+            json,
+        } => apply_command(&harness(false)?, &id, dry_run, yes, json),
     }
 }
 
@@ -374,7 +484,13 @@ fn ask(prompt: &str) -> Option<String> {
     Some(line.trim().to_string())
 }
 
-fn apply_command(h: &Harness, id: &str, dry_run: bool, yes: bool, json: bool) -> Result<i32, String> {
+fn apply_command(
+    h: &Harness,
+    id: &str,
+    dry_run: bool,
+    yes: bool,
+    json: bool,
+) -> Result<i32, String> {
     let mut plan = h.apply_plan(id)?;
     if dry_run {
         plan.dry_run = true;
@@ -401,12 +517,17 @@ fn apply_command(h: &Harness, id: &str, dry_run: bool, yes: bool, json: bool) ->
             return Err("this plan cannot be applied (see above)".into());
         }
         let (question, expected) = if plan.risk == Risk::Full {
-            ("This is a FULL-risk apply. Type `apply` to continue: ", "apply")
+            (
+                "This is a FULL-risk apply. Type `apply` to continue: ",
+                "apply",
+            )
         } else {
             ("Apply these changes to the project? [y/N] ", "y")
         };
         let answer = ask(question).unwrap_or_default();
-        if !answer.eq_ignore_ascii_case(expected) && !(expected == "y" && answer.eq_ignore_ascii_case("yes")) {
+        if !answer.eq_ignore_ascii_case(expected)
+            && !(expected == "y" && answer.eq_ignore_ascii_case("yes"))
+        {
             println!("not applied");
             return Ok(1);
         }
@@ -419,9 +540,16 @@ fn apply_command(h: &Harness, id: &str, dry_run: bool, yes: bool, json: bool) ->
     };
     let report = h.apply(id, confirmation)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
     } else {
-        println!("applied {} file(s) to {}", report.files.len(), report.target);
+        println!(
+            "applied {} file(s) to {}",
+            report.files.len(),
+            report.target
+        );
     }
     Ok(0)
 }
@@ -447,13 +575,27 @@ mod tests {
     #[test]
     fn run_command_line() {
         let args: Vec<String> = [
-            "run", "codex", "--cwd", "C:/p", "--permission=accept-edits", "--worktree", "--timeout", "5m", "--budget-tokens", "50_000",
-            "--json", "revisa", "los", "tests",
+            "run",
+            "codex",
+            "--cwd",
+            "C:/p",
+            "--permission=accept-edits",
+            "--worktree",
+            "--timeout",
+            "5m",
+            "--budget-tokens",
+            "50_000",
+            "--json",
+            "revisa",
+            "los",
+            "tests",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
-        let Command::Run(a) = parse(&args).unwrap() else { panic!("not run") };
+        let Command::Run(a) = parse(&args).unwrap() else {
+            panic!("not run")
+        };
         assert_eq!(a.agent, "codex");
         assert_eq!(a.prompt, "revisa los tests");
         assert_eq!(a.cwd, Some(PathBuf::from("C:/p")));
@@ -465,8 +607,13 @@ mod tests {
 
     #[test]
     fn defaults_and_errors() {
-        let Command::Run(a) = p("run claude hola").unwrap() else { panic!() };
-        assert_eq!((a.permission, a.worktree, a.timeout, a.model), (Permission::ReadOnly, false, None, None));
+        let Command::Run(a) = p("run claude hola").unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            (a.permission, a.worktree, a.timeout, a.model),
+            (Permission::ReadOnly, false, None, None)
+        );
         assert!(p("run codex").is_err(), "a prompt is required");
         assert!(p("run").is_err());
         assert!(p("run codex --permission root x").is_err());
@@ -477,15 +624,40 @@ mod tests {
         assert!(p("list extra").is_err());
         assert_eq!(p("").unwrap(), Command::Help);
         assert_eq!(p("--help").unwrap(), Command::Help);
-        assert_eq!(p("list --json --models").unwrap(), Command::List { json: true, models: true });
-        assert_eq!(p("apply 7 --dry-run").unwrap(), Command::Apply { id: "7".into(), dry_run: true, yes: false, json: false });
-        assert_eq!(p("diff 3 --stat").unwrap(), Command::Diff { id: "3".into(), stat: true });
+        assert_eq!(
+            p("list --json --models").unwrap(),
+            Command::List {
+                json: true,
+                models: true
+            }
+        );
+        assert_eq!(
+            p("apply 7 --dry-run").unwrap(),
+            Command::Apply {
+                id: "7".into(),
+                dry_run: true,
+                yes: false,
+                json: false
+            }
+        );
+        assert_eq!(
+            p("diff 3 --stat").unwrap(),
+            Command::Diff {
+                id: "3".into(),
+                stat: true
+            }
+        );
     }
 
     #[test]
     fn double_dash_ends_flags() {
-        let args: Vec<String> = ["run", "codex", "--", "--json", "is", "text"].iter().map(|s| s.to_string()).collect();
-        let Command::Run(a) = parse(&args).unwrap() else { panic!() };
+        let args: Vec<String> = ["run", "codex", "--", "--json", "is", "text"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let Command::Run(a) = parse(&args).unwrap() else {
+            panic!()
+        };
         assert_eq!(a.prompt, "--json is text");
         assert!(!a.json);
     }

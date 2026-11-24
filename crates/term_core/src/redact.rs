@@ -18,7 +18,16 @@
 pub const REDACTED: &str = "[REDACTED]";
 
 const KEY_WORDS: &[&str] = &["SECRET", "TOKEN", "PASSWORD", "PASSWD", "KEY", "CREDENTIAL"];
-const FLAG_NAMES: &[&str] = &["password", "passwd", "token", "secret", "api-key", "apikey", "access-key", "secret-key"];
+const FLAG_NAMES: &[&str] = &[
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "api-key",
+    "apikey",
+    "access-key",
+    "secret-key",
+];
 
 /// Redacts secrets in `text`; returns the new text and how many secrets were hidden.
 pub fn redact(text: &str) -> (String, usize) {
@@ -55,7 +64,10 @@ fn redact_private_keys(text: &str) -> (String, usize) {
     let (mut i, mut count) = (0, 0);
     while let Some(start) = find_ci(b, i, BEGIN) {
         // Only `... PRIVATE KEY-----` headers on the same line count.
-        let line_end = b[start..].iter().position(|&c| c == b'\n').map_or(b.len(), |p| start + p);
+        let line_end = b[start..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |p| start + p);
         let header = &text[start..line_end];
         if !(header.to_ascii_uppercase().contains("PRIVATE KEY-----")) {
             out.push_str(&text[i..start + BEGIN.len()]);
@@ -103,22 +115,86 @@ fn jwt_chars(b: u8) -> bool {
 }
 
 const SHAPES: &[Shape] = &[
-    Shape { prefix: "sk-", min_tail: 16, tail: alnum_dash },
-    Shape { prefix: "ghp_", min_tail: 20, tail: alnum_us },
-    Shape { prefix: "gho_", min_tail: 20, tail: alnum_us },
-    Shape { prefix: "ghu_", min_tail: 20, tail: alnum_us },
-    Shape { prefix: "ghs_", min_tail: 20, tail: alnum_us },
-    Shape { prefix: "ghr_", min_tail: 20, tail: alnum_us },
-    Shape { prefix: "github_pat_", min_tail: 20, tail: alnum_us },
-    Shape { prefix: "xoxb-", min_tail: 10, tail: alnum_hyphen },
-    Shape { prefix: "xoxa-", min_tail: 10, tail: alnum_hyphen },
-    Shape { prefix: "xoxp-", min_tail: 10, tail: alnum_hyphen },
-    Shape { prefix: "xoxr-", min_tail: 10, tail: alnum_hyphen },
-    Shape { prefix: "xoxs-", min_tail: 10, tail: alnum_hyphen },
-    Shape { prefix: "AKIA", min_tail: 16, tail: upper_digit },
-    Shape { prefix: "ASIA", min_tail: 16, tail: upper_digit },
-    Shape { prefix: "AIza", min_tail: 30, tail: alnum_dash },
-    Shape { prefix: "eyJ", min_tail: 20, tail: jwt_chars },
+    Shape {
+        prefix: "sk-",
+        min_tail: 16,
+        tail: alnum_dash,
+    },
+    Shape {
+        prefix: "ghp_",
+        min_tail: 20,
+        tail: alnum_us,
+    },
+    Shape {
+        prefix: "gho_",
+        min_tail: 20,
+        tail: alnum_us,
+    },
+    Shape {
+        prefix: "ghu_",
+        min_tail: 20,
+        tail: alnum_us,
+    },
+    Shape {
+        prefix: "ghs_",
+        min_tail: 20,
+        tail: alnum_us,
+    },
+    Shape {
+        prefix: "ghr_",
+        min_tail: 20,
+        tail: alnum_us,
+    },
+    Shape {
+        prefix: "github_pat_",
+        min_tail: 20,
+        tail: alnum_us,
+    },
+    Shape {
+        prefix: "xoxb-",
+        min_tail: 10,
+        tail: alnum_hyphen,
+    },
+    Shape {
+        prefix: "xoxa-",
+        min_tail: 10,
+        tail: alnum_hyphen,
+    },
+    Shape {
+        prefix: "xoxp-",
+        min_tail: 10,
+        tail: alnum_hyphen,
+    },
+    Shape {
+        prefix: "xoxr-",
+        min_tail: 10,
+        tail: alnum_hyphen,
+    },
+    Shape {
+        prefix: "xoxs-",
+        min_tail: 10,
+        tail: alnum_hyphen,
+    },
+    Shape {
+        prefix: "AKIA",
+        min_tail: 16,
+        tail: upper_digit,
+    },
+    Shape {
+        prefix: "ASIA",
+        min_tail: 16,
+        tail: upper_digit,
+    },
+    Shape {
+        prefix: "AIza",
+        min_tail: 30,
+        tail: alnum_dash,
+    },
+    Shape {
+        prefix: "eyJ",
+        min_tail: 20,
+        tail: jwt_chars,
+    },
 ];
 
 fn redact_tokens(text: &str) -> (String, usize) {
@@ -127,9 +203,7 @@ fn redact_tokens(text: &str) -> (String, usize) {
     let (mut i, mut last, mut count) = (0, 0, 0);
     while i < b.len() {
         let boundary = i == 0 || !is_ident(b[i - 1]);
-        if boundary
-            && let Some(end) = match_shape(&b[i..]).map(|n| i + n)
-        {
+        if boundary && let Some(end) = match_shape(&b[i..]).map(|n| i + n) {
             out.push_str(&text[last..i]);
             out.push_str(REDACTED);
             count += 1;
@@ -150,7 +224,10 @@ fn match_shape(s: &[u8]) -> Option<usize> {
         if !s.starts_with(p) {
             continue;
         }
-        let tail = s[p.len()..].iter().take_while(|&&c| (shape.tail)(c)).count();
+        let tail = s[p.len()..]
+            .iter()
+            .take_while(|&&c| (shape.tail)(c))
+            .count();
         if tail < shape.min_tail {
             continue;
         }
@@ -180,7 +257,10 @@ fn redact_bearer(text: &str) -> (String, usize) {
         };
         if let Some(w) = word {
             let start = i + w;
-            let len = b[start..].iter().take_while(|&&c| !c.is_ascii_whitespace() && c != b'"' && c != b'\'').count();
+            let len = b[start..]
+                .iter()
+                .take_while(|&&c| !c.is_ascii_whitespace() && c != b'"' && c != b'\'')
+                .count();
             // `Basic` is a common English word: require something credential-like.
             let min = if w == 7 { 8 } else { 12 };
             let token = &text[start..start + len];
@@ -212,11 +292,17 @@ fn value_span(s: &[u8]) -> Option<(usize, usize)> {
         q @ (b'"' | b'\'') => {
             let close = s[1..].iter().position(|c| c == q)?;
             (close > 0).then_some((1, 1 + close))
-        },
+        }
         _ => {
-            let len = s.iter().take_while(|&&c| !c.is_ascii_whitespace() && !matches!(c, b'&' | b',' | b';' | b'"' | b'\'' | b')' | b'}')).count();
+            let len = s
+                .iter()
+                .take_while(|&&c| {
+                    !c.is_ascii_whitespace()
+                        && !matches!(c, b'&' | b',' | b';' | b'"' | b'\'' | b')' | b'}')
+                })
+                .count();
             (len > 0).then_some((0, len))
-        },
+        }
     }
 }
 
@@ -226,14 +312,22 @@ fn redact_key_values(text: &str) -> (String, usize) {
     let (mut i, mut last, mut count) = (0, 0, 0);
     while i < b.len() {
         // A name starts at an identifier char that is not preceded by one.
-        if !(is_ident(b[i]) && (i == 0 || !(is_ident(b[i - 1]) || b[i - 1] == b'-' || b[i - 1] == b'.'))) {
+        if !(is_ident(b[i])
+            && (i == 0 || !(is_ident(b[i - 1]) || b[i - 1] == b'-' || b[i - 1] == b'.')))
+        {
             i += 1;
             continue;
         }
         // Names may contain `-` and `.` (`api-key`, `app.secret`).
-        let name_len = b[i..].iter().take_while(|&&c| is_ident(c) || c == b'-' || c == b'.').count();
+        let name_len = b[i..]
+            .iter()
+            .take_while(|&&c| is_ident(c) || c == b'-' || c == b'.')
+            .count();
         let name_end = i + name_len;
-        let quoted_key = i > 0 && matches!(b[i - 1], b'"' | b'\'') && name_end < b.len() && b[name_end] == b[i - 1];
+        let quoted_key = i > 0
+            && matches!(b[i - 1], b'"' | b'\'')
+            && name_end < b.len()
+            && b[name_end] == b[i - 1];
         let mut j = if quoted_key { name_end + 1 } else { name_end };
         while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
             j += 1;
@@ -279,10 +373,15 @@ fn redact_flags(text: &str) -> (String, usize) {
     let mut out = String::with_capacity(text.len());
     let (mut i, mut last, mut count) = (0, 0, 0);
     while i < b.len() {
-        let at_flag = b[i] == b'-' && b.get(i + 1) == Some(&b'-') && (i == 0 || b[i - 1].is_ascii_whitespace());
+        let at_flag = b[i] == b'-'
+            && b.get(i + 1) == Some(&b'-')
+            && (i == 0 || b[i - 1].is_ascii_whitespace());
         if at_flag {
             let name_start = i + 2;
-            let name_len = b[name_start..].iter().take_while(|&&c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_').count();
+            let name_len = b[name_start..]
+                .iter()
+                .take_while(|&&c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+                .count();
             let name = &text[name_start..name_start + name_len];
             if FLAG_NAMES.iter().any(|f| name.eq_ignore_ascii_case(f)) {
                 let mut v = name_start + name_len;
@@ -321,25 +420,77 @@ mod tests {
             // Token shapes.
             ("key sk-abcdefghijklmnop1234 end", "key [REDACTED] end", 1),
             ("sk-ant-api03-AbCdEf_ghIJKLmnop-qrstuv", "[REDACTED]", 1),
-            ("export T=ghp_abcdefghijklmnopqrstuvwx", "export T=[REDACTED]", 1),
+            (
+                "export T=ghp_abcdefghijklmnopqrstuvwx",
+                "export T=[REDACTED]",
+                1,
+            ),
             ("github_pat_11ABCDEFG0abcdefghijklmnop_xyz", "[REDACTED]", 1),
-            ("slack xoxb-1234567890-abcdefghij ok", "slack [REDACTED] ok", 1),
-            ("AKIAIOSFODNN7EXAMPLE and ASIAIOSFODNN7EXAMPLE", "[REDACTED] and [REDACTED]", 2),
-            ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r", "[REDACTED]", 1),
+            (
+                "slack xoxb-1234567890-abcdefghij ok",
+                "slack [REDACTED] ok",
+                1,
+            ),
+            (
+                "AKIAIOSFODNN7EXAMPLE and ASIAIOSFODNN7EXAMPLE",
+                "[REDACTED] and [REDACTED]",
+                2,
+            ),
+            (
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r",
+                "[REDACTED]",
+                1,
+            ),
             // Authorization.
-            ("Authorization: Bearer abc123def456ghi", "Authorization: Bearer [REDACTED]", 1),
-            ("curl -H 'authorization: bearer ZZZZZZZZZZ'", "curl -H 'authorization: bearer [REDACTED]'", 1),
+            (
+                "Authorization: Bearer abc123def456ghi",
+                "Authorization: Bearer [REDACTED]",
+                1,
+            ),
+            (
+                "curl -H 'authorization: bearer ZZZZZZZZZZ'",
+                "curl -H 'authorization: bearer [REDACTED]'",
+                1,
+            ),
             // name=value.
-            ("password=hunter2 user=bob", "password=[REDACTED] user=bob", 1),
+            (
+                "password=hunter2 user=bob",
+                "password=[REDACTED] user=bob",
+                1,
+            ),
             ("DB_PASSWORD=\"p w d\"", "DB_PASSWORD=\"[REDACTED]\"", 1),
-            ("API_KEY=abc\nSECRET_TOKEN = xyz\nHOME=C:\\x", "API_KEY=[REDACTED]\nSECRET_TOKEN = [REDACTED]\nHOME=C:\\x", 2),
-            ("$env:GITHUB_TOKEN = 'abc123'", "$env:GITHUB_TOKEN = '[REDACTED]'", 1),
-            ("https://x/y?token=abc123&page=2", "https://x/y?token=[REDACTED]&page=2", 1),
+            (
+                "API_KEY=abc\nSECRET_TOKEN = xyz\nHOME=C:\\x",
+                "API_KEY=[REDACTED]\nSECRET_TOKEN = [REDACTED]\nHOME=C:\\x",
+                2,
+            ),
+            (
+                "$env:GITHUB_TOKEN = 'abc123'",
+                "$env:GITHUB_TOKEN = '[REDACTED]'",
+                1,
+            ),
+            (
+                "https://x/y?token=abc123&page=2",
+                "https://x/y?token=[REDACTED]&page=2",
+                1,
+            ),
             ("client_secret: 'abc'", "client_secret: '[REDACTED]'", 1),
-            ("{\"password\": \"s3cret\", \"user\": \"u\"}", "{\"password\": \"[REDACTED]\", \"user\": \"u\"}", 1),
+            (
+                "{\"password\": \"s3cret\", \"user\": \"u\"}",
+                "{\"password\": \"[REDACTED]\", \"user\": \"u\"}",
+                1,
+            ),
             // Flags.
-            ("tool --password hunter2 --verbose", "tool --password [REDACTED] --verbose", 1),
-            ("tool --token=abc --other x", "tool --token=[REDACTED] --other x", 1),
+            (
+                "tool --password hunter2 --verbose",
+                "tool --password [REDACTED] --verbose",
+                1,
+            ),
+            (
+                "tool --token=abc --other x",
+                "tool --token=[REDACTED] --other x",
+                1,
+            ),
             ("tool --api-key \"k k\"", "tool --api-key \"[REDACTED]\"", 1),
         ];
         for (input, want, n) in cases {
@@ -351,7 +502,10 @@ mod tests {
     #[test]
     fn private_key_blocks() {
         let text = "before\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nabc\n-----END RSA PRIVATE KEY-----\nafter";
-        assert_eq!(redact(text), ("before\n[REDACTED PRIVATE KEY]\nafter".to_string(), 1));
+        assert_eq!(
+            redact(text),
+            ("before\n[REDACTED PRIVATE KEY]\nafter".to_string(), 1)
+        );
         // Unterminated: everything to the end goes.
         let (s, n) = redact("x\n-----BEGIN PRIVATE KEY-----\nMIIE\nmore");
         assert_eq!((s.as_str(), n), ("x\n[REDACTED PRIVATE KEY]", 1));

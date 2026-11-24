@@ -1,8 +1,8 @@
 //! Small shared pieces of the chat UI built from ui_kit primitives and theme tokens.
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, IntoElement, ParentElement as _, SharedString, Stateful, Styled as _,
-    Window, div, prelude::*, px,
+    AnyElement, App, ClickEvent, Div, ElementId, IntoElement, ParentElement as _, SharedString,
+    Stateful, Styled as _, Window, div, prelude::*, px,
 };
 use theme::{Radius, Rgba, Theme};
 use ui_kit::{FileIcon, Icon, Spinner, file_icon, icon};
@@ -39,7 +39,10 @@ pub fn menu_row(
         .text_size(px(ty.ui_size_md))
         .text_color(if enabled { c.text } else { c.muted })
         .when(selected, |d| d.bg(c.surface_3))
-        .when(enabled, |d| d.cursor_pointer().when(!selected, |d| d.hover(move |s| s.bg(hover))))
+        .when(enabled, |d| {
+            d.cursor_pointer()
+                .when(!selected, |d| d.hover(move |s| s.bg(hover)))
+        })
         .when(!enabled, |d| d.opacity(0.55))
         .when_some(lead, |d, l| d.child(l))
         .child(
@@ -48,8 +51,21 @@ pub fn menu_row(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap().child(label.into()))
-                .when_some(hint, |d, h| d.child(div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(h))),
+                .child(
+                    div()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(label.into()),
+                )
+                .when_some(hint, |d, h| {
+                    d.child(
+                        div()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.muted)
+                            .child(h),
+                    )
+                }),
         )
         .when(selected, |d| d.child(icon(Icon::Check, 16.0, c.text)));
     if enabled {
@@ -80,7 +96,14 @@ pub fn file_chip(theme: &Theme, name: &str, color: Rgba) -> Div {
         .text_size(px(ty.ui_size_sm))
         .text_color(color)
         .child(file_glyph(name, color))
-        .child(div().max_w(px(260.0)).overflow_hidden().text_ellipsis().whitespace_nowrap().child(SharedString::from(name.to_string())))
+        .child(
+            div()
+                .max_w(px(260.0))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(SharedString::from(name.to_string())),
+        )
 }
 
 /// The collapsed one-line row of tool activity: lead glyph, label, trailing meta and a chevron.
@@ -109,13 +132,31 @@ pub fn tool_line(
         .text_size(px(ty.ui_size_md))
         .text_color(muted)
         .child(lead)
-        .child(div().min_w_0().flex_shrink().overflow_hidden().whitespace_nowrap().child(label))
+        .child(
+            div()
+                .min_w_0()
+                .flex_shrink()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(label),
+        )
         .when_some(meta, |d, m| d.child(m))
         .when_some(chevron, |d, open| {
-            d.child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 14.0, muted))
+            d.child(icon(
+                if open {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                },
+                14.0,
+                muted,
+            ))
         });
     if let Some(f) = on_click {
-        row = row.cursor_pointer().hover(move |s| s.text_color(text)).on_click(move |e, w, cx| f(e, w, cx));
+        row = row
+            .cursor_pointer()
+            .hover(move |s| s.text_color(text))
+            .on_click(move |e, w, cx| f(e, w, cx));
     }
     row
 }

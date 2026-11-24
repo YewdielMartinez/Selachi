@@ -2,17 +2,16 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_TIMEOUT};
 use windows::Win32::Security::{
-    GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetLengthSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_WIN32,
-    QueryFullProcessImageNameW,
-    WaitForSingleObject,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
+    WaitForSingleObject, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_WIN32,
 };
-use windows::core::PWSTR;
 
 /// A Win32 handle closed on drop. Kernel handles are thread-safe.
 #[derive(Debug)]
@@ -79,7 +78,12 @@ pub(crate) fn image_path(h: &OwnedHandle) -> Option<String> {
     let mut len = buf.len() as u32;
     // SAFETY: `buf` is valid for `len` u16s; `len` is updated by the call.
     let ok = unsafe {
-        QueryFullProcessImageNameW(h.raw(), PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len)
+        QueryFullProcessImageNameW(
+            h.raw(),
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
     };
     ok.ok()?;
     Some(String::from_utf16_lossy(&buf[..len as usize]))

@@ -96,7 +96,11 @@ impl LogWatcher {
                     if !dir.is_dir() {
                         continue;
                     }
-                    let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
+                    let mode = if recursive {
+                        RecursiveMode::Recursive
+                    } else {
+                        RecursiveMode::NonRecursive
+                    };
                     match w.watch(&dir, mode) {
                         Ok(()) => watched += 1,
                         Err(e) => log::warn!("usage: cannot watch {}: {e}", dir.display()),
@@ -109,7 +113,10 @@ impl LogWatcher {
                 None
             }
         };
-        LogWatcher { shared, _watcher: watcher }
+        LogWatcher {
+            shared,
+            _watcher: watcher,
+        }
     }
 
     /// Is anything pending? Lock-free.
@@ -168,7 +175,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let claude = tmp.path().join("claude");
         std::fs::create_dir_all(claude.join("proj")).unwrap();
-        let cfg = IngestConfig { claude_projects: Some(claude.clone()), ..Default::default() };
+        let cfg = IngestConfig {
+            claude_projects: Some(claude.clone()),
+            ..Default::default()
+        };
         let w = LogWatcher::start(&cfg);
         // Initial state: everything unknown.
         let first = w.take_changes(10);
@@ -179,7 +189,11 @@ mod tests {
         let noise = claude.join("proj").join("notes.txt");
         std::fs::write(&noise, "x").unwrap();
         for _ in 0..3 {
-            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&log).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)
+                .unwrap();
             writeln!(f, "{{}}").unwrap();
         }
         assert!(wait_for(&w, LogWatcher::has_changes));
@@ -195,7 +209,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let claude = tmp.path().join("claude");
         std::fs::create_dir_all(&claude).unwrap();
-        let cfg = IngestConfig { claude_projects: Some(claude.clone()), ..Default::default() };
+        let cfg = IngestConfig {
+            claude_projects: Some(claude.clone()),
+            ..Default::default()
+        };
         let w = LogWatcher::start(&cfg);
         w.take_changes(1);
         for i in 0..5 {

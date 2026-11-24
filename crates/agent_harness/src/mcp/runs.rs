@@ -104,7 +104,9 @@ pub fn start(spec: &Spec, state: &CallState, registry: &Registry) -> Result<Star
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     agents_driver::proc::hide_window(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("cannot start {}: {e}", exe.display()))?;
     let pid = child.id();
 
     // prompt -> stdin (on its own thread: a large prompt must not block the loop below)
@@ -126,7 +128,8 @@ pub fn start(spec: &Spec, state: &CallState, registry: &Registry) -> Result<Star
                 let line = String::from_utf8_lossy(&raw);
                 let line = line.trim_end_matches('\r');
                 if let Some(id) = line.strip_prefix(RUN_ID_MARKER) {
-                    *announce.run_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.trim().to_string());
+                    *announce.run_id.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(id.trim().to_string());
                     announce.cv.notify_all();
                 } else {
                     let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
@@ -152,7 +155,11 @@ pub fn start(spec: &Spec, state: &CallState, registry: &Registry) -> Result<Star
     let mut announced_run: Option<String> = None;
     loop {
         if announced_run.is_none() {
-            announced_run = announce.run_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            announced_run = announce
+                .run_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
         }
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -192,14 +199,24 @@ pub fn start(spec: &Spec, state: &CallState, registry: &Registry) -> Result<Star
     }
     let code = child.wait().ok().and_then(|s| s.code());
     let stdout = out_thread.join().unwrap_or_default();
-    let stderr_tail = tail.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect::<Vec<_>>().join("\n");
+    let stderr_tail = tail
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     match serde_json::from_str::<RunResult>(stdout.trim()) {
         Ok(r) => Ok(Started::Finished(Box::new(r))),
         Err(_) => {
             let reason = format!(
                 "the runner exited{} without a result{}",
                 code.map(|c| format!(" with code {c}")).unwrap_or_default(),
-                if stderr_tail.trim().is_empty() { String::new() } else { format!(": {}", stderr_tail.trim()) }
+                if stderr_tail.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", stderr_tail.trim())
+                }
             );
             Ok(Started::Finished(Box::new(RunResult {
                 summary: reason.clone(),
@@ -230,7 +247,11 @@ mod tests {
         };
         let a = child_args(&spec);
         let dd = a.iter().position(|x| x == "--").unwrap();
-        assert_eq!(&a[dd + 1..], ["--json", "-"], "agent and prompt marker come after `--`");
+        assert_eq!(
+            &a[dd + 1..],
+            ["--json", "-"],
+            "agent and prompt marker come after `--`"
+        );
         assert!(a.contains(&"--model=--worktree".to_string()));
         assert!(a.contains(&"--cwd=C:/my project".to_string()));
         assert!(a.contains(&"--timeout=30s".to_string()));

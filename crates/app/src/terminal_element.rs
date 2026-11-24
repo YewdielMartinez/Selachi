@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::{
     App, BorderStyle, Bounds, ElementInputHandler, Entity, Font, FontStyle, FontWeight,
-    GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, SharedString,
-    ShapedLine, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, fill, font, outline,
+    GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, ShapedLine,
+    SharedString, StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, fill, font, outline,
     point, px, relative, size,
 };
 use term_core::{BlockState, CellFlags, CellView, Rgb8, Snapshot};
@@ -51,8 +51,17 @@ fn summary_cells(hidden: u64, fg: theme::Rgba, bg: Rgb8, cols: usize) -> Vec<Cel
     let fg = Rgb8::new(to8(fg.r), to8(fg.g), to8(fg.b));
     let plural = if hidden == 1 { "" } else { "s" };
     let text = format!("+ {hidden} línea{plural} plegada{plural} · clic para desplegar");
-    let blank = CellView { ch: ' ', fg, bg, flags: CellFlags::default() };
-    let mut cells: Vec<CellView> = text.chars().take(cols).map(|ch| CellView { ch, ..blank }).collect();
+    let blank = CellView {
+        ch: ' ',
+        fg,
+        bg,
+        flags: CellFlags::default(),
+    };
+    let mut cells: Vec<CellView> = text
+        .chars()
+        .take(cols)
+        .map(|ch| CellView { ch, ..blank })
+        .collect();
     cells.resize(cols, blank);
     cells
 }
@@ -131,7 +140,12 @@ struct Segment {
 
 impl Segment {
     fn new(col: usize) -> Self {
-        Self { col, text: String::new(), runs: Vec::new(), last_style: None }
+        Self {
+            col,
+            text: String::new(),
+            runs: Vec::new(),
+            last_style: None,
+        }
     }
 
     fn push(&mut self, ch: char, style: RunStyle, fonts: &Fonts) {
@@ -185,7 +199,11 @@ struct Fonts {
 impl Fonts {
     fn new(family: &'static str) -> Self {
         let base = font(family);
-        let with = |weight, style| Font { weight, style, ..base.clone() };
+        let with = |weight, style| Font {
+            weight,
+            style,
+            ..base.clone()
+        };
         Self {
             regular: base.clone(),
             bold: with(FontWeight::BOLD, FontStyle::Normal),
@@ -254,7 +272,12 @@ impl gpui::Element for TerminalElement {
         // Resize only when the grid size changed (Session::resize is a no-op otherwise).
         let cols = ((bounds.size.width / cw).floor() as usize).clamp(2, 1000);
         let rows = ((bounds.size.height / ch).floor() as usize).clamp(1, 1000);
-        session.resize(cols as u16, rows as u16, f32::from(cw) as u16, f32::from(ch) as u16);
+        session.resize(
+            cols as u16,
+            rows as u16,
+            f32::from(cw) as u16,
+            f32::from(ch) as u16,
+        );
 
         let theme = view.theme;
         let mut state = view.paint_state.borrow_mut();
@@ -308,7 +331,9 @@ impl gpui::Element for TerminalElement {
                     let cells = summary_cells(hidden, theme.colors.muted, default_bg, snap.cols);
                     CacheEntry {
                         last_used: 0,
-                        row: Rc::new(build_row(&cells, None, default_bg, fonts, font_size, cw, window)),
+                        row: Rc::new(build_row(
+                            &cells, None, default_bg, fonts, font_size, cw, window,
+                        )),
                     }
                 });
                 entry.last_used = generation;
@@ -316,10 +341,15 @@ impl gpui::Element for TerminalElement {
                 continue;
             }
             let Some(r) = v.term_row else { continue };
-            let Some(row) = snap.lines.get(r) else { continue };
+            let Some(row) = snap.lines.get(r) else {
+                continue;
+            };
             // Only the cursor row depends on something besides its cells (the glyph under a block
             // cursor is drawn in the background color).
-            let block_col = snap.cursor.filter(|&(cr, _)| block_cursor && cr == r).map(|(_, c)| c);
+            let block_col = snap
+                .cursor
+                .filter(|&(cr, _)| block_cursor && cr == r)
+                .map(|(_, c)| c);
             let key = match block_col {
                 Some(c) => snap.row_hash[r] ^ (c as u64 + 1).wrapping_mul(0xA24B_AED4_963E_E407),
                 None => snap.row_hash[r],
@@ -328,7 +358,9 @@ impl gpui::Element for TerminalElement {
                 shaped += 1;
                 CacheEntry {
                     last_used: 0,
-                    row: Rc::new(build_row(row, block_col, default_bg, fonts, font_size, cw, window)),
+                    row: Rc::new(build_row(
+                        row, block_col, default_bg, fonts, font_size, cw, window,
+                    )),
                 }
             });
             entry.last_used = generation;
@@ -340,10 +372,14 @@ impl gpui::Element for TerminalElement {
         if !ui.blocks.is_empty() {
             let c = theme.colors;
             for (a, b, id) in block_layout::gutter_runs(&vis) {
-                let (color, dashed) = match block_layout::find_block(&ui.blocks, id).map(|bl| bl.state) {
+                let (color, dashed) = match block_layout::find_block(&ui.blocks, id)
+                    .map(|bl| bl.state)
+                {
                     Some(BlockState::Failed) => (gpui::Hsla::from(c.error), false),
                     Some(BlockState::Running) => (gpui::Hsla::from(c.accent), true),
-                    Some(BlockState::Succeeded) | None => (gpui::Hsla::from(c.muted).opacity(0.35), false),
+                    Some(BlockState::Succeeded) | None => {
+                        (gpui::Hsla::from(c.muted).opacity(0.35), false)
+                    }
                     Some(BlockState::Unknown) => (gpui::Hsla::from(c.muted).opacity(0.5), false),
                 };
                 let x = origin.x - px(GUTTER_X);
@@ -358,11 +394,16 @@ impl gpui::Element for TerminalElement {
                     let mut y = top;
                     while y < bottom {
                         let h = on.min(bottom - y);
-                        frame.gutter.push(fill(Bounds::new(point(x, y), size(px(GUTTER_W), h)), color));
+                        frame
+                            .gutter
+                            .push(fill(Bounds::new(point(x, y), size(px(GUTTER_W), h)), color));
                         y += on + off;
                     }
                 } else {
-                    frame.gutter.push(fill(Bounds::new(point(x, top), size(px(GUTTER_W), bottom - top)), color));
+                    frame.gutter.push(fill(
+                        Bounds::new(point(x, top), size(px(GUTTER_W), bottom - top)),
+                        color,
+                    ));
                 }
             }
         }
@@ -371,8 +412,10 @@ impl gpui::Element for TerminalElement {
             let x = origin.x + cw * hit.cols.start as f32;
             let w = cw * (hit.cols.end - hit.cols.start) as f32;
             let y = origin.y + ch * (*vi + 1) as f32 - px(2.0);
-            frame.underline =
-                Some(fill(Bounds::new(point(x, y), size(w, px(1.0))), gpui::Hsla::from(theme.colors.accent)));
+            frame.underline = Some(fill(
+                Bounds::new(point(x, y), size(w, px(1.0))),
+                gpui::Hsla::from(theme.colors.accent),
+            ));
         }
 
         let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
@@ -390,11 +433,17 @@ impl gpui::Element for TerminalElement {
 
         // Cursor.
         view.cursor_bounds.set(None);
-        let cursor_vis = snap
-            .cursor
-            .and_then(|(cr, cc)| vis.iter().position(|v| v.term_row == Some(cr)).map(|vi| (cr, vi, cc)));
+        let cursor_vis = snap.cursor.and_then(|(cr, cc)| {
+            vis.iter()
+                .position(|v| v.term_row == Some(cr))
+                .map(|vi| (cr, vi, cc))
+        });
         if let Some((cr, cvi, cc)) = cursor_vis {
-            let wide = snap.lines.get(cr).and_then(|l| l.get(cc)).is_some_and(|c| c.flags.wide);
+            let wide = snap
+                .lines
+                .get(cr)
+                .and_then(|l| l.get(cc))
+                .is_some_and(|c| c.flags.wide);
             let width = if wide { cw * 2.0 } else { cw };
             let cb = Bounds::new(
                 point(origin.x + cw * cc as f32, origin.y + ch * cvi as f32),
@@ -421,7 +470,11 @@ impl gpui::Element for TerminalElement {
         cx: &mut App,
     ) {
         let focus_handle = self.view.read(cx).focus_handle.clone();
-        window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.view.clone()), cx);
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(bounds, self.view.clone()),
+            cx,
+        );
 
         let (x0, cw, ch) = (frame.origin_x, frame.cell_width, frame.cell_height);
         for (y, row) in &frame.rows {
@@ -544,7 +597,10 @@ fn bg_quad(
     end: usize,
     bg: Rgb8,
 ) -> PaintQuad {
-    let bounds = Bounds::new(point(x0 + cw * start as f32, y), size(cw * (end - start) as f32, ch));
+    let bounds = Bounds::new(
+        point(x0 + cw * start as f32, y),
+        size(cw * (end - start) as f32, ch),
+    );
     fill(bounds, hsla(bg))
 }
 

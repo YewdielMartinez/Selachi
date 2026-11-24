@@ -28,7 +28,11 @@ fn env(cx: &mut TestAppContext, factory: Arc<FakeFactory>) -> Env {
     cx.update(crate::init);
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("proj").join("src")).unwrap();
-    std::fs::write(dir.path().join("proj").join("src").join("main.rs"), "fn main() {}").unwrap();
+    std::fs::write(
+        dir.path().join("proj").join("src").join("main.rs"),
+        "fn main() {}",
+    )
+    .unwrap();
     std::fs::write(dir.path().join("proj").join("README.md"), "# x").unwrap();
     let store = ChatStore::builder()
         .path(dir.path().join("chat.db"))
@@ -37,7 +41,12 @@ fn env(cx: &mut TestAppContext, factory: Arc<FakeFactory>) -> Env {
         .unwrap();
     let s2 = store.clone();
     let hub = cx.update(|cx| ChatHub::create(s2, Theme::dark(), cx));
-    Env { dir, factory, hub, store }
+    Env {
+        dir,
+        factory,
+        hub,
+        store,
+    }
 }
 
 impl Env {
@@ -50,15 +59,26 @@ fn approval_script() -> Arc<FakeFactory> {
     FakeFactory::new(|_, _| {
         vec![
             Step::now(AgentEvent::Status(AgentStatus::Working)),
-            Step::now(AgentEvent::Text { text: "Voy a ejecutar algo.".into(), delta: false }),
-            Step::now(AgentEvent::ApprovalRequest { id: "req-1".into(), tool: "Bash".into(), detail: "rm -rf target".into() }),
+            Step::now(AgentEvent::Text {
+                text: "Voy a ejecutar algo.".into(),
+                delta: false,
+            }),
+            Step::now(AgentEvent::ApprovalRequest {
+                id: "req-1".into(),
+                tool: "Bash".into(),
+                detail: "rm -rf target".into(),
+            }),
             Step::now(AgentEvent::Status(AgentStatus::WaitingForInput)),
         ]
     })
 }
 
 /// Runs the executors until `pred` holds (background tasks, the update pump...).
-fn settle(vcx: &mut VisualTestContext, what: &str, mut pred: impl FnMut(&mut VisualTestContext) -> bool) {
+fn settle(
+    vcx: &mut VisualTestContext,
+    what: &str,
+    mut pred: impl FnMut(&mut VisualTestContext) -> bool,
+) {
     let end = Instant::now() + Duration::from_secs(10);
     while Instant::now() < end {
         vcx.run_until_parked();
@@ -70,7 +90,14 @@ fn settle(vcx: &mut VisualTestContext, what: &str, mut pred: impl FnMut(&mut Vis
     panic!("timed out waiting for: {what}");
 }
 
-fn thread_view<'a>(cx: &'a mut TestAppContext, e: &Env) -> (Entity<ChatView>, &'a mut VisualTestContext, chat_core::ThreadRuntime) {
+fn thread_view<'a>(
+    cx: &'a mut TestAppContext,
+    e: &Env,
+) -> (
+    Entity<ChatView>,
+    &'a mut VisualTestContext,
+    chat_core::ThreadRuntime,
+) {
     let mut spec = ThreadSpec::new(e.project(), AgentKind::ClaudeCode);
     spec.permission = PermissionMode::Ask;
     let rec = e.store.create_thread(spec).unwrap();
@@ -86,12 +113,23 @@ fn thread_view<'a>(cx: &'a mut TestAppContext, e: &Env) -> (Entity<ChatView>, &'
 // Composer
 // ---------------------------------------------------------------------------------------------
 
-fn composer<'a>(cx: &'a mut TestAppContext, e: &Env) -> (Entity<Composer>, &'a mut VisualTestContext, Rc<RefCell<Vec<ComposerEvent>>>) {
+fn composer<'a>(
+    cx: &'a mut TestAppContext,
+    e: &Env,
+) -> (
+    Entity<Composer>,
+    &'a mut VisualTestContext,
+    Rc<RefCell<Vec<ComposerEvent>>>,
+) {
     let hub = e.hub.clone();
     let (c, vcx) = cx.add_window_view(move |_, cx| Composer::new(hub, Theme::dark(), cx));
     let events = Rc::new(RefCell::new(Vec::new()));
     let log = events.clone();
-    let sub = vcx.update(|_, cx| cx.subscribe(&c, move |_, ev: &ComposerEvent, _| log.borrow_mut().push(ev.clone())));
+    let sub = vcx.update(|_, cx| {
+        cx.subscribe(&c, move |_, ev: &ComposerEvent, _| {
+            log.borrow_mut().push(ev.clone())
+        })
+    });
     std::mem::forget(sub);
     c.update_in(vcx, |c, window, cx| c.focus(window, cx));
     vcx.run_until_parked();
@@ -108,8 +146,18 @@ fn enter_sends_and_shift_enter_adds_a_line(cx: &mut TestAppContext) {
     assert_eq!(c.read_with(vcx, |c, cx| c.text(cx)), "hola\nmundo");
     assert!(events.borrow().is_empty(), "shift+enter must not send");
     vcx.simulate_keystrokes("enter");
-    assert_eq!(*events.borrow(), vec![ComposerEvent::Send { text: "hola\nmundo".into(), attachments: vec![] }]);
-    assert_eq!(c.read_with(vcx, |c, cx| c.text(cx)), "", "the field is cleared after sending");
+    assert_eq!(
+        *events.borrow(),
+        vec![ComposerEvent::Send {
+            text: "hola\nmundo".into(),
+            attachments: vec![]
+        }]
+    );
+    assert_eq!(
+        c.read_with(vcx, |c, cx| c.text(cx)),
+        "",
+        "the field is cleared after sending"
+    );
 }
 
 #[gpui::test]
@@ -126,20 +174,39 @@ fn enter_on_an_empty_field_sends_nothing(cx: &mut TestAppContext) {
 fn round_button_is_send_then_stop(cx: &mut TestAppContext) {
     let e = env(cx, FakeFactory::silent());
     let (c, vcx, events) = composer(cx, &e);
-    assert_eq!(c.read_with(vcx, |c, cx| c.button_mode(cx)), ButtonMode::Disabled);
+    assert_eq!(
+        c.read_with(vcx, |c, cx| c.button_mode(cx)),
+        ButtonMode::Disabled
+    );
     c.update(vcx, |c, cx| c.set_text("algo", cx));
-    assert_eq!(c.read_with(vcx, |c, cx| c.button_mode(cx)), ButtonMode::Send);
+    assert_eq!(
+        c.read_with(vcx, |c, cx| c.button_mode(cx)),
+        ButtonMode::Send
+    );
     c.update(vcx, |c, cx| c.press_round_button(cx));
     assert_eq!(events.borrow().len(), 1);
     // A turn is running: the same button interrupts, with or without text.
     c.update(vcx, |c, cx| {
-        c.set_state(ComposerState { working: true, ..ComposerState::default() }, cx);
+        c.set_state(
+            ComposerState {
+                working: true,
+                ..ComposerState::default()
+            },
+            cx,
+        );
         c.set_text("otra cosa", cx);
     });
-    assert_eq!(c.read_with(vcx, |c, cx| c.button_mode(cx)), ButtonMode::Stop);
+    assert_eq!(
+        c.read_with(vcx, |c, cx| c.button_mode(cx)),
+        ButtonMode::Stop
+    );
     c.update(vcx, |c, cx| c.press_round_button(cx));
     assert_eq!(events.borrow().last(), Some(&ComposerEvent::Stop));
-    assert_eq!(events.borrow().len(), 2, "stopping does not send the typed text");
+    assert_eq!(
+        events.borrow().len(),
+        2,
+        "stopping does not send the typed text"
+    );
 }
 
 #[gpui::test]
@@ -147,7 +214,13 @@ fn escape_stops_a_running_turn_but_first_closes_pickers(cx: &mut TestAppContext)
     let e = env(cx, FakeFactory::silent());
     let (c, vcx, events) = composer(cx, &e);
     c.update(vcx, |c, cx| {
-        c.set_state(ComposerState { working: true, ..ComposerState::default() }, cx);
+        c.set_state(
+            ComposerState {
+                working: true,
+                ..ComposerState::default()
+            },
+            cx,
+        );
     });
     vcx.simulate_keystrokes("escape");
     assert_eq!(*events.borrow(), vec![ComposerEvent::Stop]);
@@ -159,10 +232,18 @@ fn at_sign_opens_the_file_picker_and_enter_inserts_the_path(cx: &mut TestAppCont
     let (c, vcx, events) = composer(cx, &e);
     let root = e.project();
     c.update(vcx, |c, cx| {
-        c.set_state(ComposerState { project_root: Some(root.clone()), ..ComposerState::default() }, cx);
+        c.set_state(
+            ComposerState {
+                project_root: Some(root.clone()),
+                ..ComposerState::default()
+            },
+            cx,
+        );
     });
     vcx.simulate_input("mira @mai");
-    settle(vcx, "file list", |vcx| c.read_with(vcx, |c, _| c.is_mention_open()));
+    settle(vcx, "file list", |vcx| {
+        c.read_with(vcx, |c, _| c.is_mention_open())
+    });
     // the walk finishes in the background; the picker then lists src/main.rs
     settle(vcx, "mention items", |vcx| {
         vcx.simulate_keystrokes("down");
@@ -171,7 +252,10 @@ fn at_sign_opens_the_file_picker_and_enter_inserts_the_path(cx: &mut TestAppCont
     });
     vcx.simulate_keystrokes("enter");
     assert_eq!(c.read_with(vcx, |c, cx| c.text(cx)), "mira @src/main.rs ");
-    assert!(events.borrow().is_empty(), "accepting a mention must not send the message");
+    assert!(
+        events.borrow().is_empty(),
+        "accepting a mention must not send the message"
+    );
     assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
 }
 
@@ -182,21 +266,42 @@ fn the_mention_popover_takes_up_down_and_tab_instead_of_the_text_field(cx: &mut 
     let (c, vcx, events) = composer(cx, &e);
     let root = e.project();
     c.update(vcx, |c, cx| {
-        c.set_state(ComposerState { project_root: Some(root.clone()), ..ComposerState::default() }, cx);
+        c.set_state(
+            ComposerState {
+                project_root: Some(root.clone()),
+                ..ComposerState::default()
+            },
+            cx,
+        );
     });
     type_text(vcx, "@");
-    settle(vcx, "two files listed", |vcx| c.read_with(vcx, |c, _| c.mention_state().is_some_and(|(items, _)| items.len() == 2)));
+    settle(vcx, "two files listed", |vcx| {
+        c.read_with(vcx, |c, _| {
+            c.mention_state().is_some_and(|(items, _)| items.len() == 2)
+        })
+    });
     let items = c.read_with(vcx, |c, _| c.mention_state().unwrap().0.to_vec());
     assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 0);
     press(vcx, "down");
     assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 1);
     press(vcx, "down");
-    assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 0, "the highlight wraps around");
+    assert_eq!(
+        c.read_with(vcx, |c, _| c.mention_state().unwrap().1),
+        0,
+        "the highlight wraps around"
+    );
     press(vcx, "up");
-    assert_eq!(c.read_with(vcx, |c, _| c.mention_state().unwrap().1), 1, "up goes back (and wraps)");
+    assert_eq!(
+        c.read_with(vcx, |c, _| c.mention_state().unwrap().1),
+        1,
+        "up goes back (and wraps)"
+    );
     // Tab accepts the highlighted entry; it does not move focus and nothing is sent.
     press(vcx, "tab");
-    assert_eq!(c.read_with(vcx, |c, cx| c.text(cx)), format!("@{} ", items[1]));
+    assert_eq!(
+        c.read_with(vcx, |c, cx| c.text(cx)),
+        format!("@{} ", items[1])
+    );
     assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
     assert!(events.borrow().is_empty());
     // With the popover closed, Up / Down are caret motion again: no navigation is captured.
@@ -211,15 +316,31 @@ fn escape_closes_the_mention_popover_without_stopping_anything(cx: &mut TestAppC
     let (c, vcx, events) = composer(cx, &e);
     let root = e.project();
     c.update(vcx, |c, cx| {
-        c.set_state(ComposerState { project_root: Some(root.clone()), working: true, ..ComposerState::default() }, cx);
+        c.set_state(
+            ComposerState {
+                project_root: Some(root.clone()),
+                working: true,
+                ..ComposerState::default()
+            },
+            cx,
+        );
     });
     type_text(vcx, "@");
-    settle(vcx, "popover open", |vcx| c.read_with(vcx, |c, _| c.is_mention_open()));
+    settle(vcx, "popover open", |vcx| {
+        c.read_with(vcx, |c, _| c.is_mention_open())
+    });
     press(vcx, "escape");
     assert!(!c.read_with(vcx, |c, _| c.is_mention_open()));
-    assert!(events.borrow().is_empty(), "the first Esc only closes the picker");
+    assert!(
+        events.borrow().is_empty(),
+        "the first Esc only closes the picker"
+    );
     press(vcx, "escape");
-    assert_eq!(*events.borrow(), vec![ComposerEvent::Stop], "the second one stops the turn");
+    assert_eq!(
+        *events.borrow(),
+        vec![ComposerEvent::Stop],
+        "the second one stops the turn"
+    );
 }
 
 #[gpui::test]
@@ -227,15 +348,27 @@ fn ctrl_enter_also_sends_and_attachments_are_removed_by_path(cx: &mut TestAppCon
     use ui_kit::testing::{press, type_text};
     let e = env(cx, FakeFactory::silent());
     let (c, vcx, events) = composer(cx, &e);
-    let (a, b) = (e.project().join("README.md"), e.project().join("src").join("main.rs"));
+    let (a, b) = (
+        e.project().join("README.md"),
+        e.project().join("src").join("main.rs"),
+    );
     c.update(vcx, |c, cx| c.add_attachments([a.clone(), b.clone()], cx));
     vcx.run_until_parked();
     // Clicking the x of the first chip removes that path, not "whatever is at index 0 now".
     ui_kit::testing::click_id(vcx, &format!("attach-x-{}", b.display()));
-    assert_eq!(c.read_with(vcx, |c, _| c.attachments().to_vec()), vec![a.clone()]);
+    assert_eq!(
+        c.read_with(vcx, |c, _| c.attachments().to_vec()),
+        vec![a.clone()]
+    );
     type_text(vcx, "mira");
     press(vcx, "ctrl-enter");
-    assert_eq!(*events.borrow(), vec![ComposerEvent::Send { text: "mira".into(), attachments: vec![a] }]);
+    assert_eq!(
+        *events.borrow(),
+        vec![ComposerEvent::Send {
+            text: "mira".into(),
+            attachments: vec![a]
+        }]
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -247,11 +380,16 @@ fn approval_buttons_answer_through_the_runtime(cx: &mut TestAppContext) {
     let e = env(cx, approval_script());
     let (view, vcx, rt) = thread_view(cx, &e);
     view.update(vcx, |v, cx| v.send("haz algo".into(), vec![], cx));
-    assert!(rt.wait_for(Duration::from_secs(10), |s| s.status == ThreadStatus::WaitingForInput && !s.pending_approvals().is_empty()));
+    assert!(rt.wait_for(Duration::from_secs(10), |s| s.status
+        == ThreadStatus::WaitingForInput
+        && !s.pending_approvals().is_empty()));
     view.update(vcx, |v, cx| v.sync(cx));
     // the approval row is in the list
     let pending = view.read_with(vcx, |v, _| {
-        v.rows.iter().filter(|r| matches!(r.kind, crate::rows::RowKind::Approval { .. })).count()
+        v.rows
+            .iter()
+            .filter(|r| matches!(r.kind, crate::rows::RowKind::Approval { .. }))
+            .count()
     });
     assert_eq!(pending, 1);
     view.update(vcx, |v, cx| v.approve("req-1", ApprovalDecision::Allow, cx));
@@ -259,7 +397,10 @@ fn approval_buttons_answer_through_the_runtime(cx: &mut TestAppContext) {
     while e.factory.approvals().is_empty() && Instant::now() < end {
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(e.factory.approvals(), vec![("req-1".to_string(), ApprovalDecision::Allow)]);
+    assert_eq!(
+        e.factory.approvals(),
+        vec![("req-1".to_string(), ApprovalDecision::Allow)]
+    );
 }
 
 #[gpui::test]
@@ -267,7 +408,9 @@ fn deny_and_always_map_to_their_decisions(cx: &mut TestAppContext) {
     let e = env(cx, approval_script());
     let (view, vcx, rt) = thread_view(cx, &e);
     view.update(vcx, |v, cx| v.send("haz algo".into(), vec![], cx));
-    assert!(rt.wait_for(Duration::from_secs(10), |s| !s.pending_approvals().is_empty()));
+    assert!(rt.wait_for(Duration::from_secs(10), |s| {
+        !s.pending_approvals().is_empty()
+    }));
     view.update(vcx, |v, cx| v.approve("req-1", ApprovalDecision::Deny, cx));
     let end = Instant::now() + Duration::from_secs(10);
     while e.factory.approvals().is_empty() && Instant::now() < end {
@@ -282,28 +425,41 @@ fn deny_and_always_map_to_their_decisions(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_hidden_thread_reads_nothing_until_it_is_painted(cx: &mut TestAppContext) {
-    let e = env(cx, FakeFactory::new(|_, _| {
-        vec![
-            Step::now(AgentEvent::Status(AgentStatus::Working)),
-            Step::now(AgentEvent::Text { text: "hola".into(), delta: false }),
-            Step::now(AgentEvent::Status(AgentStatus::Done)),
-        ]
-    }));
+    let e = env(
+        cx,
+        FakeFactory::new(|_, _| {
+            vec![
+                Step::now(AgentEvent::Status(AgentStatus::Working)),
+                Step::now(AgentEvent::Text {
+                    text: "hola".into(),
+                    delta: false,
+                }),
+                Step::now(AgentEvent::Status(AgentStatus::Done)),
+            ]
+        }),
+    );
     let (view, vcx, rt) = thread_view(cx, &e);
     rt.send("hola", vec![]).unwrap();
     assert!(rt.wait_for(Duration::from_secs(10), |s| s.status == ThreadStatus::Done));
     // Nothing painted the view: it did not build rows (zero work while hidden).
     assert_eq!(view.read_with(vcx, |v, _| v.row_count()), 0);
     view.update(vcx, |v, cx| v.sync(cx));
-    assert!(view.read_with(vcx, |v, _| v.row_count()) >= 2, "user + assistant text");
+    assert!(
+        view.read_with(vcx, |v, _| v.row_count()) >= 2,
+        "user + assistant text"
+    );
 }
 
 #[gpui::test]
 fn stop_interrupts_the_thread(cx: &mut TestAppContext) {
-    let e = env(cx, FakeFactory::new(|_, _| vec![Step::now(AgentEvent::Status(AgentStatus::Working))]));
+    let e = env(
+        cx,
+        FakeFactory::new(|_, _| vec![Step::now(AgentEvent::Status(AgentStatus::Working))]),
+    );
     let (view, vcx, rt) = thread_view(cx, &e);
     view.update(vcx, |v, cx| v.send("largo".into(), vec![], cx));
-    assert!(rt.wait_for(Duration::from_secs(10), |s| s.status == ThreadStatus::Working));
+    assert!(rt.wait_for(Duration::from_secs(10), |s| s.status
+        == ThreadStatus::Working));
     view.update(vcx, |v, cx| v.stop(cx));
     let end = Instant::now() + Duration::from_secs(10);
     while e.factory.interrupts() == 0 && Instant::now() < end {
@@ -314,9 +470,13 @@ fn stop_interrupts_the_thread(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_draft_needs_a_project_then_creates_the_thread_on_send(cx: &mut TestAppContext) {
-    let e = env(cx, FakeFactory::new(|_, _| vec![Step::now(AgentEvent::Status(AgentStatus::Done))]));
+    let e = env(
+        cx,
+        FakeFactory::new(|_, _| vec![Step::now(AgentEvent::Status(AgentStatus::Done))]),
+    );
     let hub = e.hub.clone();
-    let (view, vcx) = cx.add_window_view(move |_, cx| ChatView::draft(hub, Theme::dark(), None, cx));
+    let (view, vcx) =
+        cx.add_window_view(move |_, cx| ChatView::draft(hub, Theme::dark(), None, cx));
     // no project: nothing is created and the text goes back to the field
     view.update(vcx, |v, cx| v.send("hola".into(), vec![], cx));
     vcx.run_until_parked();
@@ -333,7 +493,9 @@ fn a_draft_needs_a_project_then_creates_the_thread_on_send(cx: &mut TestAppConte
         }
         v.send("hola".into(), vec![], cx);
     });
-    settle(vcx, "thread created", |vcx| view.read_with(vcx, |v, _| v.thread_id().is_some()));
+    settle(vcx, "thread created", |vcx| {
+        view.read_with(vcx, |v, _| v.thread_id().is_some())
+    });
     let end = Instant::now() + Duration::from_secs(10);
     while e.factory.sent().is_empty() && Instant::now() < end {
         std::thread::sleep(Duration::from_millis(5));
@@ -347,9 +509,13 @@ fn the_hub_list_follows_thread_status(cx: &mut TestAppContext) {
     let e = env(cx, approval_script());
     let (view, vcx, rt) = thread_view(cx, &e);
     let id = rt.id();
-    settle(vcx, "initial list", |vcx| e.hub.read_with(vcx, |h, _| h.thread(id).is_some()));
+    settle(vcx, "initial list", |vcx| {
+        e.hub.read_with(vcx, |h, _| h.thread(id).is_some())
+    });
     view.update(vcx, |v, cx| v.send("x".into(), vec![], cx));
     settle(vcx, "waiting in the list", |vcx| {
-        e.hub.read_with(vcx, |h, _| h.thread(id).map(|t| t.status) == Some(ThreadStatus::WaitingForInput))
+        e.hub.read_with(vcx, |h, _| {
+            h.thread(id).map(|t| t.status) == Some(ThreadStatus::WaitingForInput)
+        })
     });
 }

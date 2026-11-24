@@ -82,7 +82,11 @@ pub struct RpcError {
 
 impl RpcError {
     fn new(code: i64, message: impl Into<String>) -> RpcError {
-        RpcError { code, message: message.into(), data: None }
+        RpcError {
+            code,
+            message: message.into(),
+            data: None,
+        }
     }
 }
 
@@ -144,7 +148,11 @@ pub fn read_frame<R: BufRead>(r: &mut R, max: usize) -> io::Result<Frame> {
         }
         r.consume(take + usize::from(found));
         if found {
-            return Ok(if too_long { Frame::TooLong } else { Frame::Line(buf) });
+            return Ok(if too_long {
+                Frame::TooLong
+            } else {
+                Frame::Line(buf)
+            });
         }
     }
 }
@@ -168,7 +176,11 @@ impl Server {
         let mut line = serde_json::to_string(msg).unwrap_or_else(|_| "{}".into());
         line.push('\n');
         let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
-        if out.write_all(line.as_bytes()).and_then(|()| out.flush()).is_err() {
+        if out
+            .write_all(line.as_bytes())
+            .and_then(|()| out.flush())
+            .is_err()
+        {
             log::debug!("mcp: the client closed stdout");
         }
     }
@@ -196,7 +208,14 @@ impl Server {
 
     fn handle_line(self: &Arc<Self>, bytes: &[u8]) {
         let Ok(text) = std::str::from_utf8(bytes) else {
-            return self.respond(&Value::Null, Err(RpcError::new(-32700, "parse error: the message is not valid UTF-8")), false);
+            return self.respond(
+                &Value::Null,
+                Err(RpcError::new(
+                    -32700,
+                    "parse error: the message is not valid UTF-8",
+                )),
+                false,
+            );
         };
         let text = text.trim().trim_start_matches('\u{feff}');
         if text.is_empty() {
@@ -204,31 +223,63 @@ impl Server {
         }
         let msg: Value = match serde_json::from_str(text) {
             Ok(v) => v,
-            Err(e) => return self.respond(&Value::Null, Err(RpcError::new(-32700, format!("parse error: {e}"))), false),
+            Err(e) => {
+                return self.respond(
+                    &Value::Null,
+                    Err(RpcError::new(-32700, format!("parse error: {e}"))),
+                    false,
+                )
+            }
         };
         let Some(obj) = msg.as_object() else {
-            let what = if msg.is_array() { "JSON-RPC batches are not supported; send one message per line" } else { "a message must be a JSON object" };
-            return self.respond(&Value::Null, Err(RpcError::new(-32600, format!("invalid request: {what}"))), false);
+            let what = if msg.is_array() {
+                "JSON-RPC batches are not supported; send one message per line"
+            } else {
+                "a message must be a JSON object"
+            };
+            return self.respond(
+                &Value::Null,
+                Err(RpcError::new(-32600, format!("invalid request: {what}"))),
+                false,
+            );
         };
         let Some(method) = obj.get("method").and_then(Value::as_str) else {
             // a response from the client (we never send requests) or garbage: nothing to do
             if !obj.contains_key("result") && !obj.contains_key("error") {
-                self.respond(&Value::Null, Err(RpcError::new(-32600, "invalid request: no method")), false);
+                self.respond(
+                    &Value::Null,
+                    Err(RpcError::new(-32600, "invalid request: no method")),
+                    false,
+                );
             }
             return;
         };
         let params = obj.get("params").cloned().unwrap_or(Value::Null);
         match obj.get("id") {
             None => self.notification(method, &params),
-            Some(id) if id.is_string() || id.is_number() => self.request(id.clone(), method, params),
-            Some(_) => self.respond(&Value::Null, Err(RpcError::new(-32600, "invalid request: id must be a string or a number")), false),
+            Some(id) if id.is_string() || id.is_number() => {
+                self.request(id.clone(), method, params)
+            }
+            Some(_) => self.respond(
+                &Value::Null,
+                Err(RpcError::new(
+                    -32600,
+                    "invalid request: id must be a string or a number",
+                )),
+                false,
+            ),
         }
     }
 
     fn notification(&self, method: &str, params: &Value) {
         if method == "notifications/cancelled" {
             if let Some(rid) = params.get("requestId") {
-                let state = self.inflight.lock().unwrap_or_else(|e| e.into_inner()).get(&id_key(rid)).cloned();
+                let state = self
+                    .inflight
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&id_key(rid))
+                    .cloned();
                 if let Some(s) = state {
                     s.cancel();
                 }
@@ -239,7 +290,10 @@ impl Server {
 
     fn request(self: &Arc<Self>, id: Value, method: &str, params: Value) {
         // Which era? The modern per-request `_meta` wins; its version must be one we serve.
-        let requested = params.get("_meta").and_then(|m| m.get(META_VERSION)).and_then(Value::as_str);
+        let requested = params
+            .get("_meta")
+            .and_then(|m| m.get(META_VERSION))
+            .and_then(Value::as_str);
         let modern = requested.is_some();
         if let Some(v) = requested {
             if v != LATEST_VERSION {
@@ -256,16 +310,32 @@ impl Server {
             "server/discover" => self.respond(&id, Ok(discover()), true),
             "ping" => self.respond(&id, Ok(json!({})), modern),
             "tools/list" => self.respond(&id, Ok(json!({"tools": schema::tools()})), modern),
-            other => self.respond(&id, Err(RpcError::new(-32601, format!("method not found: {other}"))), modern),
+            other => self.respond(
+                &id,
+                Err(RpcError::new(-32601, format!("method not found: {other}"))),
+                modern,
+            ),
         }
     }
 
     fn tools_call(self: &Arc<Self>, id: Value, params: Value, modern: bool) {
-        let Some(name) = params.get("name").and_then(Value::as_str).map(str::to_string) else {
-            return self.respond(&id, Err(RpcError::new(-32602, "invalid params: `name` is required")), modern);
+        let Some(name) = params
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return self.respond(
+                &id,
+                Err(RpcError::new(-32602, "invalid params: `name` is required")),
+                modern,
+            );
         };
         if !schema::TOOL_NAMES.contains(&name.as_str()) {
-            return self.respond(&id, Err(RpcError::new(-32602, format!("unknown tool: {name}"))), modern);
+            return self.respond(
+                &id,
+                Err(RpcError::new(-32602, format!("unknown tool: {name}"))),
+                modern,
+            );
         }
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
         let state = Arc::new(CallState::default());
@@ -273,26 +343,38 @@ impl Server {
             let mut inflight = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
             if inflight.len() >= MAX_IN_FLIGHT {
                 drop(inflight);
-                return self.respond(&id, Err(RpcError::new(-32603, format!("too many calls in flight (max {MAX_IN_FLIGHT})"))), modern);
+                return self.respond(
+                    &id,
+                    Err(RpcError::new(
+                        -32603,
+                        format!("too many calls in flight (max {MAX_IN_FLIGHT})"),
+                    )),
+                    modern,
+                );
             }
             inflight.insert(id_key(&id), state.clone());
         }
         let this = self.clone();
-        let spawned = std::thread::Builder::new().name(format!("mcp-{name}")).spawn({
-            let id = id.clone();
-            move || {
-                let out = tools::call(&this.ctx, &name, args, &state);
-                this.inflight.lock().unwrap_or_else(|e| e.into_inner()).remove(&id_key(&id));
-                if state.is_cancelled() {
-                    return; // the client gave up on this request: send nothing more for it
+        let spawned = std::thread::Builder::new()
+            .name(format!("mcp-{name}"))
+            .spawn({
+                let id = id.clone();
+                move || {
+                    let out = tools::call(&this.ctx, &name, args, &state);
+                    this.inflight
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&id_key(&id));
+                    if state.is_cancelled() {
+                        return; // the client gave up on this request: send nothing more for it
+                    }
+                    let result = match out {
+                        Some(o) => Ok(tool_result(o)),
+                        None => Err(RpcError::new(-32602, format!("unknown tool: {name}"))),
+                    };
+                    this.respond(&id, result, modern);
                 }
-                let result = match out {
-                    Some(o) => Ok(tool_result(o)),
-                    None => Err(RpcError::new(-32602, format!("unknown tool: {name}"))),
-                };
-                this.respond(&id, result, modern);
-            }
-        });
+            });
         match spawned {
             Ok(handle) => {
                 let mut w = self.workers.lock().unwrap_or_else(|e| e.into_inner());
@@ -300,18 +382,34 @@ impl Server {
                 w.push(handle);
             }
             Err(e) => {
-                self.inflight.lock().unwrap_or_else(|e| e.into_inner()).remove(&id_key(&id));
-                self.respond(&id, Err(RpcError::new(-32603, format!("cannot start a worker thread: {e}"))), modern);
+                self.inflight
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id_key(&id));
+                self.respond(
+                    &id,
+                    Err(RpcError::new(
+                        -32603,
+                        format!("cannot start a worker thread: {e}"),
+                    )),
+                    modern,
+                );
             }
         }
     }
 
     /// Client closed stdin: stop blocking work and wait for the workers.
     fn shutdown(&self) {
-        for s in self.inflight.lock().unwrap_or_else(|e| e.into_inner()).values() {
+        for s in self
+            .inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
             s.cancel();
         }
-        let workers: Vec<_> = std::mem::take(&mut *self.workers.lock().unwrap_or_else(|e| e.into_inner()));
+        let workers: Vec<_> =
+            std::mem::take(&mut *self.workers.lock().unwrap_or_else(|e| e.into_inner()));
         for w in workers {
             let _ = w.join();
         }
@@ -323,8 +421,15 @@ fn server_info() -> Value {
 }
 
 fn initialize(params: &Value) -> Value {
-    let wanted = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
-    let version = if LEGACY_VERSIONS.contains(&wanted) { wanted } else { LEGACY_VERSIONS[0] };
+    let wanted = params
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let version = if LEGACY_VERSIONS.contains(&wanted) {
+        wanted
+    } else {
+        LEGACY_VERSIONS[0]
+    };
     json!({
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": false}},
@@ -394,10 +499,16 @@ mod tests {
     #[test]
     fn frames_split_on_newlines_and_keep_partial_input() {
         let mut r = Cursor::new(b"{\"a\":1}\r\n\n{\"b\":2}".to_vec());
-        assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Line(b"{\"a\":1}\r".to_vec()));
+        assert_eq!(
+            read_frame(&mut r, 100).unwrap(),
+            Frame::Line(b"{\"a\":1}\r".to_vec())
+        );
         assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Line(Vec::new()));
         // a last line without a newline is still delivered
-        assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Line(b"{\"b\":2}".to_vec()));
+        assert_eq!(
+            read_frame(&mut r, 100).unwrap(),
+            Frame::Line(b"{\"b\":2}".to_vec())
+        );
         assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Eof);
     }
 
@@ -406,8 +517,14 @@ mod tests {
         // 1-byte BufReader capacity: every message arrives in pieces
         let data = b"{\"x\":\"hello\"}\n{\"y\":2}\n".to_vec();
         let mut r = io::BufReader::with_capacity(1, Cursor::new(data));
-        assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Line(b"{\"x\":\"hello\"}".to_vec()));
-        assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Line(b"{\"y\":2}".to_vec()));
+        assert_eq!(
+            read_frame(&mut r, 100).unwrap(),
+            Frame::Line(b"{\"x\":\"hello\"}".to_vec())
+        );
+        assert_eq!(
+            read_frame(&mut r, 100).unwrap(),
+            Frame::Line(b"{\"y\":2}".to_vec())
+        );
         assert_eq!(read_frame(&mut r, 100).unwrap(), Frame::Eof);
     }
 
@@ -427,9 +544,18 @@ mod tests {
 
     #[test]
     fn initialize_negotiates_the_legacy_version() {
-        assert_eq!(initialize(&json!({"protocolVersion": "2025-06-18"}))["protocolVersion"], "2025-06-18");
-        assert_eq!(initialize(&json!({"protocolVersion": "2024-11-05"}))["protocolVersion"], "2024-11-05");
-        assert_eq!(initialize(&json!({"protocolVersion": "1999-01-01"}))["protocolVersion"], "2025-11-25");
+        assert_eq!(
+            initialize(&json!({"protocolVersion": "2025-06-18"}))["protocolVersion"],
+            "2025-06-18"
+        );
+        assert_eq!(
+            initialize(&json!({"protocolVersion": "2024-11-05"}))["protocolVersion"],
+            "2024-11-05"
+        );
+        assert_eq!(
+            initialize(&json!({"protocolVersion": "1999-01-01"}))["protocolVersion"],
+            "2025-11-25"
+        );
         assert_eq!(initialize(&json!({}))["protocolVersion"], "2025-11-25");
         let r = initialize(&json!({"protocolVersion": "2025-11-25"}));
         assert_eq!(r["serverInfo"]["name"], "selachi");

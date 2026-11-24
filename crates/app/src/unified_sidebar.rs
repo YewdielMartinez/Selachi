@@ -11,13 +11,15 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use gpui::{
-    App, ClickEvent, Div, Entity, Hsla, IntoElement, SharedString, Stateful, Transformation, Window,
-    div, prelude::*, px, radians,
+    App, ClickEvent, Div, Entity, Hsla, IntoElement, SharedString, Stateful, Transformation,
+    Window, div, prelude::*, px, radians,
 };
 use panel_api::{TabId, TabInfo};
 use store::ResolvedLayout;
 use theme::Theme;
-use ui_kit::{DitherMeter, Icon, IconButton, SectionLabel, StatusGlyph, glass_hover, glass_selected, icon};
+use ui_kit::{
+    DitherMeter, Icon, IconButton, SectionLabel, StatusGlyph, glass_hover, glass_selected, icon,
+};
 
 use crate::app_shell::AppShell;
 use crate::rail::RailItem;
@@ -69,7 +71,11 @@ pub fn close_visible(_selected: bool, hovered: Option<TabId>, id: TabId) -> bool
 
 /// The new hovered key after `key` reported `hovered`: entering takes the slot, leaving clears it
 /// only when the slot still holds `key` (a late "left" of the previous row must not wipe the next).
-pub fn hover_transition<K: PartialEq + Copy>(current: Option<K>, key: K, hovered: bool) -> Option<K> {
+pub fn hover_transition<K: PartialEq + Copy>(
+    current: Option<K>,
+    key: K,
+    hovered: bool,
+) -> Option<K> {
     if hovered {
         Some(key)
     } else if current == Some(key) {
@@ -82,7 +88,14 @@ pub fn hover_transition<K: PartialEq + Copy>(current: Option<K>, key: K, hovered
 type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// "Nueva pestaña  Ctrl+N" / "Buscar  Ctrl+K".
-fn action_row(p: &UnifiedProps, id: &'static str, ic: Icon, label: &'static str, chord: &'static str, on_click: Click) -> Stateful<Div> {
+fn action_row(
+    p: &UnifiedProps,
+    id: &'static str,
+    ic: Icon,
+    label: &'static str,
+    chord: &'static str,
+    on_click: Click,
+) -> Stateful<Div> {
     let t = p.theme;
     let c = t.colors;
     let ty = t.typography;
@@ -105,14 +118,25 @@ fn action_row(p: &UnifiedProps, id: &'static str, ic: Icon, label: &'static str,
         .on_click(move |e, w, cx| on_click(e, w, cx))
         .child(icon(ic, 16.0, c.muted))
         .child(div().flex_1().child(label))
-        .child(div().text_size(px(ty.ui_size_sm)).text_color(c.outline).child(chord))
+        .child(
+            div()
+                .text_size(px(ty.ui_size_sm))
+                .text_color(c.outline)
+                .child(chord),
+        )
 }
 
 /// The row of small panel buttons.
 fn panel_icons(p: &UnifiedProps, items: Vec<RailItem>) -> Div {
     let mut row = div().flex().flex_row().flex_wrap().gap(px(1.0));
     for item in items {
-        let RailItem { id, icon: ic, title, active, on_click } = item;
+        let RailItem {
+            id,
+            icon: ic,
+            title,
+            active,
+            on_click,
+        } = item;
         let mut b = IconButton::new(SharedString::from(format!("sb-{id}")), p.theme, ic)
             .size(28.0)
             .glass(p.glass)
@@ -127,7 +151,12 @@ fn panel_icons(p: &UnifiedProps, items: Vec<RailItem>) -> Div {
 }
 
 /// A tab as a nested row: mark, title and model / branch · state, elapsed time and status glyph.
-fn tab_row(p: &UnifiedProps, info: &TabInfo, nested: bool, now: Instant) -> impl IntoElement + use<> {
+fn tab_row(
+    p: &UnifiedProps,
+    info: &TabInfo,
+    nested: bool,
+    now: Instant,
+) -> impl IntoElement + use<> {
     let t = p.theme;
     let c = t.colors;
     let ty = t.typography;
@@ -140,94 +169,107 @@ fn tab_row(p: &UnifiedProps, info: &TabInfo, nested: bool, now: Instant) -> impl
     let show_close = close_visible(selected, p.hovered_row, id);
     let lead = crate::agents::lead_icon(&info.icon, 16.0, if selected { c.text } else { c.muted });
     let bg = pill_bg(t, p.glass, selected);
-    let close_bg: Hsla = if p.glass { glass_selected(t) } else { c.surface_4.into() };
-    div()
-        .when(nested, |d| d.pl(px(12.0)))
-        .child(
-            div()
-                .id(("urow", id))
-                .relative()
-                .occlude()
-                .w_full()
-                .h(px(if subtitle.is_some() { 40.0 } else { 32.0 }))
-                .my(px(1.0))
-                .px(px(10.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap(px(10.0))
-                .rounded(px(10.0))
-                .cursor_pointer()
-                .when(selected, move |d| d.bg(bg))
-                .when(!selected, move |d| d.hover(move |s| s.bg(bg)))
-                .on_hover(move |hovered, _, cx| shell_hover.update(cx, |s, cx| s.set_row_hover(id, *hovered, cx)))
-                .on_click(move |_, window, cx| shell_sel.update(cx, |s, cx| s.select_tab(id, window, cx)))
-                .child(lead)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_size(px(ty.ui_size_md))
-                                .text_color(c.text)
-                                .child(info.title.clone()),
-                        )
-                        .children(subtitle.map(|s| {
-                            div()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .text_size(px(ty.ui_size_sm))
-                                .text_color(c.muted)
-                                .child(SharedString::from(s))
-                        })),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .flex_col()
-                        .items_end()
-                        .gap(px(1.0))
-                        // Swap, not stack: the glyph and the time keep their space (no reflow of
-                        // the title) but are not painted while the x takes their place.
-                        .when(show_close, |d| d.invisible())
-                        .children(info.status.map(|s| StatusGlyph::new(t, s)))
-                        .children(time.map(|tm| {
-                            div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(SharedString::from(tm))
-                        })),
-                )
-                .children(show_close.then(|| {
-                    div()
-                        .absolute()
-                        .right(px(6.0))
-                        .top_0()
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .child(
-                            div().rounded(px(7.0)).bg(close_bg).child(
-                                IconButton::new(SharedString::from(format!("urow-close-{}", id.as_u64())), t, Icon::Close)
-                                    .glass(p.glass)
-                                    .passthrough(true)
-                                    .size(22.0)
-                                    .icon_size(10.0)
-                                    .tooltip("Cerrar (Ctrl+W)")
-                                    .on_click(move |_, window, cx| {
-                                        cx.stop_propagation();
-                                        shell_close.update(cx, |s, cx| s.request_close(id, window, cx));
-                                    }),
-                            ),
-                        )
-                })),
-        )
+    let close_bg: Hsla = if p.glass {
+        glass_selected(t)
+    } else {
+        c.surface_4.into()
+    };
+    div().when(nested, |d| d.pl(px(12.0))).child(
+        div()
+            .id(("urow", id))
+            .relative()
+            .occlude()
+            .w_full()
+            .h(px(if subtitle.is_some() { 40.0 } else { 32.0 }))
+            .my(px(1.0))
+            .px(px(10.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .rounded(px(10.0))
+            .cursor_pointer()
+            .when(selected, move |d| d.bg(bg))
+            .when(!selected, move |d| d.hover(move |s| s.bg(bg)))
+            .on_hover(move |hovered, _, cx| {
+                shell_hover.update(cx, |s, cx| s.set_row_hover(id, *hovered, cx))
+            })
+            .on_click(move |_, window, cx| {
+                shell_sel.update(cx, |s, cx| s.select_tab(id, window, cx))
+            })
+            .child(lead)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(ty.ui_size_md))
+                            .text_color(c.text)
+                            .child(info.title.clone()),
+                    )
+                    .children(subtitle.map(|s| {
+                        div()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.muted)
+                            .child(SharedString::from(s))
+                    })),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap(px(1.0))
+                    // Swap, not stack: the glyph and the time keep their space (no reflow of
+                    // the title) but are not painted while the x takes their place.
+                    .when(show_close, |d| d.invisible())
+                    .children(info.status.map(|s| StatusGlyph::new(t, s)))
+                    .children(time.map(|tm| {
+                        div()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.muted)
+                            .child(SharedString::from(tm))
+                    })),
+            )
+            .children(show_close.then(|| {
+                div()
+                    .absolute()
+                    .right(px(6.0))
+                    .top_0()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div().rounded(px(7.0)).bg(close_bg).child(
+                            IconButton::new(
+                                SharedString::from(format!("urow-close-{}", id.as_u64())),
+                                t,
+                                Icon::Close,
+                            )
+                            .glass(p.glass)
+                            .passthrough(true)
+                            .size(22.0)
+                            .icon_size(10.0)
+                            .tooltip("Cerrar (Ctrl+W)")
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                shell_close.update(cx, |s, cx| s.request_close(id, window, cx));
+                            }),
+                        ),
+                    )
+            })),
+    )
 }
 
 /// A space header: fold chevron, name, branch and dirty dot, and "+" (a new tab there).
@@ -240,13 +282,28 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
     let open = s.is_open();
     let hover = pill_bg(t, p.glass, false);
     let show_plus = p.hovered_space == Some(ix);
-    let (shell, shell_plus, shell_hover, shell_drop) = (p.shell.clone(), p.shell.clone(), p.shell.clone(), p.shell.clone());
+    let (shell, shell_plus, shell_hover, shell_drop) = (
+        p.shell.clone(),
+        p.shell.clone(),
+        p.shell.clone(),
+        p.shell.clone(),
+    );
     let theme = *t;
     let chevron = {
         let g = icon(Icon::ChevronRight, 12.0, c.muted);
-        if open && !folded { g.with_transformation(Transformation::rotate(radians(std::f32::consts::FRAC_PI_2))) } else { g }
+        if open && !folded {
+            g.with_transformation(Transformation::rotate(radians(std::f32::consts::FRAC_PI_2)))
+        } else {
+            g
+        }
     };
-    let dirty_dot = s.dirty.then(|| div().size(px(6.0)).flex_none().rounded_full().bg(gpui::rgb(t.terminal.ansi[3])));
+    let dirty_dot = s.dirty.then(|| {
+        div()
+            .size(px(6.0))
+            .flex_none()
+            .rounded_full()
+            .bg(gpui::rgb(t.terminal.ansi[3]))
+    });
     let can_add = !root.as_os_str().is_empty();
     div()
         .id(("space", ix))
@@ -262,7 +319,9 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
         .rounded(px(8.0))
         .cursor_pointer()
         .hover(move |st| st.bg(hover))
-        .on_hover(move |hovered, _, cx| shell_hover.update(cx, |sh, cx| sh.set_space_hover(ix, *hovered, cx)))
+        .on_hover(move |hovered, _, cx| {
+            shell_hover.update(cx, |sh, cx| sh.set_space_hover(ix, *hovered, cx))
+        })
         .on_click(move |_, window, cx| {
             let (key, root) = (key.clone(), root.clone());
             shell.update(cx, |sh, cx| {
@@ -318,13 +377,17 @@ fn space_header(p: &UnifiedProps, ix: usize, s: &Space, folded: bool) -> impl In
             )
         }))
         .child(
-            ui_kit::DropZone::new(("space-drop", ix), &theme, "Soltar para abrir una terminal aquí")
-                .radius(8.0)
-                .compact(true)
-                .on_drop(move |paths, window, cx| {
-                    let paths = paths.to_vec();
-                    shell_drop.update(cx, |sh, cx| sh.drop_on_space(&paths, window, cx));
-                }),
+            ui_kit::DropZone::new(
+                ("space-drop", ix),
+                &theme,
+                "Soltar para abrir una terminal aquí",
+            )
+            .radius(8.0)
+            .compact(true)
+            .on_drop(move |paths, window, cx| {
+                let paths = paths.to_vec();
+                shell_drop.update(cx, |sh, cx| sh.drop_on_space(&paths, window, cx));
+            }),
         )
 }
 
@@ -354,7 +417,9 @@ fn footer(p: &UnifiedProps) -> impl IntoElement + use<> {
                 .gap(px(8.0))
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {
-                    usage_shell.update(cx, |s, cx| s.toggle_right_panel(panel_api::PanelId::new(ui_usage::PANEL_ID), cx));
+                    usage_shell.update(cx, |s, cx| {
+                        s.toggle_right_panel(panel_api::PanelId::new(ui_usage::PANEL_ID), cx)
+                    });
                 })
                 .child(DitherMeter::new(t).segments(6).value(p.usage.fraction))
                 .child(
@@ -370,12 +435,18 @@ fn footer(p: &UnifiedProps) -> impl IntoElement + use<> {
                 .glass(p.glass)
                 .size(30.0)
                 .tooltip("Ajustes (Ctrl+,)")
-                .on_click(move |_, window, cx| shell.update(cx, |s, cx| s.open_settings(window, cx))),
+                .on_click(move |_, window, cx| {
+                    shell.update(cx, |s, cx| s.open_settings(window, cx))
+                }),
         )
 }
 
 /// The chevron at the top of the sidebar that folds it to icons (points left).
-pub fn collapse_button(theme: &Theme, glass: bool, on_click: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
+pub fn collapse_button(
+    theme: &Theme,
+    glass: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let c = theme.colors;
     let hover = pill_bg(theme, glass, false);
     div()
@@ -389,9 +460,15 @@ pub fn collapse_button(theme: &Theme, glass: bool, on_click: impl Fn(&mut Window
         .rounded(px(10.0))
         .cursor_pointer()
         .hover(move |s| s.bg(hover))
-        .tooltip(ui_kit::Tooltip::text(theme, "Plegar la barra lateral (Ctrl+B)"))
+        .tooltip(ui_kit::Tooltip::text(
+            theme,
+            "Plegar la barra lateral (Ctrl+B)",
+        ))
         .on_click(move |_, window, cx| on_click(window, cx))
-        .child(icon(Icon::ChevronRight, 16.0, c.muted).with_transformation(Transformation::rotate(radians(std::f32::consts::PI))))
+        .child(
+            icon(Icon::ChevronRight, 16.0, c.muted)
+                .with_transformation(Transformation::rotate(radians(std::f32::consts::PI))),
+        )
 }
 
 /// The full sidebar body: scrolling middle plus the pinned footer.
@@ -420,7 +497,9 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
                     Icon::Plus,
                     "Nueva pestaña",
                     "Ctrl+N",
-                    Box::new(move |_, window, cx| a.update(cx, |s, cx| s.open_new_tab_menu(window, cx))),
+                    Box::new(move |_, window, cx| {
+                        a.update(cx, |s, cx| s.open_new_tab_menu(window, cx))
+                    }),
                 ))
                 .child(action_row(
                     p,
@@ -436,7 +515,13 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
         body = body.child(panel_icons(p, panel_items));
     }
     let mut spaces = div().flex().flex_col().gap(px(4.0));
-    spaces = spaces.child(div().px(px(10.0)).pt(px(2.0)).pb(px(2.0)).child(SectionLabel::new(t, "Espacios").uppercase(true)));
+    spaces = spaces.child(
+        div()
+            .px(px(10.0))
+            .pt(px(2.0))
+            .pb(px(2.0))
+            .child(SectionLabel::new(t, "Espacios").uppercase(true)),
+    );
     for (ix, s) in p.spaces.iter().enumerate() {
         let folded = p.folded.contains(&s.key());
         let mut block = div().flex().flex_col();
@@ -476,7 +561,16 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
         .items_center()
         .gap(px(4.0))
         .py(px(8.0));
-    let mut top = div().id("usb-collapsed-scroll").flex_1().min_h_0().w_full().overflow_y_scroll().flex().flex_col().items_center().gap(px(4.0));
+    let mut top = div()
+        .id("usb-collapsed-scroll")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(4.0));
     {
         let s = shell.clone();
         top = top.child(
@@ -493,19 +587,32 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
                 IconButton::new("sb-c-new", t, Icon::Plus)
                     .glass(p.glass)
                     .tooltip("Nueva pestaña (Ctrl+N)")
-                    .on_click(move |_, window, cx| a.update(cx, |s, cx| s.open_new_tab_menu(window, cx))),
+                    .on_click(move |_, window, cx| {
+                        a.update(cx, |s, cx| s.open_new_tab_menu(window, cx))
+                    }),
             )
             .child(
                 IconButton::new("sb-c-search", t, Icon::Search)
                     .glass(p.glass)
                     .tooltip("Buscar (Ctrl+K)")
-                    .on_click(move |_, window, cx| b.update(cx, |s, cx| s.open_palette(window, cx))),
+                    .on_click(move |_, window, cx| {
+                        b.update(cx, |s, cx| s.open_palette(window, cx))
+                    }),
             );
     }
     if l.panel_icons {
         for item in panel_items {
-            let RailItem { id, icon: ic, title, active, on_click } = item;
-            let mut b = IconButton::new(SharedString::from(format!("sbc-{id}")), t, ic).glass(p.glass).active(active).tooltip(title);
+            let RailItem {
+                id,
+                icon: ic,
+                title,
+                active,
+                on_click,
+            } = item;
+            let mut b = IconButton::new(SharedString::from(format!("sbc-{id}")), t, ic)
+                .glass(p.glass)
+                .active(active)
+                .tooltip(title);
             if let Some(f) = on_click {
                 b = b.on_click(move |_, window, cx| f(window, cx));
             }
@@ -516,10 +623,14 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
     for info in p.tabs {
         let id = info.id;
         let s = shell.clone();
-        let mut b = IconButton::new(SharedString::from(format!("sb-tab-{}", id.as_u64())), t, info.icon.icon())
-            .glass(p.glass)
-            .active(Some(id) == p.active)
-            .tooltip(info.title.clone());
+        let mut b = IconButton::new(
+            SharedString::from(format!("sb-tab-{}", id.as_u64())),
+            t,
+            info.icon.icon(),
+        )
+        .glass(p.glass)
+        .active(Some(id) == p.active)
+        .tooltip(info.title.clone());
         b = b.on_click(move |_, window, cx| s.update(cx, |s, cx| s.select_tab(id, window, cx)));
         top = top.child(b);
     }
@@ -529,7 +640,9 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
             IconButton::new("sb-c-settings", t, Icon::Settings)
                 .glass(p.glass)
                 .tooltip("Ajustes (Ctrl+,)")
-                .on_click(move |_, window, cx| shell.update(cx, |s, cx| s.open_settings(window, cx))),
+                .on_click(move |_, window, cx| {
+                    shell.update(cx, |s, cx| s.open_settings(window, cx))
+                }),
         );
     }
     col
@@ -545,10 +658,22 @@ mod tests {
 
     #[test]
     fn close_shows_on_selected_and_hovered_rows_only() {
-        assert!(!close_visible(true, None, id(1)), "selected row keeps its status at rest");
-        assert!(!close_visible(true, Some(id(2)), id(1)), "another hovered row doesn't affect it");
-        assert!(close_visible(true, Some(id(1)), id(1)), "hovered selected row shows the x");
-        assert!(close_visible(false, Some(id(1)), id(1)), "hovered row shows the x");
+        assert!(
+            !close_visible(true, None, id(1)),
+            "selected row keeps its status at rest"
+        );
+        assert!(
+            !close_visible(true, Some(id(2)), id(1)),
+            "another hovered row doesn't affect it"
+        );
+        assert!(
+            close_visible(true, Some(id(1)), id(1)),
+            "hovered selected row shows the x"
+        );
+        assert!(
+            close_visible(false, Some(id(1)), id(1)),
+            "hovered row shows the x"
+        );
         assert!(!close_visible(false, None, id(1)));
         assert!(!close_visible(false, Some(id(2)), id(1)));
     }

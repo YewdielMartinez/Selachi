@@ -128,7 +128,11 @@ impl RenderOnce for IconButton {
         // element-id path and lives exactly as long as the button is rendered.
         let group: Option<SharedString> = (emphasize && !self.active).then(|| {
             let uid = window
-                .use_keyed_state(ElementId::NamedChild(Box::new(id.clone()), "ib-group".into()), cx, |_, _| ())
+                .use_keyed_state(
+                    ElementId::NamedChild(Box::new(id.clone()), "ib-group".into()),
+                    cx,
+                    |_, _| (),
+                )
                 .entity_id()
                 .as_u64();
             SharedString::from(format!("icon-button-{uid}"))
@@ -139,11 +143,16 @@ impl RenderOnce for IconButton {
         };
         let theme = self.theme;
         let (bg_active, bg_hover, bg_press): (gpui::Hsla, gpui::Hsla, gpui::Hsla) = if self.glass {
-            (crate::glass_selected(&theme), crate::glass_hover(&theme), crate::glass_selected(&theme))
+            (
+                crate::glass_selected(&theme),
+                crate::glass_hover(&theme),
+                crate::glass_selected(&theme),
+            )
         } else {
             (c.surface_3.into(), c.surface_2.into(), c.surface_3.into())
         };
-        let focus = (self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
+        let focus =
+            (self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
         let mut el = div()
             .id(id.clone())
             .when_some(group, |d, g| d.group(g))
@@ -157,10 +166,12 @@ impl RenderOnce for IconButton {
             .cursor_pointer()
             .when(self.active, |d| d.bg(bg_active))
             .when(!self.active && !emphasize, |d| {
-                d.hover(move |s| s.bg(bg_hover)).active(move |s| s.bg(bg_hover))
+                d.hover(move |s| s.bg(bg_hover))
+                    .active(move |s| s.bg(bg_hover))
             })
             .when(!self.active && emphasize, |d| {
-                d.hover(move |s| s.bg(bg_hover)).active(move |s| s.bg(bg_press))
+                d.hover(move |s| s.bg(bg_hover))
+                    .active(move |s| s.bg(bg_press))
             })
             .child(glyph);
         if let Some(f) = self.on_click {
@@ -274,15 +285,27 @@ impl Button {
         }
     }
 
-    pub fn primary(id: impl Into<SharedString>, theme: &Theme, label: impl Into<SharedString>) -> Self {
+    pub fn primary(
+        id: impl Into<SharedString>,
+        theme: &Theme,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self::new(id, theme, label, ButtonKind::Primary)
     }
 
-    pub fn tonal(id: impl Into<SharedString>, theme: &Theme, label: impl Into<SharedString>) -> Self {
+    pub fn tonal(
+        id: impl Into<SharedString>,
+        theme: &Theme,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self::new(id, theme, label, ButtonKind::Tonal)
     }
 
-    pub fn ghost(id: impl Into<SharedString>, theme: &Theme, label: impl Into<SharedString>) -> Self {
+    pub fn ghost(
+        id: impl Into<SharedString>,
+        theme: &Theme,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self::new(id, theme, label, ButtonKind::Ghost)
     }
 
@@ -326,7 +349,8 @@ impl RenderOnce for Button {
         let kind = self.kind;
         let enabled = !self.disabled;
         let id = ElementId::from(self.id.clone());
-        let focus = (enabled && self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
+        let focus = (enabled && self.focusable && self.on_click.is_some())
+            .then(|| focus::handle(window, cx, &id));
         let ring_radius = self.radius.unwrap_or(self.height / 2.0);
         let base: Stateful<Div> = div().id(id.clone());
         let mut el = base

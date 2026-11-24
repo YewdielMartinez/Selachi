@@ -95,7 +95,11 @@ fn str_field<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
 
 /// One-line human title for a tool call.
 pub fn tool_title(name: &str, input: &Value) -> String {
-    let pick = |keys: &[&str]| keys.iter().find_map(|k| str_field(input, k)).map(str::to_string);
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| str_field(input, k))
+            .map(str::to_string)
+    };
     let t = match name {
         "Read" | "Edit" | "MultiEdit" | "Write" => pick(&["file_path"]),
         "NotebookEdit" => pick(&["notebook_path"]),
@@ -199,7 +203,10 @@ impl ClaudeParser {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
-                log::debug!("claude: non-JSON stdout line ({e}): {}", truncate(line, 120));
+                log::debug!(
+                    "claude: non-JSON stdout line ({e}): {}",
+                    truncate(line, 120)
+                );
                 return Vec::new();
             }
         };
@@ -253,13 +260,19 @@ impl ClaudeParser {
                     Some("text_delta") => {
                         if let Some(t) = str_field(d, "text") {
                             self.streamed.insert((self.cur_msg.clone(), "text"));
-                            out.push(AgentEvent::Text { text: t.to_string(), delta: true });
+                            out.push(AgentEvent::Text {
+                                text: t.to_string(),
+                                delta: true,
+                            });
                         }
                     }
                     Some("thinking_delta") => {
                         if let Some(t) = str_field(d, "thinking") {
                             self.streamed.insert((self.cur_msg.clone(), "thinking"));
-                            out.push(AgentEvent::Thinking { text: t.to_string(), delta: true });
+                            out.push(AgentEvent::Thinking {
+                                text: t.to_string(),
+                                delta: true,
+                            });
                         }
                     }
                     _ => {}
@@ -273,20 +286,28 @@ impl ClaudeParser {
         let msg = v.get("message").unwrap_or(&Value::Null);
         let msg_id = str_field(msg, "id").unwrap_or_default().to_string();
         let is_sub = !v.get("parent_tool_use_id").is_none_or(Value::is_null);
-        let Some(blocks) = msg.get("content").and_then(Value::as_array) else { return };
+        let Some(blocks) = msg.get("content").and_then(Value::as_array) else {
+            return;
+        };
         for b in blocks {
             match str_field(b, "type") {
                 Some("text") if !is_sub => {
                     if !self.streamed.contains(&(msg_id.clone(), "text")) {
                         if let Some(t) = str_field(b, "text") {
-                            out.push(AgentEvent::Text { text: t.to_string(), delta: false });
+                            out.push(AgentEvent::Text {
+                                text: t.to_string(),
+                                delta: false,
+                            });
                         }
                     }
                 }
                 Some("thinking") if !is_sub => {
                     if !self.streamed.contains(&(msg_id.clone(), "thinking")) {
                         if let Some(t) = str_field(b, "thinking").filter(|t| !t.is_empty()) {
-                            out.push(AgentEvent::Thinking { text: t.to_string(), delta: false });
+                            out.push(AgentEvent::Thinking {
+                                text: t.to_string(),
+                                delta: false,
+                            });
                         }
                     }
                 }
@@ -336,7 +357,11 @@ impl ClaudeParser {
             let context_window = v
                 .get("modelUsage")
                 .and_then(Value::as_object)
-                .and_then(|m| m.values().filter_map(|e| e.get("contextWindow")?.as_u64()).max());
+                .and_then(|m| {
+                    m.values()
+                        .filter_map(|e| e.get("contextWindow")?.as_u64())
+                        .max()
+                });
             out.push(AgentEvent::Usage {
                 input: g("input_tokens"),
                 output: g("output_tokens"),
@@ -361,7 +386,9 @@ impl ClaudeParser {
     }
 
     fn on_rate_limit(&mut self, v: &Value, out: &mut Vec<AgentEvent>) {
-        let Some(wins) = v.pointer("/rate_limit_info/unifiedWindows").and_then(Value::as_object)
+        let Some(wins) = v
+            .pointer("/rate_limit_info/unifiedWindows")
+            .and_then(Value::as_object)
         else {
             return;
         };
@@ -393,9 +420,13 @@ impl ClaudeParser {
         };
         let input = req.get("input").cloned().unwrap_or_else(|| json!({}));
         let detail = approval_detail(tool, &input);
-        self.pending
-            .lock()
-            .insert(rid.to_string(), PendingRequest { tool: tool.to_string(), input });
+        self.pending.lock().insert(
+            rid.to_string(),
+            PendingRequest {
+                tool: tool.to_string(),
+                input,
+            },
+        );
         out.push(AgentEvent::ApprovalRequest {
             id: rid.to_string(),
             tool: tool.to_string(),
@@ -465,8 +496,13 @@ impl ClaudeDriver {
     }
 
     /// [`spawn`](Self::spawn) with [`SpawnOpts`] (Job Object membership).
-    pub fn spawn_with(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>, opts: &SpawnOpts) -> Result<Self> {
-        let exe = proc::resolve_executable("claude").ok_or_else(|| DriverError::NotFound("claude".into()))?;
+    pub fn spawn_with(
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        let exe = proc::resolve_executable("claude")
+            .ok_or_else(|| DriverError::NotFound("claude".into()))?;
         let mut cmd = proc::command_for(&exe);
         cmd.args(build_args(cfg))
             .current_dir(&cfg.cwd)
@@ -524,7 +560,9 @@ impl ClaudeDriver {
         let stdin = guard.as_mut().ok_or(DriverError::Closed)?;
         let mut line = v.to_string();
         line.push('\n');
-        stdin.write_all(line.as_bytes()).map_err(|_| DriverError::Closed)?;
+        stdin
+            .write_all(line.as_bytes())
+            .map_err(|_| DriverError::Closed)?;
         stdin.flush().map_err(|_| DriverError::Closed)
     }
 
@@ -601,7 +639,14 @@ impl AgentDriver for ClaudeDriver {
     }
 
     fn approve(&mut self, id: &str, allow: bool) -> Result<()> {
-        self.approve_with(id, if allow { ApprovalDecision::Allow } else { ApprovalDecision::Deny })
+        self.approve_with(
+            id,
+            if allow {
+                ApprovalDecision::Allow
+            } else {
+                ApprovalDecision::Deny
+            },
+        )
     }
 
     fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<()> {
@@ -660,15 +705,32 @@ mod tests {
     #[test]
     fn recorded_basic_session() {
         let ev = parse_fixture("claude_basic.jsonl");
-        assert!(matches!(&ev[0], AgentEvent::SessionStarted { session_id, model }
-            if session_id.starts_with("00000000") && model.as_deref() == Some("claude-haiku-5-5")));
-        assert!(ev.contains(&AgentEvent::Text { text: "ok".into(), delta: false }));
+        assert!(
+            matches!(&ev[0], AgentEvent::SessionStarted { session_id, model }
+            if session_id.starts_with("00000000") && model.as_deref() == Some("claude-haiku-5-5"))
+        );
+        assert!(ev.contains(&AgentEvent::Text {
+            text: "ok".into(),
+            delta: false
+        }));
         let usage = ev
             .iter()
             .find_map(|e| match e {
-                AgentEvent::Usage { input, output, cache_create, cache_read, cost_usd, context_window } => {
-                    Some((*input, *output, *cache_create, *cache_read, *cost_usd, *context_window))
-                }
+                AgentEvent::Usage {
+                    input,
+                    output,
+                    cache_create,
+                    cache_read,
+                    cost_usd,
+                    context_window,
+                } => Some((
+                    *input,
+                    *output,
+                    *cache_create,
+                    *cache_read,
+                    *cost_usd,
+                    *context_window,
+                )),
                 _ => None,
             })
             .expect("usage");
@@ -685,7 +747,12 @@ mod tests {
         assert!((rl[0].used_percent - 31.0).abs() < 1e-6);
         assert_eq!(rl[0].window_mins, Some(300));
         // hooks / commands_changed produce nothing
-        assert_eq!(ev.iter().filter(|e| matches!(e, AgentEvent::SessionStarted { .. })).count(), 1);
+        assert_eq!(
+            ev.iter()
+                .filter(|e| matches!(e, AgentEvent::SessionStarted { .. }))
+                .count(),
+            1
+        );
     }
 
     /// Hand-written from the documented SDK message shapes (NOT a live recording).
@@ -701,12 +768,23 @@ mod tests {
             .collect();
         // two deltas, and the full assistant text is NOT repeated for the streamed message
         assert_eq!(texts, vec![("Hel", true), ("lo", true), ("Done.", false)]);
-        assert!(ev.contains(&AgentEvent::Thinking { text: "hmm".into(), delta: false }));
+        assert!(ev.contains(&AgentEvent::Thinking {
+            text: "hmm".into(),
+            delta: false
+        }));
         assert!(ev.iter().any(|e| matches!(e,
             AgentEvent::ToolCall { id, kind: ToolKind::Read, title, .. }
             if id == "toolu_1" && title == "src/main.rs")));
-        assert!(ev.contains(&AgentEvent::ToolResult { id: "toolu_1".into(), ok: true, summary: "fn main() {}".into() }));
-        assert!(ev.contains(&AgentEvent::ToolResult { id: "toolu_2".into(), ok: false, summary: "exit 1".into() }));
+        assert!(ev.contains(&AgentEvent::ToolResult {
+            id: "toolu_1".into(),
+            ok: true,
+            summary: "fn main() {}".into()
+        }));
+        assert!(ev.contains(&AgentEvent::ToolResult {
+            id: "toolu_2".into(),
+            ok: false,
+            summary: "exit 1".into()
+        }));
         assert!(ev.iter().any(|e| matches!(e, AgentEvent::ToolCall { kind: ToolKind::Command, title, .. } if title == "cargo build")));
         assert!(ev.contains(&AgentEvent::Plan {
             tasks: vec![
@@ -721,7 +799,10 @@ mod tests {
             detail: "rm -rf build".into()
         }));
         assert!(ev.contains(&AgentEvent::Status(AgentStatus::WaitingForInput)));
-        assert_eq!(ev.last(), Some(&AgentEvent::Status(AgentStatus::Error("boom".into()))));
+        assert_eq!(
+            ev.last(),
+            Some(&AgentEvent::Status(AgentStatus::Error("boom".into())))
+        );
     }
 
     #[test]
@@ -737,7 +818,10 @@ mod tests {
 
     #[test]
     fn approve_with_encodes_each_decision() {
-        let req = PendingRequest { tool: "Bash".into(), input: json!({"command":"cargo test"}) };
+        let req = PendingRequest {
+            tool: "Bash".into(),
+            input: json!({"command":"cargo test"}),
+        };
         let r = |d| permission_response("r1", &req, d);
         assert_eq!(
             r(ApprovalDecision::Allow),
@@ -763,7 +847,9 @@ mod tests {
     fn interrupted_turn_is_done_not_error() {
         let flag = Arc::new(AtomicBool::new(true));
         let mut p = ClaudeParser::new(Pending::default(), flag);
-        let ev = p.parse_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":""}"#);
+        let ev = p.parse_line(
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":""}"#,
+        );
         assert_eq!(ev, vec![AgentEvent::Status(AgentStatus::Done)]);
     }
 
@@ -790,7 +876,9 @@ mod tests {
             let a = build_args(&cfg);
             let i = a.iter().position(|x| x == "--permission-mode").unwrap();
             assert_eq!(a[i + 1], flag);
-            assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]));
+            assert!(a
+                .windows(2)
+                .any(|w| w == ["--permission-prompt-tool", "stdio"]));
             assert!(a.windows(2).any(|w| w == ["--resume", "abc"]));
             assert!(a.windows(2).any(|w| w == ["--model", "haiku"]));
             assert!(a.ends_with(&["--effort".into(), "low".into()]));
@@ -821,7 +909,10 @@ mod tests {
         cfg.permission_mode = PermissionMode::Ask;
         let mut d = ClaudeDriver::spawn(&cfg, tx).unwrap();
         std::thread::sleep(Duration::from_millis(1500));
-        assert!(d.child.lock().try_wait().unwrap().is_none(), "claude exited early (bad flags?)");
+        assert!(
+            d.child.lock().try_wait().unwrap().is_none(),
+            "claude exited early (bad flags?)"
+        );
         d.shutdown();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut exited = false;
@@ -872,7 +963,9 @@ mod tests {
         let mut cfg = ThreadConfig::new(".");
         assert!(!build_args(&cfg).contains(&"--effort".to_string()));
         cfg.effort = Some("xhigh".into());
-        assert!(build_args(&cfg).windows(2).any(|w| w == ["--effort", "xhigh"]));
+        assert!(build_args(&cfg)
+            .windows(2)
+            .any(|w| w == ["--effort", "xhigh"]));
         cfg.effort = Some("turbo".into());
         assert!(!build_args(&cfg).contains(&"--effort".to_string()));
     }

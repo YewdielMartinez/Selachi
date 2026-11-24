@@ -67,7 +67,10 @@ fn integrated(env: &[(&str, &str)], pre: &str) -> (Session, UnboundedReceiver<Se
     }
     let mut cfg = config(&program);
     cfg.args = args;
-    let env = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let env = env
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     let (session, mut rx) = Session::spawn_with_env(cfg, env).expect("spawn integrated shell");
     // The first prompt reports the starting directory: the integration is loaded.
     assert!(wait_event(&mut rx, |e| matches!(e, SessionEvent::Cwd(_)).then_some(())).is_some());
@@ -84,7 +87,11 @@ fn wait_blocks(session: &Session, n: usize) -> Vec<Block> {
         }
         std::thread::sleep(Duration::from_millis(30));
     }
-    panic!("expected {n} finished blocks, got {:?}\nscreen:\n{}", session.blocks(), session.snapshot().text());
+    panic!(
+        "expected {n} finished blocks, got {:?}\nscreen:\n{}",
+        session.blocks(),
+        session.snapshot().text()
+    );
 }
 
 /// Types `cmd`, waits for its block and returns the trimmed output.
@@ -110,23 +117,50 @@ fn real_pwsh_produces_blocks_with_exit_codes_and_commands() {
     let cmds: Vec<_> = blocks.iter().map(|b| b.command.as_deref()).collect();
     assert_eq!(
         cmds,
-        [Some("Write-Output hi-1"), Some("cmd /c exit 3"), Some("Write-Output \"hi-$((1+2))\"; 'x;y'")]
+        [
+            Some("Write-Output hi-1"),
+            Some("cmd /c exit 3"),
+            Some("Write-Output \"hi-$((1+2))\"; 'x;y'")
+        ]
     );
     let codes: Vec<_> = blocks.iter().map(|b| (b.state, b.exit_code)).collect();
     assert_eq!(
         codes,
-        [(BlockState::Succeeded, Some(0)), (BlockState::Failed, Some(3)), (BlockState::Succeeded, Some(0))]
+        [
+            (BlockState::Succeeded, Some(0)),
+            (BlockState::Failed, Some(3)),
+            (BlockState::Succeeded, Some(0))
+        ]
     );
-    assert!(blocks.iter().all(|b| b.duration.is_some() && b.cwd.is_some()));
-    assert!(blocks.windows(2).all(|w| w[0].output_end.is_some_and(|e| e <= w[1].prompt_line)));
+    assert!(
+        blocks
+            .iter()
+            .all(|b| b.duration.is_some() && b.cwd.is_some())
+    );
+    assert!(
+        blocks
+            .windows(2)
+            .all(|w| w[0].output_end.is_some_and(|e| e <= w[1].prompt_line))
+    );
 
-    assert_eq!(session.block_output_text(blocks[0].id, 1000).as_deref(), Some("hi-1"));
-    assert_eq!(session.block_output_text(blocks[1].id, 1000).as_deref(), Some(""));
-    assert_eq!(session.block_output_text(blocks[2].id, 1000).as_deref(), Some("hi-3\nx;y"));
+    assert_eq!(
+        session.block_output_text(blocks[0].id, 1000).as_deref(),
+        Some("hi-1")
+    );
+    assert_eq!(
+        session.block_output_text(blocks[1].id, 1000).as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        session.block_output_text(blocks[2].id, 1000).as_deref(),
+        Some("hi-3\nx;y")
+    );
 
     // The viewport row of the first output line belongs to the first block.
     let snap = session.snapshot();
-    let row = (0..snap.rows).find(|&r| snap.line_text(r).trim() == "hi-1").expect("row of hi-1");
+    let row = (0..snap.rows)
+        .find(|&r| snap.line_text(r).trim() == "hi-1")
+        .expect("row of hi-1");
     assert_eq!(session.block_at_line(row), Some(blocks[0].id));
     assert_eq!(session.prev_block(Some(blocks[2].id)), Some(blocks[1].id));
     assert_eq!(session.next_block(Some(blocks[0].id)), Some(blocks[1].id));
@@ -171,7 +205,10 @@ fn smart_tab_accepts_the_inline_suggestion() {
     std::thread::sleep(Duration::from_millis(300));
     session.write(&b"\r"[..]);
     let blocks = wait_blocks(&session, 2);
-    assert_eq!(blocks[1].command.as_deref(), Some("echo selachi-history-marker-xyz"));
+    assert_eq!(
+        blocks[1].command.as_deref(),
+        Some("echo selachi-history-marker-xyz")
+    );
     assert_eq!(
         session.block_output_text(blocks[1].id, 1000).as_deref(),
         Some("selachi-history-marker-xyz")
@@ -192,7 +229,11 @@ fn smart_tab_falls_back_to_the_menu_without_a_suggestion() {
     std::thread::sleep(Duration::from_millis(300));
     session.write(&b"\r"[..]);
     let blocks = wait_blocks(&session, 2);
-    assert_eq!(blocks[1].command.as_deref(), Some("cd .\\zzqq-unique-dir\\"), "completion did not apply");
+    assert_eq!(
+        blocks[1].command.as_deref(),
+        Some("cd .\\zzqq-unique-dir\\"),
+        "completion did not apply"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -222,7 +263,13 @@ fn tab_modes_map_to_the_right_bindings() {
 fn native_and_implicit_modes_respect_the_users_own_bindings() {
     let user = "Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete; Set-PSReadLineKeyHandler -Key Ctrl+RightArrow -Function ShellForwardWord";
     // native: untouched.
-    let (s, _rx) = integrated(&[("SELACHI_TAB_MODE", "native"), ("SELACHI_ACCEPT_WORD_KEY", "native")], user);
+    let (s, _rx) = integrated(
+        &[
+            ("SELACHI_TAB_MODE", "native"),
+            ("SELACHI_ACCEPT_WORD_KEY", "native"),
+        ],
+        user,
+    );
     assert_eq!(bound(&s, "Tab"), "MenuComplete");
     assert_eq!(bound(&s, "Ctrl+RightArrow"), "ShellForwardWord");
     // Variables absent (implicit defaults): the user's custom bindings win...
@@ -230,7 +277,13 @@ fn native_and_implicit_modes_respect_the_users_own_bindings() {
     assert_eq!(bound(&s, "Tab"), "MenuComplete");
     assert_eq!(bound(&s, "Ctrl+RightArrow"), "ShellForwardWord");
     // ...but an explicit choice overrides them.
-    let (s, _rx) = integrated(&[("SELACHI_TAB_MODE", "smart"), ("SELACHI_ACCEPT_WORD_KEY", "Ctrl+RightArrow")], user);
+    let (s, _rx) = integrated(
+        &[
+            ("SELACHI_TAB_MODE", "smart"),
+            ("SELACHI_ACCEPT_WORD_KEY", "Ctrl+RightArrow"),
+        ],
+        user,
+    );
     assert_eq!(bound(&s, "Tab"), "SelachiSmartTab");
     assert_eq!(bound(&s, "Ctrl+RightArrow"), "SelachiAcceptWord");
     // Stock bindings are replaced by the defaults.
@@ -242,15 +295,21 @@ fn native_and_implicit_modes_respect_the_users_own_bindings() {
 #[test]
 fn prediction_options_and_accept_word_key_follow_the_environment() {
     let opt = |s: &Session, name: &str| run_command(s, &format!("(Get-PSReadLineOption).{name}"));
-    for (var, want) in [("history", "History"), ("history_and_plugin", "HistoryAndPlugin"), ("off", "None")] {
+    for (var, want) in [
+        ("history", "History"),
+        ("history_and_plugin", "HistoryAndPlugin"),
+        ("off", "None"),
+    ] {
         let (s, _rx) = integrated(&[("SELACHI_PREDICTION", var)], "");
         let got = opt(&s, "PredictionSource");
         // PSReadLine 2.1 has no plugin predictions: the script falls back to History.
         let ok = got == want || (var == "history_and_plugin" && got == "History");
         assert!(ok, "SELACHI_PREDICTION={var}: got {got}");
     }
-    let (s, _rx) =
-        integrated(&[("SELACHI_PREDICTION", "native")], "Set-PSReadLineOption -PredictionSource None");
+    let (s, _rx) = integrated(
+        &[("SELACHI_PREDICTION", "native")],
+        "Set-PSReadLineOption -PredictionSource None",
+    );
     assert_eq!(opt(&s, "PredictionSource"), "None");
 
     let (s, _rx) = integrated(&[("SELACHI_PREDICTION_VIEW", "list")], "");

@@ -19,21 +19,39 @@ pub enum GitOp {
     /// `git add -- <path>`.
     Stage(PathBuf),
     /// `git restore --staged -- <path>` (`git rm --cached` on an unborn branch).
-    Unstage { path: PathBuf, unborn: bool },
+    Unstage {
+        path: PathBuf,
+        unborn: bool,
+    },
     /// `git add -A`.
     StageAll,
     /// `git restore --staged -- .`.
-    UnstageAll { unborn: bool },
+    UnstageAll {
+        unborn: bool,
+    },
     /// A typed `git_svc` action: commit, push, pull, fetch.
     Action(GitAction),
     /// `git commit -m <message>` and, when it worked, `git push`.
-    CommitAndPush { message: String },
+    CommitAndPush {
+        message: String,
+    },
     /// `git push --set-upstream origin <branch>`.
-    PublishBranch { branch: String },
-    CreateWorktree { name: String },
-    RemoveWorktree { path: PathBuf, force: bool },
-    CreateCheckpoint { label: String },
-    RestoreCheckpoint { id: String },
+    PublishBranch {
+        branch: String,
+    },
+    CreateWorktree {
+        name: String,
+    },
+    RemoveWorktree {
+        path: PathBuf,
+        force: bool,
+    },
+    CreateCheckpoint {
+        label: String,
+    },
+    RestoreCheckpoint {
+        id: String,
+    },
 }
 
 fn argv(parts: &[&str]) -> Vec<String> {
@@ -99,7 +117,13 @@ impl GitOp {
             GitOp::UnstageAll { unborn } => vec![unstage_argv(Path::new("."), *unborn)],
             GitOp::Action(a) => vec![a.argv()],
             GitOp::CommitAndPush { message } => {
-                vec![GitAction::Commit { message: message.clone() }.argv(), GitAction::Push.argv()]
+                vec![
+                    GitAction::Commit {
+                        message: message.clone(),
+                    }
+                    .argv(),
+                    GitAction::Push.argv(),
+                ]
             }
             GitOp::PublishBranch { branch } => {
                 vec![argv(&["git", "push", "--set-upstream", "origin", branch])]
@@ -144,13 +168,17 @@ impl GitOp {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             GitOp::Action(a) => a.validate().map_err(|e| e.to_string()),
-            GitOp::CommitAndPush { message } => {
-                GitAction::Commit { message: message.clone() }.validate().map_err(|e| e.to_string())
+            GitOp::CommitAndPush { message } => GitAction::Commit {
+                message: message.clone(),
             }
+            .validate()
+            .map_err(|e| e.to_string()),
             GitOp::CreateWorktree { name } => {
                 git_svc::validate_worktree_name(name).map_err(|e| e.to_string())
             }
-            GitOp::PublishBranch { branch } if branch.trim().is_empty() || branch.starts_with('-') => {
+            GitOp::PublishBranch { branch }
+                if branch.trim().is_empty() || branch.starts_with('-') =>
+            {
                 Err("nombre de rama no válido".into())
             }
             GitOp::Stage(p) | GitOp::Unstage { path: p, .. } if p.as_os_str().is_empty() => {
@@ -164,7 +192,11 @@ impl GitOp {
 /// Commit message from the two fields: `subject` plus an optional body after a blank line.
 pub fn commit_message(subject: &str, body: &str) -> String {
     let (s, b) = (subject.trim(), body.trim());
-    if b.is_empty() { s.to_string() } else { format!("{s}\n\n{b}") }
+    if b.is_empty() {
+        s.to_string()
+    } else {
+        format!("{s}\n\n{b}")
+    }
 }
 
 /// Output of [`run_git`].
@@ -183,7 +215,11 @@ impl GitRun {
 
 /// Runs `git <args>` in `cwd` and waits up to `timeout`. No console window, no credential
 /// prompts, no optional locks, paths taken literally (`GIT_LITERAL_PATHSPECS`).
-pub fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration) -> Result<GitRun, String> {
+pub fn run_git<S: AsRef<OsStr>>(
+    cwd: &Path,
+    args: &[S],
+    timeout: Duration,
+) -> Result<GitRun, String> {
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("core.quotepath=false")
@@ -200,7 +236,9 @@ pub fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration) -> Re
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let mut child = cmd.spawn().map_err(|e| format!("no se pudo ejecutar git: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("no se pudo ejecutar git: {e}"))?;
     let drain = |mut pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
             let mut buf = Vec::new();
@@ -210,8 +248,18 @@ pub fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration) -> Re
             buf
         })
     };
-    let out_t = drain(child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>));
-    let err_t = drain(child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>));
+    let out_t = drain(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+    let err_t = drain(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
     let deadline = Instant::now() + timeout;
     let mut nap = Duration::from_millis(1);
     let status = loop {
@@ -236,7 +284,10 @@ pub fn run_git<S: AsRef<OsStr>>(cwd: &Path, args: &[S], timeout: Duration) -> Re
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             stderr: String::from_utf8_lossy(&stderr).trim().to_owned(),
         }),
-        None => Err(format!("git tardó más de {} s y se canceló", timeout.as_secs())),
+        None => Err(format!(
+            "git tardó más de {} s y se canceló",
+            timeout.as_secs()
+        )),
     }
 }
 
@@ -246,7 +297,10 @@ mod tests {
 
     #[test]
     fn stage_and_unstage_argv() {
-        assert_eq!(stage_argv(Path::new("src/a b.rs")), ["git", "add", "--", "src/a b.rs"]);
+        assert_eq!(
+            stage_argv(Path::new("src/a b.rs")),
+            ["git", "add", "--", "src/a b.rs"]
+        );
         assert_eq!(
             unstage_argv(Path::new("src/a.rs"), false),
             ["git", "restore", "--staged", "--", "src/a.rs"]
@@ -266,34 +320,54 @@ mod tests {
             GitOp::UnstageAll { unborn: false }.argv_steps(),
             [["git", "restore", "--staged", "--", "."]]
         );
-        let steps = GitOp::CommitAndPush { message: "feat: x".into() }.argv_steps();
+        let steps = GitOp::CommitAndPush {
+            message: "feat: x".into(),
+        }
+        .argv_steps();
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0], ["git", "commit", "-m", "feat: x"]);
         assert_eq!(steps[1], ["git", "push"]);
         assert_eq!(
-            GitOp::PublishBranch { branch: "dev".into() }.argv_steps(),
+            GitOp::PublishBranch {
+                branch: "dev".into()
+            }
+            .argv_steps(),
             [["git", "push", "--set-upstream", "origin", "dev"]]
         );
-        assert!(GitOp::CreateCheckpoint { label: "x".into() }.argv_steps().is_empty());
+        assert!(
+            GitOp::CreateCheckpoint { label: "x".into() }
+                .argv_steps()
+                .is_empty()
+        );
     }
 
     #[test]
     fn sensitivity_matches_the_service() {
-        let commit = GitOp::Action(GitAction::Commit { message: "m".into() });
+        let commit = GitOp::Action(GitAction::Commit {
+            message: "m".into(),
+        });
         for op in [
             commit,
             GitOp::Action(GitAction::Push),
             GitOp::Action(GitAction::Pull),
-            GitOp::CommitAndPush { message: "m".into() },
+            GitOp::CommitAndPush {
+                message: "m".into(),
+            },
             GitOp::PublishBranch { branch: "b".into() },
-            GitOp::RemoveWorktree { path: "x".into(), force: false },
+            GitOp::RemoveWorktree {
+                path: "x".into(),
+                force: false,
+            },
             GitOp::RestoreCheckpoint { id: "1".into() },
         ] {
             assert!(op.is_sensitive(), "{op:?}");
         }
         for op in [
             GitOp::Stage("a".into()),
-            GitOp::Unstage { path: "a".into(), unborn: false },
+            GitOp::Unstage {
+                path: "a".into(),
+                unborn: false,
+            },
             GitOp::StageAll,
             GitOp::UnstageAll { unborn: false },
             GitOp::Action(GitAction::Fetch),
@@ -307,15 +381,46 @@ mod tests {
     #[test]
     fn commit_message_joins_subject_and_body() {
         assert_eq!(commit_message(" fix: a ", ""), "fix: a");
-        assert_eq!(commit_message("fix: a", "  more\ntext "), "fix: a\n\nmore\ntext");
+        assert_eq!(
+            commit_message("fix: a", "  more\ntext "),
+            "fix: a\n\nmore\ntext"
+        );
     }
 
     #[test]
     fn validation() {
-        assert!(GitOp::Action(GitAction::Commit { message: "  ".into() }).validate().is_err());
-        assert!(GitOp::CommitAndPush { message: String::new() }.validate().is_err());
-        assert!(GitOp::CreateWorktree { name: "con".into() }.validate().is_err());
-        assert!(GitOp::CreateWorktree { name: "feature-x".into() }.validate().is_ok());
-        assert!(GitOp::PublishBranch { branch: "--force".into() }.validate().is_err());
+        assert!(
+            GitOp::Action(GitAction::Commit {
+                message: "  ".into()
+            })
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GitOp::CommitAndPush {
+                message: String::new()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            GitOp::CreateWorktree { name: "con".into() }
+                .validate()
+                .is_err()
+        );
+        assert!(
+            GitOp::CreateWorktree {
+                name: "feature-x".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            GitOp::PublishBranch {
+                branch: "--force".into()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

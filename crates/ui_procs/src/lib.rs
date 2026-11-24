@@ -29,7 +29,7 @@ mod source;
 mod state;
 mod view;
 
-pub use assets::{ASSETS, ARROW_UP_RIGHT, Assets, load as load_asset, runtime_icon_path};
+pub use assets::{ARROW_UP_RIGHT, ASSETS, Assets, load as load_asset, runtime_icon_path};
 pub use fmt::{format_bytes, format_cpu, format_uptime, shorten_command};
 pub use model::{
     AgentGroup, Collected, GroupKey, Origin, OrphanSummary, OwnerGroup, PortPill, PortRow, ProcRow,

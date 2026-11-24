@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chat_core::{
-    ApprovalDecision as ChatDecision, ChatError, ChatStore, DriverFactory, ThreadId, ThreadLink, ThreadRuntime, ThreadSpec,
-    ThreadStatus,
+    ApprovalDecision as ChatDecision, ChatError, ChatStore, DriverFactory, ThreadId, ThreadLink,
+    ThreadRuntime, ThreadSpec, ThreadStatus,
 };
 use chrono::{Local, TimeZone};
 use parking_lot::Mutex;
@@ -24,8 +24,8 @@ use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PR
 use crate::jobs::JobHooks;
 use crate::output::{cap_chars, diff_stat_of, CostOut, RunResult, RunStatus, UsageOut};
 use crate::policy::{
-    Caller, DelegationConfig, Permission, Policy, Refusal, RefusalCode, ENV_DELEGATION_DEPTH, ENV_PARENT_PERMISSION,
-    ENV_PARENT_TAB, ENV_PARENT_THREAD,
+    Caller, DelegationConfig, Permission, Policy, Refusal, RefusalCode, ENV_DELEGATION_DEPTH,
+    ENV_PARENT_PERMISSION, ENV_PARENT_TAB, ENV_PARENT_THREAD,
 };
 use crate::registry::{Registry, RunRecord};
 use crate::slots;
@@ -56,7 +56,11 @@ pub struct RunRequest {
 }
 
 impl RunRequest {
-    pub fn new(agent: impl Into<String>, prompt: impl Into<String>, cwd: impl Into<PathBuf>) -> RunRequest {
+    pub fn new(
+        agent: impl Into<String>,
+        prompt: impl Into<String>,
+        cwd: impl Into<PathBuf>,
+    ) -> RunRequest {
         RunRequest {
             agent: agent.into(),
             prompt: prompt.into(),
@@ -138,18 +142,24 @@ impl HarnessBuilder {
     pub fn build(self) -> Result<Harness, String> {
         let data_dir = match self.data_dir {
             Some(d) => d,
-            None => store::paths::app_data_dir().map_err(|e| format!("cannot find the Selachi data folder: {e}"))?,
+            None => store::paths::app_data_dir()
+                .map_err(|e| format!("cannot find the Selachi data folder: {e}"))?,
         };
-        std::fs::create_dir_all(&data_dir).map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
         let (cfg, warning) = match self.config {
             Some(c) => (c, None),
             None => DelegationConfig::load(&data_dir),
         };
         Ok(Harness {
             registry: Registry::new(&data_dir),
-            usage: self.usage.unwrap_or_else(|| Arc::new(AgentsSvcProbe::new(&data_dir))),
+            usage: self
+                .usage
+                .unwrap_or_else(|| Arc::new(AgentsSvcProbe::new(&data_dir))),
             resolver: self.resolver.unwrap_or_else(|| Arc::new(SystemResolver)),
-            broker: self.broker.unwrap_or_else(|| Arc::new(PipeBroker::for_current_user())),
+            broker: self
+                .broker
+                .unwrap_or_else(|| Arc::new(PipeBroker::for_current_user())),
             caller: self.caller.unwrap_or_else(Caller::from_env),
             config_warning: warning,
             data_dir,
@@ -193,7 +203,9 @@ impl From<Refusal> for Stop {
 
 /// Unix ms of the last local midnight before `now_ms`.
 pub fn local_day_start_ms(now_ms: i64) -> i64 {
-    let Some(now) = Local.timestamp_millis_opt(now_ms).single() else { return now_ms - now_ms.rem_euclid(86_400_000) };
+    let Some(now) = Local.timestamp_millis_opt(now_ms).single() else {
+        return now_ms - now_ms.rem_euclid(86_400_000);
+    };
     let midnight = now.date_naive().and_hms_opt(0, 0, 0);
     midnight
         .and_then(|m| Local.from_local_datetime(&m).earliest())
@@ -202,7 +214,9 @@ pub fn local_day_start_ms(now_ms: i64) -> i64 {
 }
 
 fn ms_of(t: std::time::SystemTime) -> Option<i64> {
-    t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+    t.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
 }
 
 /// Absolute, existing directory without the `\\?\` prefix.
@@ -213,7 +227,11 @@ fn normalize_dir(p: &Path) -> Option<PathBuf> {
 }
 
 fn thread_title(agent: &str, prompt: &str) -> String {
-    let first = prompt.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let first = prompt
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     let short: String = first.chars().take(48).collect();
     format!("{agent}: {short}")
 }
@@ -255,7 +273,10 @@ impl Harness {
         if let Some(s) = slot.as_ref() {
             return Ok(s.clone());
         }
-        let mut sb = ChatStore::builder().path(self.data_dir.join("chat.db")).hooks(self.hooks.clone()).keep_busy_status();
+        let mut sb = ChatStore::builder()
+            .path(self.data_dir.join("chat.db"))
+            .hooks(self.hooks.clone())
+            .keep_busy_status();
         if let Some(f) = &self.factory {
             sb = sb.factory(f.clone());
         }
@@ -289,7 +310,9 @@ impl Harness {
 
     fn check_budgets(&self, agent: &str, now: i64) -> Result<(), Refusal> {
         if self.cfg.daily_token_budget > 0 {
-            let used = self.registry.billable_tokens_between(local_day_start_ms(now), i64::MAX);
+            let used = self
+                .registry
+                .billable_tokens_between(local_day_start_ms(now), i64::MAX);
             if used >= self.cfg.daily_token_budget {
                 return Err(Refusal::new(
                     RefusalCode::DailyBudget,
@@ -325,12 +348,19 @@ impl Harness {
             return Err(Refusal::new(RefusalCode::BadRequest, "the prompt is empty").into());
         }
         let cwd = normalize_dir(&req.cwd).ok_or_else(|| {
-            Refusal::new(RefusalCode::BadRequest, format!("--cwd {} is not an existing directory", req.cwd.display()))
+            Refusal::new(
+                RefusalCode::BadRequest,
+                format!("--cwd {} is not an existing directory", req.cwd.display()),
+            )
         })?;
 
         // 1. static rules: enabled, allowed agent, permission <= parent, never Full, depth
         let policy_name = canonical_name(&req.agent).unwrap_or(req.agent.trim());
-        let permission = Policy { cfg: &self.cfg, caller: &self.caller }.check(policy_name, req.permission)?;
+        let permission = Policy {
+            cfg: &self.cfg,
+            caller: &self.caller,
+        }
+        .check(policy_name, req.permission)?;
 
         // 2. which agent exactly
         let kind = self.resolver.resolve(&req.agent)?;
@@ -362,14 +392,21 @@ impl Harness {
         let prompt = redaction.text;
         let mut notes: Vec<String> = Vec::new();
         if redaction.count > 0 {
-            notes.push(format!("{} secret(s) were hidden in the prompt before sending it ({})", redaction.count, redaction.kinds.join(", ")));
+            notes.push(format!(
+                "{} secret(s) were hidden in the prompt before sending it ({})",
+                redaction.count,
+                redaction.kinds.join(", ")
+            ));
         }
 
         // 6. child thread (+ worktree)
         if req.worktree && !matches!(git_svc::Repo::discover(&cwd), Ok(Some(_))) {
             return Err(Refusal::new(
                 RefusalCode::NotAGitRepo,
-                format!("--worktree needs a git repository and {} is not inside one", cwd.display()),
+                format!(
+                    "--worktree needs a git repository and {} is not inside one",
+                    cwd.display()
+                ),
             )
             .into());
         }
@@ -399,7 +436,11 @@ impl Harness {
         let thread = match store.create_thread(spec) {
             Ok(t) => t,
             Err(ChatError::NotAGitRepo(p)) => {
-                return Err(Refusal::new(RefusalCode::NotAGitRepo, format!("{} is not inside a git repository", p.display())).into())
+                return Err(Refusal::new(
+                    RefusalCode::NotAGitRepo,
+                    format!("{} is not inside a git repository", p.display()),
+                )
+                .into())
             }
             Err(e) => return Err(Stop::Failed(format!("cannot create the child thread: {e}"))),
         };
@@ -411,11 +452,15 @@ impl Harness {
         if let Ok(Some(repo)) = git_svc::Repo::discover(&run_dir) {
             match repo.create_checkpoint(&format!("delegacion {run_id} a {agent}")) {
                 Ok(cp) => checkpoint_id = Some(cp.id),
-                Err(e) => notes.push(format!("no checkpoint could be taken ({e}); the diff of this run will be unavailable")),
+                Err(e) => notes.push(format!(
+                    "no checkpoint could be taken ({e}); the diff of this run will be unavailable"
+                )),
             }
         }
 
-        let timeout = req.timeout.unwrap_or(Duration::from_secs(self.cfg.timeout_secs.max(1)));
+        let timeout = req
+            .timeout
+            .unwrap_or(Duration::from_secs(self.cfg.timeout_secs.max(1)));
         let started_ms = chat_core::now_ms();
         let mut record = RunRecord {
             run_id: run_id.clone(),
@@ -468,12 +513,20 @@ impl Harness {
         store.close_thread(thread.id);
         let state = rt.snapshot();
         let totals = state.usage;
-        let usage = UsageOut::new(totals.input, totals.output, totals.cache_create, totals.cache_read);
+        let usage = UsageOut::new(
+            totals.input,
+            totals.output,
+            totals.cache_create,
+            totals.cache_read,
+        );
         let usd = totals.cost_usd();
         let cost = CostOut {
             usd,
             exact: usd > 0.0 && totals.cost_is_exact(),
-            source: match (totals.cost_reported_usd > 0.0, totals.cost_estimated_usd > 0.0) {
+            source: match (
+                totals.cost_reported_usd > 0.0,
+                totals.cost_estimated_usd > 0.0,
+            ) {
                 (true, false) => "reported",
                 (false, true) => "estimated",
                 (true, true) => "mixed",
@@ -481,7 +534,10 @@ impl Harness {
             }
             .into(),
         };
-        let answer = state.last_assistant().map(|m| m.plain_text()).unwrap_or_default();
+        let answer = state
+            .last_assistant()
+            .map(|m| m.plain_text())
+            .unwrap_or_default();
         let (status, reason) = match &outcome {
             Outcome::Done => (RunStatus::Done, None),
             Outcome::Failed(msg) => (RunStatus::Error, Some(redacted(state.error.as_deref().unwrap_or(msg)))),
@@ -498,17 +554,25 @@ impl Harness {
             cap_chars(&redacted(&answer), MAX_SUMMARY_CHARS)
         };
 
-        let (files_changed, diff_stat) = match (&record.checkpoint_id, git_svc::Repo::discover(&run_dir)) {
-            (Some(cp), Ok(Some(repo))) => {
-                let files = repo
-                    .changed_files_since(cp)
-                    .map(|v| v.into_iter().map(|c| c.path.to_string_lossy().replace('\\', "/")).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                let stat = repo.diff_since_checkpoint(cp).map(|d| diff_stat_of(&d)).unwrap_or_default();
-                (files, stat)
-            }
-            _ => (Vec::new(), Default::default()),
-        };
+        let (files_changed, diff_stat) =
+            match (&record.checkpoint_id, git_svc::Repo::discover(&run_dir)) {
+                (Some(cp), Ok(Some(repo))) => {
+                    let files = repo
+                        .changed_files_since(cp)
+                        .map(|v| {
+                            v.into_iter()
+                                .map(|c| c.path.to_string_lossy().replace('\\', "/"))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let stat = repo
+                        .diff_since_checkpoint(cp)
+                        .map(|d| diff_stat_of(&d))
+                        .unwrap_or_default();
+                    (files, stat)
+                }
+                _ => (Vec::new(), Default::default()),
+            };
 
         let result = RunResult {
             run_id: Some(run_id.clone()),
@@ -518,7 +582,10 @@ impl Harness {
             diff_stat,
             usage,
             cost,
-            worktree_path: record.worktree_path.as_ref().map(|p| store::paths::clean_display(&p.to_string_lossy())),
+            worktree_path: record
+                .worktree_path
+                .as_ref()
+                .map(|p| store::paths::clean_display(&p.to_string_lossy())),
             agent: Some(agent),
             permission: Some(permission.to_string()),
             thread_id: Some(thread.id.0),
@@ -538,7 +605,14 @@ impl Harness {
     }
 
     /// Wait for the turn to end, answering approvals and enforcing timeout, cancel and token budget.
-    fn wait(&self, rt: &ThreadRuntime, record: &RunRecord, req: &RunRequest, timeout: Duration, notes: &mut Vec<String>) -> Outcome {
+    fn wait(
+        &self,
+        rt: &ThreadRuntime,
+        record: &RunRecord,
+        req: &RunRequest,
+        timeout: Duration,
+        notes: &mut Vec<String>,
+    ) -> Outcome {
         let start = Instant::now();
         let deadline = start + timeout;
         let handled: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
@@ -575,12 +649,18 @@ impl Harness {
             let (status, error) = rt.with_state(|s| (s.status, s.error.clone()));
             match status {
                 ThreadStatus::Done => return Outcome::Done,
-                ThreadStatus::Error => return Outcome::Failed(error.unwrap_or_else(|| "the agent reported an error".into())),
+                ThreadStatus::Error => {
+                    return Outcome::Failed(
+                        error.unwrap_or_else(|| "the agent reported an error".into()),
+                    )
+                }
                 _ => {}
             }
             rt.wait_for(POLL, |s| {
                 matches!(s.status, ThreadStatus::Done | ThreadStatus::Error)
-                    || s.pending_approvals().iter().any(|a| !handled.lock().contains(&a.request_id))
+                    || s.pending_approvals()
+                        .iter()
+                        .any(|a| !handled.lock().contains(&a.request_id))
             });
         }
     }
@@ -621,9 +701,15 @@ impl Harness {
             Decision::Deny => notes.push(format!(
                 "approval denied for {}: {}",
                 req.tool,
-                verdict.reason.as_deref().unwrap_or("denied by the user in Selachi")
+                verdict
+                    .reason
+                    .as_deref()
+                    .unwrap_or("denied by the user in Selachi")
             )),
-            _ => notes.push(format!("approval for {} was granted from Selachi", req.tool)),
+            _ => notes.push(format!(
+                "approval for {} was granted from Selachi",
+                req.tool
+            )),
         }
         if let Err(e) = rt.approve(request_id, chat) {
             notes.push(format!("could not deliver the approval answer: {e}"));

@@ -47,7 +47,11 @@ impl std::fmt::Display for FetchError {
         match self {
             FetchError::NotHttps(u) => write!(f, "Solo se admiten URL https:// ({u})"),
             FetchError::TooLarge { cap } => {
-                write!(f, "La respuesta supera el límite de {}", crate::fmt::bytes(*cap))
+                write!(
+                    f,
+                    "La respuesta supera el límite de {}",
+                    crate::fmt::bytes(*cap)
+                )
             }
             FetchError::Network(m) => write!(f, "Sin conexión o respuesta inválida: {m}"),
             FetchError::Status(s) => write!(f, "El servidor respondió {s}"),
@@ -63,7 +67,13 @@ pub type Progress<'a> = &'a mut dyn FnMut(u64, Option<u64>);
 
 /// Downloads one URL into memory under a size cap.
 pub trait Fetcher: Send + Sync + 'static {
-    fn get(&self, url: &str, cap: u64, timeout: Duration, progress: Progress<'_>) -> Result<Vec<u8>, FetchError>;
+    fn get(
+        &self,
+        url: &str,
+        cap: u64,
+        timeout: Duration,
+        progress: Progress<'_>,
+    ) -> Result<Vec<u8>, FetchError>;
 }
 
 /// `Ok` only for `https://` URLs with a host.
@@ -81,7 +91,13 @@ pub fn check_https(url: &str) -> Result<(), FetchError> {
 pub struct HttpFetcher;
 
 impl Fetcher for HttpFetcher {
-    fn get(&self, url: &str, cap: u64, timeout: Duration, progress: Progress<'_>) -> Result<Vec<u8>, FetchError> {
+    fn get(
+        &self,
+        url: &str,
+        cap: u64,
+        timeout: Duration,
+        progress: Progress<'_>,
+    ) -> Result<Vec<u8>, FetchError> {
         check_https(url)?;
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .https_only(true)
@@ -149,7 +165,13 @@ pub struct LocalFetcher {
 
 #[cfg(any(test, feature = "dev-file-urls"))]
 impl Fetcher for LocalFetcher {
-    fn get(&self, url: &str, cap: u64, _timeout: Duration, progress: Progress<'_>) -> Result<Vec<u8>, FetchError> {
+    fn get(
+        &self,
+        url: &str,
+        cap: u64,
+        _timeout: Duration,
+        progress: Progress<'_>,
+    ) -> Result<Vec<u8>, FetchError> {
         let path = if let Some(p) = url.strip_prefix("file:///") {
             std::path::PathBuf::from(p.replace('/', std::path::MAIN_SEPARATOR_STR))
         } else {
@@ -157,7 +179,8 @@ impl Fetcher for LocalFetcher {
             let name = url.rsplit('/').next().unwrap_or("");
             self.archives_dir.join(name)
         };
-        let file = std::fs::File::open(&path).map_err(|e| FetchError::Io(format!("{}: {e}", path.display())))?;
+        let file = std::fs::File::open(&path)
+            .map_err(|e| FetchError::Io(format!("{}: {e}", path.display())))?;
         let total = file.metadata().ok().map(|m| m.len());
         if total.is_some_and(|n| n > cap) {
             return Err(FetchError::TooLarge { cap });
@@ -186,16 +209,29 @@ mod tests {
             "https://exa\nmple.com/",
             "",
         ] {
-            assert!(matches!(check_https(bad), Err(FetchError::NotHttps(_))), "{bad:?} must be rejected");
+            assert!(
+                matches!(check_https(bad), Err(FetchError::NotHttps(_))),
+                "{bad:?} must be rejected"
+            );
         }
     }
 
     #[test]
     fn http_fetcher_refuses_other_schemes_without_touching_the_network() {
         let mut calls = 0;
-        let r = HttpFetcher.get("http://127.0.0.1:1/x", MAX_INDEX_BYTES, INDEX_TIMEOUT, &mut |_, _| calls += 1);
+        let r = HttpFetcher.get(
+            "http://127.0.0.1:1/x",
+            MAX_INDEX_BYTES,
+            INDEX_TIMEOUT,
+            &mut |_, _| calls += 1,
+        );
         assert!(matches!(r, Err(FetchError::NotHttps(_))));
-        let r = HttpFetcher.get("file:///C:/Windows/win.ini", MAX_INDEX_BYTES, INDEX_TIMEOUT, &mut |_, _| {});
+        let r = HttpFetcher.get(
+            "file:///C:/Windows/win.ini",
+            MAX_INDEX_BYTES,
+            INDEX_TIMEOUT,
+            &mut |_, _| {},
+        );
         assert!(matches!(r, Err(FetchError::NotHttps(_))));
         assert_eq!(calls, 0);
     }
@@ -216,7 +252,13 @@ mod tests {
     fn progress_is_reported_monotonically() {
         let body = vec![1u8; CHUNK * 3 + 5];
         let mut seen = Vec::new();
-        read_capped(&body[..], MAX_ARCHIVE_BYTES, Some(body.len() as u64), &mut |n, t| seen.push((n, t))).unwrap();
+        read_capped(
+            &body[..],
+            MAX_ARCHIVE_BYTES,
+            Some(body.len() as u64),
+            &mut |n, t| seen.push((n, t)),
+        )
+        .unwrap();
         assert!(seen.windows(2).all(|w| w[0].0 < w[1].0));
         assert_eq!(seen.last().unwrap().0, body.len() as u64);
         assert!(seen.iter().all(|(_, t)| *t == Some(body.len() as u64)));
@@ -226,18 +268,44 @@ mod tests {
     fn local_fetcher_maps_archive_urls_and_enforces_the_cap() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a-1.zip"), vec![0u8; 100]).unwrap();
-        let f = LocalFetcher { archives_dir: dir.path().to_path_buf() };
-        let got = f.get("https://example.invalid/dl/a-1.zip", 1000, ARCHIVE_TIMEOUT, &mut |_, _| {}).unwrap();
+        let f = LocalFetcher {
+            archives_dir: dir.path().to_path_buf(),
+        };
+        let got = f
+            .get(
+                "https://example.invalid/dl/a-1.zip",
+                1000,
+                ARCHIVE_TIMEOUT,
+                &mut |_, _| {},
+            )
+            .unwrap();
         assert_eq!(got.len(), 100);
-        let err = f.get("https://example.invalid/dl/a-1.zip", 50, ARCHIVE_TIMEOUT, &mut |_, _| {}).unwrap_err();
+        let err = f
+            .get(
+                "https://example.invalid/dl/a-1.zip",
+                50,
+                ARCHIVE_TIMEOUT,
+                &mut |_, _| {},
+            )
+            .unwrap_err();
         assert_eq!(err, FetchError::TooLarge { cap: 50 });
         // Even the local fetcher refuses plain http.
         assert!(matches!(
-            f.get("http://example.invalid/a-1.zip", 1000, ARCHIVE_TIMEOUT, &mut |_, _| {}),
+            f.get(
+                "http://example.invalid/a-1.zip",
+                1000,
+                ARCHIVE_TIMEOUT,
+                &mut |_, _| {}
+            ),
             Err(FetchError::NotHttps(_))
         ));
         assert!(matches!(
-            f.get("https://example.invalid/missing.zip", 1000, ARCHIVE_TIMEOUT, &mut |_, _| {}),
+            f.get(
+                "https://example.invalid/missing.zip",
+                1000,
+                ARCHIVE_TIMEOUT,
+                &mut |_, _| {}
+            ),
             Err(FetchError::Io(_))
         ));
     }

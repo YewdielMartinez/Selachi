@@ -16,22 +16,22 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use windows::core::{BOOL, HRESULT};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HWND, LPARAM};
 use windows::Win32::System::Console::{
-    AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent, GetConsoleProcessList,
-    SetConsoleCtrlHandler,
+    AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, GetConsoleProcessList,
+    SetConsoleCtrlHandler, CTRL_BREAK_EVENT,
 };
 use windows::Win32::System::Threading::{
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
+    TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
 };
-use windows::core::{BOOL, HRESULT};
 
-use crate::error::{Error, RefuseReason, Result, win32};
+use crate::error::{win32, Error, RefuseReason, Result};
 use crate::job::JobGroup;
-use crate::snapshot::{ProcInfo, SnapshotOptions, snapshot_with};
+use crate::snapshot::{snapshot_with, ProcInfo, SnapshotOptions};
 use crate::sys::{self, OwnedHandle};
 
 /// Image names that are never terminated (lower case, no `.exe`).
@@ -114,7 +114,13 @@ pub fn check_safe(pid: u32, policy: &SafetyPolicy) -> Result<()> {
 /// Terminates `pid` and all its descendants: graceful first, then force after
 /// `grace`. Uses the default [`TerminateOptions`] otherwise.
 pub fn terminate_tree(pid: u32, grace: Duration) -> Result<TerminateOutcome> {
-    terminate_tree_with(pid, &TerminateOptions { grace, ..TerminateOptions::default() })
+    terminate_tree_with(
+        pid,
+        &TerminateOptions {
+            grace,
+            ..TerminateOptions::default()
+        },
+    )
 }
 
 /// [`terminate_tree`] with full options.
@@ -162,8 +168,11 @@ pub fn terminate_tree_with(pid: u32, opts: &TerminateOptions) -> Result<Terminat
     }
 
     // Include descendants spawned meanwhile by survivors, then force.
-    let survivors: Vec<u32> =
-        targets.iter().filter(|t| sys::is_alive(&t.handle)).map(|t| t.pid).collect();
+    let survivors: Vec<u32> = targets
+        .iter()
+        .filter(|t| sys::is_alive(&t.handle))
+        .map(|t| t.pid)
+        .collect();
     if !survivors.is_empty() {
         let known: HashSet<u32> = targets.iter().map(|t| t.pid).collect();
         let procs = snapshot_with(SnapshotOptions { cmdline: false });
@@ -190,7 +199,13 @@ pub fn terminate_tree_with(pid: u32, opts: &TerminateOptions) -> Result<Terminat
 /// Terminates every process of `job` (hard `TerminateJobObject`), after the
 /// same safety checks as [`terminate_tree`] and without a graceful phase.
 pub fn terminate_job(job: &JobGroup) -> Result<TerminateOutcome> {
-    terminate_job_with(job, &TerminateOptions { grace: Duration::ZERO, ..Default::default() })
+    terminate_job_with(
+        job,
+        &TerminateOptions {
+            grace: Duration::ZERO,
+            ..Default::default()
+        },
+    )
 }
 
 /// [`terminate_job`] with options; a non-zero `grace` first posts `WM_CLOSE`
@@ -230,7 +245,9 @@ pub fn terminate_job_with(job: &JobGroup, opts: &TerminateOptions) -> Result<Ter
                 if sys::wait_exit(&t.handle, Duration::from_secs(2)) {
                     outcome.killed.push(t.pid);
                 } else {
-                    outcome.failed.push((t.pid, "did not exit after TerminateJobObject".into()));
+                    outcome
+                        .failed
+                        .push((t.pid, "did not exit after TerminateJobObject".into()));
                 }
             }
         }
@@ -296,10 +313,16 @@ struct Target {
 
 fn open_target(pid: u32, policy: &SafetyPolicy) -> Result<Target> {
     if pid == 0 || pid == 4 {
-        return Err(Error::Refused { pid, reason: RefuseReason::SystemPid });
+        return Err(Error::Refused {
+            pid,
+            reason: RefuseReason::SystemPid,
+        });
     }
     if pid == std::process::id() {
-        return Err(Error::Refused { pid, reason: RefuseReason::SelfProcess });
+        return Err(Error::Refused {
+            pid,
+            reason: RefuseReason::SelfProcess,
+        });
     }
     let handle = sys::open_process(
         pid,
@@ -307,7 +330,10 @@ fn open_target(pid: u32, policy: &SafetyPolicy) -> Result<Target> {
     )
     .map_err(|e| {
         if e.code() == HRESULT::from_win32(ERROR_ACCESS_DENIED.0) {
-            Error::Refused { pid, reason: RefuseReason::Unverifiable }
+            Error::Refused {
+                pid,
+                reason: RefuseReason::Unverifiable,
+            }
         } else {
             win32("OpenProcess")(e)
         }
@@ -321,7 +347,11 @@ fn check_handle(pid: u32, h: &OwnedHandle, policy: &SafetyPolicy) -> Result<()> 
     let Some(path) = sys::image_path(h) else {
         return refuse(RefuseReason::Unverifiable);
     };
-    let file = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_ascii_lowercase();
+    let file = path
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(&path)
+        .to_ascii_lowercase();
     let stem = file.strip_suffix(".exe").unwrap_or(&file);
     if stem == "explorer" {
         if !policy.allow_explorer {
@@ -335,7 +365,10 @@ fn check_handle(pid: u32, h: &OwnedHandle, policy: &SafetyPolicy) -> Result<()> 
         return refuse(RefuseReason::Unverifiable);
     };
     if ours != theirs {
-        return refuse(RefuseReason::OtherSession { target: theirs, ours });
+        return refuse(RefuseReason::OtherSession {
+            target: theirs,
+            ours,
+        });
     }
     match (sys::own_user_sid(), sys::user_sid(h)) {
         (Some(a), Some(b)) if *a == b => Ok(()),
@@ -365,7 +398,9 @@ fn force_kill(all: &[Target], outcome: &mut TerminateOutcome) {
             Ok(()) => killed.push(t),
             Err(e) => {
                 if sys::is_alive(&t.handle) {
-                    outcome.failed.push((t.pid, format!("TerminateProcess: {e}")));
+                    outcome
+                        .failed
+                        .push((t.pid, format!("TerminateProcess: {e}")));
                 }
             }
         }
@@ -374,7 +409,9 @@ fn force_kill(all: &[Target], outcome: &mut TerminateOutcome) {
         if sys::wait_exit(&t.handle, Duration::from_secs(2)) {
             outcome.killed.push(t.pid);
         } else {
-            outcome.failed.push((t.pid, "still running after TerminateProcess".into()));
+            outcome
+                .failed
+                .push((t.pid, "still running after TerminateProcess".into()));
         }
     }
 }
@@ -397,7 +434,9 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     // SAFETY: plain query on a window handle that may vanish; failure is benign.
     if ctx.pids.contains(&pid) && unsafe { IsWindowVisible(hwnd) }.as_bool() {
         // SAFETY: posting a message is safe for any handle value.
-        if unsafe { PostMessageW(Some(hwnd), WM_CLOSE, Default::default(), Default::default()) }.is_ok() {
+        if unsafe { PostMessageW(Some(hwnd), WM_CLOSE, Default::default(), Default::default()) }
+            .is_ok()
+        {
             ctx.posted += 1;
         }
     }
@@ -408,7 +447,12 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
 fn post_close(pids: &HashSet<u32>) -> usize {
     let mut ctx = EnumCtx { pids, posted: 0 };
     // SAFETY: `ctx` outlives the synchronous EnumWindows call.
-    let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(std::ptr::from_mut(&mut ctx) as isize)) };
+    let _ = unsafe {
+        EnumWindows(
+            Some(enum_proc),
+            LPARAM(std::ptr::from_mut(&mut ctx) as isize),
+        )
+    };
     ctx.posted
 }
 
@@ -502,12 +546,18 @@ mod tests {
         for pid in [0u32, 4] {
             assert!(matches!(
                 check_safe(pid, &pol),
-                Err(Error::Refused { reason: RefuseReason::SystemPid, .. })
+                Err(Error::Refused {
+                    reason: RefuseReason::SystemPid,
+                    ..
+                })
             ));
         }
         assert!(matches!(
             check_safe(std::process::id(), &pol),
-            Err(Error::Refused { reason: RefuseReason::SelfProcess, .. })
+            Err(Error::Refused {
+                reason: RefuseReason::SelfProcess,
+                ..
+            })
         ));
     }
 }

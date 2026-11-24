@@ -44,7 +44,11 @@ pub fn snap_up(s: &str, mut i: usize) -> usize {
 /// Expands tabs to [`TAB_WIDTH`] stops and cuts the line at `max_bytes`, remapping `spans` so they
 /// still point at the same characters. Spans always come back sorted, non-empty and on char
 /// boundaries of the returned text.
-pub fn prepare_line(line: &str, spans: &[(Range<usize>, HighlightKind)], max_bytes: usize) -> PreparedLine {
+pub fn prepare_line(
+    line: &str,
+    spans: &[(Range<usize>, HighlightKind)],
+    max_bytes: usize,
+) -> PreparedLine {
     if !line.contains('\t') && line.len() <= max_bytes {
         let spans = spans
             .iter()
@@ -53,7 +57,11 @@ pub fn prepare_line(line: &str, spans: &[(Range<usize>, HighlightKind)], max_byt
                 (s < e).then_some((s..e, *k))
             })
             .collect();
-        return PreparedLine { text: line.to_owned(), spans, truncated: false };
+        return PreparedLine {
+            text: line.to_owned(),
+            spans,
+            truncated: false,
+        };
     }
 
     let mut out = String::with_capacity(line.len().min(max_bytes) + 4);
@@ -93,7 +101,11 @@ pub fn prepare_line(line: &str, spans: &[(Range<usize>, HighlightKind)], max_byt
         out.push('\u{2026}');
     }
     new_spans.retain(|(r, _)| r.end <= out.len());
-    PreparedLine { text: out, spans: new_spans, truncated }
+    PreparedLine {
+        text: out,
+        spans: new_spans,
+        truncated,
+    }
 }
 
 /// Segments of `0..len` styled by `base` and/or `over`; both inputs must be sorted and
@@ -128,8 +140,14 @@ pub fn overlay<A: Copy, B: Copy>(
         while over.get(oi).is_some_and(|(r, _)| r.end <= s) {
             oi += 1;
         }
-        let a = base.get(bi).filter(|(r, _)| r.start <= s && s < r.end).map(|(_, a)| *a);
-        let b = over.get(oi).filter(|(r, _)| r.start <= s && s < r.end).map(|(_, b)| *b);
+        let a = base
+            .get(bi)
+            .filter(|(r, _)| r.start <= s && s < r.end)
+            .map(|(_, a)| *a);
+        let b = over
+            .get(oi)
+            .filter(|(r, _)| r.start <= s && s < r.end)
+            .map(|(_, b)| *b);
         if a.is_some() || b.is_some() {
             out.push((s..e, a, b));
         }
@@ -169,7 +187,8 @@ pub fn line_contains(line: &str, needle: &str) -> bool {
         return false;
     }
     let first = n[0].to_ascii_lowercase();
-    h.windows(n.len()).any(|w| w[0].to_ascii_lowercase() == first && w.eq_ignore_ascii_case(n))
+    h.windows(n.len())
+        .any(|w| w[0].to_ascii_lowercase() == first && w.eq_ignore_ascii_case(n))
 }
 
 #[cfg(test)]
@@ -212,11 +231,19 @@ mod tests {
         let line = "\u{e9}\ta\u{f1}b";
         let p = prepare_line(line, &[(0..2, Keyword), (3..7, Str)], 100);
         for (r, _) in &p.spans {
-            assert!(p.text.is_char_boundary(r.start) && p.text.is_char_boundary(r.end), "{r:?} in {:?}", p.text);
+            assert!(
+                p.text.is_char_boundary(r.start) && p.text.is_char_boundary(r.end),
+                "{r:?} in {:?}",
+                p.text
+            );
         }
         // Misaligned span (lossy decoding) is snapped instead of panicking.
         let p = prepare_line("\u{e9}", &[(1..2, Keyword)], 100);
-        assert!(p.spans.iter().all(|(r, _)| p.text.is_char_boundary(r.start) && p.text.is_char_boundary(r.end)));
+        assert!(
+            p.spans
+                .iter()
+                .all(|(r, _)| p.text.is_char_boundary(r.start) && p.text.is_char_boundary(r.end))
+        );
     }
 
     #[test]

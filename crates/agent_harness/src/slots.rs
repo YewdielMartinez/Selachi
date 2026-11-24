@@ -42,13 +42,29 @@ pub fn acquire(data_dir: &Path, max: usize) -> std::io::Result<Option<SlotGuard>
     std::fs::create_dir_all(&dir)?;
     for index in 0..max {
         let path = dir.join(format!("slot-{index}.lock"));
-        match OpenOptions::new().read(true).write(true).create(true).truncate(true).share_mode(0).open(&path) {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(0)
+            .open(&path)
+        {
             Ok(mut file) => {
                 // Diagnostics only: who holds it.
                 let _ = write!(file, "{}", std::process::id());
-                return Ok(Some(SlotGuard { _file: file, index, path }));
+                return Ok(Some(SlotGuard {
+                    _file: file,
+                    index,
+                    path,
+                }));
             }
-            Err(e) if matches!(e.raw_os_error(), Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION | ERROR_ACCESS_DENIED)) => {
+            Err(e)
+                if matches!(
+                    e.raw_os_error(),
+                    Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION | ERROR_ACCESS_DENIED)
+                ) =>
+            {
                 continue;
             }
             Err(e) => return Err(e),
@@ -87,7 +103,10 @@ mod tests {
         let mut idx = [a.index(), b.index(), c.index()];
         idx.sort_unstable();
         assert_eq!(idx, [0, 1, 2]);
-        assert!(acquire(dir.path(), 3).unwrap().is_none(), "the fourth run must be refused");
+        assert!(
+            acquire(dir.path(), 3).unwrap().is_none(),
+            "the fourth run must be refused"
+        );
         assert_eq!(in_use(dir.path(), 3), 3);
         drop(b);
         assert_eq!(in_use(dir.path(), 3), 2);

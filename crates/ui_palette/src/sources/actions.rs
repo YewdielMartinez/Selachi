@@ -23,7 +23,13 @@ pub struct ActionEntry {
 
 impl ActionEntry {
     pub fn new(id: impl Into<SharedString>, title: impl Into<SharedString>) -> Self {
-        Self { id: id.into(), title: title.into(), shortcut: None, icon: None, keywords: SharedString::default() }
+        Self {
+            id: id.into(),
+            title: title.into(),
+            shortcut: None,
+            icon: None,
+            keywords: SharedString::default(),
+        }
     }
 
     pub fn shortcut(mut self, shortcut: impl Into<SharedString>) -> Self {
@@ -83,7 +89,10 @@ impl PaletteSource for ActionsSource {
             let score = if needle.is_empty() {
                 Some(ordered_score(i))
             } else {
-                matcher.score(&needle, &[(&e.title, 1.0), (&e.keywords, 0.7), (&e.id, 0.4)])
+                matcher.score(
+                    &needle,
+                    &[(&e.title, 1.0), (&e.keywords, 0.7), (&e.id, 0.4)],
+                )
             };
             let Some(score) = score else { continue };
             let mut item = PaletteItem::new(

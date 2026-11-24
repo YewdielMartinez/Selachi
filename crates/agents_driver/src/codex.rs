@@ -100,23 +100,41 @@ fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
 
 /// Our effort level as Codex spells it (`max` is Codex's `xhigh`).
 fn codex_effort(e: &str) -> &str {
-    if e == "max" { "xhigh" } else { e }
+    if e == "max" {
+        "xhigh"
+    } else {
+        e
+    }
 }
 
 /// `model/list` -> models (hidden ones dropped).
 fn parse_model_list(result: &Value) -> Vec<ModelInfo> {
-    let Some(data) = result.get("data").and_then(Value::as_array) else { return Vec::new() };
+    let Some(data) = result.get("data").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     data.iter()
         .filter(|m| m.get("hidden").and_then(Value::as_bool) != Some(true))
         .filter_map(|m| {
             let id = s(m, "model").or_else(|| s(m, "id"))?.to_string();
-            let label = s(m, "displayName").filter(|l| !l.is_empty()).unwrap_or(&id).to_string();
+            let label = s(m, "displayName")
+                .filter(|l| !l.is_empty())
+                .unwrap_or(&id)
+                .to_string();
             let efforts = m
                 .get("supportedReasoningEfforts")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|o| s(o, "reasoningEffort").map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|o| s(o, "reasoningEffort").map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
-            Some(ModelInfo { id, label, efforts, default_effort: s(m, "defaultReasoningEffort").map(str::to_string) })
+            Some(ModelInfo {
+                id,
+                label,
+                efforts,
+                default_effort: s(m, "defaultReasoningEffort").map(str::to_string),
+            })
         })
         .collect()
 }
@@ -236,7 +254,8 @@ impl CodexSession {
         if let Some(e) = &self.effort {
             params["effort"] = json!(e);
         }
-        step.outgoing.push(self.request(Req::TurnStart, "turn/start", params));
+        step.outgoing
+            .push(self.request(Req::TurnStart, "turn/start", params));
     }
 
     /// User message: starts a turn, steers the running one, or queues until ready.
@@ -273,7 +292,14 @@ impl CodexSession {
     }
 
     pub fn approve(&mut self, id: &str, allow: bool) -> Result<Step> {
-        self.approve_with(id, if allow { ApprovalDecision::Allow } else { ApprovalDecision::Deny })
+        self.approve_with(
+            id,
+            if allow {
+                ApprovalDecision::Allow
+            } else {
+                ApprovalDecision::Deny
+            },
+        )
     }
 
     /// `Always` answers `acceptForSession`: the server stops asking for the same kind of
@@ -300,7 +326,9 @@ impl CodexSession {
         let mut step = Step::default();
         match (v.get("method").and_then(Value::as_str), v.get("id")) {
             (Some(m), Some(id)) => self.on_server_request(m, id, v, &mut step),
-            (Some(m), None) => self.on_notification(m, v.get("params").unwrap_or(&Value::Null), &mut step),
+            (Some(m), None) => {
+                self.on_notification(m, v.get("params").unwrap_or(&Value::Null), &mut step)
+            }
             (None, Some(id)) => self.on_response(id, v, &mut step),
             _ => {}
         }
@@ -333,16 +361,20 @@ impl CodexSession {
                 Req::ModelList => log::debug!("codex: model/list unavailable: {msg}"),
                 Req::TurnStart => {
                     self.busy = false;
-                    step.events.push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300))));
+                    step.events
+                        .push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300))));
                 }
-                _ => step.events.push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300)))),
+                _ => step
+                    .events
+                    .push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300)))),
             }
             return;
         }
         let result = v.get("result").unwrap_or(&Value::Null);
         match kind {
             Req::Initialize => {
-                step.outgoing.push(json!({ "method": "initialized", "params": {} }));
+                step.outgoing
+                    .push(json!({ "method": "initialized", "params": {} }));
                 let (method, params) = if self.resume.is_some() {
                     ("thread/resume", self.thread_params())
                 } else {
@@ -353,7 +385,11 @@ impl CodexSession {
                 let m = self.request(Req::RateLimits, "account/rateLimits/read", Value::Null);
                 step.outgoing.push(m);
                 // The catalogue for the model picker (no model call).
-                let m = self.request(Req::ModelList, "model/list", json!({ "includeHidden": false }));
+                let m = self.request(
+                    Req::ModelList,
+                    "model/list",
+                    json!({ "includeHidden": false }),
+                );
                 step.outgoing.push(m);
             }
             Req::ModelList => {
@@ -434,7 +470,8 @@ impl CodexSession {
             tool: tool.into(),
             detail: truncate(&detail, 300),
         });
-        step.events.push(AgentEvent::Status(AgentStatus::WaitingForInput));
+        step.events
+            .push(AgentEvent::Status(AgentStatus::WaitingForInput));
     }
 
     // -- notifications -----------------------------------------------------
@@ -472,13 +509,19 @@ impl CodexSession {
             "item/agentMessage/delta" => {
                 if let (Some(id), Some(d)) = (s(p, "itemId"), s(p, "delta")) {
                     self.streamed.insert(id.to_string());
-                    ev.push(AgentEvent::Text { text: d.to_string(), delta: true });
+                    ev.push(AgentEvent::Text {
+                        text: d.to_string(),
+                        delta: true,
+                    });
                 }
             }
             "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
                 if let (Some(id), Some(d)) = (s(p, "itemId"), s(p, "delta")) {
                     self.streamed.insert(id.to_string());
-                    ev.push(AgentEvent::Thinking { text: d.to_string(), delta: true });
+                    ev.push(AgentEvent::Thinking {
+                        text: d.to_string(),
+                        delta: true,
+                    });
                 }
             }
             "item/started" => {
@@ -518,7 +561,9 @@ impl CodexSession {
                         cache_create: g("cacheWriteInputTokens"),
                         cache_read: g("cachedInputTokens"),
                         cost_usd: None,
-                        context_window: p.pointer("/tokenUsage/modelContextWindow").and_then(Value::as_u64),
+                        context_window: p
+                            .pointer("/tokenUsage/modelContextWindow")
+                            .and_then(Value::as_u64),
                     });
                 }
             }
@@ -535,7 +580,9 @@ impl CodexSession {
     }
 
     fn on_item_started(&mut self, item: &Value, ev: &mut Vec<AgentEvent>) {
-        let (Some(id), Some(ty)) = (s(item, "id"), s(item, "type")) else { return };
+        let (Some(id), Some(ty)) = (s(item, "id"), s(item, "type")) else {
+            return;
+        };
         let (kind, title, input) = match ty {
             "commandExecution" => (
                 ToolKind::Command,
@@ -548,11 +595,19 @@ impl CodexSession {
                     .as_array()
                     .map(|a| a.iter().filter_map(|c| s(c, "path")).collect())
                     .unwrap_or_default();
-                let title = if paths.is_empty() { "file changes".to_string() } else { paths.join(", ") };
+                let title = if paths.is_empty() {
+                    "file changes".to_string()
+                } else {
+                    paths.join(", ")
+                };
                 (ToolKind::Edit, title, changes)
             }
             "mcpToolCall" => (
-                ToolKind::Other(format!("{}/{}", s(item, "server").unwrap_or("mcp"), s(item, "tool").unwrap_or("tool"))),
+                ToolKind::Other(format!(
+                    "{}/{}",
+                    s(item, "server").unwrap_or("mcp"),
+                    s(item, "tool").unwrap_or("tool")
+                )),
                 s(item, "tool").unwrap_or("tool").to_string(),
                 item.get("arguments").cloned().unwrap_or(Value::Null),
             ),
@@ -571,17 +626,27 @@ impl CodexSession {
         let title = truncate(&title, 200);
         self.titles.insert(id.to_string(), title.clone());
         self.tool_items.insert(id.to_string());
-        ev.push(AgentEvent::ToolCall { id: id.to_string(), kind, title, input_json: input });
+        ev.push(AgentEvent::ToolCall {
+            id: id.to_string(),
+            kind,
+            title,
+            input_json: input,
+        });
     }
 
     fn on_item_completed(&mut self, item: &Value, ev: &mut Vec<AgentEvent>) {
-        let (Some(id), Some(ty)) = (s(item, "id"), s(item, "type")) else { return };
+        let (Some(id), Some(ty)) = (s(item, "id"), s(item, "type")) else {
+            return;
+        };
         let status = s(item, "status").unwrap_or("");
         match ty {
             "agentMessage" => {
                 if !self.streamed.remove(id) {
                     if let Some(t) = s(item, "text").filter(|t| !t.is_empty()) {
-                        ev.push(AgentEvent::Text { text: t.to_string(), delta: false });
+                        ev.push(AgentEvent::Text {
+                            text: t.to_string(),
+                            delta: false,
+                        });
                     }
                 }
             }
@@ -590,7 +655,12 @@ impl CodexSession {
                     let join = |k: &str| -> String {
                         item.get(k)
                             .and_then(Value::as_array)
-                            .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"))
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
                             .unwrap_or_default()
                     };
                     let mut text = join("summary");
@@ -615,14 +685,25 @@ impl CodexSession {
                 } else {
                     truncate(out, 300)
                 };
-                ev.push(AgentEvent::ToolResult { id: id.to_string(), ok, summary });
+                ev.push(AgentEvent::ToolResult {
+                    id: id.to_string(),
+                    ok,
+                    summary,
+                });
             }
             "fileChange" => {
-                let n = item.get("changes").and_then(Value::as_array).map_or(0, Vec::len);
+                let n = item
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
                 ev.push(AgentEvent::ToolResult {
                     id: id.to_string(),
                     ok: status == "completed",
-                    summary: if status == "completed" { format!("{n} file(s) changed") } else { status.to_string() },
+                    summary: if status == "completed" {
+                        format!("{n} file(s) changed")
+                    } else {
+                        status.to_string()
+                    },
                 });
             }
             "mcpToolCall" => {
@@ -634,11 +715,22 @@ impl CodexSession {
                 });
             }
             "dynamicToolCall" => {
-                let ok = item.get("success").and_then(Value::as_bool).unwrap_or(status == "completed");
-                ev.push(AgentEvent::ToolResult { id: id.to_string(), ok, summary: status.to_string() });
+                let ok = item
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(status == "completed");
+                ev.push(AgentEvent::ToolResult {
+                    id: id.to_string(),
+                    ok,
+                    summary: status.to_string(),
+                });
             }
             "webSearch" => {
-                ev.push(AgentEvent::ToolResult { id: id.to_string(), ok: true, summary: String::new() });
+                ev.push(AgentEvent::ToolResult {
+                    id: id.to_string(),
+                    ok: true,
+                    summary: String::new(),
+                });
             }
             _ => {}
         }
@@ -663,7 +755,8 @@ fn write_all(stdin: &Mutex<Option<ChildStdin>>, msgs: &[Value]) -> Result<()> {
     for m in msgs {
         let mut line = m.to_string();
         line.push('\n');
-        w.write_all(line.as_bytes()).map_err(|_| DriverError::Closed)?;
+        w.write_all(line.as_bytes())
+            .map_err(|_| DriverError::Closed)?;
     }
     w.flush().map_err(|_| DriverError::Closed)
 }
@@ -674,8 +767,13 @@ impl CodexDriver {
     }
 
     /// [`spawn`](Self::spawn) with [`SpawnOpts`] (Job Object membership).
-    pub fn spawn_with(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>, opts: &SpawnOpts) -> Result<Self> {
-        let exe = proc::resolve_executable("codex").ok_or_else(|| DriverError::NotFound("codex".into()))?;
+    pub fn spawn_with(
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        let exe = proc::resolve_executable("codex")
+            .ok_or_else(|| DriverError::NotFound("codex".into()))?;
         let mut cmd = proc::command_for(&exe);
         cmd.arg("app-server")
             .args(&cfg.extra_args)
@@ -695,35 +793,46 @@ impl CodexDriver {
         let session = Arc::new(Mutex::new(session));
         write_all(&stdin, &first)?;
 
-        std::thread::Builder::new().name("codex-stderr".into()).spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(|l| l.ok()) {
-                log::debug!("codex stderr: {line}");
-            }
-        })?;
+        std::thread::Builder::new()
+            .name("codex-stderr".into())
+            .spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(|l| l.ok()) {
+                    log::debug!("codex stderr: {line}");
+                }
+            })?;
 
         {
-            let (session, stdin, child, tx) = (session.clone(), stdin.clone(), child.clone(), tx.clone());
+            let (session, stdin, child, tx) =
+                (session.clone(), stdin.clone(), child.clone(), tx.clone());
             let lines = coalesce::spawn_line_reader("codex-stdout-io", stdout)?;
-            std::thread::Builder::new().name("codex-stdout".into()).spawn(move || {
-                let mut co = Coalescer::new(tx.clone());
-                let alive = coalesce::pump(&lines, &mut co, |line| {
-                    let step = session.lock().on_line(line);
-                    if !step.outgoing.is_empty() {
-                        if let Err(e) = write_all(&stdin, &step.outgoing) {
-                            log::warn!("codex: write failed: {e}");
+            std::thread::Builder::new()
+                .name("codex-stdout".into())
+                .spawn(move || {
+                    let mut co = Coalescer::new(tx.clone());
+                    let alive = coalesce::pump(&lines, &mut co, |line| {
+                        let step = session.lock().on_line(line);
+                        if !step.outgoing.is_empty() {
+                            if let Err(e) = write_all(&stdin, &step.outgoing) {
+                                log::warn!("codex: write failed: {e}");
+                            }
                         }
+                        step.events
+                    });
+                    if !alive {
+                        return;
                     }
-                    step.events
-                });
-                if !alive {
-                    return;
-                }
-                let code = wait_exit(&child, Duration::from_secs(5));
-                let _ = tx.unbounded_send(AgentEvent::Exited { code });
-            })?;
+                    let code = wait_exit(&child, Duration::from_secs(5));
+                    let _ = tx.unbounded_send(AgentEvent::Exited { code });
+                })?;
         }
 
-        Ok(Self { session, stdin, child, tx, pid })
+        Ok(Self {
+            session,
+            stdin,
+            child,
+            tx,
+            pid,
+        })
     }
 
     fn apply(&self, step: Step) -> Result<()> {
@@ -810,7 +919,11 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> String {
-        std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
     }
 
     /// The fixtures were recorded by a script that used its own request ids
@@ -821,7 +934,10 @@ mod tests {
         s.reqs.insert(2, Req::RateLimits);
         s.reqs.insert(3, Req::ThreadStart);
         s.reqs.insert(4, Req::TurnStart);
-        fixture(name).lines().flat_map(|l| s.on_line(l).events).collect()
+        fixture(name)
+            .lines()
+            .flat_map(|l| s.on_line(l).events)
+            .collect()
     }
 
     #[test]
@@ -830,15 +946,30 @@ mod tests {
         assert!(matches!(&ev[0], AgentEvent::RateLimits { windows }
             if windows[0].name == "primary" && windows[0].used_percent == 12.0
                && windows[0].window_mins == Some(43200)));
-        assert!(ev.iter().any(|e| matches!(e, AgentEvent::SessionStarted { session_id, model }
-            if session_id.starts_with("01a1fa88") && model.is_some())));
-        assert!(ev.contains(&AgentEvent::Text { text: "ok".into(), delta: true }));
+        assert!(ev.iter().any(
+            |e| matches!(e, AgentEvent::SessionStarted { session_id, model }
+            if session_id.starts_with("01a1fa88") && model.is_some())
+        ));
+        assert!(ev.contains(&AgentEvent::Text {
+            text: "ok".into(),
+            delta: true
+        }));
         // the completed agentMessage must not repeat the streamed text
-        assert_eq!(ev.iter().filter(|e| matches!(e, AgentEvent::Text { .. })).count(), 1);
+        assert_eq!(
+            ev.iter()
+                .filter(|e| matches!(e, AgentEvent::Text { .. }))
+                .count(),
+            1
+        );
         let usage = ev.iter().find_map(|e| match e {
-            AgentEvent::Usage { input, output, cache_create, cache_read, context_window, .. } => {
-                Some((*input, *output, *cache_create, *cache_read, *context_window))
-            }
+            AgentEvent::Usage {
+                input,
+                output,
+                cache_create,
+                cache_read,
+                context_window,
+                ..
+            } => Some((*input, *output, *cache_create, *cache_read, *context_window)),
             _ => None,
         });
         assert_eq!(usage, Some((19702, 5, 0, 0, Some(258_400))));
@@ -875,7 +1006,9 @@ mod tests {
         assert_eq!(step.outgoing[2]["method"], "account/rateLimits/read");
         let tid_req = step.outgoing[1]["id"].clone();
         let step = s.on_message(&json!({"id":tid_req,"result":{"thread":{"id":"t1"},"model":"m"}}));
-        assert!(matches!(&step.events[0], AgentEvent::SessionStarted { session_id, .. } if session_id == "t1"));
+        assert!(
+            matches!(&step.events[0], AgentEvent::SessionStarted { session_id, .. } if session_id == "t1")
+        );
         assert_eq!(step.outgoing[0]["method"], "turn/start");
         assert_eq!(step.outgoing[0]["params"]["threadId"], "t1");
         assert_eq!(step.outgoing[0]["params"]["input"][0]["text"], "hi");
@@ -886,7 +1019,9 @@ mod tests {
         let mut s = CodexSession::new(&ThreadConfig::new("."));
         s.thread_id = Some("t".into());
         assert!(s.interrupt().is_err());
-        s.on_message(&json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"u1"}}}));
+        s.on_message(
+            &json!({"method":"turn/started","params":{"threadId":"t","turn":{"id":"u1"}}}),
+        );
         let step = s.user_message("more");
         assert_eq!(step.outgoing[0]["method"], "turn/steer");
         assert_eq!(step.outgoing[0]["params"]["expectedTurnId"], "u1");
@@ -903,11 +1038,19 @@ mod tests {
             "method":"item/commandExecution/requestApproval","id":7,
             "params":{"itemId":"i1","threadId":"t","turnId":"u","command":"git status","cwd":"C:/x","startedAtMs":1}
         }));
-        assert_eq!(step.events[0], AgentEvent::ApprovalRequest {
-            id: "7".into(), tool: "Command".into(), detail: "git status".into()
-        });
+        assert_eq!(
+            step.events[0],
+            AgentEvent::ApprovalRequest {
+                id: "7".into(),
+                tool: "Command".into(),
+                detail: "git status".into()
+            }
+        );
         let step = s.approve("7", true).unwrap();
-        assert_eq!(step.outgoing[0], json!({"id":7,"result":{"decision":"accept"}}));
+        assert_eq!(
+            step.outgoing[0],
+            json!({"id":7,"result":{"decision":"accept"}})
+        );
         assert!(s.approve("7", true).is_err());
         s.on_message(&json!({"method":"item/fileChange/requestApproval","id":8,"params":{"itemId":"i2","reason":"write file"}}));
         let step = s.approve("8", false).unwrap();
@@ -922,8 +1065,10 @@ mod tests {
             (ApprovalDecision::Deny, "decline"),
         ] {
             let mut s = CodexSession::new(&ThreadConfig::new("."));
-            s.on_message(&json!({"method":"item/commandExecution/requestApproval","id":3,
-                "params":{"itemId":"i","command":"ls"}}));
+            s.on_message(
+                &json!({"method":"item/commandExecution/requestApproval","id":3,
+                "params":{"itemId":"i","command":"ls"}}),
+            );
             let step = s.approve_with("3", d).unwrap();
             assert_eq!(step.outgoing[0], json!({"id":3,"result":{"decision":want}}));
         }
@@ -932,7 +1077,8 @@ mod tests {
     #[test]
     fn unsupported_server_request_gets_an_error_reply() {
         let mut s = CodexSession::new(&ThreadConfig::new("."));
-        let step = s.on_message(&json!({"method":"item/tool/requestUserInput","id":"abc","params":{}}));
+        let step =
+            s.on_message(&json!({"method":"item/tool/requestUserInput","id":"abc","params":{}}));
         assert!(step.events.is_empty());
         assert_eq!(step.outgoing[0]["id"], "abc");
         assert_eq!(step.outgoing[0]["error"]["code"], -32601);
@@ -945,21 +1091,44 @@ mod tests {
         let start = json!({"method":"item/started","params":{"threadId":"t","turnId":"u","startedAtMs":1,
             "item":{"type":"commandExecution","id":"c1","command":"dir","cwd":"C:/x","status":"inProgress","commandActions":[]}}});
         let ev = s.on_message(&start).events;
-        assert!(matches!(&ev[0], AgentEvent::ToolCall { id, kind: ToolKind::Command, title, .. } if id == "c1" && title == "dir"));
+        assert!(
+            matches!(&ev[0], AgentEvent::ToolCall { id, kind: ToolKind::Command, title, .. } if id == "c1" && title == "dir")
+        );
         let done = json!({"method":"item/completed","params":{"threadId":"t","turnId":"u","completedAtMs":2,
             "item":{"type":"commandExecution","id":"c1","command":"dir","cwd":"C:/x","status":"completed","exitCode":0,"aggregatedOutput":"a.txt\n","commandActions":[]}}});
         let ev = s.on_message(&done).events;
-        assert_eq!(ev, vec![AgentEvent::ToolResult { id: "c1".into(), ok: true, summary: "a.txt".into() }]);
+        assert_eq!(
+            ev,
+            vec![AgentEvent::ToolResult {
+                id: "c1".into(),
+                ok: true,
+                summary: "a.txt".into()
+            }]
+        );
         let plan = s.on_message(&json!({"method":"turn/plan/updated","params":{"threadId":"t","turnId":"u",
             "plan":[{"step":"a","status":"completed"},{"step":"b","status":"inProgress"},{"step":"c","status":"pending"}]}})).events;
-        assert_eq!(plan, vec![AgentEvent::Plan { tasks: vec![
-            ("a".into(), TaskState::Done), ("b".into(), TaskState::InProgress), ("c".into(), TaskState::Pending)] }]);
+        assert_eq!(
+            plan,
+            vec![AgentEvent::Plan {
+                tasks: vec![
+                    ("a".into(), TaskState::Done),
+                    ("b".into(), TaskState::InProgress),
+                    ("c".into(), TaskState::Pending)
+                ]
+            }]
+        );
     }
 
     #[test]
     fn permission_mapping() {
-        assert_eq!(policy_for(PermissionMode::Ask), ("untrusted", "workspace-write"));
-        assert_eq!(policy_for(PermissionMode::Full), ("never", "danger-full-access"));
+        assert_eq!(
+            policy_for(PermissionMode::Ask),
+            ("untrusted", "workspace-write")
+        );
+        assert_eq!(
+            policy_for(PermissionMode::Full),
+            ("never", "danger-full-access")
+        );
     }
 
     /// Live and non-consuming: handshake + `account/rateLimits/read` through the
@@ -1012,6 +1181,9 @@ mod tests {
         let tid = step.outgoing[1]["id"].clone();
         s.on_message(&json!({"id":tid,"result":{"thread":{"id":"t1"},"model":"m"}}));
         let step = s.user_message("hi");
-        assert_eq!(step.outgoing[0]["params"]["effort"], "xhigh", "max is Codex's xhigh");
+        assert_eq!(
+            step.outgoing[0]["params"]["effort"], "xhigh",
+            "max is Codex's xhigh"
+        );
     }
 }

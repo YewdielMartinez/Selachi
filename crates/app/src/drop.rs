@@ -20,7 +20,11 @@ pub enum ShellKind {
 
 /// The kind of shell from its program name (`pwsh`, `powershell`, `cmd`, `bash`, `wsl`...).
 pub fn shell_kind(name: &str) -> ShellKind {
-    let n = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
+    let n = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
     let n = n.trim_end_matches(".exe");
     match n {
         "cmd" => ShellKind::Cmd,
@@ -30,7 +34,11 @@ pub fn shell_kind(name: &str) -> ShellKind {
 }
 
 fn plain(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '\\' | '/' | ':' | '~' | '+' | ',' | '@')
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '_' | '-' | '.' | '\\' | '/' | ':' | '~' | '+' | ',' | '@'
+        )
 }
 
 /// One path as a single word for `kind`. Paths made only of safe characters stay as they are.
@@ -50,7 +58,11 @@ pub fn quote_path(kind: ShellKind, path: &Path) -> String {
 
 /// The text typed at the prompt for dropped `paths`: quoted, space-separated, no newline.
 pub fn quote_paths(kind: ShellKind, paths: &[PathBuf]) -> String {
-    paths.iter().map(|p| quote_path(kind, p)).collect::<Vec<_>>().join(" ")
+    paths
+        .iter()
+        .map(|p| quote_path(kind, p))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A drop on a space row: the folder to open a terminal in (the first dropped folder).
@@ -89,22 +101,43 @@ mod tests {
 
     #[test]
     fn safe_paths_are_left_alone() {
-        assert_eq!(quote_path(ShellKind::PowerShell, &p(r"C:\dev\app\main.rs")), r"C:\dev\app\main.rs");
+        assert_eq!(
+            quote_path(ShellKind::PowerShell, &p(r"C:\dev\app\main.rs")),
+            r"C:\dev\app\main.rs"
+        );
     }
 
     #[test]
     fn powershell_quotes_spaces_and_metacharacters_literally() {
-        assert_eq!(quote_path(ShellKind::PowerShell, &p(r"C:\Mis Documentos\a.txt")), r"'C:\Mis Documentos\a.txt'");
-        assert_eq!(quote_path(ShellKind::PowerShell, &p(r"C:\x\$env(a)&b.txt")), r"'C:\x\$env(a)&b.txt'");
-        assert_eq!(quote_path(ShellKind::PowerShell, &p(r"C:\it's here\f.txt")), r"'C:\it''s here\f.txt'");
+        assert_eq!(
+            quote_path(ShellKind::PowerShell, &p(r"C:\Mis Documentos\a.txt")),
+            r"'C:\Mis Documentos\a.txt'"
+        );
+        assert_eq!(
+            quote_path(ShellKind::PowerShell, &p(r"C:\x\$env(a)&b.txt")),
+            r"'C:\x\$env(a)&b.txt'"
+        );
+        assert_eq!(
+            quote_path(ShellKind::PowerShell, &p(r"C:\it's here\f.txt")),
+            r"'C:\it''s here\f.txt'"
+        );
         // The verbatim prefix Windows adds to long paths is dropped.
-        assert_eq!(quote_path(ShellKind::PowerShell, &p(r"\\?\C:\a b\c")), r"'C:\a b\c'");
+        assert_eq!(
+            quote_path(ShellKind::PowerShell, &p(r"\\?\C:\a b\c")),
+            r"'C:\a b\c'"
+        );
     }
 
     #[test]
     fn cmd_and_posix_follow_their_own_rules() {
-        assert_eq!(quote_path(ShellKind::Cmd, &p(r"C:\a b\c.txt")), "\"C:\\a b\\c.txt\"");
-        assert_eq!(quote_path(ShellKind::Posix, &p("/home/a b/it's")), r"'/home/a b/it'\''s'");
+        assert_eq!(
+            quote_path(ShellKind::Cmd, &p(r"C:\a b\c.txt")),
+            "\"C:\\a b\\c.txt\""
+        );
+        assert_eq!(
+            quote_path(ShellKind::Posix, &p("/home/a b/it's")),
+            r"'/home/a b/it'\''s'"
+        );
         assert_eq!(shell_kind("pwsh"), ShellKind::PowerShell);
         assert_eq!(shell_kind(r"C:\Windows\System32\cmd.exe"), ShellKind::Cmd);
         assert_eq!(shell_kind("bash.exe"), ShellKind::Posix);
@@ -113,7 +146,10 @@ mod tests {
 
     #[test]
     fn several_paths_are_space_separated_without_enter() {
-        let t = quote_paths(ShellKind::PowerShell, &[p(r"C:\a\x.txt"), p(r"C:\b c\y.txt")]);
+        let t = quote_paths(
+            ShellKind::PowerShell,
+            &[p(r"C:\a\x.txt"), p(r"C:\b c\y.txt")],
+        );
         assert_eq!(t, r"C:\a\x.txt 'C:\b c\y.txt'");
         assert!(!t.contains('\n') && !t.contains('\r'));
         assert_eq!(quote_paths(ShellKind::PowerShell, &[]), "");
@@ -128,7 +164,11 @@ mod tests {
         let missing = dir.join("nope");
         let all = [file.clone(), dir.clone(), missing];
         assert_eq!(folder_to_open(&all), Some(dir.clone()));
-        assert_eq!(folder_to_open(std::slice::from_ref(&file)), None, "a file does not open a terminal");
+        assert_eq!(
+            folder_to_open(std::slice::from_ref(&file)),
+            None,
+            "a file does not open a terminal"
+        );
         let v = split_for_viewer(&all);
         assert_eq!(v.files, vec![file]);
         assert_eq!(v.folders, vec![dir.clone()]);

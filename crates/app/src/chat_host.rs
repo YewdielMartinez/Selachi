@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use agents_driver::{AgentEvent, AgentKind, AgentStatus, DriverError, ThreadConfig, ToolKind};
 use chat_core::{
-    AgentControl, ApprovalDecision, ChatStore, DriverFactory, JobHandle, OwnerInfo, ProcessHooks, SpawnedAgent, ThreadId,
-    ThreadStatus,
+    AgentControl, ApprovalDecision, ChatStore, DriverFactory, JobHandle, OwnerInfo, ProcessHooks,
+    SpawnedAgent, ThreadId, ThreadStatus,
 };
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui::{AnyView, App, AppContext as _, IntoElement, Render, SharedString, Window, div};
@@ -52,7 +52,10 @@ pub struct ProcHooks {
 
 impl ProcHooks {
     pub fn new(tracker: SharedTracker, tx: UnboundedSender<HookMsg>) -> Self {
-        Self { tracker, tx: Mutex::new(tx) }
+        Self {
+            tracker,
+            tx: Mutex::new(tx),
+        }
     }
 
     fn send(&self, msg: HookMsg) {
@@ -63,17 +66,30 @@ impl ProcHooks {
 
 impl ProcessHooks for ProcHooks {
     fn open_owner(&self, thread_id: ThreadId, info: &OwnerInfo) -> Option<JobHandle> {
-        let label = if info.label.trim().is_empty() { format!("Hilo · {}", info.agent) } else { info.label.clone() };
-        let meta = proc_svc::OwnerMeta { agent: Some(info.agent.clone()), label, cwd: Some(info.cwd.clone()) };
-        match ui_procs::open_owner(&self.tracker, owner_of(thread_id), meta, proc_svc::JobOptions::default()) {
+        let label = if info.label.trim().is_empty() {
+            format!("Hilo · {}", info.agent)
+        } else {
+            info.label.clone()
+        };
+        let meta = proc_svc::OwnerMeta {
+            agent: Some(info.agent.clone()),
+            label,
+            cwd: Some(info.cwd.clone()),
+        };
+        match ui_procs::open_owner(
+            &self.tracker,
+            owner_of(thread_id),
+            meta,
+            proc_svc::JobOptions::default(),
+        ) {
             Ok(job) => {
                 self.send(HookMsg::Events(job.events));
                 Some(job.job_handle as usize)
-            },
+            }
             Err(e) => {
                 log::warn!("could not create the process job of thread {thread_id}: {e}");
                 None
-            },
+            }
         }
     }
 
@@ -98,7 +114,9 @@ pub fn fake_requested() -> bool {
 pub fn open_store(hooks: Arc<ProcHooks>) -> chat_core::Result<ChatStore> {
     let mut b = ChatStore::builder().hooks(hooks);
     if fake_requested() {
-        log::warn!("SELACHI_CHAT_FAKE=1: chat threads use a scripted agent (no processes, no model calls)");
+        log::warn!(
+            "SELACHI_CHAT_FAKE=1: chat threads use a scripted agent (no processes, no model calls)"
+        );
         b = b.factory(Arc::new(FakeFactory));
     }
     b.open()
@@ -106,7 +124,10 @@ pub fn open_store(hooks: Arc<ProcHooks>) -> chat_core::Result<ChatStore> {
 
 /// What a thread's state asks of the user. `approval` is the first pending approval's
 /// `(tool, detail)`. `Done` and `Idle` ask nothing (the sidebar row shows the check).
-pub fn attention_for(status: ThreadStatus, approval: Option<(String, String)>) -> Option<AttentionKind> {
+pub fn attention_for(
+    status: ThreadStatus,
+    approval: Option<(String, String)>,
+) -> Option<AttentionKind> {
     if let Some((tool, detail)) = approval {
         return Some(AttentionKind::Approval { tool, detail });
     }
@@ -123,7 +144,9 @@ pub fn toast_title(kind: &AttentionKind, agent: &str) -> String {
         AttentionKind::Approval { .. } => format!("{agent} pide tu aprobación"),
         AttentionKind::WaitingInput => format!("{agent} espera tu respuesta"),
         AttentionKind::AgentError => format!("{agent} terminó con un error"),
-        AttentionKind::Failed { .. } | AttentionKind::LongCommandDone => format!("{agent} necesita tu atención"),
+        AttentionKind::Failed { .. } | AttentionKind::LongCommandDone => {
+            format!("{agent} necesita tu atención")
+        }
     }
 }
 
@@ -176,7 +199,13 @@ impl PanelProvider for ThreadsProvider {
         }
     }
 
-    fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, window: &mut Window, cx: &mut App) -> bool {
+    fn context_changed(
+        &self,
+        view: &AnyView,
+        ctx: &PanelCtx,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
         Self::inner(cx).is_some_and(|p| p.context_changed(view, ctx, window, cx))
     }
 }
@@ -196,27 +225,75 @@ struct FakeControl {
 const FAKE_TEXT: &str = "Revisé el módulo: el problema está en `skip_comment`, que cierra el comentario en el primer `*/`.\n\nEl arreglo es contar la profundidad:\n\n```rust\nfn skip_comment(&mut self) {\n    let mut depth = 1;\n    while depth > 0 {\n        match (self.bump(), self.peek()) {\n            ('/', '*') => depth += 1,\n            ('*', '/') => depth -= 1,\n            _ => {}\n        }\n    }\n}\n```\n\nNo ejecuté nada: esto es el agente de pruebas de Selachi (`SELACHI_CHAT_FAKE=1`), sin modelo ni procesos.";
 
 fn fake_session() -> Vec<(u64, AgentEvent)> {
-    let call = |id: &str, kind: ToolKind, title: &str, input: serde_json::Value| AgentEvent::ToolCall {
+    let call =
+        |id: &str, kind: ToolKind, title: &str, input: serde_json::Value| AgentEvent::ToolCall {
+            id: id.into(),
+            kind,
+            title: title.into(),
+            input_json: input,
+        };
+    let res = |id: &str, summary: &str| AgentEvent::ToolResult {
         id: id.into(),
-        kind,
-        title: title.into(),
-        input_json: input,
+        ok: true,
+        summary: summary.into(),
     };
-    let res = |id: &str, summary: &str| AgentEvent::ToolResult { id: id.into(), ok: true, summary: summary.into() };
     let mut s = vec![
-        (0, AgentEvent::SessionStarted { session_id: "fake-session".into(), model: Some("claude-opus-5-5".into()) }),
+        (
+            0,
+            AgentEvent::SessionStarted {
+                session_id: "fake-session".into(),
+                model: Some("claude-opus-5-5".into()),
+            },
+        ),
         (0, AgentEvent::Status(AgentStatus::Working)),
-        (250, AgentEvent::Thinking { text: "Miro cómo se cierran hoy los comentarios del lexer.".into(), delta: false }),
-        (250, call("f1", ToolKind::Search, "fn skip_comment", serde_json::json!({"pattern": "fn skip_comment"}))),
+        (
+            250,
+            AgentEvent::Thinking {
+                text: "Miro cómo se cierran hoy los comentarios del lexer.".into(),
+                delta: false,
+            },
+        ),
+        (
+            250,
+            call(
+                "f1",
+                ToolKind::Search,
+                "fn skip_comment",
+                serde_json::json!({"pattern": "fn skip_comment"}),
+            ),
+        ),
         (150, res("f1", "crates/parser/src/lexer.rs:88")),
-        (200, call("f2", ToolKind::Read, "crates/parser/src/lexer.rs", serde_json::json!({"file_path": "crates/parser/src/lexer.rs"}))),
+        (
+            200,
+            call(
+                "f2",
+                ToolKind::Read,
+                "crates/parser/src/lexer.rs",
+                serde_json::json!({"file_path": "crates/parser/src/lexer.rs"}),
+            ),
+        ),
         (150, res("f2", "212 líneas")),
     ];
     let chars: Vec<char> = FAKE_TEXT.chars().collect();
-    s.extend(chars.chunks(12).map(|c| (14, AgentEvent::Text { text: c.iter().collect(), delta: true })));
+    s.extend(chars.chunks(12).map(|c| {
+        (
+            14,
+            AgentEvent::Text {
+                text: c.iter().collect(),
+                delta: true,
+            },
+        )
+    }));
     s.push((
         100,
-        AgentEvent::Usage { input: 4200, output: 610, cache_create: 0, cache_read: 18_000, cost_usd: None, context_window: Some(1_000_000) },
+        AgentEvent::Usage {
+            input: 4200,
+            output: 610,
+            cache_create: 0,
+            cache_read: 18_000,
+            cost_usd: None,
+            context_window: Some(1_000_000),
+        },
     ));
     s.push((0, AgentEvent::Status(AgentStatus::Done)));
     s
@@ -242,7 +319,9 @@ impl AgentControl for FakeControl {
     }
 
     fn interrupt(&mut self) -> agents_driver::Result<()> {
-        let _ = self.tx.unbounded_send(AgentEvent::Status(AgentStatus::Done));
+        let _ = self
+            .tx
+            .unbounded_send(AgentEvent::Status(AgentStatus::Done));
         Ok(())
     }
 
@@ -256,9 +335,18 @@ impl AgentControl for FakeControl {
 }
 
 impl DriverFactory for FakeFactory {
-    fn spawn(&self, _kind: &AgentKind, _cfg: &ThreadConfig, _job: Option<JobHandle>) -> agents_driver::Result<SpawnedAgent> {
+    fn spawn(
+        &self,
+        _kind: &AgentKind,
+        _cfg: &ThreadConfig,
+        _job: Option<JobHandle>,
+    ) -> agents_driver::Result<SpawnedAgent> {
         let (tx, events) = unbounded();
-        Ok(SpawnedAgent { control: Box::new(FakeControl { tx }), events, pid: None })
+        Ok(SpawnedAgent {
+            control: Box::new(FakeControl { tx }),
+            events,
+            pid: None,
+        })
     }
 }
 
@@ -280,23 +368,50 @@ mod tests {
         assert_eq!(attention_for(S::Working, None), None);
         assert_eq!(attention_for(S::Done, None), None);
         assert_eq!(attention_for(S::Idle, None), None);
-        assert_eq!(attention_for(S::WaitingForInput, None), Some(AttentionKind::WaitingInput));
-        assert_eq!(attention_for(S::Error, None), Some(AttentionKind::AgentError));
+        assert_eq!(
+            attention_for(S::WaitingForInput, None),
+            Some(AttentionKind::WaitingInput)
+        );
+        assert_eq!(
+            attention_for(S::Error, None),
+            Some(AttentionKind::AgentError)
+        );
         // A pending approval wins, whatever the status says.
         let k = attention_for(S::WaitingForInput, Some(("Bash".into(), "ls".into())));
-        assert_eq!(k, Some(AttentionKind::Approval { tool: "Bash".into(), detail: "ls".into() }));
+        assert_eq!(
+            k,
+            Some(AttentionKind::Approval {
+                tool: "Bash".into(),
+                detail: "ls".into()
+            })
+        );
     }
 
     #[test]
     fn toasts_name_the_agent_and_the_need() {
-        assert_eq!(toast_title(&AttentionKind::WaitingInput, "Claude Code"), "Claude Code espera tu respuesta");
-        assert!(toast_title(&AttentionKind::Approval { tool: String::new(), detail: String::new() }, "Codex").contains("aprobación"));
+        assert_eq!(
+            toast_title(&AttentionKind::WaitingInput, "Claude Code"),
+            "Claude Code espera tu respuesta"
+        );
+        assert!(
+            toast_title(
+                &AttentionKind::Approval {
+                    tool: String::new(),
+                    detail: String::new()
+                },
+                "Codex"
+            )
+            .contains("aprobación")
+        );
     }
 
     #[test]
     fn the_scripted_session_ends_done_and_streams_text() {
         let s = fake_session();
-        assert!(matches!(s.last(), Some((_, AgentEvent::Status(AgentStatus::Done)))));
+        assert!(matches!(
+            s.last(),
+            Some((_, AgentEvent::Status(AgentStatus::Done)))
+        ));
         let text: String = s
             .iter()
             .filter_map(|(_, e)| match e {

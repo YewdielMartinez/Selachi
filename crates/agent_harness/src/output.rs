@@ -117,7 +117,11 @@ pub struct CostOut {
 
 impl Default for CostOut {
     fn default() -> Self {
-        CostOut { usd: 0.0, exact: false, source: "none".into() }
+        CostOut {
+            usd: 0.0,
+            exact: false,
+            source: "none".into(),
+        }
     }
 }
 
@@ -183,7 +187,8 @@ impl RunResult {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|e| format!("{{\"status\":\"error\",\"reason\":\"{e}\"}}"))
+        serde_json::to_string_pretty(self)
+            .unwrap_or_else(|e| format!("{{\"status\":\"error\",\"reason\":\"{e}\"}}"))
     }
 
     /// Human-readable rendering (the default output of `run` / `result`).
@@ -195,7 +200,10 @@ impl RunResult {
         if let Some(reason) = &self.reason {
             let _ = writeln!(s, "reason: {reason}");
         }
-        if !self.summary.is_empty() && self.reason.as_deref() != Some(self.summary.as_str()) && self.status != RunStatus::Refused {
+        if !self.summary.is_empty()
+            && self.reason.as_deref() != Some(self.summary.as_str())
+            && self.status != RunStatus::Refused
+        {
             let _ = writeln!(s, "\n{}\n", self.summary.trim_end());
         }
         if !self.files_changed.is_empty() {
@@ -217,7 +225,10 @@ impl RunResult {
         if let Some(wt) = &self.worktree_path {
             let _ = writeln!(s, "worktree: {wt}");
             if let Some(id) = &self.run_id {
-                let _ = writeln!(s, "next: selachi-agent diff {id} | selachi-agent apply {id}");
+                let _ = writeln!(
+                    s,
+                    "next: selachi-agent diff {id} | selachi-agent apply {id}"
+                );
             }
         }
         for n in &self.notes {
@@ -289,14 +300,32 @@ pub fn diff_stat_of(diff: &str) -> DiffStat {
     let deletions: usize = files.iter().map(|f| f.2).sum();
     let mut text = String::new();
     if !files.is_empty() {
-        let width = files.iter().map(|f| f.0.chars().count()).max().unwrap_or(0).min(60);
+        let width = files
+            .iter()
+            .map(|f| f.0.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(60);
         let max_changes = files.iter().map(|f| f.1 + f.2).max().unwrap_or(0).max(1);
         for (path, ins, del) in &files {
             let n = ins + del;
-            let bar_len = if max_changes > 40 { (n * 40).div_ceil(max_changes) } else { n };
-            let plus = if n == 0 { 0 } else { (ins * bar_len).div_ceil(n).min(bar_len) };
+            let bar_len = if max_changes > 40 {
+                (n * 40).div_ceil(max_changes)
+            } else {
+                n
+            };
+            let plus = if n == 0 {
+                0
+            } else {
+                (ins * bar_len).div_ceil(n).min(bar_len)
+            };
             let minus = bar_len - plus;
-            let _ = writeln!(text, " {path:<width$} | {n:>4} {}{}", "+".repeat(plus), "-".repeat(minus));
+            let _ = writeln!(
+                text,
+                " {path:<width$} | {n:>4} {}{}",
+                "+".repeat(plus),
+                "-".repeat(minus)
+            );
         }
         let _ = write!(
             text,
@@ -307,7 +336,12 @@ pub fn diff_stat_of(diff: &str) -> DiffStat {
             if deletions == 1 { "" } else { "s" },
         );
     }
-    DiffStat { files: files.len(), insertions, deletions, text }
+    DiffStat {
+        files: files.len(),
+        insertions,
+        deletions,
+        text,
+    }
 }
 
 #[cfg(test)]
@@ -340,7 +374,12 @@ index 0000000..333
         let s = diff_stat_of(DIFF);
         assert_eq!((s.files, s.insertions, s.deletions), (2, 4, 1));
         assert!(s.text.contains("a.txt"));
-        assert!(s.text.contains("2 files changed, 4 insertions(+), 1 deletion(-)"), "{}", s.text);
+        assert!(
+            s.text
+                .contains("2 files changed, 4 insertions(+), 1 deletion(-)"),
+            "{}",
+            s.text
+        );
         assert_eq!(diff_stat_of(""), DiffStat::default());
     }
 
@@ -358,14 +397,26 @@ index 0000000..333
         r.summary = "ok".into();
         r.usage = UsageOut::new(1, 2, 3, 4);
         let v: serde_json::Value = serde_json::from_str(&r.to_json()).unwrap();
-        for k in ["run_id", "status", "summary", "files_changed", "diff_stat", "usage", "cost", "worktree_path"] {
+        for k in [
+            "run_id",
+            "status",
+            "summary",
+            "files_changed",
+            "diff_stat",
+            "usage",
+            "cost",
+            "worktree_path",
+        ] {
             assert!(v.get(k).is_some(), "missing {k}");
         }
         assert_eq!(v["status"], "done");
         assert_eq!(v["usage"]["total"], 10);
         assert_eq!(v["usage"]["billable"], 6);
         assert!(v["worktree_path"].is_null());
-        assert!(v.get("reason").is_none(), "optional fields are omitted when empty");
+        assert!(
+            v.get("reason").is_none(),
+            "optional fields are omitted when empty"
+        );
         let back: RunResult = serde_json::from_value(v).unwrap();
         assert_eq!(back, r);
     }

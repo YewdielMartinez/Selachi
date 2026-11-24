@@ -261,7 +261,17 @@ impl Store {
     /// per assistant message and updates its token/cost totals after every step), unlike the
     /// monotonic-chunk heuristic of [`Store::upsert_usage`].
     pub fn upsert_usage_replace(&self, e: &UsageEvent, x: &UsageExtras) -> Result<UpsertOutcome> {
-        type Row = (i64, i64, i64, i64, i64, i64, Option<f64>, Option<String>, Option<String>);
+        type Row = (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            Option<f64>,
+            Option<String>,
+            Option<String>,
+        );
         let existing: Option<Row> = self
             .conn
             .prepare_cached(
@@ -312,7 +322,11 @@ impl Store {
                 x.cost_source,
                 x.provider
             ])?;
-        Ok(if existing.is_some() { UpsertOutcome::Updated } else { UpsertOutcome::Inserted })
+        Ok(if existing.is_some() {
+            UpsertOutcome::Updated
+        } else {
+            UpsertOutcome::Inserted
+        })
     }
 
     /// Returns true if a new row was inserted.

@@ -2,15 +2,16 @@
 //! bottom-sheet variant for narrow windows (DESIGN.md "Responsive", class XS).
 
 use gpui::{
-    AnyElement, Context, Div, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement, Render, Styled, Window, div, prelude::*, px,
+    AnyElement, Context, Div, FontWeight, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, Render, SharedString, Styled, Window, div, prelude::*, px,
 };
 use theme::Radius;
-use ui_kit::{ActionButton, ActionSize, GhostButton, Icon, Logo, icon};
+use ui_kit::{ActionButton, ActionSize, FocusNext, FocusPrev, GhostButton, Icon, Logo, icon};
 
 use crate::flow::Step;
 use crate::view::OnboardingView;
-use crate::widgets::{COLUMN_WIDTH, WIDE_COLUMN_WIDTH, XS_BELOW, ok_color};
+use crate::widgets::{COLUMN_WIDTH, WIDE_COLUMN_WIDTH, XS_BELOW};
+use crate::{CONTEXT, Confirm};
 
 impl OnboardingView {
     fn primary_label(&self) -> &'static str {
@@ -25,14 +26,27 @@ impl OnboardingView {
     fn breadcrumb(&self, cx: &mut Context<Self>, xs: bool) -> Div {
         let t = self.theme;
         let c = t.colors;
+        let ty = t.typography;
         let current = self.flow.step();
         if xs {
             return div()
-                .text_size(px(12.0))
+                .text_size(px(ty.ui_size_sm))
                 .text_color(c.muted)
-                .child(format!("Paso {} de {} · {}", current.index() + 1, Step::ALL.len(), current.label()));
+                .child(format!(
+                    "Paso {} de {} · {}",
+                    current.index() + 1,
+                    Step::ALL.len(),
+                    current.label()
+                ));
         }
-        let mut row = div().flex().flex_row().flex_wrap().justify_center().items_center().gap(px(6.0)).text_size(px(12.0));
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_center()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(px(ty.ui_size_sm));
         for (ix, step) in Step::ALL.into_iter().enumerate() {
             if ix > 0 {
                 row = row.child(div().text_color(c.outline_soft).child("·"));
@@ -40,21 +54,31 @@ impl OnboardingView {
             let reachable = step <= self.flow.furthest() && step != current && !self.finishing;
             let is_current = step == current;
             let done = self.flow.is_done(step);
-            let color = if is_current { c.text } else if step < current || self.flow.is_skipped(step) { c.muted } else { c.outline };
+            let color = if is_current {
+                c.text
+            } else if step < current || self.flow.is_skipped(step) {
+                c.muted
+            } else {
+                c.outline
+            };
             let item = div()
-                .id(("crumb", ix))
+                .id(SharedString::from(format!("crumb-{}", step.label())))
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(4.0))
                 .text_color(color)
                 .when(is_current, |d| d.font_weight(FontWeight::MEDIUM))
-                .when(done, |d| d.child(icon(Icon::Check, 12.0, ok_color(&t))))
+                .when(done, |d| d.child(icon(Icon::Check, 12.0, t.colors.success)))
                 .child(step.label())
                 .when(reachable, |d| {
                     d.cursor_pointer()
+                        .tab_index(0)
+                        .focus(move |s| s.text_color(c.text))
                         .hover(move |s| s.text_color(c.text))
-                        .on_click(cx.listener(move |this, _, window, cx| this.go_to(step, window, cx)))
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| this.go_to(step, window, cx)),
+                        )
                 });
             row = row.child(item);
         }
@@ -62,7 +86,14 @@ impl OnboardingView {
     }
 
     fn header(&self, cx: &mut Context<Self>, xs: bool) -> Div {
-        let mut col = div().w_full().flex().flex_col().items_center().gap(px(14.0)).pt(px(if xs { 18.0 } else { 28.0 })).px(px(16.0));
+        let mut col = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(14.0))
+            .pt(px(if xs { 18.0 } else { 28.0 }))
+            .px(px(16.0));
         if self.flow.step() != Step::Welcome {
             col = col.child(Logo::new(self.theme.mode).size(30.0));
         }
@@ -73,15 +104,30 @@ impl OnboardingView {
     fn footer(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let step = self.flow.step();
-        let primary = ActionButton::new("primary", &t, if self.finishing { "Guardando…" } else { self.primary_label() })
-            .size(ActionSize::Lg)
-            .no_icon()
-            .disabled(self.finishing)
-            .on_click(cx.listener(|this, _, window, cx| this.primary(window, cx)));
-        let mut quiet = div().flex().flex_row().flex_wrap().justify_center().items_center().gap(px(4.0));
+        let primary = ActionButton::new(
+            "primary",
+            &t,
+            if self.finishing {
+                "Guardando…"
+            } else {
+                self.primary_label()
+            },
+        )
+        .size(ActionSize::Lg)
+        .no_icon()
+        .disabled(self.finishing)
+        .on_click(cx.listener(|this, _, window, cx| this.primary(window, cx)));
+        let mut quiet = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_center()
+            .items_center()
+            .gap(px(4.0));
         if self.flow.can_go_back() {
             quiet = quiet.child(
-                GhostButton::new("back", &t, "Atrás").on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
+                GhostButton::new("back", &t, "Atrás")
+                    .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
             );
         }
         if step == Step::Welcome {
@@ -92,16 +138,32 @@ impl OnboardingView {
         }
         if self.flow.can_skip() {
             quiet = quiet.child(
-                GhostButton::new("skip", &t, "Omitir por ahora").on_click(cx.listener(|this, _, window, cx| this.skip(window, cx))),
+                GhostButton::new("skip", &t, "Omitir por ahora")
+                    .on_click(cx.listener(|this, _, window, cx| this.skip(window, cx))),
             );
         }
-        div().w_full().flex().flex_col().items_center().gap(px(10.0)).child(primary).child(quiet)
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(10.0))
+            .child(primary)
+            .child(quiet)
     }
 
     fn notice_line(&self) -> Option<AnyElement> {
         let c = self.theme.colors;
+        let ty = self.theme.typography;
         self.notice.as_ref().map(|n| {
-            div().w_full().px(px(16.0)).text_size(px(12.0)).text_color(c.muted).text_center().child(n.clone()).into_any_element()
+            div()
+                .w_full()
+                .px(px(16.0))
+                .text_size(px(ty.ui_size_sm))
+                .text_color(c.muted)
+                .text_center()
+                .child(n.clone())
+                .into_any_element()
         })
     }
 }
@@ -115,7 +177,11 @@ impl Render for OnboardingView {
         let (w, h) = (f32::from(size.width), f32::from(size.height));
         let xs = w < XS_BELOW;
         let step = self.flow.step();
-        let column = if step == Step::Appearance { WIDE_COLUMN_WIDTH } else { COLUMN_WIDTH };
+        let column = if step == Step::Appearance {
+            WIDE_COLUMN_WIDTH
+        } else {
+            COLUMN_WIDTH
+        };
 
         let body = self.step_body(window, cx, xs);
         let body_scroll = div()
@@ -143,14 +209,22 @@ impl Render for OnboardingView {
         let footer = self.footer(cx);
 
         let root = div()
-            .key_context("Onboarding")
+            .key_context(CONTEXT)
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                if ev.keystroke.key == "enter" && !ev.keystroke.modifiers.modified() {
+            // Enter continues the wizard only when nothing inside has the focus: a focused button,
+            // checkbox or row activates itself (the kit runs its click on Enter / Space).
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                if this.focus.is_focused(window) {
                     this.primary(window, cx);
                 }
             }))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, _| window.focus(&this.focus)))
+            // The plain-div tab stops (rows, cards) do not move the focus themselves.
+            .on_action(cx.listener(|_, _: &FocusNext, window, _| window.focus_next()))
+            .on_action(cx.listener(|_, _: &FocusPrev, window, _| window.focus_prev()))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, _| window.focus(&this.focus)),
+            )
             .size_full()
             .bg(c.bg)
             .text_color(c.text)
@@ -160,7 +234,11 @@ impl Render for OnboardingView {
 
         if xs {
             // Bottom sheet: the step rises from the bottom edge on a raised card.
-            let hero = if step == Step::Welcome { Some(self.hero(&t)) } else { None };
+            let hero = if step == Step::Welcome {
+                Some(self.hero(&t))
+            } else {
+                None
+            };
             root.child(
                 div()
                     .flex_1()
@@ -188,13 +266,35 @@ impl Render for OnboardingView {
                     .rounded_tl(px(Radius::LG))
                     .rounded_tr(px(Radius::LG))
                     .bg(c.surface_1)
-                    .child(div().flex_shrink().min_h_0().flex().flex_col().child(body_scroll))
+                    .child(
+                        div()
+                            .flex_shrink()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .child(body_scroll),
+                    )
                     .child(footer),
             )
         } else {
             root.child(self.header(cx, false))
-                .child(div().flex_1().min_h_0().w_full().flex().flex_col().child(body_scroll))
-                .child(div().flex_none().w_full().pt(px(8.0)).pb(px(24.0)).child(footer))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .child(body_scroll),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w_full()
+                        .pt(px(8.0))
+                        .pb(px(24.0))
+                        .child(footer),
+                )
         }
     }
 }

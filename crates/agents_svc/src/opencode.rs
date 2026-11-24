@@ -67,7 +67,11 @@ fn num(v: Option<&Value>) -> u64 {
     match v {
         Some(v) => v
             .as_u64()
-            .or_else(|| v.as_f64().filter(|f| f.is_finite() && *f > 0.0).map(|f| f.round() as u64))
+            .or_else(|| {
+                v.as_f64()
+                    .filter(|f| f.is_finite() && *f > 0.0)
+                    .map(|f| f.round() as u64)
+            })
             .unwrap_or(0),
         None => 0,
     }
@@ -135,7 +139,10 @@ pub fn parse_message(
         reasoning,
         reported_cost_usd: cost,
         cost_source: cost.map(|_| COST_SOURCE.to_string()),
-        provider: data.get("providerID").and_then(Value::as_str).and_then(non_empty),
+        provider: data
+            .get("providerID")
+            .and_then(Value::as_str)
+            .and_then(non_empty),
     };
     Parsed::Usage(Box::new((event, extras)))
 }
@@ -186,7 +193,9 @@ pub fn legacy_message_files(data_dir: &Path) -> Vec<PathBuf> {
         if !s.path().is_dir() {
             continue;
         }
-        let Ok(msgs) = std::fs::read_dir(s.path()) else { continue };
+        let Ok(msgs) = std::fs::read_dir(s.path()) else {
+            continue;
+        };
         out.extend(
             msgs.flatten()
                 .map(|m| m.path())
@@ -224,7 +233,14 @@ mod tests {
 
     #[test]
     fn maps_tokens_cost_and_context() {
-        let (e, x) = usage(parse_message("msg_1", "ses_1", Some(5), &assistant(), Some("C:\\other"), Some("main")));
+        let (e, x) = usage(parse_message(
+            "msg_1",
+            "ses_1",
+            Some(5),
+            &assistant(),
+            Some("C:\\other"),
+            Some("main"),
+        ));
         assert_eq!(e.agent, Agent::OpenCode);
         assert_eq!(e.msg_key, "opencode:msg_1");
         assert_eq!(e.session_id, "ses_1");
@@ -232,9 +248,19 @@ mod tests {
         assert_eq!(e.model, "claude-sonnet-4-5");
         assert_eq!(
             e.tokens,
-            TokenCounts { input: 10, output: 25, cache_create: 5, cache_create_1h: 0, cache_read: 60 }
+            TokenCounts {
+                input: 10,
+                output: 25,
+                cache_create: 5,
+                cache_create_1h: 0,
+                cache_read: 60
+            }
         );
-        assert_eq!(e.cwd.as_deref(), Some("C:\\work\\proj"), "message path beats session dir");
+        assert_eq!(
+            e.cwd.as_deref(),
+            Some("C:\\work\\proj"),
+            "message path beats session dir"
+        );
         assert_eq!(e.git_branch.as_deref(), Some("main"));
         assert_eq!(x.reasoning, 5);
         assert_eq!(x.reported_cost_usd, Some(0.0123));
@@ -248,7 +274,14 @@ mod tests {
         d["cost"] = json!(0);
         d["path"] = json!({});
         d["time"] = json!({"created": 7});
-        let (e, x) = usage(parse_message("m", "s", Some(99), &d, Some("D:\\sess"), None));
+        let (e, x) = usage(parse_message(
+            "m",
+            "s",
+            Some(99),
+            &d,
+            Some("D:\\sess"),
+            None,
+        ));
         assert_eq!(x.reported_cost_usd, None);
         assert_eq!(x.cost_source, None);
         assert_eq!(e.cwd.as_deref(), Some("D:\\sess"));
@@ -258,7 +291,17 @@ mod tests {
 
     #[test]
     fn user_and_empty_messages_are_skipped() {
-        assert_eq!(parse_message("u", "s", None, &json!({"role":"user","time":{"created":1}}), None, None), Parsed::NotAssistant);
+        assert_eq!(
+            parse_message(
+                "u",
+                "s",
+                None,
+                &json!({"role":"user","time":{"created":1}}),
+                None,
+                None
+            ),
+            Parsed::NotAssistant
+        );
         let mut d = assistant();
         d["tokens"] = json!({"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}});
         d["cost"] = json!(0);
@@ -285,11 +328,29 @@ mod tests {
         std::fs::write(dir.join("opencode.db"), b"").unwrap();
         std::fs::write(dir.join("opencode-dev.db"), b"").unwrap();
         std::fs::write(dir.join("other.db"), b"").unwrap();
-        std::fs::write(dir.join("storage").join("message").join("ses_1").join("msg_1.json"), b"{}").unwrap();
-        std::fs::write(dir.join("storage").join("message").join("ses_1").join("note.txt"), b"x").unwrap();
+        std::fs::write(
+            dir.join("storage")
+                .join("message")
+                .join("ses_1")
+                .join("msg_1.json"),
+            b"{}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("storage")
+                .join("message")
+                .join("ses_1")
+                .join("note.txt"),
+            b"x",
+        )
+        .unwrap();
         let dbs = find_dbs(&dir);
         assert_eq!(dbs.len(), 2);
-        assert!(dbs.iter().all(|p| p.file_name().unwrap().to_string_lossy().starts_with("opencode")));
+        assert!(dbs.iter().all(|p| p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("opencode")));
         assert_eq!(legacy_message_files(&dir).len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }

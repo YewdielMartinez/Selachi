@@ -13,7 +13,11 @@ pub fn compact_tokens(n: u64) -> String {
         _ => (f / 1e9, "B"),
     };
     // One decimal below 100, none above (`842K`, `12.4M`).
-    if v >= 100.0 { format!("{v:.0}{suffix}") } else { format!("{v:.1}{suffix}").replace(".0", "") }
+    if v >= 100.0 {
+        format!("{v:.0}{suffix}")
+    } else {
+        format!("{v:.1}{suffix}").replace(".0", "")
+    }
 }
 
 /// `1234567` -> `1.234.567` (Spanish thousands separator), for tooltips.
@@ -31,7 +35,11 @@ pub fn full_tokens(n: u64) -> String {
 
 /// `1 evento`, `28 eventos` (with the Spanish thousands separator).
 pub fn events_label(n: u64) -> String {
-    if n == 1 { "1 evento".to_string() } else { format!("{} eventos", full_tokens(n)) }
+    if n == 1 {
+        "1 evento".to_string()
+    } else {
+        format!("{} eventos", full_tokens(n))
+    }
 }
 
 /// `4.1` -> `$4.10`, `0.004` -> `<$0.01`, `142.3` -> `$142`.
@@ -103,13 +111,22 @@ pub fn weekday_short_es(w: Weekday) -> &'static str {
 }
 
 pub fn month_short_es(month: u32) -> &'static str {
-    const M: [&str; 12] = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-    M.get(month.saturating_sub(1) as usize).copied().unwrap_or("")
+    const M: [&str; 12] = [
+        "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
+    ];
+    M.get(month.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or("")
 }
 
 /// `mié 19 nov` for chart tooltips.
 pub fn day_label(date: NaiveDate) -> String {
-    format!("{} {} {}", weekday_short_es(date.weekday()), date.day(), month_short_es(date.month()))
+    format!(
+        "{} {} {}",
+        weekday_short_es(date.weekday()),
+        date.day(),
+        month_short_es(date.month())
+    )
 }
 
 /// When a forecast lands, relative to `now` in its own timezone: `hoy 16:30`, `mañana 09:00`,

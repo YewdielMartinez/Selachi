@@ -10,7 +10,9 @@ use theme::{Rgba, Theme};
 use ui_kit::UniformListScrollHandle;
 use viewer_svc::Document;
 
-use crate::minimap::{BarSpec, bars, changed_flags, minimap_geometry_width, viewport_rect, visible_rows};
+use crate::minimap::{
+    BarSpec, bars, changed_flags, minimap_geometry_width, viewport_rect, visible_rows,
+};
 
 /// Width of the strip, including its padding.
 pub const STRIP_W: f32 = 72.0;
@@ -22,7 +24,10 @@ pub enum MinimapSource {
     /// A document's line lengths (code view).
     Doc(Document),
     /// Precomputed row lengths plus the changed rows (diff view).
-    Rows { lens: Rc<Vec<u16>>, changed: Rc<Vec<usize>> },
+    Rows {
+        lens: Rc<Vec<u16>>,
+        changed: Rc<Vec<usize>>,
+    },
 }
 
 impl MinimapSource {
@@ -37,7 +42,9 @@ impl MinimapSource {
     fn buckets(&self, n: usize) -> Vec<u16> {
         match self {
             MinimapSource::Doc(d) => d.minimap(0..self.total(), n),
-            MinimapSource::Rows { lens, .. } => viewer_svc::minimap_from_lengths(lens.iter().copied(), lens.len(), n),
+            MinimapSource::Rows { lens, .. } => {
+                viewer_svc::minimap_from_lengths(lens.iter().copied(), lens.len(), n)
+            }
         }
     }
 
@@ -79,7 +86,10 @@ pub fn minimap(
         move |bounds, _, window, _| {
             shared.bounds.set(bounds);
             let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-            let spec = BarSpec { max_w: minimap_geometry_width(w, PAD_X), ..BarSpec::default() };
+            let spec = BarSpec {
+                max_w: minimap_geometry_width(w, PAD_X),
+                ..BarSpec::default()
+            };
             let n = spec.buckets_for_height(h);
             let total = source.total();
             if n == 0 || total == 0 {
@@ -101,7 +111,10 @@ pub fn minimap(
             for bar in bars(&cached.lens, &cached.flags, &spec) {
                 let color = if bar.changed { c.accent } else { calm };
                 window.paint_quad(fill(
-                    Bounds::new(point(x0, y0 + px(bar.y.floor())), size(px(bar.w), px(spec.bar_h))),
+                    Bounds::new(
+                        point(x0, y0 + px(bar.y.floor())),
+                        size(px(bar.w), px(spec.bar_h)),
+                    ),
                     color,
                 ));
             }
@@ -118,7 +131,10 @@ pub fn minimap(
                 let mut tint = c.text;
                 tint.a = 0.10;
                 window.paint_quad(fill(
-                    Bounds::new(point(bounds.origin.x, y0 + px(top.floor())), size(bounds.size.width, px(height.ceil()))),
+                    Bounds::new(
+                        point(bounds.origin.x, y0 + px(top.floor())),
+                        size(bounds.size.width, px(height.ceil())),
+                    ),
                     tint,
                 ));
             }

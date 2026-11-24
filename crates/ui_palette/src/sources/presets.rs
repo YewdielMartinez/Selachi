@@ -23,12 +23,24 @@ impl PresetsSource {
 
 fn describe(p: BuiltinPreset) -> (&'static str, &'static str) {
     match p {
-        BuiltinPreset::Terminal => ("Terminal", "Rail, pestañas arriba y la terminal; sin sidebar"),
-        BuiltinPreset::Espacios => ("Espacios", "Sidebar con espacios y agentes; pestañas arriba"),
-        BuiltinPreset::Orquestador => ("Orquestador", "Proyecto, worktree y agentes; pestañas verticales"),
+        BuiltinPreset::Terminal => (
+            "Terminal",
+            "Rail, pestañas arriba y la terminal; sin sidebar",
+        ),
+        BuiltinPreset::Espacios => (
+            "Espacios",
+            "Sidebar con espacios y agentes; pestañas arriba",
+        ),
+        BuiltinPreset::Orquestador => (
+            "Orquestador",
+            "Proyecto, worktree y agentes; pestañas verticales",
+        ),
         BuiltinPreset::Chat => ("Chat", "Hilos agrupados, conversación y panel de contexto"),
         BuiltinPreset::Zen => ("Zen", "Solo la terminal; el resto al pasar por el borde"),
-        BuiltinPreset::EspaciosUnificados => ("Espacios unificados", "Sidebar de cristal con espacios y pestañas anidadas; paneles a la derecha"),
+        BuiltinPreset::EspaciosUnificados => (
+            "Espacios unificados",
+            "Sidebar de cristal con espacios y pestañas anidadas; paneles a la derecha",
+        ),
     }
 }
 
@@ -60,21 +72,30 @@ impl PaletteSource for PresetsSource {
             .into_iter()
             .map(|b| {
                 let (name, desc) = describe(b);
-                (PresetId::Builtin(b), format!("Diseño: {name}"), desc.to_string())
+                (
+                    PresetId::Builtin(b),
+                    format!("Diseño: {name}"),
+                    desc.to_string(),
+                )
             })
             .collect();
-        rows.extend(
-            self.custom
-                .iter()
-                .map(|n| (PresetId::Custom(n.clone()), format!("Diseño: {n}"), "Diseño propio".to_string())),
-        );
+        rows.extend(self.custom.iter().map(|n| {
+            (
+                PresetId::Custom(n.clone()),
+                format!("Diseño: {n}"),
+                "Diseño propio".to_string(),
+            )
+        }));
         let mut out = Vec::new();
         for (i, (id, title, desc)) in rows.into_iter().enumerate() {
             let score = if needle.is_empty() {
                 Some(ordered_score(i))
             } else {
                 matcher
-                    .score(&needle, &[(&title, 1.0), ("layout preset diseño", 0.4), (&desc, 0.4)])
+                    .score(
+                        &needle,
+                        &[(&title, 1.0), ("layout preset diseño", 0.4), (&desc, 0.4)],
+                    )
                     .map(|s| s + ordered_score(i) * 0.05)
             };
             let Some(score) = score else { continue };

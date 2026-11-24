@@ -8,7 +8,12 @@ use crate::view::SettingsView;
 
 /// Apply the text of field `key`. Invalid text leaves the config untouched and sets an inline
 /// error on the field; valid text is applied (and saved) immediately.
-pub(crate) fn apply(view: &mut SettingsView, key: &str, text: &str, cx: &mut Context<SettingsView>) {
+pub(crate) fn apply(
+    view: &mut SettingsView,
+    key: &str,
+    text: &str,
+    cx: &mut Context<SettingsView>,
+) {
     let trimmed = text.trim().to_string();
     match key {
         "ui_font" | "mono_font" => {
@@ -36,7 +41,12 @@ pub(crate) fn apply(view: &mut SettingsView, key: &str, text: &str, cx: &mut Con
         },
         "accept_word_key" => {
             if trimmed.is_empty() {
-                set_error(view, key, "Escribe una tecla (o «native» para dejar la del shell).", cx);
+                set_error(
+                    view,
+                    key,
+                    "Escribe una tecla (o «native» para dejar la del shell).",
+                    cx,
+                );
                 return;
             }
             view.edit_field(key, cx, |c| c.terminal.completion.accept_word_key = trimmed);
@@ -57,7 +67,9 @@ fn set_error(view: &mut SettingsView, key: &str, message: &str, cx: &mut Context
 /// `profile.<i>.<name|program|args|cwd>` and `profile.<i>.env.<j>.<k|v>`.
 fn profile_field(view: &mut SettingsView, key: &str, text: &str, cx: &mut Context<SettingsView>) {
     let parts: Vec<&str> = key.split('.').collect();
-    let Some(i) = parts.get(1).and_then(|s| s.parse::<usize>().ok()) else { return };
+    let Some(i) = parts.get(1).and_then(|s| s.parse::<usize>().ok()) else {
+        return;
+    };
     if i >= view.cfg.profiles.len() {
         return;
     }
@@ -100,10 +112,14 @@ fn profile_field(view: &mut SettingsView, key: &str, text: &str, cx: &mut Contex
         }
         Some("cwd") => {
             let cwd = text.trim().to_string();
-            view.edit_field(key, cx, move |c| c.profiles[i].cwd = (!cwd.is_empty()).then_some(cwd));
+            view.edit_field(key, cx, move |c| {
+                c.profiles[i].cwd = (!cwd.is_empty()).then_some(cwd)
+            });
         }
         Some("env") => {
-            let Some(j) = parts.get(3).and_then(|s| s.parse::<usize>().ok()) else { return };
+            let Some(j) = parts.get(3).and_then(|s| s.parse::<usize>().ok()) else {
+                return;
+            };
             let which = parts.get(4).copied().unwrap_or("");
             if let Some(editor) = view.profile_editor.as_mut().filter(|e| e.index == i)
                 && let Some(row) = editor.env.get_mut(j)
@@ -121,8 +137,15 @@ fn profile_field(view: &mut SettingsView, key: &str, text: &str, cx: &mut Contex
 }
 
 /// Write the env draft of profile `i` into the config when it has no empty or repeated names.
-pub(crate) fn commit_env(view: &mut SettingsView, i: usize, key: &str, cx: &mut Context<SettingsView>) {
-    let Some(editor) = view.profile_editor.as_ref().filter(|e| e.index == i) else { return };
+pub(crate) fn commit_env(
+    view: &mut SettingsView,
+    i: usize,
+    key: &str,
+    cx: &mut Context<SettingsView>,
+) {
+    let Some(editor) = view.profile_editor.as_ref().filter(|e| e.index == i) else {
+        return;
+    };
     let rows = editor.env.clone();
     let mut map = std::collections::BTreeMap::new();
     for (k, v) in &rows {

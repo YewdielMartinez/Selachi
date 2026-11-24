@@ -60,12 +60,52 @@ fn walk(inlines: &[MdInline], style: InlineStyle, link: Option<&str>, out: &mut 
     for i in inlines {
         match i {
             MdInline::Text(t) => push(out, t, style, link),
-            MdInline::Code(t) => push(out, t, InlineStyle { code: true, ..style }, link),
-            MdInline::Emph(c) => walk(c, InlineStyle { italic: true, ..style }, link, out),
-            MdInline::Strong(c) => walk(c, InlineStyle { bold: true, ..style }, link, out),
-            MdInline::Strike(c) => walk(c, InlineStyle { strike: true, ..style }, link, out),
+            MdInline::Code(t) => push(
+                out,
+                t,
+                InlineStyle {
+                    code: true,
+                    ..style
+                },
+                link,
+            ),
+            MdInline::Emph(c) => walk(
+                c,
+                InlineStyle {
+                    italic: true,
+                    ..style
+                },
+                link,
+                out,
+            ),
+            MdInline::Strong(c) => walk(
+                c,
+                InlineStyle {
+                    bold: true,
+                    ..style
+                },
+                link,
+                out,
+            ),
+            MdInline::Strike(c) => walk(
+                c,
+                InlineStyle {
+                    strike: true,
+                    ..style
+                },
+                link,
+                out,
+            ),
             MdInline::Link { url, children } => {
-                walk(children, InlineStyle { link: true, ..style }, Some(url), out);
+                walk(
+                    children,
+                    InlineStyle {
+                        link: true,
+                        ..style
+                    },
+                    Some(url),
+                    out,
+                );
             }
             MdInline::Image { alt, .. } => push(out, &format!("[{alt}]"), style, link),
             MdInline::SoftBreak => push(out, " ", style, link),
@@ -96,12 +136,44 @@ mod tests {
 
     #[test]
     fn styles_nest() {
-        let f = flatten(&[Text("a ".into()), Strong(vec![Text("b ".into()), Emph(vec![Text("c".into())])]), Code("d".into())]);
+        let f = flatten(&[
+            Text("a ".into()),
+            Strong(vec![Text("b ".into()), Emph(vec![Text("c".into())])]),
+            Code("d".into()),
+        ]);
         assert_eq!(f.text, "a b cd");
         assert_eq!(f.runs.len(), 3);
-        assert_eq!(f.runs[0], (2..4, InlineStyle { bold: true, ..Default::default() }));
-        assert_eq!(f.runs[1], (4..5, InlineStyle { bold: true, italic: true, ..Default::default() }));
-        assert_eq!(f.runs[2], (5..6, InlineStyle { code: true, ..Default::default() }));
+        assert_eq!(
+            f.runs[0],
+            (
+                2..4,
+                InlineStyle {
+                    bold: true,
+                    ..Default::default()
+                }
+            )
+        );
+        assert_eq!(
+            f.runs[1],
+            (
+                4..5,
+                InlineStyle {
+                    bold: true,
+                    italic: true,
+                    ..Default::default()
+                }
+            )
+        );
+        assert_eq!(
+            f.runs[2],
+            (
+                5..6,
+                InlineStyle {
+                    code: true,
+                    ..Default::default()
+                }
+            )
+        );
         assert!(f.runs.windows(2).all(|w| w[0].0.end <= w[1].0.start));
     }
 
@@ -109,7 +181,10 @@ mod tests {
     fn links_collect_ranges() {
         let f = flatten(&[
             Text("see ".into()),
-            Link { url: "https://x.dev".into(), children: vec![Text("the ".into()), Strong(vec![Text("docs".into())])] },
+            Link {
+                url: "https://x.dev".into(),
+                children: vec![Text("the ".into()), Strong(vec![Text("docs".into())])],
+            },
             Text(".".into()),
         ]);
         assert_eq!(f.text, "see the docs.");
@@ -119,7 +194,16 @@ mod tests {
 
     #[test]
     fn breaks_and_images() {
-        let f = flatten(&[Text("a".into()), SoftBreak, Text("b".into()), HardBreak, MdInline::Image { src: "x.png".into(), alt: "logo".into() }]);
+        let f = flatten(&[
+            Text("a".into()),
+            SoftBreak,
+            Text("b".into()),
+            HardBreak,
+            MdInline::Image {
+                src: "x.png".into(),
+                alt: "logo".into(),
+            },
+        ]);
         assert_eq!(f.text, "a b\n[logo]");
     }
 

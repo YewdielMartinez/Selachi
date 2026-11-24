@@ -20,7 +20,9 @@ pub fn default_roots(home: &Path) -> Vec<PathBuf> {
 
 /// The user's home directory (`USERPROFILE`, then `HOME`).
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from)
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 /// Depth (below each sub-folder of a root) searched by [`scan_streaming`].
@@ -41,7 +43,15 @@ fn skip_dir(name: &str) -> bool {
     n.starts_with('.')
         || matches!(
             n.as_str(),
-            "node_modules" | "target" | "bin" | "obj" | "dist" | "build" | "out" | "venv" | "appdata"
+            "node_modules"
+                | "target"
+                | "bin"
+                | "obj"
+                | "dist"
+                | "build"
+                | "out"
+                | "venv"
+                | "appdata"
         )
 }
 
@@ -68,7 +78,9 @@ pub fn scan_streaming(roots: &[PathBuf], cancel: &AtomicBool, tx: &UnboundedSend
             send(vec![p]);
             continue;
         }
-        let Ok(entries) = std::fs::read_dir(root) else { continue };
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
         let mut subdirs: Vec<PathBuf> = entries
             .flatten()
             .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()))
@@ -164,20 +176,31 @@ impl ProjectList {
                 continue;
             }
             let (checked, favorite) = self.remembered.get(&key).copied().unwrap_or((true, false));
-            self.items.push(ProjectItem { project, checked, favorite });
+            self.items.push(ProjectItem {
+                project,
+                checked,
+                favorite,
+            });
             self.index.insert(key, self.items.len() - 1);
             added = true;
         }
         if added {
-            self.items.sort_by(|a, b| a.project.path.cmp(&b.project.path));
-            self.index = self.items.iter().enumerate().map(|(i, it)| (key_of(&it.project), i)).collect();
+            self.items
+                .sort_by(|a, b| a.project.path.cmp(&b.project.path));
+            self.index = self
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, it)| (key_of(&it.project), i))
+                .collect();
         }
     }
 
     /// Empty the list for a new scan, remembering the choices already made.
     pub fn clear_keep_choices(&mut self) {
         for it in &self.items {
-            self.remembered.insert(key_of(&it.project), (it.checked, it.favorite));
+            self.remembered
+                .insert(key_of(&it.project), (it.checked, it.favorite));
         }
         self.items.clear();
         self.index.clear();
@@ -228,12 +251,20 @@ impl ProjectList {
 
     /// The projects to import.
     pub fn selected(&self) -> Vec<DiscoveredProject> {
-        self.items.iter().filter(|i| i.checked).map(|i| i.project.clone()).collect()
+        self.items
+            .iter()
+            .filter(|i| i.checked)
+            .map(|i| i.project.clone())
+            .collect()
     }
 
     /// Favorite paths, in list order.
     pub fn favorites(&self) -> Vec<PathBuf> {
-        self.items.iter().filter(|i| i.favorite && i.checked).map(|i| i.project.path.clone()).collect()
+        self.items
+            .iter()
+            .filter(|i| i.favorite && i.checked)
+            .map(|i| i.project.path.clone())
+            .collect()
     }
 }
 
@@ -244,14 +275,25 @@ mod tests {
     fn proj(path: &str, kind: ProjectKind) -> DiscoveredProject {
         let path = PathBuf::from(path);
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        DiscoveredProject { path, name, kind, is_git: kind == ProjectKind::Git }
+        DiscoveredProject {
+            path,
+            name,
+            kind,
+            is_git: kind == ProjectKind::Git,
+        }
     }
 
     #[test]
     fn batches_dedupe_sort_and_start_checked() {
         let mut l = ProjectList::new();
-        l.push_batch([proj("C:/p/b", ProjectKind::Rust), proj("C:/p/a", ProjectKind::Node)]);
-        l.push_batch([proj("c:\\P\\B", ProjectKind::Rust), proj("C:/p/c", ProjectKind::Git)]);
+        l.push_batch([
+            proj("C:/p/b", ProjectKind::Rust),
+            proj("C:/p/a", ProjectKind::Node),
+        ]);
+        l.push_batch([
+            proj("c:\\P\\B", ProjectKind::Rust),
+            proj("C:/p/c", ProjectKind::Git),
+        ]);
         let names: Vec<_> = l.items().iter().map(|i| i.project.name.as_str()).collect();
         assert_eq!(names, ["a", "b", "c"], "sorted, no duplicate b");
         assert_eq!(l.checked_count(), 3);
@@ -261,13 +303,19 @@ mod tests {
     #[test]
     fn toggling_and_favorites() {
         let mut l = ProjectList::new();
-        l.push_batch([proj("C:/p/a", ProjectKind::Rust), proj("C:/p/b", ProjectKind::Rust)]);
+        l.push_batch([
+            proj("C:/p/a", ProjectKind::Rust),
+            proj("C:/p/b", ProjectKind::Rust),
+        ]);
         l.toggle_checked(0);
         assert_eq!(l.selected().len(), 1);
         l.toggle_favorite(0); // starring an unchecked row checks it
         assert!(l.items()[0].checked && l.items()[0].favorite);
         l.toggle_favorite(1);
-        assert_eq!(l.favorites(), [PathBuf::from("C:/p/a"), PathBuf::from("C:/p/b")]);
+        assert_eq!(
+            l.favorites(),
+            [PathBuf::from("C:/p/a"), PathBuf::from("C:/p/b")]
+        );
         l.set_checked(0, false); // unchecking drops the star
         assert_eq!(l.favorites(), [PathBuf::from("C:/p/b")]);
         l.set_all(false);
@@ -281,12 +329,19 @@ mod tests {
     #[test]
     fn choices_survive_a_rescan() {
         let mut l = ProjectList::new();
-        l.push_batch([proj("C:/p/a", ProjectKind::Rust), proj("C:/p/b", ProjectKind::Rust)]);
+        l.push_batch([
+            proj("C:/p/a", ProjectKind::Rust),
+            proj("C:/p/b", ProjectKind::Rust),
+        ]);
         l.toggle_checked(1);
         l.toggle_favorite(0);
         l.clear_keep_choices();
         assert!(l.is_empty());
-        l.push_batch([proj("C:/p/b", ProjectKind::Rust), proj("C:/p/a", ProjectKind::Rust), proj("C:/p/z", ProjectKind::Node)]);
+        l.push_batch([
+            proj("C:/p/b", ProjectKind::Rust),
+            proj("C:/p/a", ProjectKind::Rust),
+            proj("C:/p/z", ProjectKind::Node),
+        ]);
         assert!(l.items()[0].favorite && l.items()[0].checked, "a: starred");
         assert!(!l.items()[1].checked, "b: stays unchecked");
         assert!(l.items()[2].checked, "z: new, checked");
@@ -296,14 +351,29 @@ mod tests {
     fn scan_streams_batches_then_done() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        for (name, marker) in [("alpha", "Cargo.toml"), ("beta", "package.json"), ("gamma", "x.sln")] {
+        for (name, marker) in [
+            ("alpha", "Cargo.toml"),
+            ("beta", "package.json"),
+            ("gamma", "x.sln"),
+        ] {
             std::fs::create_dir_all(root.join(name)).unwrap();
             std::fs::write(root.join(name).join(marker), "").unwrap();
         }
         std::fs::create_dir_all(root.join("plain").join("deep").join("proj")).unwrap();
-        std::fs::write(root.join("plain").join("deep").join("proj").join("pyproject.toml"), "").unwrap();
+        std::fs::write(
+            root.join("plain")
+                .join("deep")
+                .join("proj")
+                .join("pyproject.toml"),
+            "",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("node_modules").join("junk")).unwrap();
-        std::fs::write(root.join("node_modules").join("junk").join("package.json"), "").unwrap();
+        std::fs::write(
+            root.join("node_modules").join("junk").join("package.json"),
+            "",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join(".hidden")).unwrap();
         std::fs::write(root.join(".hidden").join("Cargo.toml"), "").unwrap();
 
@@ -348,7 +418,10 @@ mod tests {
         std::fs::create_dir_all(home.path().join("Desktop")).unwrap();
         std::fs::create_dir_all(home.path().join("dev")).unwrap();
         let roots = default_roots(home.path());
-        assert_eq!(roots, [home.path().join("Desktop"), home.path().join("dev")]);
+        assert_eq!(
+            roots,
+            [home.path().join("Desktop"), home.path().join("dev")]
+        );
         assert!(default_roots(&home.path().join("nope")).is_empty());
     }
 }

@@ -32,7 +32,12 @@ pub fn resolve_path() -> Option<PathBuf> {
         candidates.push(dir.join("onboarding").join("shark.gif"));
         candidates.extend(dir.ancestors().skip(1).take(4).map(|a| a.join(REL_PATH)));
     }
-    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(REL_PATH));
+    candidates.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(REL_PATH),
+    );
     candidates.into_iter().find(|p| p.is_file())
 }
 
@@ -52,7 +57,11 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<SharkFrame>, String> {
     for frame in decoder.into_frames() {
         let frame = frame.map_err(|e| e.to_string())?;
         let delay = Duration::from(frame.delay());
-        let delay = if delay.is_zero() { DEFAULT_DELAY } else { delay.max(MIN_DELAY) };
+        let delay = if delay.is_zero() {
+            DEFAULT_DELAY
+        } else {
+            delay.max(MIN_DELAY)
+        };
         let (left, top) = (frame.left(), frame.top());
         let buffer = frame.into_buffer();
         let full = match &mut canvas {
@@ -69,7 +78,10 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<SharkFrame>, String> {
         for px in bgra.pixels_mut() {
             px.0.swap(0, 2);
         }
-        out.push(SharkFrame { image: Arc::new(RenderImage::new(vec![Frame::new(bgra)])), delay });
+        out.push(SharkFrame {
+            image: Arc::new(RenderImage::new(vec![Frame::new(bgra)])),
+            delay,
+        });
     }
     if out.is_empty() {
         return Err("el GIF no tiene fotogramas".to_string());

@@ -41,7 +41,12 @@ impl DataTree {
                 expanded.insert(vec![i]);
             }
         }
-        let mut t = DataTree { structured, root, expanded, rows: Vec::new() };
+        let mut t = DataTree {
+            structured,
+            root,
+            expanded,
+            rows: Vec::new(),
+        };
         t.rebuild();
         Ok(t)
     }
@@ -88,7 +93,9 @@ impl DataTree {
 
     /// Loads the next batch of children of the container at `path` (the "N more" row).
     pub fn load_more(&mut self, path: &[usize]) {
-        let Some(node) = self.node_at(path) else { return };
+        let Some(node) = self.node_at(path) else {
+            return;
+        };
         let loaded = node.children.len();
         let total = node.child_count;
         if loaded >= total {
@@ -134,7 +141,13 @@ impl DataTree {
     }
 }
 
-fn flatten(node: &Node, path: &mut Vec<usize>, depth: usize, expanded: &HashSet<Vec<usize>>, out: &mut Vec<DataRow>) {
+fn flatten(
+    node: &Node,
+    path: &mut Vec<usize>,
+    depth: usize,
+    expanded: &HashSet<Vec<usize>>,
+    out: &mut Vec<DataRow>,
+) {
     let expandable = node.is_container() && node.child_count > 0;
     let is_open = expandable && expanded.contains(path.as_slice());
     out.push(DataRow {
@@ -193,7 +206,13 @@ mod tests {
     #[test]
     fn toggle_collapses_and_expands() {
         let mut t = tree();
-        let deps = t.rows().iter().find(|r| r.key == "deps").unwrap().path.clone();
+        let deps = t
+            .rows()
+            .iter()
+            .find(|r| r.key == "deps")
+            .unwrap()
+            .path
+            .clone();
         t.toggle(&deps);
         assert_eq!(t.len(), 1 + 6 + 2);
         assert!(!t.rows().iter().any(|r| r.key == "gpui"));
@@ -222,7 +241,13 @@ mod tests {
 
     #[test]
     fn huge_arrays_load_lazily_in_batches() {
-        let big = format!("[{}]", (0..2_500).map(|i| i.to_string()).collect::<Vec<_>>().join(","));
+        let big = format!(
+            "[{}]",
+            (0..2_500)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         let mut t = DataTree::parse(Format::Json, big.as_bytes()).unwrap();
         // Capped at MAX_CHILDREN plus the "more" row.
         assert_eq!(t.len(), 1 + MAX_CHILDREN + 1);

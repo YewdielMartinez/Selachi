@@ -45,7 +45,9 @@ pub fn default_body(kind: FileKind) -> Body {
 /// The "source" counterpart of a rendered body (markdown <-> text, tree <-> text, svg <-> text).
 pub fn source_body(kind: FileKind) -> Option<Body> {
     match kind {
-        FileKind::Markdown | FileKind::Json | FileKind::Toml | FileKind::Yaml | FileKind::Svg => Some(Body::Code),
+        FileKind::Markdown | FileKind::Json | FileKind::Toml | FileKind::Yaml | FileKind::Svg => {
+            Some(Body::Code)
+        }
         _ => None,
     }
 }
@@ -119,7 +121,10 @@ pub fn parse_goto(input: &str, total: usize) -> Option<Goto> {
         Some(c) if !c.is_empty() => Some(c.parse::<usize>().ok()?.saturating_sub(1)),
         _ => None,
     };
-    Some(Goto { line: line.saturating_sub(1).min(total - 1), col })
+    Some(Goto {
+        line: line.saturating_sub(1).min(total - 1),
+        col,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -192,7 +197,12 @@ impl FindState {
             return String::new();
         }
         match self.current {
-            Some(i) => format!("{} / {}{}", i + 1, self.matches.len(), if self.capped { "+" } else { "" }),
+            Some(i) => format!(
+                "{} / {}{}",
+                i + 1,
+                self.matches.len(),
+                if self.capped { "+" } else { "" }
+            ),
             None => "sin resultados".to_owned(),
         }
     }
@@ -275,7 +285,9 @@ pub fn plugin_hint(
     };
     if let Some(w) = warning {
         return Some(PluginHint {
-            message: format!("El plugin de {language} no se pudo cargar ({w}); se muestra sin colores"),
+            message: format!(
+                "El plugin de {language} no se pudo cargar ({w}); se muestra sin colores"
+            ),
             id,
             language,
             failed: true,
@@ -298,7 +310,10 @@ mod tests {
     use viewer_svc::{Encoding, ImageFormat, Lang};
 
     fn text(lang: Option<Lang>) -> FileKind {
-        FileKind::Text { lang, encoding: Encoding::Utf8 }
+        FileKind::Text {
+            lang,
+            encoding: Encoding::Utf8,
+        }
     }
 
     #[test]
@@ -309,7 +324,12 @@ mod tests {
         assert_eq!(default_body(FileKind::Json), Body::Tree(Format::Json));
         assert_eq!(default_body(FileKind::Toml), Body::Tree(Format::Toml));
         assert_eq!(default_body(FileKind::Yaml), Body::Tree(Format::Yaml));
-        assert_eq!(default_body(FileKind::Image { format: ImageFormat::Png }), Body::Image);
+        assert_eq!(
+            default_body(FileKind::Image {
+                format: ImageFormat::Png
+            }),
+            Body::Image
+        );
         assert_eq!(default_body(FileKind::Svg), Body::Image);
         assert_eq!(default_body(FileKind::Binary), Body::Hex);
         assert_eq!(default_body(FileKind::TooLarge), Body::Hex);
@@ -322,7 +342,12 @@ mod tests {
         assert_eq!(source_body(FileKind::Svg), Some(Body::Code));
         assert_eq!(source_body(text(None)), None);
         assert_eq!(source_body(FileKind::Binary), None);
-        assert_eq!(source_body(FileKind::Image { format: ImageFormat::Png }), None);
+        assert_eq!(
+            source_body(FileKind::Image {
+                format: ImageFormat::Png
+            }),
+            None
+        );
     }
 
     #[test]
@@ -331,7 +356,9 @@ mod tests {
         assert!(supports_diff(FileKind::Markdown));
         assert!(!supports_diff(FileKind::Binary));
         assert!(!supports_diff(FileKind::TooLarge));
-        assert!(!supports_diff(FileKind::Image { format: ImageFormat::Png }));
+        assert!(!supports_diff(FileKind::Image {
+            format: ImageFormat::Png
+        }));
     }
 
     #[test]
@@ -354,14 +381,38 @@ mod tests {
 
     #[test]
     fn goto_parsing() {
-        assert_eq!(parse_goto("42", 100), Some(Goto { line: 41, col: None }));
-        assert_eq!(parse_goto(" 42:7 ", 100), Some(Goto { line: 41, col: Some(6) }));
+        assert_eq!(
+            parse_goto("42", 100),
+            Some(Goto {
+                line: 41,
+                col: None
+            })
+        );
+        assert_eq!(
+            parse_goto(" 42:7 ", 100),
+            Some(Goto {
+                line: 41,
+                col: Some(6)
+            })
+        );
         assert_eq!(parse_goto(":5", 100), Some(Goto { line: 4, col: None }));
         assert_eq!(parse_goto("1", 100), Some(Goto { line: 0, col: None }));
         assert_eq!(parse_goto("0", 100), Some(Goto { line: 0, col: None }));
         // clamps to the last line
-        assert_eq!(parse_goto("5000", 100), Some(Goto { line: 99, col: None }));
-        assert_eq!(parse_goto("42:", 100), Some(Goto { line: 41, col: None }));
+        assert_eq!(
+            parse_goto("5000", 100),
+            Some(Goto {
+                line: 99,
+                col: None
+            })
+        );
+        assert_eq!(
+            parse_goto("42:", 100),
+            Some(Goto {
+                line: 41,
+                col: None
+            })
+        );
         // invalid
         assert_eq!(parse_goto("", 100), None);
         assert_eq!(parse_goto("abc", 100), None);
@@ -409,7 +460,15 @@ mod tests {
     fn search_scans_the_document() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.txt");
-        let body: String = (0..10_000).map(|i| if i % 1000 == 7 { format!("Needle {i}\n") } else { format!("line {i}\n") }).collect();
+        let body: String = (0..10_000)
+            .map(|i| {
+                if i % 1000 == 7 {
+                    format!("Needle {i}\n")
+                } else {
+                    format!("line {i}\n")
+                }
+            })
+            .collect();
         std::fs::write(&path, body).unwrap();
         let doc = Document::open_lazy(&path, viewer_svc::Limits::default()).unwrap();
         let cancel = AtomicBool::new(false);
@@ -435,7 +494,10 @@ mod tests {
     #[test]
     fn no_hint_when_highlighting_works() {
         let kind = text(Some(Lang::Rust));
-        assert_eq!(plugin_hint(kind, Some("rs"), Some("rust"), None, true), None);
+        assert_eq!(
+            plugin_hint(kind, Some("rs"), Some("rust"), None, true),
+            None
+        );
     }
 
     #[test]

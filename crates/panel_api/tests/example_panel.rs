@@ -5,12 +5,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use gpui::{
-    AnyView, App, AppContext as _, Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window, div, px,
+    AnyView, App, AppContext as _, Context, EventEmitter, IntoElement, ParentElement, Render,
+    SharedString, Styled, Window, div, px,
 };
 use panel_api::{
-    CloseCheck, Icon, PanelCtx, PanelId, PanelProvider, PanelRegistry, PanelZone, RowStatus, TabEvent,
-    TabIcon, TabModel, WidthClass,
+    CloseCheck, Icon, PanelCtx, PanelId, PanelProvider, PanelRegistry, PanelZone, RowStatus,
+    TabEvent, TabIcon, TabModel, WidthClass,
 };
 
 /// The view. It reads `ctx.width_class` and never looks at `ctx.zone` to decide what to show.
@@ -30,7 +30,11 @@ impl Render for NotesPanel {
                 let text: SharedString = if roomy {
                     l.clone()
                 } else {
-                    l.split_whitespace().next().unwrap_or_default().to_string().into()
+                    l.split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                        .into()
                 };
                 div().child(text)
             }))
@@ -54,13 +58,24 @@ impl PanelProvider for NotesProvider {
         &[PanelZone::Right, PanelZone::Sidebar, PanelZone::Main]
     }
     fn build(&self, ctx: PanelCtx, _window: &mut Window, cx: &mut App) -> AnyView {
-        cx.new(|_| NotesPanel { ctx, lines: vec!["una nota larga".into(), "otra nota".into()] })
-            .into()
+        cx.new(|_| NotesPanel {
+            ctx,
+            lines: vec!["una nota larga".into(), "otra nota".into()],
+        })
+        .into()
     }
 
     /// Cheap re-targeting: keep the view, swap the context.
-    fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
-        let Ok(panel) = view.clone().downcast::<NotesPanel>() else { return false };
+    fn context_changed(
+        &self,
+        view: &AnyView,
+        ctx: &PanelCtx,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Ok(panel) = view.clone().downcast::<NotesPanel>() else {
+            return false;
+        };
         panel.update(cx, |p, cx| {
             p.ctx = ctx.clone();
             cx.notify(); // every async or external update ends in notify()
@@ -89,7 +104,11 @@ impl TabModel for ChatThread {
         Some("opus-5.5 · feat/ui".into())
     }
     fn status(&self, _cx: &App) -> Option<RowStatus> {
-        Some(if self.working { RowStatus::Working } else { RowStatus::Done })
+        Some(if self.working {
+            RowStatus::Working
+        } else {
+            RowStatus::Done
+        })
     }
     fn content(&self, _cx: &App) -> AnyView {
         self.body.clone()
@@ -156,5 +175,9 @@ fn panel_ids_are_normalized() {
 // Compile-time check that `ChatThread` satisfies the contract and can be wrapped.
 #[allow(dead_code)]
 fn wraps(cx: &mut App, body: AnyView) -> panel_api::TabHandle {
-    panel_api::TabHandle::new(cx.new(|_| ChatThread { title: "t".into(), working: false, body }))
+    panel_api::TabHandle::new(cx.new(|_| ChatThread {
+        title: "t".into(),
+        working: false,
+        body,
+    }))
 }

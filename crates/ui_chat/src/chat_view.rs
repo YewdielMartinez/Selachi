@@ -11,13 +11,13 @@ use std::rc::Rc;
 
 use agents_driver::{AgentKind, PermissionMode};
 use chat_core::{
-    ApprovalDecision, ChatError, ContextUsage, Plan, ThreadId, ThreadRecord, ThreadRuntime, ThreadSpec, ThreadStatus, ThreadUpdate,
-    should_checkpoint,
+    ApprovalDecision, ChatError, ContextUsage, Plan, ThreadId, ThreadRecord, ThreadRuntime,
+    ThreadSpec, ThreadStatus, ThreadUpdate, should_checkpoint,
 };
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement, ListAlignment,
-    ListState, ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _, Subscription, Window, div, list,
-    prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    IntoElement, ListAlignment, ListState, ParentElement as _, PathPromptOptions, Render,
+    SharedString, Styled as _, Subscription, Window, div, list, prelude::*, px, relative,
 };
 use panel_api::WidthClass;
 use theme::{Radius, Theme};
@@ -49,15 +49,28 @@ pub struct DraftSpec {
 
 impl DraftSpec {
     pub fn new(project: Option<PathBuf>) -> Self {
-        Self { project, agent: AgentKind::ClaudeCode, model: None, effort: None, permission: PermissionMode::Ask, use_worktree: false }
+        Self {
+            project,
+            agent: AgentKind::ClaudeCode,
+            model: None,
+            effort: None,
+            permission: PermissionMode::Ask,
+            use_worktree: false,
+        }
     }
 
     /// The `ThreadSpec` of this draft, or why it cannot be created yet.
     pub fn to_thread_spec(&self) -> Result<ThreadSpec, &'static str> {
-        let project = self.project.clone().ok_or("Elige un proyecto para empezar el hilo.")?;
+        let project = self
+            .project
+            .clone()
+            .ok_or("Elige un proyecto para empezar el hilo.")?;
         let mut spec = ThreadSpec::new(project, self.agent.clone());
         spec.model = self.model.clone();
-        spec.effort = self.effort.clone().filter(|_| agents_driver::supports_effort(&self.agent));
+        spec.effort = self
+            .effort
+            .clone()
+            .filter(|_| agents_driver::supports_effort(&self.agent));
         spec.permission = self.permission;
         spec.use_worktree = self.use_worktree;
         spec.checkpoint_before_turn = should_checkpoint(self.permission);
@@ -70,7 +83,11 @@ pub enum ViewMode {
     Loading,
     Failed(String),
     /// "¿Qué construimos?": no thread yet.
-    Draft { spec: DraftSpec, creating: bool, error: Option<String> },
+    Draft {
+        spec: DraftSpec,
+        creating: bool,
+        error: Option<String>,
+    },
     Thread,
 }
 
@@ -137,7 +154,9 @@ impl ChatView {
     fn base(hub: Entity<ChatHub>, theme: Theme, mode: ViewMode, cx: &mut Context<Self>) -> Self {
         let composer = cx.new(|cx| Composer::new(hub.clone(), theme, cx));
         let subs = vec![
-            cx.subscribe(&composer, |this, _c, ev: &ComposerEvent, cx| this.on_composer(ev.clone(), cx)),
+            cx.subscribe(&composer, |this, _c, ev: &ComposerEvent, cx| {
+                this.on_composer(ev.clone(), cx)
+            }),
             cx.observe(&hub, |this, _h, cx| {
                 this.cstate_dirty = true;
                 cx.notify();
@@ -183,8 +202,22 @@ impl ChatView {
     }
 
     /// A "¿Qué construimos?" view for a thread that does not exist yet.
-    pub fn draft(hub: Entity<ChatHub>, theme: Theme, project: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        Self::base(hub, theme, ViewMode::Draft { spec: DraftSpec::new(project), creating: false, error: None }, cx)
+    pub fn draft(
+        hub: Entity<ChatHub>,
+        theme: Theme,
+        project: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::base(
+            hub,
+            theme,
+            ViewMode::Draft {
+                spec: DraftSpec::new(project),
+                creating: false,
+                error: None,
+            },
+            cx,
+        )
     }
 
     // ----- accessors -----------------------------------------------------------------------
@@ -264,14 +297,17 @@ impl ChatView {
             // A deliberate window-level decision (docs/DESIGN.md, `WindowClass::Xl`): on a very wide
             // monitor lines are capped no matter how the zones are split. Everything else here uses
             // the measured width of the chat column.
-            None if ui_kit::WindowClass::from_width(self.window_w) == ui_kit::WindowClass::Xl => Some(READING_WIDTH_XL),
+            None if ui_kit::WindowClass::from_width(self.window_w) == ui_kit::WindowClass::Xl => {
+                Some(READING_WIDTH_XL)
+            }
             None => None,
         }
     }
 
     /// Opens a composer menu by name (see `Composer::open_popup_named`): demos and screenshots.
     pub fn open_composer_popup(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.composer.update(cx, |c, cx| c.open_popup_named(name, cx));
+        self.composer
+            .update(cx, |c, cx| c.open_popup_named(name, cx));
     }
 
     pub fn width_class(&self) -> WidthClass {
@@ -296,11 +332,13 @@ impl ChatView {
         self.pending_perm = None;
         self.pending_model = None;
         self.pending_effort = None;
-        self.thread_sub = Some(cx.subscribe(&self.hub, move |this, _h, u: &ThreadUpdate, cx| {
-            if u.thread_id == id {
-                this.on_update(u, cx);
-            }
-        }));
+        self.thread_sub = Some(
+            cx.subscribe(&self.hub, move |this, _h, u: &ThreadUpdate, cx| {
+                if u.thread_id == id {
+                    this.on_update(u, cx);
+                }
+            }),
+        );
         self.refresh_branch(cx);
         cx.emit(ChatViewEvent::Bound(id));
         cx.notify();
@@ -361,7 +399,12 @@ impl ChatView {
                 let (rows, meta) = rt.with_state(|st| {
                     (
                         build_rows(st, cache),
-                        Meta { status: st.status, model: st.model.clone(), context: st.context, plan: st.plan.clone() },
+                        Meta {
+                            status: st.status,
+                            model: st.model.clone(),
+                            context: st.context,
+                            plan: st.plan.clone(),
+                        },
                     )
                 });
                 self.meta = meta;
@@ -369,10 +412,18 @@ impl ChatView {
                 if self.pending_perm == Some(record.permission) {
                     self.pending_perm = None;
                 }
-                if self.pending_model.as_ref().is_some_and(|m| *m == record.model) {
+                if self
+                    .pending_model
+                    .as_ref()
+                    .is_some_and(|m| *m == record.model)
+                {
                     self.pending_model = None;
                 }
-                if self.pending_effort.as_ref().is_some_and(|e| *e == record.effort) {
+                if self
+                    .pending_effort
+                    .as_ref()
+                    .is_some_and(|e| *e == record.effort)
+                {
                     self.pending_effort = None;
                 }
                 self.record = Some(record);
@@ -437,7 +488,10 @@ impl ChatView {
                 plan: self.meta.plan.clone(),
                 placeholder: "Escribe un mensaje…  (@ para mencionar archivos)".into(),
             },
-            _ => ComposerState { agents, ..ComposerState::default() },
+            _ => ComposerState {
+                agents,
+                ..ComposerState::default()
+            },
         }
     }
 
@@ -460,7 +514,12 @@ impl ChatView {
     }
 
     /// Answers an approval row (Permitir / Rechazar / Siempre).
-    pub fn approve(&mut self, request_id: &str, decision: ApprovalDecision, cx: &mut Context<Self>) {
+    pub fn approve(
+        &mut self,
+        request_id: &str,
+        decision: ApprovalDecision,
+        cx: &mut Context<Self>,
+    ) {
         let Some(rt) = &self.runtime else { return };
         if let Err(e) = rt.approve(request_id, decision) {
             let msg = format!("No se pudo responder al permiso: {e}");
@@ -479,7 +538,14 @@ impl ChatView {
             cx.notify();
             return;
         }
-        let ViewMode::Draft { spec, creating, error } = &mut self.mode else { return };
+        let ViewMode::Draft {
+            spec,
+            creating,
+            error,
+        } = &mut self.mode
+        else {
+            return;
+        };
         if *creating {
             return;
         }
@@ -512,7 +578,10 @@ impl ChatView {
                     }
                 }
                 Err(e) => {
-                    if let ViewMode::Draft { creating, error, .. } = &mut this.mode {
+                    if let ViewMode::Draft {
+                        creating, error, ..
+                    } = &mut this.mode
+                    {
                         *creating = false;
                         *error = Some(format!("No se pudo crear el hilo: {e}"));
                     }
@@ -561,7 +630,11 @@ impl ChatView {
                     cx.notify();
                 }
                 (_, Some(rt)) => {
-                    let agent = self.record.as_ref().map(|r| r.agent.clone()).unwrap_or(AgentKind::ClaudeCode);
+                    let agent = self
+                        .record
+                        .as_ref()
+                        .map(|r| r.agent.clone())
+                        .unwrap_or(AgentKind::ClaudeCode);
                     match rt.switch_agent_or_model(agent, model.clone()) {
                         Ok(()) => {
                             self.pending_model = Some(model);
@@ -581,7 +654,10 @@ impl ChatView {
                 }
                 (_, Some(rt)) => {
                     let rec = self.record.clone();
-                    let agent = rec.as_ref().map(|r| r.agent.clone()).unwrap_or(AgentKind::ClaudeCode);
+                    let agent = rec
+                        .as_ref()
+                        .map(|r| r.agent.clone())
+                        .unwrap_or(AgentKind::ClaudeCode);
                     let model = match &self.pending_model {
                         Some(m) => m.clone(),
                         None => rec.as_ref().and_then(|r| r.model.clone()),
@@ -592,7 +668,9 @@ impl ChatView {
                             self.cstate_dirty = true;
                             cx.notify();
                         }
-                        Err(e) => self.set_notice(format!("No se pudo cambiar el esfuerzo: {e}"), cx),
+                        Err(e) => {
+                            self.set_notice(format!("No se pudo cambiar el esfuerzo: {e}"), cx)
+                        }
                     }
                 }
                 _ => {}
@@ -608,11 +686,13 @@ impl ChatView {
                 }
                 (_, Some(rt)) => {
                     let target = kind.clone();
-                    let task = cx.background_spawn(async move { rt.handoff_preview(&target, None) });
+                    let task =
+                        cx.background_spawn(async move { rt.handoff_preview(&target, None) });
                     cx.spawn(async move |this, cx| {
                         let text = task.await.ok().flatten();
                         let _ = this.update(cx, |this, cx| {
-                            this.composer.update(cx, |c, cx| c.set_handoff_preview(&kind, text, cx));
+                            this.composer
+                                .update(cx, |c, cx| c.set_handoff_preview(&kind, text, cx));
                         });
                     })
                     .detach();
@@ -620,7 +700,11 @@ impl ChatView {
                 _ => {}
             },
             ComposerEvent::ConfirmSwitch { agent, model } => {
-                if let Some(Err(e)) = self.runtime.as_ref().map(|rt| rt.switch_agent_or_model(agent, model)) {
+                if let Some(Err(e)) = self
+                    .runtime
+                    .as_ref()
+                    .map(|rt| rt.switch_agent_or_model(agent, model))
+                {
                     let msg = format!("No se pudo cambiar de agente: {e}");
                     self.set_notice(msg, cx);
                 }
@@ -635,17 +719,25 @@ impl ChatView {
         let title = rec.display_title().to_string();
         let theme = self.theme;
         let field = cx.new(|cx| {
-            let mut f = ui_kit::TextField::new(theme, cx).bare().placeholder("Título del hilo").font_size(theme.typography.ui_size_lg);
+            let mut f = ui_kit::TextField::new(theme, cx)
+                .bare()
+                .placeholder("Título del hilo")
+                .font_size(theme.typography.ui_size_lg);
             f.set_text(&title, cx);
             f
         });
         let focus = field.read(cx).focus_handle(cx);
         self.title_subs = vec![
-            cx.subscribe(&field, |this, f, ev: &ui_kit::TextFieldEvent, cx| match ev {
-                ui_kit::TextFieldEvent::Submit => this.commit_rename(f.read(cx).text().to_string(), cx),
-                ui_kit::TextFieldEvent::Cancel => this.cancel_rename(cx),
-                _ => {}
-            }),
+            cx.subscribe(
+                &field,
+                |this, f, ev: &ui_kit::TextFieldEvent, cx| match ev {
+                    ui_kit::TextFieldEvent::Submit => {
+                        this.commit_rename(f.read(cx).text().to_string(), cx)
+                    }
+                    ui_kit::TextFieldEvent::Cancel => this.cancel_rename(cx),
+                    _ => {}
+                },
+            ),
             cx.on_focus_out(&focus, window, |this, _e, _w, cx| {
                 if let Some(f) = this.title_edit.clone() {
                     let t = f.read(cx).text().to_string();
@@ -684,7 +776,19 @@ impl ChatView {
 
     fn column(&self, content: impl IntoElement) -> impl IntoElement {
         let max = self.column_max();
-        div().w_full().flex().flex_row().justify_center().px(px(24.0)).child(div().w_full().min_w_0().when_some(max, |d, w| d.max_w(px(w))).child(content))
+        div()
+            .w_full()
+            .flex()
+            .flex_row()
+            .justify_center()
+            .px(px(24.0))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .when_some(max, |d, w| d.max_w(px(w)))
+                    .child(content),
+            )
     }
 
     fn header(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -693,7 +797,15 @@ impl ChatView {
         let ty = t.typography;
         let rec = self.record.clone();
         let title: AnyElement = match (&self.title_edit, &rec) {
-            (Some(f), _) => div().w(px(380.0)).max_w_full().px(px(8.0)).py(px(3.0)).rounded(px(Radius::CONTROL)).bg(c.surface_2).child(f.clone()).into_any_element(),
+            (Some(f), _) => div()
+                .w(px(380.0))
+                .max_w_full()
+                .px(px(8.0))
+                .py(px(3.0))
+                .rounded(px(Radius::CONTROL))
+                .bg(c.surface_2)
+                .child(f.clone())
+                .into_any_element(),
             (None, Some(r)) => div()
                 .id("chat-title")
                 .max_w(px(520.0))
@@ -709,7 +821,9 @@ impl ChatView {
                 .cursor_text()
                 .hover(move |s| s.bg(c.surface_2))
                 .tooltip(ui_kit::Tooltip::text(&t, "Clic para renombrar"))
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.begin_rename(window, cx)))
+                .on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.begin_rename(window, cx)),
+                )
                 .child(SharedString::from(r.display_title().to_string()))
                 .into_any_element(),
             _ => div().into_any_element(),
@@ -742,7 +856,16 @@ impl ChatView {
             .font_family(ty.ui_family)
             .child(title)
             .when(!narrow, |d| {
-                d.children(crumb.map(|b| div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(SharedString::from(b))))
+                d.children(crumb.map(|b| {
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.muted)
+                        .child(SharedString::from(b))
+                }))
             })
             .child(div().flex_1())
             .children(agent.map(|(mark, model)| {
@@ -757,7 +880,11 @@ impl ChatView {
                     .child(agent_icon(mark, 16.0, c.muted))
                     .child(model)
             }));
-        div().w_full().flex_none().child(self.column(inner)).into_any_element()
+        div()
+            .w_full()
+            .flex_none()
+            .child(self.column(inner))
+            .into_any_element()
     }
 
     fn notice_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -818,27 +945,51 @@ impl ChatView {
                 .child("Escribe un mensaje para empezar.")
                 .into_any_element()
         } else {
-            list(self.list.clone(), cx.processor(|this, ix: usize, _w, cx| this.render_row(ix, cx))).size_full().into_any_element()
+            list(
+                self.list.clone(),
+                cx.processor(|this, ix: usize, _w, cx| this.render_row(ix, cx)),
+            )
+            .size_full()
+            .into_any_element()
         };
-        let composer = div()
-            .w_full()
-            .flex_none()
-            .pt(px(8.0))
-            .pb(px(14.0))
-            .child(self.column(div().flex().flex_col().children(self.notice_line(cx)).child(self.composer.clone())));
-        div().size_full().flex().flex_col().child(header).child(div().flex_1().min_h_0().child(body)).child(composer).into_any_element()
+        let composer = div().w_full().flex_none().pt(px(8.0)).pb(px(14.0)).child(
+            self.column(
+                div()
+                    .flex()
+                    .flex_col()
+                    .children(self.notice_line(cx))
+                    .child(self.composer.clone()),
+            ),
+        );
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(div().flex_1().min_h_0().child(body))
+            .child(composer)
+            .into_any_element()
     }
 
     fn project_pill(&self, spec: &DraftSpec, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
         let this = cx.entity();
-        let label = spec.project.as_deref().map(project_name).unwrap_or_else(|| "Elegir proyecto".to_string());
+        let label = spec
+            .project
+            .as_deref()
+            .map(project_name)
+            .unwrap_or_else(|| "Elegir proyecto".to_string());
         let pill = Pill::new("draft-project", &t)
             .icon(Icon::Folder)
             .label(label)
             .child(icon(Icon::ChevronDown, 14.0, c.muted))
-            .tooltip(spec.project.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Carpeta donde trabajará el agente".into()))
+            .tooltip(
+                spec.project
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "Carpeta donde trabajará el agente".into()),
+            )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.project_menu_open = !this.project_menu_open;
                 cx.notify();
@@ -859,7 +1010,9 @@ impl ChatView {
                     Some(p.display().to_string().into()),
                     selected,
                     true,
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.set_project(Some(path.clone()), cx)),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.set_project(Some(path.clone()), cx)
+                    }),
                 )
                 .into_any_element()
             })
@@ -906,7 +1059,12 @@ impl ChatView {
 
     fn pick_project(&mut self, cx: &mut Context<Self>) {
         self.project_menu_open = false;
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: None });
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut paths))) = rx.await
                 && let Some(p) = paths.pop()
@@ -923,7 +1081,14 @@ impl ChatView {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
-        let ViewMode::Draft { spec, creating, error } = &self.mode else { return div().into_any_element() };
+        let ViewMode::Draft {
+            spec,
+            creating,
+            error,
+        } = &self.mode
+        else {
+            return div().into_any_element();
+        };
         let (spec, creating, error) = (spec.clone(), *creating, error.clone());
         let project = self.project_pill(&spec, cx);
         let worktree = Pill::new("draft-worktree", &t)
@@ -947,7 +1112,13 @@ impl ChatView {
             .gap(px(22.0))
             .font_family(ty.ui_family)
             .child(Logo::new(t.mode).size(64.0))
-            .child(div().text_size(px(30.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.text).child("¿Qué construimos?"))
+            .child(
+                div()
+                    .text_size(px(30.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c.text)
+                    .child("¿Qué construimos?"),
+            )
             .child(
                 div()
                     .w_full()
@@ -955,10 +1126,24 @@ impl ChatView {
                     .flex()
                     .flex_col()
                     .gap(px(10.0))
-                    .child(div().flex().flex_row().items_center().gap(px(4.0)).child(project).child(worktree))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(project)
+                            .child(worktree),
+                    )
                     .children(self.notice_line(cx))
                     .child(self.composer.clone())
-                    .children(error.map(|e| div().px(px(8.0)).text_size(px(12.5)).text_color(c.error).child(SharedString::from(e))))
+                    .children(error.map(|e| {
+                        div()
+                            .px(px(8.0))
+                            .text_size(px(12.5))
+                            .text_color(c.error)
+                            .child(SharedString::from(e))
+                    }))
                     .children(creating.then(|| {
                         div()
                             .px(px(8.0))
@@ -1005,7 +1190,11 @@ impl Render for ChatView {
                 .gap(px(8.0))
                 .text_color(c.muted)
                 .child(icon(Icon::Alert, 16.0, c.error))
-                .child(div().text_color(c.error).child(SharedString::from(msg.clone())))
+                .child(
+                    div()
+                        .text_color(c.error)
+                        .child(SharedString::from(msg.clone())),
+                )
                 .into_any_element(),
             ViewMode::Draft { .. } => self.render_draft(cx),
             ViewMode::Thread => self.render_thread(cx),

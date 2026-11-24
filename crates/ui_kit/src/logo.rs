@@ -36,9 +36,11 @@ impl Logo {
 
 impl RenderOnce for Logo {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        img(ImageSource::Resource(Resource::Embedded(logo_asset(self.mode).into())))
-            .w(px(self.size))
-            .h(px(self.size))
-            .flex_none()
+        img(ImageSource::Resource(Resource::Embedded(
+            logo_asset(self.mode).into(),
+        )))
+        .w(px(self.size))
+        .h(px(self.size))
+        .flex_none()
     }
 }

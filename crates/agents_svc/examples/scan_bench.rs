@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
     let mut a = std::env::args().skip(1);
-    let db = a.next().ok_or_else(|| anyhow::anyhow!("usage: scan_bench <db> [iterations] [sleep_secs]"))?;
+    let db = a
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("usage: scan_bench <db> [iterations] [sleep_secs]"))?;
     let n: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(5);
     let sleep: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(2);
     let mut ing = Ingestor::open(std::path::Path::new(&db), IngestConfig::from_home())?;

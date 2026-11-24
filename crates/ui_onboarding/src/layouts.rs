@@ -18,7 +18,9 @@ pub enum LayoutCard {
 impl LayoutCard {
     pub const fn label(self) -> &'static str {
         match self {
-            LayoutCard::Unified | LayoutCard::Builtin(BuiltinPreset::EspaciosUnificados) => "Espacios unificados",
+            LayoutCard::Unified | LayoutCard::Builtin(BuiltinPreset::EspaciosUnificados) => {
+                "Espacios unificados"
+            }
             LayoutCard::Builtin(BuiltinPreset::Terminal) => "Terminal",
             LayoutCard::Builtin(BuiltinPreset::Espacios) => "Espacios",
             LayoutCard::Builtin(BuiltinPreset::Orquestador) => "Orquestador",
@@ -57,16 +59,16 @@ pub fn unified_rects() -> Vec<WireRect> {
     use WireFill::{Dither, Outline, Solid};
     let r = WireRect::new;
     vec![
-        r(0, 0, 9, 20, Dither),    // sidebar
-        r(1, 1, 7, 1, Solid),      // new tab / search actions
-        r(1, 3, 7, 1, Solid),      // panel icon row
-        r(1, 6, 7, 1, Solid),      // space
-        r(2, 8, 5, 1, Solid),      // nested tab
-        r(2, 10, 5, 1, Solid),     // nested tab
-        r(1, 12, 7, 1, Solid),     // space
-        r(1, 18, 7, 1, Solid),     // usage footer
-        r(10, 0, 8, 2, Solid),     // active tab title
-        r(24, 0, 2, 2, Solid),     // panel buttons, grouped on the right
+        r(0, 0, 9, 20, Dither), // sidebar
+        r(1, 1, 7, 1, Solid),   // new tab / search actions
+        r(1, 3, 7, 1, Solid),   // panel icon row
+        r(1, 6, 7, 1, Solid),   // space
+        r(2, 8, 5, 1, Solid),   // nested tab
+        r(2, 10, 5, 1, Solid),  // nested tab
+        r(1, 12, 7, 1, Solid),  // space
+        r(1, 18, 7, 1, Solid),  // usage footer
+        r(10, 0, 8, 2, Solid),  // active tab title
+        r(24, 0, 2, 2, Solid),  // panel buttons, grouped on the right
         r(27, 0, 2, 2, Solid),
         r(30, 0, 2, 2, Dither),
         r(10, 3, 22, 17, Outline), // work card
@@ -77,7 +79,12 @@ pub fn unified_rects() -> Vec<WireRect> {
 /// (once `store` has it) is not shown twice.
 pub fn cards() -> Vec<LayoutCard> {
     let mut v = vec![LayoutCard::Unified];
-    v.extend(BuiltinPreset::ALL.into_iter().filter(|b| b.id() != UNIFIED_ID).map(LayoutCard::Builtin));
+    v.extend(
+        BuiltinPreset::ALL
+            .into_iter()
+            .filter(|b| b.id() != UNIFIED_ID)
+            .map(LayoutCard::Builtin),
+    );
     v
 }
 
@@ -111,7 +118,13 @@ mod tests {
 
     #[test]
     fn unified_writes_the_store_preset() {
-        assert_eq!(resolve(LayoutCard::Unified), PresetId::Builtin(BuiltinPreset::EspaciosUnificados));
-        assert_eq!(resolve(LayoutCard::Builtin(BuiltinPreset::Chat)), PresetId::Builtin(BuiltinPreset::Chat));
+        assert_eq!(
+            resolve(LayoutCard::Unified),
+            PresetId::Builtin(BuiltinPreset::EspaciosUnificados)
+        );
+        assert_eq!(
+            resolve(LayoutCard::Builtin(BuiltinPreset::Chat)),
+            PresetId::Builtin(BuiltinPreset::Chat)
+        );
     }
 }

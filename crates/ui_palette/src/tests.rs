@@ -4,14 +4,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{Context, Entity, FocusHandle, IntoElement, Render, Subscription, TestAppContext, VisualTestContext, Window, div, prelude::*};
+use gpui::{
+    Context, Entity, FocusHandle, IntoElement, Render, Subscription, TestAppContext,
+    VisualTestContext, Window, div, prelude::*,
+};
 use store::Param;
 use theme::Theme;
 use ui_kit::testing::{self, press, type_text};
 
 use crate::{
-    ActionEntry, ActionsSource, CommandPalette, FormSpec, ItemAction, OpenContext, PaletteEvent, PaletteItem,
-    PaletteSource, Scope, SourceQuery, command_palette,
+    ActionEntry, ActionsSource, CommandPalette, FormSpec, ItemAction, OpenContext, PaletteEvent,
+    PaletteItem, PaletteSource, Scope, SourceQuery, command_palette,
 };
 
 type Events = Rc<RefCell<Vec<PaletteEvent>>>;
@@ -25,7 +28,11 @@ struct Host {
 impl Render for Host {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         // The palette is the last child of a full-size root, like in the shell.
-        div().relative().size_full().track_focus(&self.focus).child(self.palette.clone())
+        div()
+            .relative()
+            .size_full()
+            .track_focus(&self.focus)
+            .child(self.palette.clone())
     }
 }
 
@@ -53,7 +60,11 @@ impl PaletteSource for Fixture {
         )
         .alt(ItemAction::emit(
             "Ejecutar",
-            PaletteEvent::RunCommand { line: "deploy".into(), cwd: None, new_tab: false },
+            PaletteEvent::RunCommand {
+                line: "deploy".into(),
+                cwd: None,
+                new_tab: false,
+            },
         ));
         let form = PaletteItem::new(
             "fixture:form",
@@ -64,7 +75,11 @@ impl PaletteSource for Fixture {
                     7,
                     "Deploy a entorno",
                     "deploy {env|dev|prod}",
-                    vec![Param { name: "env".into(), default: Some("dev".into()), options: vec!["dev".into(), "prod".into()] }],
+                    vec![Param {
+                        name: "env".into(),
+                        default: Some("dev".into()),
+                        options: vec!["dev".into(), "prod".into()],
+                    }],
                     None,
                 ),
             ),
@@ -84,20 +99,36 @@ fn entries() -> Vec<ActionEntry> {
 fn open<'a>(
     cx: &'a mut TestAppContext,
     initial: &str,
-) -> (Entity<CommandPalette>, FocusHandle, &'a mut VisualTestContext, Events) {
+) -> (
+    Entity<CommandPalette>,
+    FocusHandle,
+    &'a mut VisualTestContext,
+    Events,
+) {
     let events: Events = Rc::default();
     let sink = events.clone();
     let (host, vcx) = testing::open_window(cx, move |window, cx| {
-        let sources: Vec<std::sync::Arc<dyn PaletteSource>> =
-            vec![std::sync::Arc::new(ActionsSource::new(entries())), std::sync::Arc::new(Fixture)];
+        let sources: Vec<std::sync::Arc<dyn PaletteSource>> = vec![
+            std::sync::Arc::new(ActionsSource::new(entries())),
+            std::sync::Arc::new(Fixture),
+        ];
         let palette = command_palette(Theme::dark(), None, sources, cx);
-        let sub = cx.subscribe(&palette, move |_: &mut Host, _, ev: &PaletteEvent, _| sink.borrow_mut().push(ev.clone()));
+        let sub = cx.subscribe(&palette, move |_: &mut Host, _, ev: &PaletteEvent, _| {
+            sink.borrow_mut().push(ev.clone())
+        });
         let focus = cx.focus_handle();
         window.focus(&focus);
-        Host { focus, palette, _sub: sub }
+        Host {
+            focus,
+            palette,
+            _sub: sub,
+        }
     });
     let (palette, focus) = host.read_with(vcx, |h, _| (h.palette.clone(), h.focus.clone()));
-    let ctx = OpenContext { initial: initial.to_string(), ..OpenContext::default() };
+    let ctx = OpenContext {
+        initial: initial.to_string(),
+        ..OpenContext::default()
+    };
     vcx.update(|window, cx| palette.update(cx, |p, cx| p.open(ctx, window, cx)));
     vcx.run_until_parked();
     (palette, focus, vcx, events)
@@ -115,9 +146,18 @@ fn open_type_enter_emits_the_action_and_closes(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     press(vcx, "enter");
     vcx.run_until_parked();
-    assert_eq!(*events.borrow(), vec![PaletteEvent::Action("settings.open".into()), PaletteEvent::Closed]);
+    assert_eq!(
+        *events.borrow(),
+        vec![
+            PaletteEvent::Action("settings.open".into()),
+            PaletteEvent::Closed
+        ]
+    );
     assert!(!palette.read_with(vcx, |p, _| p.is_open()));
-    assert!(testing::is_focused(vcx, &focus), "focus goes back to what had it");
+    assert!(
+        testing::is_focused(vcx, &focus),
+        "focus goes back to what had it"
+    );
 }
 
 #[gpui::test]
@@ -128,7 +168,10 @@ fn down_moves_the_selection_and_up_returns(cx: &mut TestAppContext) {
     press(vcx, "enter");
     vcx.run_until_parked();
     // `>` lists the actions in order: down, down, up lands on the second.
-    assert_eq!(events.borrow().first(), Some(&PaletteEvent::Action("tab.close".into())));
+    assert_eq!(
+        events.borrow().first(),
+        Some(&PaletteEvent::Action("tab.close".into()))
+    );
 }
 
 #[gpui::test]
@@ -149,13 +192,20 @@ fn ctrl_enter_runs_the_alternative_action(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     assert_eq!(
         events.borrow().first(),
-        Some(&PaletteEvent::RunCommand { line: "deploy".into(), cwd: None, new_tab: false })
+        Some(&PaletteEvent::RunCommand {
+            line: "deploy".into(),
+            cwd: None,
+            new_tab: false
+        })
     );
     // Plain Enter is the primary action.
     let (_palette, _, vcx, events) = open(cx, "$");
     press(vcx, "enter");
     vcx.run_until_parked();
-    assert_eq!(events.borrow().first(), Some(&PaletteEvent::InsertText("deploy".into())));
+    assert_eq!(
+        events.borrow().first(),
+        Some(&PaletteEvent::InsertText("deploy".into()))
+    );
 }
 
 #[gpui::test]
@@ -178,14 +228,21 @@ fn form_choice_cycles_with_the_arrows_and_ctrl_enter_runs_it(cx: &mut TestAppCon
     // The second item has the parameter form.
     press(vcx, "down enter");
     vcx.run_until_parked();
-    assert!(palette.read_with(vcx, |p, _| p.in_form_for_test()), "Enter on a form item opens the form");
+    assert!(
+        palette.read_with(vcx, |p, _| p.in_form_for_test()),
+        "Enter on a form item opens the form"
+    );
     // The default is `dev`; the arrow cycles the options instead of moving a caret.
     press(vcx, "right");
     press(vcx, "ctrl-enter");
     vcx.run_until_parked();
     assert_eq!(
         events.borrow().first(),
-        Some(&PaletteEvent::RunCommand { line: "deploy prod".into(), cwd: None, new_tab: false })
+        Some(&PaletteEvent::RunCommand {
+            line: "deploy prod".into(),
+            cwd: None,
+            new_tab: false
+        })
     );
 }
 

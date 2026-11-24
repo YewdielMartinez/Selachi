@@ -91,7 +91,13 @@ pub fn blocks(layout: &ResolvedLayout, cols: u8, rows: u8) -> Vec<WireRect> {
                     if space {
                         out.push(WireRect::new(x0 + 1, y, inner, 1, WireFill::Solid));
                     } else {
-                        out.push(WireRect::new(x0 + 2, y, inner.saturating_sub(1).max(1), 1, WireFill::Solid));
+                        out.push(WireRect::new(
+                            x0 + 2,
+                            y,
+                            inner.saturating_sub(1).max(1),
+                            1,
+                            WireFill::Solid,
+                        ));
                     }
                     space = !space && y % 3 == 0;
                     y += 2;

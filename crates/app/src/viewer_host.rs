@@ -8,14 +8,18 @@ use viewer_svc::grammars::{GrammarRegistry, set_plugin_registry};
 
 /// `%APPDATA%\Selachi\plugins\grammars`.
 pub fn grammars_dir() -> Option<PathBuf> {
-    store::paths::app_data_dir_path().ok().map(|d| d.join("plugins").join("grammars"))
+    store::paths::app_data_dir_path()
+        .ok()
+        .map(|d| d.join("plugins").join("grammars"))
 }
 
 /// Opens the plugin registry and installs it process-wide. Blocking (it scans the folder and
 /// applies deferred installs): call it off the UI thread. Returns the ids of the grammars that are
 /// available, for the doctor.
 pub fn init_grammars() -> Vec<String> {
-    let Some(dir) = grammars_dir() else { return Vec::new() };
+    let Some(dir) = grammars_dir() else {
+        return Vec::new();
+    };
     let registry = Arc::new(GrammarRegistry::new(dir));
     let ids = registry.available().into_iter().map(|g| g.id).collect();
     set_plugin_registry(Some(registry));
@@ -28,7 +32,11 @@ pub fn init_grammars() -> Vec<String> {
 /// launcher is `code.cmd` on Windows).
 pub fn editor_argv(path: &Path, line: Option<usize>, editor: &str) -> Vec<String> {
     let words = split_command(editor);
-    let vscode_like = words.is_empty() || words[0].to_lowercase().trim_end_matches(".cmd").ends_with("code");
+    let vscode_like = words.is_empty()
+        || words[0]
+            .to_lowercase()
+            .trim_end_matches(".cmd")
+            .ends_with("code");
     let target = match line {
         Some(l) if vscode_like => format!("{}:{l}", path.display()),
         _ => path.display().to_string(),
@@ -55,17 +63,17 @@ fn split_command(text: &str) -> Vec<String> {
             '"' => {
                 quoted = !quoted;
                 has = true;
-            },
+            }
             c if c.is_whitespace() && !quoted => {
                 if has {
                     out.push(std::mem::take(&mut cur));
                     has = false;
                 }
-            },
+            }
             c => {
                 cur.push(c);
                 has = true;
-            },
+            }
         }
     }
     if has {
@@ -87,7 +95,9 @@ pub fn spawn_editor(path: &Path, line: Option<usize>, editor: &str) -> Result<()
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    cmd.spawn().map(drop).map_err(|e| format!("No se pudo abrir el editor ({}): {e}", argv[0]))
+    cmd.spawn()
+        .map(drop)
+        .map_err(|e| format!("No se pudo abrir el editor ({}): {e}", argv[0]))
 }
 
 #[cfg(test)]
@@ -106,7 +116,14 @@ mod tests {
     fn a_configured_editor_comes_first() {
         let a = editor_argv(Path::new(r"C:\p\a.rs"), Some(3), "code -g");
         assert_eq!(a, ["code", "-g", r"C:\p\a.rs:3"]);
-        let b = editor_argv(Path::new(r"C:\p\a.rs"), Some(3), r#""C:\Program Files\N++\n.exe" -multiInst"#);
-        assert_eq!(b, [r"C:\Program Files\N++\n.exe", "-multiInst", r"C:\p\a.rs"]);
+        let b = editor_argv(
+            Path::new(r"C:\p\a.rs"),
+            Some(3),
+            r#""C:\Program Files\N++\n.exe" -multiInst"#,
+        );
+        assert_eq!(
+            b,
+            [r"C:\Program Files\N++\n.exe", "-multiInst", r"C:\p\a.rs"]
+        );
     }
 }

@@ -9,11 +9,12 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use agents_driver::ToolKind;
 use chat_core::state::touched_paths;
 use chat_core::{
-    ApprovalState, Block, Message, MessageCost, Role, ThreadState, ThreadStatus, ToolClass, ToolRun, ToolStatus,
+    ApprovalState, Block, Message, MessageCost, Role, ThreadState, ThreadStatus, ToolClass,
+    ToolRun, ToolStatus,
 };
-use agents_driver::ToolKind;
 use serde_json::Value;
 
 use crate::md::MdBody;
@@ -41,12 +42,33 @@ pub struct ExploreItem {
 
 #[derive(Clone, Debug)]
 pub enum RowKind {
-    User { text: String, attachments: Vec<PathBuf> },
-    Checkpoint { id: String, label: String },
-    Text { body: MdBody, streaming: bool },
-    Thinking { text: String, streaming: bool },
-    Explored { label: String, items: Vec<ExploreItem>, running: bool },
-    Command { cmd: String, status: ToolStatus, duration_ms: Option<i64>, output: Option<String> },
+    User {
+        text: String,
+        attachments: Vec<PathBuf>,
+    },
+    Checkpoint {
+        id: String,
+        label: String,
+    },
+    Text {
+        body: MdBody,
+        streaming: bool,
+    },
+    Thinking {
+        text: String,
+        streaming: bool,
+    },
+    Explored {
+        label: String,
+        items: Vec<ExploreItem>,
+        running: bool,
+    },
+    Command {
+        cmd: String,
+        status: ToolStatus,
+        duration_ms: Option<i64>,
+        output: Option<String>,
+    },
     Edit {
         verb: &'static str,
         path: Option<String>,
@@ -56,12 +78,30 @@ pub enum RowKind {
         status: ToolStatus,
         summary: Option<String>,
     },
-    Tool { title: String, class: ToolClass, status: ToolStatus, duration_ms: Option<i64>, summary: Option<String> },
-    Approval { request_id: String, tool: String, detail: String, state: ApprovalState },
-    System { text: String },
-    Footer { cost: Option<MessageCost>, tokens: u64 },
+    Tool {
+        title: String,
+        class: ToolClass,
+        status: ToolStatus,
+        duration_ms: Option<i64>,
+        summary: Option<String>,
+    },
+    Approval {
+        request_id: String,
+        tool: String,
+        detail: String,
+        state: ApprovalState,
+    },
+    System {
+        text: String,
+    },
+    Footer {
+        cost: Option<MessageCost>,
+        tokens: u64,
+    },
     Working,
-    Error { text: String },
+    Error {
+        text: String,
+    },
 }
 
 impl RowKind {
@@ -97,7 +137,9 @@ impl ChatRow {
 // ---------------------------------------------------------------------------------------------
 
 fn str_of<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    keys.iter().find_map(|k| v.get(*k).and_then(Value::as_str)).filter(|s| !s.is_empty())
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(Value::as_str))
+        .filter(|s| !s.is_empty())
 }
 
 /// The command line of a command run: `input.command` (string or argv array), else its title.
@@ -125,7 +167,12 @@ fn replace_counts(old: &str, new: &str) -> (usize, usize) {
     let o: Vec<&str> = old.lines().collect();
     let n: Vec<&str> = new.lines().collect();
     let head = o.iter().zip(&n).take_while(|(a, b)| a == b).count();
-    let tail = o[head..].iter().rev().zip(n[head..].iter().rev()).take_while(|(a, b)| a == b).count();
+    let tail = o[head..]
+        .iter()
+        .rev()
+        .zip(n[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
     (n.len() - head - tail, o.len() - head - tail)
 }
 
@@ -151,7 +198,9 @@ fn counts_of(v: &Value, depth: usize) -> Option<(usize, usize)> {
     }
     match v {
         Value::Object(o) => {
-            if let (Some(Value::String(old)), Some(Value::String(new))) = (o.get("old_string"), o.get("new_string")) {
+            if let (Some(Value::String(old)), Some(Value::String(new))) =
+                (o.get("old_string"), o.get("new_string"))
+            {
                 return Some(replace_counts(old, new));
             }
             if let Some(Value::String(c)) = o.get("content") {
@@ -201,11 +250,20 @@ fn explore_item(run: &ToolRun) -> ExploreItem {
         _ => "Read",
     };
     let subject = if run.title.trim().is_empty() {
-        str_of(&run.input, &["path", "file_path", "pattern", "query", "directory"]).unwrap_or("").to_string()
+        str_of(
+            &run.input,
+            &["path", "file_path", "pattern", "query", "directory"],
+        )
+        .unwrap_or("")
+        .to_string()
     } else {
         run.title.clone()
     };
-    ExploreItem { class: run.class, label: format!("{verb} {subject}").trim().to_string(), running: run.is_running() }
+    ExploreItem {
+        class: run.class,
+        label: format!("{verb} {subject}").trim().to_string(),
+        running: run.is_running(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -269,7 +327,9 @@ fn message_fp(m: &Message) -> u64 {
     m.blocks.len().hash(&mut h);
     m.attachments.len().hash(&mut h);
     m.checkpoint.as_ref().map(|c| c.id.clone()).hash(&mut h);
-    m.cost.map(|c| (c.usd.to_bits(), c.source as u8)).hash(&mut h);
+    m.cost
+        .map(|c| (c.usd.to_bits(), c.source as u8))
+        .hash(&mut h);
     m.usage.map(|u| u.total()).hash(&mut h);
     for (i, b) in m.blocks.iter().enumerate() {
         block_fp(b, m.streaming && i + 1 == m.blocks.len()).hash(&mut h);
@@ -304,7 +364,11 @@ fn run_row(seq: u32, ix: u16, fp: u64, block: &Block) -> Option<Rc<ChatRow>> {
                 key,
                 fp,
                 RowKind::Edit {
-                    verb: if r.kind == ToolKind::Write { "Wrote" } else { "Edited" },
+                    verb: if r.kind == ToolKind::Write {
+                        "Wrote"
+                    } else {
+                        "Edited"
+                    },
                     path,
                     title: r.title.clone(),
                     adds,
@@ -340,7 +404,10 @@ fn message_rows(m: &Message) -> Vec<Rc<ChatRow>> {
                 out.push(ChatRow::new(
                     RowKey::Checkpoint(seq),
                     h.finish(),
-                    RowKind::Checkpoint { id: cp.id.clone(), label: cp.label.clone() },
+                    RowKind::Checkpoint {
+                        id: cp.id.clone(),
+                        label: cp.label.clone(),
+                    },
                 ));
             }
             let text = m.plain_text();
@@ -350,14 +417,21 @@ fn message_rows(m: &Message) -> Vec<Rc<ChatRow>> {
             out.push(ChatRow::new(
                 RowKey::User(seq),
                 h.finish(),
-                RowKind::User { text, attachments: m.attachments.clone() },
+                RowKind::User {
+                    text,
+                    attachments: m.attachments.clone(),
+                },
             ));
         }
         Role::System => {
             let text = m.plain_text();
             let mut h = DefaultHasher::new();
             hash_text(&mut h, &text);
-            out.push(ChatRow::new(RowKey::System(seq), h.finish(), RowKind::System { text }));
+            out.push(ChatRow::new(
+                RowKey::System(seq),
+                h.finish(),
+                RowKind::System { text },
+            ));
         }
         Role::Assistant => {
             let n = m.blocks.len();
@@ -369,13 +443,19 @@ fn message_rows(m: &Message) -> Vec<Rc<ChatRow>> {
                     Block::Text { text } if !text.trim().is_empty() => Some(ChatRow::new(
                         RowKey::Block(seq, ix),
                         fp,
-                        RowKind::Text { body: MdBody::new(text.clone()), streaming: tail },
+                        RowKind::Text {
+                            body: MdBody::new(text.clone()),
+                            streaming: tail,
+                        },
                     )),
                     Block::Text { .. } => None,
                     Block::Thinking(t) => Some(ChatRow::new(
                         RowKey::Block(seq, ix),
                         fp,
-                        RowKind::Thinking { text: t.text.clone(), streaming: tail },
+                        RowKind::Thinking {
+                            text: t.text.clone(),
+                            streaming: tail,
+                        },
                     )),
                     Block::Explored(g) => Some(ChatRow::new(
                         RowKey::Block(seq, ix),
@@ -403,9 +483,18 @@ fn message_rows(m: &Message) -> Vec<Rc<ChatRow>> {
             if !m.streaming && (m.cost.is_some() || m.usage.is_some()) {
                 let tokens = m.usage.map_or(0, |u| u.total());
                 let mut h = DefaultHasher::new();
-                m.cost.map(|c| (c.usd.to_bits(), c.source as u8)).hash(&mut h);
+                m.cost
+                    .map(|c| (c.usd.to_bits(), c.source as u8))
+                    .hash(&mut h);
                 tokens.hash(&mut h);
-                out.push(ChatRow::new(RowKey::Footer(seq), h.finish(), RowKind::Footer { cost: m.cost, tokens }));
+                out.push(ChatRow::new(
+                    RowKey::Footer(seq),
+                    h.finish(),
+                    RowKind::Footer {
+                        cost: m.cost,
+                        tokens,
+                    },
+                ));
             }
         }
     }
@@ -439,7 +528,11 @@ pub fn build_rows(st: &ThreadState, cache: &mut RowCache) -> Vec<Rc<ChatRow>> {
             if let Some(e) = st.error.as_ref().filter(|e| !e.trim().is_empty()) {
                 let mut h = DefaultHasher::new();
                 e.hash(&mut h);
-                out.push(ChatRow::new(RowKey::Error, h.finish(), RowKind::Error { text: e.clone() }));
+                out.push(ChatRow::new(
+                    RowKey::Error,
+                    h.finish(),
+                    RowKind::Error { text: e.clone() },
+                ));
             }
         }
         ThreadStatus::Working => out.push(ChatRow::new(RowKey::Working, 0, RowKind::Working)),
@@ -462,8 +555,16 @@ pub fn diff_rows<T: PartialEq>(old: &[T], new: &[T]) -> Option<Splice> {
         return None;
     }
     let head = old.iter().zip(new).take_while(|(a, b)| a == b).count();
-    let tail = old[head..].iter().rev().zip(new[head..].iter().rev()).take_while(|(a, b)| a == b).count();
-    Some(Splice { old: head..old.len() - tail, new_len: new.len() - head - tail })
+    let tail = old[head..]
+        .iter()
+        .rev()
+        .zip(new[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    Some(Splice {
+        old: head..old.len() - tail,
+        new_len: new.len() - head - tail,
+    })
 }
 
 /// `(key, fp)` pairs of rows, the input of [`diff_rows`].
@@ -506,7 +607,12 @@ mod tests {
     }
 
     fn call(id: &str, kind: ToolKind, title: &str, input: Value) -> AgentEvent {
-        AgentEvent::ToolCall { id: id.into(), kind, title: title.into(), input_json: input }
+        AgentEvent::ToolCall {
+            id: id.into(),
+            kind,
+            title: title.into(),
+            input_json: input,
+        }
     }
 
     fn kinds(rows: &[Rc<ChatRow>]) -> Vec<&'static str> {
@@ -533,32 +639,95 @@ mod tests {
     fn maps_a_whole_turn_to_rows() {
         let mut s = state();
         s.begin_user_message("arregla el parser", vec![], None, 1);
-        s.apply(AgentEvent::Thinking { text: "hmm".into(), delta: false }, 2);
+        s.apply(
+            AgentEvent::Thinking {
+                text: "hmm".into(),
+                delta: false,
+            },
+            2,
+        );
         s.apply(call("a", ToolKind::Other("LS".into()), "src", json!({})), 3);
         s.apply(call("b", ToolKind::Search, "fn parse", json!({})), 4);
-        s.apply(AgentEvent::Text { text: "Voy a editar.".into(), delta: false }, 5);
-        s.apply(call("c", ToolKind::Command, "cargo test", json!({"command": "cargo test -p parser"})), 6);
-        s.apply(AgentEvent::ToolResult { id: "c".into(), ok: true, summary: "ok".into() }, 3006);
+        s.apply(
+            AgentEvent::Text {
+                text: "Voy a editar.".into(),
+                delta: false,
+            },
+            5,
+        );
+        s.apply(
+            call(
+                "c",
+                ToolKind::Command,
+                "cargo test",
+                json!({"command": "cargo test -p parser"}),
+            ),
+            6,
+        );
+        s.apply(
+            AgentEvent::ToolResult {
+                id: "c".into(),
+                ok: true,
+                summary: "ok".into(),
+            },
+            3006,
+        );
         s.apply(
             call("d", ToolKind::Edit, "src/lib.rs", json!({"file_path": "src/lib.rs", "old_string": "a\nb\nc", "new_string": "a\nB\nC\nD"})),
             3007,
         );
-        s.apply(AgentEvent::ApprovalRequest { id: "r1".into(), tool: "Bash".into(), detail: "rm x".into() }, 3008);
+        s.apply(
+            AgentEvent::ApprovalRequest {
+                id: "r1".into(),
+                tool: "Bash".into(),
+                detail: "rm x".into(),
+            },
+            3008,
+        );
         let rows = build_rows(&s, &mut RowCache::default());
-        assert_eq!(kinds(&rows), vec!["user", "thinking", "explored", "text", "command", "edit", "approval", "working"]);
-        let RowKind::Explored { label, items, .. } = &rows[2].kind else { panic!() };
+        assert_eq!(
+            kinds(&rows),
+            vec![
+                "user", "thinking", "explored", "text", "command", "edit", "approval", "working"
+            ]
+        );
+        let RowKind::Explored { label, items, .. } = &rows[2].kind else {
+            panic!()
+        };
         assert_eq!(label, "Explored · 1 list · 1 search");
         assert_eq!(items.len(), 2);
         assert_eq!(items[1].label, "Searched fn parse");
-        let RowKind::Command { cmd, status, duration_ms, .. } = &rows[4].kind else { panic!() };
+        let RowKind::Command {
+            cmd,
+            status,
+            duration_ms,
+            ..
+        } = &rows[4].kind
+        else {
+            panic!()
+        };
         assert_eq!(cmd, "cargo test -p parser");
         assert_eq!(*status, ToolStatus::Ok);
         assert_eq!(*duration_ms, Some(3000));
-        let RowKind::Edit { path, adds, dels, verb, .. } = &rows[5].kind else { panic!() };
+        let RowKind::Edit {
+            path,
+            adds,
+            dels,
+            verb,
+            ..
+        } = &rows[5].kind
+        else {
+            panic!()
+        };
         assert_eq!(path.as_deref(), Some("src/lib.rs"));
         assert_eq!((*adds, *dels), (Some(3), Some(2)));
         assert_eq!(*verb, "Edited");
-        let RowKind::Approval { request_id, state, .. } = &rows[6].kind else { panic!() };
+        let RowKind::Approval {
+            request_id, state, ..
+        } = &rows[6].kind
+        else {
+            panic!()
+        };
         assert_eq!(request_id, "r1");
         assert_eq!(*state, ApprovalState::Pending);
     }
@@ -567,15 +736,30 @@ mod tests {
     fn finished_turn_gets_a_footer_with_cost_and_no_working_row() {
         let mut s = state();
         s.begin_user_message("hola", vec![], None, 1);
-        s.apply(AgentEvent::Text { text: "hola!".into(), delta: false }, 2);
         s.apply(
-            AgentEvent::Usage { input: 100, output: 50, cache_create: 0, cache_read: 0, cost_usd: Some(0.12), context_window: Some(1_000_000) },
+            AgentEvent::Text {
+                text: "hola!".into(),
+                delta: false,
+            },
+            2,
+        );
+        s.apply(
+            AgentEvent::Usage {
+                input: 100,
+                output: 50,
+                cache_create: 0,
+                cache_read: 0,
+                cost_usd: Some(0.12),
+                context_window: Some(1_000_000),
+            },
             3,
         );
         s.apply(AgentEvent::Status(AgentStatus::Done), 4);
         let rows = build_rows(&s, &mut RowCache::default());
         assert_eq!(kinds(&rows), vec!["user", "text", "footer"]);
-        let RowKind::Footer { cost, tokens } = &rows[2].kind else { panic!() };
+        let RowKind::Footer { cost, tokens } = &rows[2].kind else {
+            panic!()
+        };
         assert_eq!(*tokens, 150);
         let c = cost.expect("cost");
         assert!((c.usd - 0.12).abs() < 1e-9);
@@ -588,14 +772,21 @@ mod tests {
         s.begin_user_message(
             "hazlo",
             vec![PathBuf::from("a.txt")],
-            Some(chat_core::CheckpointRef { id: "cp1".into(), label: "antes del turno 1".into() }),
+            Some(chat_core::CheckpointRef {
+                id: "cp1".into(),
+                label: "antes del turno 1".into(),
+            }),
             1,
         );
         let rows = build_rows(&s, &mut RowCache::default());
         assert_eq!(&kinds(&rows)[..2], &["checkpoint", "user"]);
-        let RowKind::Checkpoint { id, label } = &rows[0].kind else { panic!() };
+        let RowKind::Checkpoint { id, label } = &rows[0].kind else {
+            panic!()
+        };
         assert_eq!((id.as_str(), label.as_str()), ("cp1", "antes del turno 1"));
-        let RowKind::User { attachments, .. } = &rows[1].kind else { panic!() };
+        let RowKind::User { attachments, .. } = &rows[1].kind else {
+            panic!()
+        };
         assert_eq!(attachments.len(), 1);
     }
 
@@ -604,9 +795,21 @@ mod tests {
         let mut s = state();
         let mut cache = RowCache::default();
         s.begin_user_message("hola", vec![], None, 1);
-        s.apply(AgentEvent::Text { text: "Hola".into(), delta: true }, 2);
+        s.apply(
+            AgentEvent::Text {
+                text: "Hola".into(),
+                delta: true,
+            },
+            2,
+        );
         let a = build_rows(&s, &mut cache);
-        s.apply(AgentEvent::Text { text: " mundo".into(), delta: true }, 3);
+        s.apply(
+            AgentEvent::Text {
+                text: " mundo".into(),
+                delta: true,
+            },
+            3,
+        );
         let b = build_rows(&s, &mut cache);
         let (ka, kb) = (keys_of(&a), keys_of(&b));
         let sp = diff_rows(&ka, &kb).expect("changed");
@@ -614,7 +817,9 @@ mod tests {
         assert_eq!(sp.old.start, 1);
         assert_eq!(sp.new_len, sp.old.len());
         assert!(sp.old.len() <= 1, "{sp:?}");
-        let RowKind::Text { streaming, .. } = &b[1].kind else { panic!() };
+        let RowKind::Text { streaming, .. } = &b[1].kind else {
+            panic!()
+        };
         assert!(*streaming);
     }
 
@@ -623,7 +828,13 @@ mod tests {
         let mut s = state();
         let mut cache = RowCache::default();
         s.begin_user_message("hola", vec![], None, 1);
-        s.apply(AgentEvent::Text { text: "uno".into(), delta: false }, 2);
+        s.apply(
+            AgentEvent::Text {
+                text: "uno".into(),
+                delta: false,
+            },
+            2,
+        );
         s.apply(AgentEvent::Status(AgentStatus::Done), 3);
         let a = build_rows(&s, &mut cache);
         let b = build_rows(&s, &mut cache);
@@ -639,11 +850,29 @@ mod tests {
         let new = vec![k(0, 1), k(1, 9), k(1, 8), k(3, 1)];
         // k(2,1) differs from k(1,8) so the middle is replaced
         let sp = diff_rows(&old, &new).unwrap();
-        assert_eq!(sp, Splice { old: 1..3, new_len: 2 });
+        assert_eq!(
+            sp,
+            Splice {
+                old: 1..3,
+                new_len: 2
+            }
+        );
         assert_eq!(diff_rows(&old, &old), None);
         let grown = vec![k(0, 1), k(1, 1), k(2, 1), k(3, 1), k(4, 1)];
-        assert_eq!(diff_rows(&old, &grown), Some(Splice { old: 4..4, new_len: 1 }));
-        assert_eq!(diff_rows(&grown, &old), Some(Splice { old: 4..5, new_len: 0 }));
+        assert_eq!(
+            diff_rows(&old, &grown),
+            Some(Splice {
+                old: 4..4,
+                new_len: 1
+            })
+        );
+        assert_eq!(
+            diff_rows(&grown, &old),
+            Some(Splice {
+                old: 4..5,
+                new_len: 0
+            })
+        );
     }
 
     #[test]
@@ -659,14 +888,24 @@ mod tests {
             started_ms: 0,
             finished_ms: Some(1),
         };
-        assert_eq!(diff_counts(&run(json!({"content": "a\nb\nc\n"}))), Some((3, 0)));
-        assert_eq!(diff_counts(&run(json!({"old_string": "x", "new_string": "x"}))), Some((0, 0)));
         assert_eq!(
-            diff_counts(&run(json!({"edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "", "new_string": "c\nd"}]}))),
+            diff_counts(&run(json!({"content": "a\nb\nc\n"}))),
+            Some((3, 0))
+        );
+        assert_eq!(
+            diff_counts(&run(json!({"old_string": "x", "new_string": "x"}))),
+            Some((0, 0))
+        );
+        assert_eq!(
+            diff_counts(&run(
+                json!({"edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "", "new_string": "c\nd"}]})
+            )),
             Some((3, 1))
         );
         assert_eq!(
-            diff_counts(&run(json!({"changes": [{"path": "a", "diff": "--- a\n+++ a\n@@\n-x\n+y\n+z"}]}))),
+            diff_counts(&run(
+                json!({"changes": [{"path": "a", "diff": "--- a\n+++ a\n@@\n-x\n+y\n+z"}]})
+            )),
             Some((2, 1))
         );
         assert_eq!(diff_counts(&run(json!({"file_path": "a"}))), None);
@@ -683,9 +922,29 @@ mod tests {
 
     #[test]
     fn expandable_rows() {
-        assert!(RowKind::Command { cmd: "x".into(), status: ToolStatus::Ok, duration_ms: None, output: None }.is_expandable());
+        assert!(
+            RowKind::Command {
+                cmd: "x".into(),
+                status: ToolStatus::Ok,
+                duration_ms: None,
+                output: None
+            }
+            .is_expandable()
+        );
         assert!(!RowKind::Working.is_expandable());
-        assert!(!RowKind::Thinking { text: " ".into(), streaming: true }.is_expandable());
-        assert!(RowKind::Thinking { text: "x".into(), streaming: false }.is_expandable());
+        assert!(
+            !RowKind::Thinking {
+                text: " ".into(),
+                streaming: true
+            }
+            .is_expandable()
+        );
+        assert!(
+            RowKind::Thinking {
+                text: "x".into(),
+                streaming: false
+            }
+            .is_expandable()
+        );
     }
 }

@@ -206,7 +206,8 @@ mod tests {
 
     #[test]
     fn long_paths_keep_their_tail() {
-        let p = display_path("C:/a/very/long/path/with/many/segments/that/goes/on/and/on/project-name");
+        let p =
+            display_path("C:/a/very/long/path/with/many/segments/that/goes/on/and/on/project-name");
         assert!(p.starts_with("…/") && p.ends_with("project-name"), "{p}");
         assert!(p.chars().count() <= 56);
         assert_eq!(display_path("C:\\x\\y"), "C:/x/y");

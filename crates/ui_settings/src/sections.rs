@@ -1,8 +1,8 @@
 //! The simple sections: General, Appearance, Git, Processes and About.
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, div, px};
-use store::config::AutoStop;
 use store::Density;
+use store::config::AutoStop;
 use theme::{Rgba, rgb};
 use ui_kit::{Button, GhostButton, Slider, SwatchRow};
 
@@ -14,34 +14,62 @@ use crate::view::{Section, SettingsEvent, SettingsView};
 pub const LANGUAGES: &[(&str, &str)] = &[("es", "Español")];
 
 /// Accent choices (the first is Selachi's brand accent, the default).
-pub const ACCENTS: [u32; 8] = [0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2];
+pub const ACCENTS: [u32; 8] = [
+    0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2,
+];
 
 impl SettingsView {
     pub(crate) fn general(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
-        let languages: Vec<(String, String)> =
-            LANGUAGES.iter().map(|(id, name)| ((*id).to_string(), (*name).to_string())).collect();
-        let lang = self.select(cx, "general-lang", languages, &self.cfg.general.language.clone(), |s, v, cx| {
-            let v = v.to_string();
-            s.edit_cfg(cx, |c| c.general.language = v);
-        });
-        let restore = self.toggle(cx, "restore-session", self.cfg.session.restore, |s, on, cx| {
-            s.edit_cfg(cx, |c| c.session.restore = on);
-        });
-        let confirm = self.toggle(cx, "confirm-close", self.cfg.general.confirm_close_running, |s, on, cx| {
-            s.edit_cfg(cx, |c| c.general.confirm_close_running = on);
-        });
+        let languages: Vec<(String, String)> = LANGUAGES
+            .iter()
+            .map(|(id, name)| ((*id).to_string(), (*name).to_string()))
+            .collect();
+        let lang = self.select(
+            cx,
+            "general-lang",
+            languages,
+            &self.cfg.general.language.clone(),
+            |s, v, cx| {
+                let v = v.to_string();
+                s.edit_cfg(cx, |c| c.general.language = v);
+            },
+        );
+        let restore = self.toggle(
+            cx,
+            "restore-session",
+            self.cfg.session.restore,
+            |s, on, cx| {
+                s.edit_cfg(cx, |c| c.session.restore = on);
+            },
+        );
+        let confirm = self.toggle(
+            cx,
+            "confirm-close",
+            self.cfg.general.confirm_close_running,
+            |s, on, cx| {
+                s.edit_cfg(cx, |c| c.general.confirm_close_running = on);
+            },
+        );
         let chord = keys::effective(&self.catalog, &self.cfg.keybindings, "window.fullscreen");
         let f11 = div()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(10.0))
-            .child(status_pill(&t, keys::display_chord(&chord), PillTone::Neutral))
-            .child(GhostButton::new("fullscreen-change", &t, "Cambiar").on_click(cx.listener(|s, _, _, cx| {
-                s.set_section(Section::Keyboard, cx);
-                s.start_capture("window.fullscreen", cx);
-            })));
+            .child(status_pill(
+                &t,
+                keys::display_chord(&chord),
+                PillTone::Neutral,
+            ))
+            .child(
+                GhostButton::new("fullscreen-change", &t, "Cambiar").on_click(cx.listener(
+                    |s, _, _, cx| {
+                        s.set_section(Section::Keyboard, cx);
+                        s.start_capture("window.fullscreen", cx);
+                    },
+                )),
+            );
         vec![
             ui::group(
                 &t,
@@ -99,21 +127,25 @@ impl SettingsView {
 
         let colors: Vec<Rgba> = ACCENTS.iter().map(|h| rgb(*h)).collect();
         let selected = ACCENTS.iter().position(|h| {
-            store::config::parse_hex_color(&a.accent).is_some_and(|(r, g, b)| (u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) == *h)
+            store::config::parse_hex_color(&a.accent).is_some_and(|(r, g, b)| {
+                (u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)) == *h
+            })
         });
         let this = cx.entity();
-        let swatches = SwatchRow::new("accent", &t, colors).selected(selected).on_select(move |ix, _, cx| {
-            this.update(cx, |s, cx| {
-                let hex = format!("#{:06X}", ACCENTS[ix.min(ACCENTS.len() - 1)]);
-                s.errors.remove("accent_hex");
-                s.edit_cfg(cx, |c| c.appearance.accent = hex.clone());
-                // Keep the hex field in step with the swatch.
-                if let Some(f) = s.fields.get("accent_hex") {
-                    f.update(cx, |f, cx| f.set_text(&hex, cx));
-                }
-                s.sync_invalid(cx);
+        let swatches = SwatchRow::new("accent", &t, colors)
+            .selected(selected)
+            .on_select(move |ix, _, cx| {
+                this.update(cx, |s, cx| {
+                    let hex = format!("#{:06X}", ACCENTS[ix.min(ACCENTS.len() - 1)]);
+                    s.errors.remove("accent_hex");
+                    s.edit_cfg(cx, |c| c.appearance.accent = hex.clone());
+                    // Keep the hex field in step with the swatch.
+                    if let Some(f) = s.fields.get("accent_hex") {
+                        f.update(cx, |f, cx| f.set_text(&hex, cx));
+                    }
+                    s.sync_invalid(cx);
+                });
             });
-        });
         let accent_control = div()
             .flex()
             .flex_row()
@@ -141,11 +173,16 @@ impl SettingsView {
                     .on_change({
                         let this = cx.entity();
                         move |v, _, cx| {
-                            this.update(cx, |s, cx| s.edit_cfg(cx, |c| c.appearance.mono_size = f64::from(v)));
+                            this.update(cx, |s, cx| {
+                                s.edit_cfg(cx, |c| c.appearance.mono_size = f64::from(v))
+                            });
                         }
                     }),
             )
-            .child(value_label(&t, format!("{} pt", decimal(a.mono_size, 1).trim_end_matches(",0"))));
+            .child(value_label(
+                &t,
+                format!("{} pt", decimal(a.mono_size, 1).trim_end_matches(",0")),
+            ));
         let leading = div()
             .flex()
             .flex_row()
@@ -162,7 +199,9 @@ impl SettingsView {
                         let this = cx.entity();
                         move |v, _, cx| {
                             let v = (f64::from(v) * 100.0).round() / 100.0;
-                            this.update(cx, |s, cx| s.edit_cfg(cx, |c| c.appearance.line_height = v));
+                            this.update(cx, |s, cx| {
+                                s.edit_cfg(cx, |c| c.appearance.line_height = v)
+                            });
                         }
                     }),
             )
@@ -176,7 +215,11 @@ impl SettingsView {
             |s, ix, cx| {
                 s.edit_cfg(cx, |c| {
                     let mut r = c.layout.resolve();
-                    r.density = if ix == 0 { Density::Compact } else { Density::Comfortable };
+                    r.density = if ix == 0 {
+                        Density::Compact
+                    } else {
+                        Density::Comfortable
+                    };
                     c.layout.set_resolved(&r);
                 });
             },
@@ -207,7 +250,10 @@ impl SettingsView {
                         }
                     }),
             )
-            .child(value_label(&t, format!("{} %", layout.sidebar_translucency)));
+            .child(value_label(
+                &t,
+                format!("{} %", layout.sidebar_translucency),
+            ));
 
         let layout_note = div()
             .flex()
@@ -299,9 +345,14 @@ impl SettingsView {
 
     pub(crate) fn git(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
-        let confirm = self.toggle(cx, "git-confirm", self.cfg.git.confirm_sensitive, |s, on, cx| {
-            s.edit_cfg(cx, |c| c.git.confirm_sensitive = on);
-        });
+        let confirm = self.toggle(
+            cx,
+            "git-confirm",
+            self.cfg.git.confirm_sensitive,
+            |s, on, cx| {
+                s.edit_cfg(cx, |c| c.git.confirm_sensitive = on);
+            },
+        );
         let editor = self.input(cx, "external_editor", "code, cursor, notepad…", 240.0, true);
         vec![
             ui::group(
@@ -339,10 +390,16 @@ impl SettingsView {
             AutoStop::Always => 1,
             AutoStop::Never => 2,
         };
-        let control = self.segmented(cx, "autostop", ["Preguntar", "Detener siempre", "No detener"], ix, |s, ix, cx| {
-            let v = [AutoStop::Ask, AutoStop::Always, AutoStop::Never][ix.min(2)];
-            s.edit_cfg(cx, |c| c.processes.auto_stop_on_thread_close = v);
-        });
+        let control = self.segmented(
+            cx,
+            "autostop",
+            ["Preguntar", "Detener siempre", "No detener"],
+            ix,
+            |s, ix, cx| {
+                let v = [AutoStop::Ask, AutoStop::Always, AutoStop::Never][ix.min(2)];
+                s.edit_cfg(cx, |c| c.processes.auto_stop_on_thread_close = v);
+            },
+        );
         vec![
             ui::group(
                 &t,
@@ -370,7 +427,11 @@ impl SettingsView {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
-        let dir = self.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let dir = self
+            .path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
         let db = store::paths::state_db_path_in(&dir);
         let path_text = |p: &std::path::Path| {
             div()
@@ -381,12 +442,13 @@ impl SettingsView {
                 .child(SharedString::from(p.display().to_string()))
         };
         let open_dir = dir;
-        let open = Button::tonal("open-config-dir", &t, "Abrir carpeta de configuración").on_click(
-            cx.listener(move |_, _, _, _| open_folder(&open_dir)),
+        let open = Button::tonal("open-config-dir", &t, "Abrir carpeta de configuración")
+            .on_click(cx.listener(move |_, _, _, _| open_folder(&open_dir)));
+        let rerun = Button::tonal("rerun-onboarding", &t, "Volver a configurar").on_click(
+            cx.listener(|_, _, _, cx| {
+                cx.emit(SettingsEvent::RerunOnboarding);
+            }),
         );
-        let rerun = Button::tonal("rerun-onboarding", &t, "Volver a configurar").on_click(cx.listener(|_, _, _, cx| {
-            cx.emit(SettingsEvent::RerunOnboarding);
-        }));
         vec![
             ui::group(
                 &t,

@@ -17,11 +17,19 @@ pub fn format_duration_ms(ms: i64) -> String {
         0..=59 => format!("{total} s"),
         60..=3_599 => {
             let (m, s) = (total / 60, total % 60);
-            if s == 0 { format!("{m} min") } else { format!("{m} min {s} s") }
+            if s == 0 {
+                format!("{m} min")
+            } else {
+                format!("{m} min {s} s")
+            }
         }
         _ => {
             let (h, m) = (total / 3_600, (total % 3_600) / 60);
-            if m == 0 { format!("{h} h") } else { format!("{h} h {m} min") }
+            if m == 0 {
+                format!("{h} h")
+            } else {
+                format!("{h} h {m} min")
+            }
         }
     }
 }
@@ -53,30 +61,57 @@ pub fn format_window(tokens: u64) -> String {
         1_000..=999_999 => format!("{}k", tokens / 1_000),
         _ => {
             let m = tokens as f64 / 1_000_000.0;
-            if (m - m.round()).abs() < 0.05 { format!("{}M", m.round() as u64) } else { format!("{m:.1}M") }
+            if (m - m.round()).abs() < 0.05 {
+                format!("{}M", m.round() as u64)
+            } else {
+                format!("{m:.1}M")
+            }
         }
     }
 }
 
 /// Last path component (`""` for an empty path). Handles both slash styles.
 pub fn file_name(path: &str) -> &str {
-    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path)
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
 }
 
 /// Last `n` components of `path`, `…\a\b` when something was cut. Forward slashes are kept as is.
 pub fn tail_path(path: &Path, n: usize) -> String {
-    let comps: Vec<String> = path.components().filter_map(|c| c.as_os_str().to_str().map(str::to_string)).collect();
-    let comps: Vec<&String> = comps.iter().filter(|c| !matches!(c.as_str(), "\\" | "/")).collect();
+    let comps: Vec<String> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
+        .collect();
+    let comps: Vec<&String> = comps
+        .iter()
+        .filter(|c| !matches!(c.as_str(), "\\" | "/"))
+        .collect();
     if comps.len() <= n {
         return path.display().to_string();
     }
-    let sep = if path.to_string_lossy().contains('\\') { "\\" } else { "/" };
-    format!("…{sep}{}", comps[comps.len() - n..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join(sep))
+    let sep = if path.to_string_lossy().contains('\\') {
+        "\\"
+    } else {
+        "/"
+    };
+    format!(
+        "…{sep}{}",
+        comps[comps.len() - n..]
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(sep)
+    )
 }
 
 /// Folder name of a project root (`"Terminal"`), falling back to the whole path.
 pub fn project_name(root: &Path) -> String {
-    root.file_name().and_then(|n| n.to_str()).map(str::to_string).unwrap_or_else(|| root.display().to_string())
+    root.file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| root.display().to_string())
 }
 
 /// Current branch of the repository (or worktree) containing `dir`, read straight from `.git`
@@ -92,7 +127,11 @@ pub fn read_branch(dir: &Path) -> Option<String> {
             // A linked worktree: `gitdir: <repo>/.git/worktrees/<name>`.
             let text = std::fs::read_to_string(&dot_git).ok()?;
             let target = text.trim().strip_prefix("gitdir:")?.trim();
-            let gitdir = if Path::new(target).is_absolute() { PathBuf::from(target) } else { d.join(target) };
+            let gitdir = if Path::new(target).is_absolute() {
+                PathBuf::from(target)
+            } else {
+                d.join(target)
+            };
             return head_of(&gitdir);
         }
         cur = d.parent();
@@ -143,7 +182,10 @@ mod tests {
         assert_eq!(file_name("src/a/b.rs"), "b.rs");
         assert_eq!(file_name("C:\\x\\y.txt"), "y.txt");
         assert_eq!(file_name("dir/"), "dir");
-        assert_eq!(project_name(Path::new("C:\\Users\\v\\Terminal")), "Terminal");
+        assert_eq!(
+            project_name(Path::new("C:\\Users\\v\\Terminal")),
+            "Terminal"
+        );
         assert_eq!(tail_path(Path::new("a/b"), 3), "a/b");
         assert_eq!(tail_path(Path::new("/a/b/c/d"), 2), "…/c/d");
     }

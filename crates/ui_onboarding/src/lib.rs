@@ -43,5 +43,31 @@ pub use flow::{Flow, Nav, Step};
 pub use model::{Draft, Outcome, ThemeChoice, WorktreeLocation};
 pub use view::{OnboardingEvent, OnboardingView, Services, onboarding, onboarding_with};
 
+use gpui::{App, KeyBinding, actions};
+
+actions!(
+    ui_onboarding,
+    [
+        /// `Enter` with nothing focused inside the wizard: the primary button.
+        Confirm
+    ]
+);
+
+/// Key context of the wizard root.
+pub(crate) const CONTEXT: &str = "Onboarding";
+
+/// Binds `Enter` (and the kit's keys). Idempotent; [`onboarding`] calls it, so a missing call at
+/// startup is harmless.
+pub fn init(cx: &mut App) {
+    struct Ready;
+    impl gpui::Global for Ready {}
+    ui_kit::init(cx);
+    if cx.has_global::<Ready>() {
+        return;
+    }
+    cx.set_global(Ready);
+    cx.bind_keys([KeyBinding::new("enter", Confirm, Some(CONTEXT))]);
+}
+
 #[cfg(test)]
 mod tests;

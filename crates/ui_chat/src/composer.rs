@@ -5,20 +5,25 @@
 
 use std::path::PathBuf;
 
+use agents_driver::TaskState;
 use agents_driver::{AgentKind, PermissionMode};
 use chat_core::{ContextUsage, Plan};
-use agents_driver::TaskState;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement, ParentElement as _, PathPromptOptions,
-    Render, SharedString, Styled as _, Subscription, Window, div, prelude::*, px, relative,
+    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement,
+    ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _, Subscription, Window,
+    div, prelude::*, px, relative,
 };
 use theme::{Radius, Theme};
-use ui_kit::{Button, DitherMeter, Icon, IconButton, Nav, Pill, Placement, Popover, Spinner, TextArea, TextField, TextFieldEvent, Tooltip, icon};
+use ui_kit::{
+    Button, DitherMeter, Icon, IconButton, Nav, Pill, Placement, Popover, Spinner, TextArea,
+    TextField, TextFieldEvent, Tooltip, icon,
+};
 
 use crate::hub::{ChatHub, FilesReady};
 use crate::mentions::{MentionQuery, filter_files, mention_at};
 use crate::options::{
-    AgentOption, PERMISSION_ORDER, effort_label, efforts_for, is_dangerous, model_label, models_for, permission_hint, permission_label,
+    AgentOption, PERMISSION_ORDER, effort_label, efforts_for, is_dangerous, model_label,
+    models_for, permission_hint, permission_label,
 };
 use crate::util::{file_name, format_tokens, format_window, tail_path};
 use crate::widgets::{file_chip, menu_row};
@@ -96,7 +101,10 @@ pub fn button_mode(working: bool, has_content: bool) -> ButtonMode {
 /// What the user did in the composer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComposerEvent {
-    Send { text: String, attachments: Vec<PathBuf> },
+    Send {
+        text: String,
+        attachments: Vec<PathBuf>,
+    },
     Stop,
     SetPermission(PermissionMode),
     SetModel(Option<String>),
@@ -106,7 +114,10 @@ pub enum ComposerEvent {
     /// thread asks for the handoff preview and calls [`Composer::set_handoff_preview`]).
     PickAgent(AgentKind),
     /// The user confirmed the handoff popover.
-    ConfirmSwitch { agent: AgentKind, model: Option<String> },
+    ConfirmSwitch {
+        agent: AgentKind,
+        model: Option<String>,
+    },
 }
 
 /// The handoff text of a pending agent switch.
@@ -158,30 +169,53 @@ impl Composer {
     pub fn new(hub: Entity<ChatHub>, theme: Theme, cx: &mut Context<Self>) -> Self {
         let state = ComposerState::default();
         // `Enter` sends, `Shift+Enter` adds a line (the area's default `EnterMode::Submit`).
-        let field = cx.new(|cx| TextArea::area(theme, cx).bare().lines(1, 10).placeholder(state.placeholder.clone()));
+        let field = cx.new(|cx| {
+            TextArea::area(theme, cx)
+                .bare()
+                .lines(1, 10)
+                .placeholder(state.placeholder.clone())
+        });
         let model_field = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Otro modelo…"));
         let mut subs = Vec::new();
-        subs.push(cx.subscribe(&field, |this, _f, ev: &TextFieldEvent, cx| this.on_field(*ev, cx)));
-        subs.push(cx.subscribe(&model_field, |this, f, ev: &TextFieldEvent, cx| match ev {
-            TextFieldEvent::Submit => {
-                let m = f.read(cx).text().trim().to_string();
-                if !m.is_empty() {
-                    this.popup = None;
-                    f.update(cx, |f, cx| f.set_text("", cx));
-                    cx.emit(ComposerEvent::SetModel(Some(m)));
-                    cx.notify();
-                }
-            }
-            TextFieldEvent::Cancel => this.close_popup(cx),
-            _ => {}
+        subs.push(cx.subscribe(&field, |this, _f, ev: &TextFieldEvent, cx| {
+            this.on_field(*ev, cx)
         }));
+        subs.push(
+            cx.subscribe(&model_field, |this, f, ev: &TextFieldEvent, cx| match ev {
+                TextFieldEvent::Submit => {
+                    let m = f.read(cx).text().trim().to_string();
+                    if !m.is_empty() {
+                        this.popup = None;
+                        f.update(cx, |f, cx| f.set_text("", cx));
+                        cx.emit(ComposerEvent::SetModel(Some(m)));
+                        cx.notify();
+                    }
+                }
+                TextFieldEvent::Cancel => this.close_popup(cx),
+                _ => {}
+            }),
+        );
         subs.push(cx.subscribe(&hub, |_, _hub, _: &crate::hub::ModelsReady, cx| cx.notify()));
         subs.push(cx.subscribe(&hub, |this, _hub, ev: &FilesReady, cx| {
-            if this.mention.is_some() && this.state.project_root.as_deref() == Some(ev.root.as_path()) {
+            if this.mention.is_some()
+                && this.state.project_root.as_deref() == Some(ev.root.as_path())
+            {
                 this.refresh_mention(cx);
             }
         }));
-        Self { hub, theme, state, field, model_field, attachments: Vec::new(), popup: None, mention: None, plan_open: false, measured: ui_kit::MeasuredWidth::new(COMPACT_BELOW), _subs: subs }
+        Self {
+            hub,
+            theme,
+            state,
+            field,
+            model_field,
+            attachments: Vec::new(),
+            popup: None,
+            mention: None,
+            plan_open: false,
+            measured: ui_kit::MeasuredWidth::new(COMPACT_BELOW),
+            _subs: subs,
+        }
     }
 
     // ----- state ---------------------------------------------------------------------------
@@ -234,7 +268,11 @@ impl Composer {
         &self.attachments
     }
 
-    pub fn add_attachments(&mut self, paths: impl IntoIterator<Item = PathBuf>, cx: &mut Context<Self>) {
+    pub fn add_attachments(
+        &mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         for p in paths {
             if !self.attachments.contains(&p) {
                 self.attachments.push(p);
@@ -249,7 +287,11 @@ impl Composer {
         let root = self.state.project_root.clone();
         let mut mentions = String::new();
         for p in paths {
-            if let Some(m) = root.as_deref().filter(|_| p.is_file()).and_then(|r| crate::mentions::mention_for(r, p)) {
+            if let Some(m) = root
+                .as_deref()
+                .filter(|_| p.is_file())
+                .and_then(|r| crate::mentions::mention_for(r, p))
+            {
                 mentions.push_str(&m);
                 mentions.push(' ');
             }
@@ -295,12 +337,19 @@ impl Composer {
     /// The `@` picker: its entries and the highlighted one.
     #[cfg(test)]
     pub(crate) fn mention_state(&self) -> Option<(&[String], usize)> {
-        self.mention.as_ref().map(|m| (m.items.as_slice(), m.selected))
+        self.mention
+            .as_ref()
+            .map(|m| (m.items.as_slice(), m.selected))
     }
 
     /// The answer to [`ComposerEvent::PickAgent`] for a thread: the handoff text, or `None` when
     /// there is nothing to hand over.
-    pub fn set_handoff_preview(&mut self, agent: &AgentKind, text: Option<String>, cx: &mut Context<Self>) {
+    pub fn set_handoff_preview(
+        &mut self,
+        agent: &AgentKind,
+        text: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(Popup::Handoff { agent: a, preview }) = &mut self.popup
             && a == agent
         {
@@ -411,11 +460,17 @@ impl Composer {
             }
         };
         let selected = match &self.mention {
-            Some(m) if m.query.range.start == q.range.start => m.selected.min(items.len().saturating_sub(1)),
+            Some(m) if m.query.range.start == q.range.start => {
+                m.selected.min(items.len().saturating_sub(1))
+            }
             _ => 0,
         };
         let capture = !items.is_empty();
-        self.mention = Some(Mention { query: q, items, selected });
+        self.mention = Some(Mention {
+            query: q,
+            items,
+            selected,
+        });
         self.field.update(cx, |f, _| f.set_capture_nav(capture));
         cx.notify();
     }
@@ -451,7 +506,12 @@ impl Composer {
 
     fn pick_files(&mut self, cx: &mut Context<Self>) {
         self.popup = None;
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: None });
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 let _ = this.update(cx, |c, cx| c.add_attachments(paths, cx));
@@ -465,9 +525,16 @@ impl Composer {
         if p == Popup::Model {
             // The first time: ask the agent which models it has (no prompt is sent).
             let (agent, root) = (self.state.agent.clone(), self.state.project_root.clone());
-            self.hub.update(cx, |h, cx| h.ensure_models(&agent, root, cx));
+            self.hub
+                .update(cx, |h, cx| h.ensure_models(&agent, root, cx));
         }
-        self.popup = if self.popup.as_ref().map(std::mem::discriminant) == Some(std::mem::discriminant(&p)) { None } else { Some(p) };
+        self.popup = if self.popup.as_ref().map(std::mem::discriminant)
+            == Some(std::mem::discriminant(&p))
+        {
+            None
+        } else {
+            Some(p)
+        };
         cx.notify();
     }
 
@@ -475,7 +542,10 @@ impl Composer {
         if kind == self.state.agent {
             self.popup = None;
         } else {
-            self.popup = Some(Popup::Handoff { agent: kind.clone(), preview: Preview::Loading });
+            self.popup = Some(Popup::Handoff {
+                agent: kind.clone(),
+                preview: Preview::Loading,
+            });
             cx.emit(ComposerEvent::PickAgent(kind));
         }
         cx.notify();
@@ -497,7 +567,11 @@ fn context_meter(theme: &Theme, ctx: Option<ContextUsage>, compact: bool) -> Opt
     let ctx = ctx?;
     let c = theme.colors;
     let ty = theme.typography;
-    let pct = if ctx.percent > 0.0 && ctx.percent < 1.0 { "<1%".to_string() } else { format!("{}%", ctx.percent.round() as u32) };
+    let pct = if ctx.percent > 0.0 && ctx.percent < 1.0 {
+        "<1%".to_string()
+    } else {
+        format!("{}%", ctx.percent.round() as u32)
+    };
     let tip = format!(
         "Contexto: {} de {} tokens ({pct})",
         format_tokens(ctx.used_tokens),
@@ -518,7 +592,11 @@ fn context_meter(theme: &Theme, ctx: Option<ContextUsage>, compact: bool) -> Opt
             .text_color(c.muted)
             .tooltip(Tooltip::text(&t, tip))
             .child(pct)
-            .child(DitherMeter::new(theme).segments(6).value(Some((ctx.percent / 100.0).clamp(0.0, 1.0))))
+            .child(
+                DitherMeter::new(theme)
+                    .segments(6)
+                    .value(Some((ctx.percent / 100.0).clamp(0.0, 1.0))),
+            )
             .when(!compact, |d| d.child(format_window(ctx.window_tokens)))
             .into_any_element(),
     )
@@ -555,7 +633,12 @@ impl Composer {
                 this.plan_open = !this.plan_open;
                 cx.notify();
             }))
-            .child(div().font_weight(FontWeight::MEDIUM).text_color(c.text).child(format!("{done}/{total}")))
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(c.text)
+                    .child(format!("{done}/{total}")),
+            )
             .child(
                 div()
                     .flex_1()
@@ -570,27 +653,66 @@ impl Composer {
                         _ => "Plan".to_string(),
                     })),
             )
-            .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 14.0, c.muted));
+            .child(icon(
+                if open {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                },
+                14.0,
+                c.muted,
+            ));
         let items = open.then(|| {
-            div().px(px(14.0)).pb(px(10.0)).flex().flex_col().gap(px(6.0)).children(plan.items.iter().enumerate().map(|(i, item)| {
-                let glyph: AnyElement = match item.state {
-                    TaskState::Done => icon(Icon::Check, 16.0, t.colors.success).into_any_element(),
-                    TaskState::InProgress => Spinner::new(c.accent).into_any_element(),
-                    TaskState::Pending => div().size(px(16.0)).flex().items_center().justify_center().child(div().size(px(8.0)).rounded_full().bg(c.surface_4)).into_any_element(),
-                };
-                div()
-                    .id(("plan-item", i))
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .gap(px(10.0))
-                    .text_size(px(ty.ui_size_md))
-                    .text_color(if item.state == TaskState::Done { c.muted } else { c.text })
-                    .child(glyph)
-                    .child(div().flex_1().min_w_0().child(SharedString::from(item.text.clone())))
-            }))
+            div()
+                .px(px(14.0))
+                .pb(px(10.0))
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .children(plan.items.iter().enumerate().map(|(i, item)| {
+                    let glyph: AnyElement = match item.state {
+                        TaskState::Done => {
+                            icon(Icon::Check, 16.0, t.colors.success).into_any_element()
+                        }
+                        TaskState::InProgress => Spinner::new(c.accent).into_any_element(),
+                        TaskState::Pending => div()
+                            .size(px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().size(px(8.0)).rounded_full().bg(c.surface_4))
+                            .into_any_element(),
+                    };
+                    div()
+                        .id(("plan-item", i))
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap(px(10.0))
+                        .text_size(px(ty.ui_size_md))
+                        .text_color(if item.state == TaskState::Done {
+                            c.muted
+                        } else {
+                            c.text
+                        })
+                        .child(glyph)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(SharedString::from(item.text.clone())),
+                        )
+                }))
         });
-        div().w_full().rounded(px(Radius::MD)).bg(c.surface_1).flex().flex_col().child(header).children(items).into_any_element()
+        div()
+            .w_full()
+            .rounded(px(Radius::MD))
+            .bg(c.surface_1)
+            .flex()
+            .flex_col()
+            .child(header)
+            .children(items)
+            .into_any_element()
     }
 
     fn mention_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -598,12 +720,20 @@ impl Composer {
         let t = self.theme;
         let c = t.colors;
         let body: AnyElement = if m.items.is_empty() {
-            let loading = self.state.project_root.as_ref().is_some_and(|r| self.hub.read(cx).files_for(r).is_none());
+            let loading = self
+                .state
+                .project_root
+                .as_ref()
+                .is_some_and(|r| self.hub.read(cx).files_for(r).is_none());
             div()
                 .px(px(10.0))
                 .py(px(8.0))
                 .text_color(c.muted)
-                .child(if loading { "Buscando archivos…" } else { "Sin coincidencias" })
+                .child(if loading {
+                    "Buscando archivos…"
+                } else {
+                    "Sin coincidencias"
+                })
                 .into_any_element()
         } else {
             div()
@@ -611,12 +741,25 @@ impl Composer {
                 .flex_col()
                 .children(m.items.iter().enumerate().map(|(i, path)| {
                     let name = file_name(path).to_string();
-                    let dir = path.strip_suffix(name.as_str()).unwrap_or("").trim_end_matches('/').to_string();
+                    let dir = path
+                        .strip_suffix(name.as_str())
+                        .unwrap_or("")
+                        .trim_end_matches('/')
+                        .to_string();
                     let lead = crate::widgets::file_glyph(&name, c.muted);
                     let hint = (!dir.is_empty()).then(|| SharedString::from(dir));
-                    menu_row(SharedString::from(format!("mention-{path}")), &t, Some(lead), name, hint, i == m.selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.accept_mention(Some(i), cx);
-                    }))
+                    menu_row(
+                        SharedString::from(format!("mention-{path}")),
+                        &t,
+                        Some(lead),
+                        name,
+                        hint,
+                        i == m.selected,
+                        true,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.accept_mention(Some(i), cx);
+                        }),
+                    )
                 }))
                 .into_any_element()
         };
@@ -647,12 +790,19 @@ impl Composer {
         let mut pill = Pill::new("cmp-perm", &t)
             .label(permission_label(mode))
             .child(chevron(&t))
-            .tooltip(if self.state.can_edit_permission { permission_hint(mode).to_string() } else { "No se puede cambiar mientras el agente trabaja".to_string() });
+            .tooltip(if self.state.can_edit_permission {
+                permission_hint(mode).to_string()
+            } else {
+                "No se puede cambiar mientras el agente trabaja".to_string()
+            });
         if is_dangerous(mode) {
             pill = pill.icon(Icon::Alert);
         }
         if self.state.can_edit_permission {
-            pill = pill.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Permission, cx)));
+            pill =
+                pill.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_popup(Popup::Permission, cx)
+                }));
         }
         Popover::new("cmp-perm-pop", &t)
             .open(pill_open && self.state.can_edit_permission)
@@ -663,7 +813,19 @@ impl Composer {
             .trigger(pill)
             .children(PERMISSION_ORDER.iter().map(|m| {
                 let m = *m;
-                let lead = icon(if is_dangerous(m) { Icon::Alert } else { Icon::Check }, 16.0, if is_dangerous(m) { t.colors.warning } else { c.muted });
+                let lead = icon(
+                    if is_dangerous(m) {
+                        Icon::Alert
+                    } else {
+                        Icon::Check
+                    },
+                    16.0,
+                    if is_dangerous(m) {
+                        t.colors.warning
+                    } else {
+                        c.muted
+                    },
+                );
                 menu_row(
                     ("perm", m as usize),
                     &t,
@@ -694,32 +856,67 @@ impl Composer {
             .label(model_label(current.as_deref()))
             .child(chevron(&t))
             .tooltip("Modelo")
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Model, cx)));
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Model, cx)),
+            );
         let catalog = self.hub.read(cx).models_of(&self.state.agent).to_vec();
         let known = models_for(&self.state.agent, &catalog);
         let mut rows: Vec<AnyElement> = Vec::new();
         rows.push(
-            menu_row("model-default", &t, None, "Predeterminado del agente", None, current.is_none(), true, cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.popup = None;
-                cx.emit(ComposerEvent::SetModel(None));
-                cx.notify();
-            }))
+            menu_row(
+                "model-default",
+                &t,
+                None,
+                "Predeterminado del agente",
+                None,
+                current.is_none(),
+                true,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.popup = None;
+                    cx.emit(ComposerEvent::SetModel(None));
+                    cx.notify();
+                }),
+            )
             .into_any_element(),
         );
         for m in known.iter() {
             let id = m.id.clone();
             let selected = current.as_deref() == Some(id.as_str());
             rows.push(
-                menu_row(SharedString::from(format!("model-{}", m.id)), &t, None, m.label.clone(), Some(id.clone().into()), selected, true, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.popup = None;
-                    cx.emit(ComposerEvent::SetModel(Some(id.clone())));
-                    cx.notify();
-                }))
+                menu_row(
+                    SharedString::from(format!("model-{}", m.id)),
+                    &t,
+                    None,
+                    m.label.clone(),
+                    Some(id.clone().into()),
+                    selected,
+                    true,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.popup = None;
+                        cx.emit(ComposerEvent::SetModel(Some(id.clone())));
+                        cx.notify();
+                    }),
+                )
                 .into_any_element(),
             );
         }
-        if let Some(cur) = current.as_deref().filter(|m| !known.iter().any(|k| k.id == *m)) {
-            rows.push(menu_row("model-current", &t, None, model_label(Some(cur)), Some(cur.to_string().into()), true, false, |_, _, _| {}).into_any_element());
+        if let Some(cur) = current
+            .as_deref()
+            .filter(|m| !known.iter().any(|k| k.id == *m))
+        {
+            rows.push(
+                menu_row(
+                    "model-current",
+                    &t,
+                    None,
+                    model_label(Some(cur)),
+                    Some(cur.to_string().into()),
+                    true,
+                    false,
+                    |_, _, _| {},
+                )
+                .into_any_element(),
+            );
         }
         rows.push(
             div()
@@ -754,25 +951,49 @@ impl Composer {
         let this = cx.entity();
         let current = self.state.effort.clone();
         let pill = Pill::new("cmp-effort", &t)
-            .label(current.as_deref().map_or_else(|| "Esfuerzo".to_string(), effort_label))
+            .label(
+                current
+                    .as_deref()
+                    .map_or_else(|| "Esfuerzo".to_string(), effort_label),
+            )
             .child(chevron(&t))
             .tooltip("Esfuerzo de razonamiento")
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Effort, cx)));
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Effort, cx)),
+            );
         let mut rows: Vec<AnyElement> = vec![
-            menu_row("effort-default", &t, None, "Predeterminado del agente", None, current.is_none(), true, cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.popup = None;
-                cx.emit(ComposerEvent::SetEffort(None));
-                cx.notify();
-            }))
+            menu_row(
+                "effort-default",
+                &t,
+                None,
+                "Predeterminado del agente",
+                None,
+                current.is_none(),
+                true,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.popup = None;
+                    cx.emit(ComposerEvent::SetEffort(None));
+                    cx.notify();
+                }),
+            )
             .into_any_element(),
         ];
         for (value, label) in levels {
             rows.push(
-                menu_row(SharedString::from(format!("effort-{value}")), &t, None, label, None, current.as_deref() == Some(value), true, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.popup = None;
-                    cx.emit(ComposerEvent::SetEffort(Some(value.to_string())));
-                    cx.notify();
-                }))
+                menu_row(
+                    SharedString::from(format!("effort-{value}")),
+                    &t,
+                    None,
+                    label,
+                    None,
+                    current.as_deref() == Some(value),
+                    true,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.popup = None;
+                        cx.emit(ComposerEvent::SetEffort(Some(value.to_string())));
+                        cx.notify();
+                    }),
+                )
                 .into_any_element(),
             );
         }
@@ -794,22 +1015,42 @@ impl Composer {
         let t = self.theme;
         let c = t.colors;
         let this = cx.entity();
-        let cur = self.state.agents.iter().find(|a| a.kind == self.state.agent).cloned().unwrap_or_else(|| AgentOption::new(self.state.agent.clone()));
+        let cur = self
+            .state
+            .agents
+            .iter()
+            .find(|a| a.kind == self.state.agent)
+            .cloned()
+            .unwrap_or_else(|| AgentOption::new(self.state.agent.clone()));
         let mut pill = Pill::new("cmp-agent", &t)
             .agent(cur.mark())
             .child(chevron(&t))
             .tooltip(format!("Agente: {}", cur.label))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Agent, cx)));
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Agent, cx)),
+            );
         if !compact {
             pill = pill.label(cur.label);
         }
         let open = matches!(self.popup, Some(Popup::Agent) | Some(Popup::Handoff { .. }));
         let body: Vec<AnyElement> = match &self.popup {
             Some(Popup::Handoff { agent, preview }) => {
-                let label = self.state.agents.iter().find(|a| &a.kind == agent).map(|a| a.label.to_string()).unwrap_or_else(|| chat_core::agent_label(agent));
+                let label = self
+                    .state
+                    .agents
+                    .iter()
+                    .find(|a| &a.kind == agent)
+                    .map(|a| a.label.to_string())
+                    .unwrap_or_else(|| chat_core::agent_label(agent));
                 let text: AnyElement = match preview {
-                    Preview::Loading => div().text_color(c.muted).child("Preparando el resumen…").into_any_element(),
-                    Preview::Empty => div().text_color(c.muted).child("Todavía no hay conversación que traspasar.").into_any_element(),
+                    Preview::Loading => div()
+                        .text_color(c.muted)
+                        .child("Preparando el resumen…")
+                        .into_any_element(),
+                    Preview::Empty => div()
+                        .text_color(c.muted)
+                        .child("Todavía no hay conversación que traspasar.")
+                        .into_any_element(),
                     Preview::Text(s) => div()
                         .id("handoff-text")
                         .max_h(px(220.0))
@@ -832,8 +1073,19 @@ impl Composer {
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
-                        .child(div().font_weight(FontWeight::MEDIUM).child(format!("Cambiar a {label}")))
-                        .child(div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child("El nuevo agente recibirá este resumen como primer mensaje:"))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(format!("Cambiar a {label}")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(ty.ui_size_sm))
+                                .text_color(c.muted)
+                                .child(
+                                    "El nuevo agente recibirá este resumen como primer mensaje:",
+                                ),
+                        )
                         .child(text)
                         .child(
                             div()
@@ -841,10 +1093,18 @@ impl Composer {
                                 .flex_row()
                                 .justify_end()
                                 .gap(px(8.0))
-                                .child(Button::tonal("handoff-cancel", &t, "Cancelar").on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_popup(cx))))
-                                .child(Button::primary("handoff-ok", &t, "Cambiar").disabled(!ready).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.confirm_switch(target.clone(), cx);
-                                }))),
+                                .child(Button::tonal("handoff-cancel", &t, "Cancelar").on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.close_popup(cx)),
+                                ))
+                                .child(
+                                    Button::primary("handoff-ok", &t, "Cambiar")
+                                        .disabled(!ready)
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _, cx| {
+                                                this.confirm_switch(target.clone(), cx);
+                                            },
+                                        )),
+                                ),
                         )
                         .into_any_element(),
                 ]
@@ -869,7 +1129,9 @@ impl Composer {
                         hint,
                         a.kind == self.state.agent,
                         a.available,
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.pick_agent(kind.clone(), cx)),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.pick_agent(kind.clone(), cx)
+                        }),
                     )
                     .into_any_element()
                 })
@@ -878,7 +1140,11 @@ impl Composer {
         Popover::new("cmp-agent-pop", &t)
             .open(open)
             .placement(Placement::TopEnd)
-            .width(if matches!(self.popup, Some(Popup::Handoff { .. })) { 380.0 } else { 240.0 })
+            .width(if matches!(self.popup, Some(Popup::Handoff { .. })) {
+                380.0
+            } else {
+                240.0
+            })
             .padding(6.0)
             .on_dismiss(move |_, cx| this.update(cx, |c, cx| c.close_popup(cx)))
             .trigger(pill)
@@ -894,7 +1160,9 @@ impl Composer {
             .size(32.0)
             .emphasize_on_hover(true)
             .tooltip("Adjuntar o mencionar archivos")
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Plus, cx)));
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_popup(Popup::Plus, cx)),
+            );
         Popover::new("cmp-plus-pop", &t)
             .open(open)
             .placement(Placement::TopStart)
@@ -902,8 +1170,26 @@ impl Composer {
             .padding(6.0)
             .on_dismiss(move |_, cx| this.update(cx, |c, cx| c.close_popup(cx)))
             .trigger(btn)
-            .child(menu_row("plus-attach", &t, Some(icon(Icon::Files, 16.0, c.muted).into_any_element()), "Adjuntar archivos…", Some("Se envían como rutas en el mensaje".into()), false, true, cx.listener(|this, _: &ClickEvent, _, cx| this.pick_files(cx))))
-            .child(menu_row("plus-mention", &t, Some(icon(Icon::Search, 16.0, c.muted).into_any_element()), "Mencionar archivo", Some("Escribe @ y elige del proyecto".into()), false, self.state.project_root.is_some(), cx.listener(|this, _: &ClickEvent, _, cx| this.insert_at_sign(cx))))
+            .child(menu_row(
+                "plus-attach",
+                &t,
+                Some(icon(Icon::Files, 16.0, c.muted).into_any_element()),
+                "Adjuntar archivos…",
+                Some("Se envían como rutas en el mensaje".into()),
+                false,
+                true,
+                cx.listener(|this, _: &ClickEvent, _, cx| this.pick_files(cx)),
+            ))
+            .child(menu_row(
+                "plus-mention",
+                &t,
+                Some(icon(Icon::Search, 16.0, c.muted).into_any_element()),
+                "Mencionar archivo",
+                Some("Escribe @ y elige del proyecto".into()),
+                false,
+                self.state.project_root.is_some(),
+                cx.listener(|this, _: &ClickEvent, _, cx| this.insert_at_sign(cx)),
+            ))
             .into_any_element()
     }
 
@@ -917,7 +1203,11 @@ impl Composer {
         let inner: AnyElement = match mode {
             // TODO-SVG: `assets/icons/stop.svg` (16x16, currentColor). Until it exists the stop mark
             // is a plain rounded square.
-            ButtonMode::Stop => div().size(px(11.0)).rounded(px(2.5)).bg(fg).into_any_element(),
+            ButtonMode::Stop => div()
+                .size(px(11.0))
+                .rounded(px(2.5))
+                .bg(fg)
+                .into_any_element(),
             _ => icon(Icon::Send, 16.0, fg).into_any_element(),
         };
         let tip = match mode {
@@ -935,7 +1225,9 @@ impl Composer {
             .flex()
             .items_center()
             .justify_center()
-            .when(mode != ButtonMode::Disabled, |d| d.cursor_pointer().hover(|s| s.opacity(0.88)))
+            .when(mode != ButtonMode::Disabled, |d| {
+                d.cursor_pointer().hover(|s| s.opacity(0.88))
+            })
             .tooltip(Tooltip::text(&t, tip))
             .child(inner)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.press_round_button(cx)))
@@ -953,22 +1245,35 @@ impl Render for Composer {
         let popup = self.popup.clone();
 
         let chips = (!self.attachments.is_empty()).then(|| {
-            div().w_full().flex().flex_row().flex_wrap().gap(px(6.0)).pb(px(8.0)).children(self.attachments.iter().map(|p| {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                file_chip(&t, &name, c.text).id(SharedString::from(format!("attach-{}", p.display()))).tooltip(Tooltip::text(&t, p.display().to_string())).child(
-                    IconButton::new(format!("attach-x-{}", p.display()), &t, Icon::Close)
-                        .size(18.0)
-                        .icon_size(10.0)
-                        .tooltip("Quitar")
-                        .on_click({
-                            let path = p.clone();
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.attachments.retain(|a| a != &path);
-                                cx.notify();
-                            })
-                        }),
-                )
-            }))
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(6.0))
+                .pb(px(8.0))
+                .children(self.attachments.iter().map(|p| {
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| p.display().to_string());
+                    file_chip(&t, &name, c.text)
+                        .id(SharedString::from(format!("attach-{}", p.display())))
+                        .tooltip(Tooltip::text(&t, p.display().to_string()))
+                        .child(
+                            IconButton::new(format!("attach-x-{}", p.display()), &t, Icon::Close)
+                                .size(18.0)
+                                .icon_size(10.0)
+                                .tooltip("Quitar")
+                                .on_click({
+                                    let path = p.clone();
+                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.attachments.retain(|a| a != &path);
+                                        cx.notify();
+                                    })
+                                }),
+                        )
+                }))
         });
 
         let controls = div()
@@ -1032,14 +1337,27 @@ impl Render for Composer {
                 .text_size(px(ty.ui_size_sm))
                 .text_color(c.muted)
                 .when_some(self.state.branch.clone(), |d, b| {
-                    d.child(icon(Icon::GitBranch, 14.0, c.muted)).child(div().flex_none().child(SharedString::from(b)))
+                    d.child(icon(Icon::GitBranch, 14.0, c.muted))
+                        .child(div().flex_none().child(SharedString::from(b)))
                 })
                 .when_some(self.state.path.clone(), |d, p| {
-                    d.child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(SharedString::from(tail_path(&p, 3))))
+                    d.child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(SharedString::from(tail_path(&p, 3))),
+                    )
                 })
         });
 
-        let plan = self.state.plan.clone().filter(|p| !p.items.is_empty()).map(|p| self.plan_bar(&p, cx));
+        let plan = self
+            .state
+            .plan
+            .clone()
+            .filter(|p| !p.items.is_empty())
+            .map(|p| self.plan_bar(&p, cx));
 
         div()
             .relative()

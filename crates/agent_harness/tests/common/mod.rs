@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agent_harness::{
-    AgentResolver, ApprovalRequest, Caller, ClientMessage, DelegationConfig, Harness, Permission, Refusal, RefusalCode,
-    ServerMessage, UsageProbe,
+    AgentResolver, ApprovalRequest, Caller, ClientMessage, DelegationConfig, Harness, Permission,
+    Refusal, RefusalCode, ServerMessage, UsageProbe,
 };
 use agents_driver::{AgentEvent, AgentKind, DriverError, ThreadConfig};
 use chat_core::{AgentControl, ApprovalDecision, DriverFactory, JobHandle, SpawnedAgent};
@@ -24,7 +24,8 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{FlushFileBuffers, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+    PIPE_WAIT,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,7 +53,9 @@ pub struct FakeFactory {
 }
 
 impl FakeFactory {
-    pub fn new(script: impl Fn(&ThreadConfig, usize, &str) -> Vec<AgentEvent> + Send + Sync + 'static) -> Arc<Self> {
+    pub fn new(
+        script: impl Fn(&ThreadConfig, usize, &str) -> Vec<AgentEvent> + Send + Sync + 'static,
+    ) -> Arc<Self> {
         Arc::new(Self {
             rec: Arc::new(Mutex::new(Rec::default())),
             script: Box::new(script),
@@ -61,7 +64,10 @@ impl FakeFactory {
         })
     }
 
-    pub fn on_approve(&self, f: impl Fn(&str, ApprovalDecision) -> Vec<AgentEvent> + Send + Sync + 'static) {
+    pub fn on_approve(
+        &self,
+        f: impl Fn(&str, ApprovalDecision) -> Vec<AgentEvent> + Send + Sync + 'static,
+    ) {
         *self.on_approve.lock() = Some(Box::new(f));
     }
 
@@ -100,7 +106,13 @@ impl AgentControl for FakeControl {
 
     fn approve(&mut self, id: &str, decision: ApprovalDecision) -> agents_driver::Result<()> {
         self.f.rec.lock().approvals.push((id.to_string(), decision));
-        let events = self.f.on_approve.lock().as_ref().map(|f| f(id, decision)).unwrap_or_default();
+        let events = self
+            .f
+            .on_approve
+            .lock()
+            .as_ref()
+            .map(|f| f(id, decision))
+            .unwrap_or_default();
         for e in events {
             let _ = self.tx.unbounded_send(e);
         }
@@ -117,7 +129,12 @@ impl AgentControl for FakeControl {
 pub struct FactoryHandle(pub Arc<FakeFactory>);
 
 impl DriverFactory for FactoryHandle {
-    fn spawn(&self, kind: &AgentKind, cfg: &ThreadConfig, job: Option<JobHandle>) -> agents_driver::Result<SpawnedAgent> {
+    fn spawn(
+        &self,
+        kind: &AgentKind,
+        cfg: &ThreadConfig,
+        job: Option<JobHandle>,
+    ) -> agents_driver::Result<SpawnedAgent> {
         let f = &self.0;
         if f.fail_spawn.load(Ordering::SeqCst) {
             return Err(DriverError::NotFound("codex".into()));
@@ -128,7 +145,15 @@ impl DriverFactory for FactoryHandle {
             r.spawns.push((kind.clone(), cfg.clone(), job));
             r.txs.push(tx.clone());
         }
-        Ok(SpawnedAgent { control: Box::new(FakeControl { f: f.clone(), cfg: cfg.clone(), tx }), events, pid: Some(4242) })
+        Ok(SpawnedAgent {
+            control: Box::new(FakeControl {
+                f: f.clone(),
+                cfg: cfg.clone(),
+                tx,
+            }),
+            events,
+            pid: Some(4242),
+        })
     }
 }
 
@@ -139,10 +164,20 @@ pub fn done() -> AgentEvent {
     AgentEvent::Status(agents_driver::AgentStatus::Done)
 }
 pub fn text(t: &str) -> AgentEvent {
-    AgentEvent::Text { text: t.into(), delta: false }
+    AgentEvent::Text {
+        text: t.into(),
+        delta: false,
+    }
 }
 pub fn usage(input: u64, output: u64, cache_create: u64, cache_read: u64) -> AgentEvent {
-    AgentEvent::Usage { input, output, cache_create, cache_read, cost_usd: None, context_window: None }
+    AgentEvent::Usage {
+        input,
+        output,
+        cache_create,
+        cache_read,
+        cost_usd: None,
+        context_window: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +193,13 @@ impl AgentResolver for FakeResolver {
             Some("claude") => Ok(AgentKind::ClaudeCode),
             Some("codex") => Ok(AgentKind::Codex),
             Some("opencode") => Ok(AgentKind::OpenCode),
-            Some(other) => Ok(AgentKind::Acp { command: format!("{other} --acp") }),
-            None => Err(Refusal::new(RefusalCode::UnknownAgent, format!("unknown agent {name}"))),
+            Some(other) => Ok(AgentKind::Acp {
+                command: format!("{other} --acp"),
+            }),
+            None => Err(Refusal::new(
+                RefusalCode::UnknownAgent,
+                format!("unknown agent {name}"),
+            )),
         }
     }
 }
@@ -173,7 +213,10 @@ impl UsageProbe for FixedUsage {
 }
 
 pub fn caller(permission: Permission) -> Caller {
-    Caller { permission, ..Caller::default() }
+    Caller {
+        permission,
+        ..Caller::default()
+    }
 }
 
 pub struct Setup {
@@ -191,7 +234,12 @@ impl Setup {
         self.harness_with(caller, cfg, Arc::new(agent_harness::DenyAll))
     }
 
-    pub fn harness_with(&self, caller: Caller, cfg: DelegationConfig, broker: Arc<dyn agent_harness::ApprovalBroker>) -> Harness {
+    pub fn harness_with(
+        &self,
+        caller: Caller,
+        cfg: DelegationConfig,
+        broker: Arc<dyn agent_harness::ApprovalBroker>,
+    ) -> Harness {
         self.harness_full(caller, cfg, broker, Vec::new())
     }
 
@@ -215,8 +263,13 @@ impl Setup {
     }
 }
 
-pub fn setup(script: impl Fn(&ThreadConfig, usize, &str) -> Vec<AgentEvent> + Send + Sync + 'static) -> Setup {
-    Setup { dir: tempfile::tempdir().unwrap(), factory: FakeFactory::new(script) }
+pub fn setup(
+    script: impl Fn(&ThreadConfig, usize, &str) -> Vec<AgentEvent> + Send + Sync + 'static,
+) -> Setup {
+    Setup {
+        dir: tempfile::tempdir().unwrap(),
+        factory: FakeFactory::new(script),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +283,12 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .expect("spawn git");
-    assert!(out.status.success(), "git {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
@@ -276,8 +334,14 @@ pub struct MockServer {
 
 impl MockServer {
     /// Serve `handler` (its `None` = close without answering). One request per connection.
-    pub fn start(handler: impl Fn(&ClientMessage) -> Option<ServerMessage> + Send + Sync + 'static) -> MockServer {
-        let path = format!(r"\\.\pipe\selachi-approvals-test-{}-{}", std::process::id(), PIPE_SEQ.fetch_add(1, Ordering::SeqCst));
+    pub fn start(
+        handler: impl Fn(&ClientMessage) -> Option<ServerMessage> + Send + Sync + 'static,
+    ) -> MockServer {
+        let path = format!(
+            r"\\.\pipe\selachi-approvals-test-{}-{}",
+            std::process::id(),
+            PIPE_SEQ.fetch_add(1, Ordering::SeqCst)
+        );
         let seen: Arc<Mutex<Vec<ClientMessage>>> = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let handler = Arc::new(handler);
@@ -348,13 +412,21 @@ impl MockServer {
                 }
             })
         };
-        MockServer { path, seen, stop, accept: Some(accept) }
+        MockServer {
+            path,
+            seen,
+            stop,
+            accept: Some(accept),
+        }
     }
 
     /// Answers every approval with `decision` and every ping with a pong.
     pub fn answering(decision: agent_harness::Decision) -> MockServer {
         MockServer::start(move |m| match m {
-            ClientMessage::Ping { v } => Some(ServerMessage::Pong { v: *v, accepts_approvals: true }),
+            ClientMessage::Ping { v } => Some(ServerMessage::Pong {
+                v: *v,
+                accepts_approvals: true,
+            }),
             ClientMessage::ApprovalRequest(r) => Some(ServerMessage::ApprovalResponse {
                 v: 1,
                 request_id: r.request_id.clone(),
@@ -380,7 +452,10 @@ impl Drop for MockServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         // Unblock ConnectNamedPipe with a throwaway client.
-        let _ = std::fs::OpenOptions::new().read(true).write(true).open(&self.path);
+        let _ = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path);
         if let Some(h) = self.accept.take() {
             let _ = h.join();
         }

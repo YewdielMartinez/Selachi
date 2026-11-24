@@ -39,7 +39,11 @@ fn wait_for(session: &Session, needle: &str) -> bool {
 fn cmd_echo_shows_output() {
     let (session, mut rx) =
         Session::spawn(config("cmd.exe", &["/c", "echo", "selachi-ok"])).expect("spawn cmd");
-    assert!(wait_for(&session, "selachi-ok"), "output not found:\n{}", session.snapshot().text());
+    assert!(
+        wait_for(&session, "selachi-ok"),
+        "output not found:\n{}",
+        session.snapshot().text()
+    );
     assert!(session.pid().is_some());
 
     // The child exits right away; an Exit event must arrive (Wakeups may precede it).
@@ -59,17 +63,25 @@ fn cmd_echo_shows_output() {
 #[test]
 fn powershell_interactive_roundtrip() {
     let (program, _) = default_shell();
-    let (session, _rx) = Session::spawn(config(&program, &["-NoLogo", "-NoProfile"]))
-        .expect("spawn powershell");
+    let (session, _rx) =
+        Session::spawn(config(&program, &["-NoLogo", "-NoProfile"])).expect("spawn powershell");
     // Computed output so that the typed command line cannot match by itself.
     session.write(&b"Write-Output \"selachi-$((20+22))\"\r"[..]);
-    assert!(wait_for(&session, "selachi-42"), "output not found:\n{}", session.snapshot().text());
+    assert!(
+        wait_for(&session, "selachi-42"),
+        "output not found:\n{}",
+        session.snapshot().text()
+    );
 }
 
 #[test]
 fn resize_updates_grid_and_keeps_working() {
     let (session, _rx) = Session::spawn(config("cmd.exe", &[])).expect("spawn cmd");
-    assert!(wait_for(&session, ">"), "no prompt:\n{}", session.snapshot().text());
+    assert!(
+        wait_for(&session, ">"),
+        "no prompt:\n{}",
+        session.snapshot().text()
+    );
     let snap = session.snapshot();
     assert_eq!((snap.cols, snap.rows), (80, 24));
 
@@ -104,7 +116,10 @@ fn wakeup_is_coalesced_until_snapshot() {
     let wakeups = std::iter::from_fn(|| rx.try_recv().ok())
         .filter(|e| matches!(e, SessionEvent::Wakeup))
         .count();
-    assert_eq!(wakeups, 1, "wakeups must coalesce until snapshot() is called");
+    assert_eq!(
+        wakeups, 1,
+        "wakeups must coalesce until snapshot() is called"
+    );
 }
 
 #[test]
@@ -122,8 +137,14 @@ fn set_palette_restyles_the_next_snapshot() {
     session.set_palette(light.clone());
     let after = session.snapshot();
     assert_eq!(after.lines[0][0].bg, light.background);
-    assert_ne!(before.row_hash[0], after.row_hash[0], "row cache key must change with the palette");
-    let text_cell = after.lines[0].iter().find(|c| c.ch != ' ').expect("prompt text");
+    assert_ne!(
+        before.row_hash[0], after.row_hash[0],
+        "row cache key must change with the palette"
+    );
+    let text_cell = after.lines[0]
+        .iter()
+        .find(|c| c.ch != ' ')
+        .expect("prompt text");
     assert_eq!(text_cell.fg, light.foreground);
 }
 
@@ -148,14 +169,19 @@ fn wait_event<T>(
 fn osc7_and_osc133_survive_conpty() {
     let (program, _) = default_shell();
     let script = "[Console]::Write([char]27 + ']7;file://PC/C:/Windows/System32' + [char]7 + [char]27 + ']133;D;5' + [char]7)";
-    let (session, mut rx) =
-        Session::spawn(config(&program, &["-NoLogo", "-NoProfile", "-Command", script]))
-            .expect("spawn powershell");
+    let (session, mut rx) = Session::spawn(config(
+        &program,
+        &["-NoLogo", "-NoProfile", "-Command", script],
+    ))
+    .expect("spawn powershell");
     let cwd = wait_event(&mut rx, |e| match e {
         SessionEvent::Cwd(p) => Some(p),
         _ => None,
     });
-    assert_eq!(cwd.as_deref(), Some(std::path::Path::new(r"C:\Windows\System32")));
+    assert_eq!(
+        cwd.as_deref(),
+        Some(std::path::Path::new(r"C:\Windows\System32"))
+    );
     let code = wait_event(&mut rx, |e| match e {
         SessionEvent::CommandFinished { exit_code } => Some(exit_code),
         _ => None,
@@ -165,7 +191,12 @@ fn osc7_and_osc133_survive_conpty() {
 }
 
 fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
-    let norm = |p: &std::path::Path| p.to_string_lossy().to_lowercase().trim_end_matches(['\\', '/']).to_string();
+    let norm = |p: &std::path::Path| {
+        p.to_string_lossy()
+            .to_lowercase()
+            .trim_end_matches(['\\', '/'])
+            .to_string()
+    };
     norm(a) == norm(b)
 }
 
@@ -189,14 +220,23 @@ fn shell_integration_reports_cwd_and_exit_codes() {
         SessionEvent::Cwd(p) if same_dir(&p, &temp) => Some(()),
         _ => None,
     });
-    assert!(reached.is_some(), "no Cwd for TEMP:\n{}", session.snapshot().text());
+    assert!(
+        reached.is_some(),
+        "no Cwd for TEMP:\n{}",
+        session.snapshot().text()
+    );
 
     session.write(&b"cmd /c exit 3\r"[..]);
     let code = wait_event(&mut rx, |e| match e {
         SessionEvent::CommandFinished { exit_code } => Some(exit_code),
         _ => None,
     });
-    assert_eq!(code, Some(Some(3)), "screen:\n{}", session.snapshot().text());
+    assert_eq!(
+        code,
+        Some(Some(3)),
+        "screen:\n{}",
+        session.snapshot().text()
+    );
 
     session.write(&b"Write-Output ok-$((1+1))\r"[..]);
     let code = wait_event(&mut rx, |e| match e {
@@ -215,10 +255,16 @@ fn shell_integration_chains_an_existing_prompt() {
     args.insert(1, "-NoProfile".to_string());
     // Simulates a profile that defines its own prompt before the integration loads.
     let load = args.pop().expect("command");
-    args.push(format!("function global:prompt {{ 'custom-prompt> ' }}; {load}"));
+    args.push(format!(
+        "function global:prompt {{ 'custom-prompt> ' }}; {load}"
+    ));
     let mut cfg = config(&program, &[]);
     cfg.args = args;
     let (session, mut rx) = Session::spawn(cfg).expect("spawn integrated shell");
     assert!(wait_event(&mut rx, |e| matches!(e, SessionEvent::Cwd(_)).then_some(())).is_some());
-    assert!(wait_for(&session, "custom-prompt>"), "screen:\n{}", session.snapshot().text());
+    assert!(
+        wait_for(&session, "custom-prompt>"),
+        "screen:\n{}",
+        session.snapshot().text()
+    );
 }

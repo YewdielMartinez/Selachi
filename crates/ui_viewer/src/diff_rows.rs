@@ -15,7 +15,10 @@ pub enum UnifiedRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SplitRow {
     Hunk(String),
-    Pair { left: Option<DiffLine>, right: Option<DiffLine> },
+    Pair {
+        left: Option<DiffLine>,
+        right: Option<DiffLine>,
+    },
 }
 
 pub fn unified_rows(hunks: &[Hunk]) -> Vec<UnifiedRow> {
@@ -35,22 +38,26 @@ pub fn split_rows(hunks: &[Hunk]) -> Vec<SplitRow> {
         rows.push(SplitRow::Hunk(h.header()));
         let mut removed: Vec<&DiffLine> = Vec::new();
         let mut added: Vec<&DiffLine> = Vec::new();
-        let flush = |rows: &mut Vec<SplitRow>, removed: &mut Vec<&DiffLine>, added: &mut Vec<&DiffLine>| {
-            let n = removed.len().max(added.len());
-            for i in 0..n {
-                rows.push(SplitRow::Pair {
-                    left: removed.get(i).map(|l| (*l).clone()),
-                    right: added.get(i).map(|l| (*l).clone()),
-                });
-            }
-            removed.clear();
-            added.clear();
-        };
+        let flush =
+            |rows: &mut Vec<SplitRow>, removed: &mut Vec<&DiffLine>, added: &mut Vec<&DiffLine>| {
+                let n = removed.len().max(added.len());
+                for i in 0..n {
+                    rows.push(SplitRow::Pair {
+                        left: removed.get(i).map(|l| (*l).clone()),
+                        right: added.get(i).map(|l| (*l).clone()),
+                    });
+                }
+                removed.clear();
+                added.clear();
+            };
         for line in &h.lines {
             match line.kind {
                 LineKind::Context => {
                     flush(&mut rows, &mut removed, &mut added);
-                    rows.push(SplitRow::Pair { left: Some(line.clone()), right: Some(line.clone()) });
+                    rows.push(SplitRow::Pair {
+                        left: Some(line.clone()),
+                        right: Some(line.clone()),
+                    });
                 }
                 LineKind::Removed => removed.push(line),
                 LineKind::Added => added.push(line),
@@ -88,7 +95,12 @@ pub fn split_minimap_source(rows: &[SplitRow]) -> (Vec<u16>, Vec<usize>) {
         match r {
             SplitRow::Hunk(_) => lens.push(10),
             SplitRow::Pair { left, right } => {
-                let len = left.iter().chain(right.iter()).map(|l| l.text.len()).max().unwrap_or(0);
+                let len = left
+                    .iter()
+                    .chain(right.iter())
+                    .map(|l| l.text.len())
+                    .max()
+                    .unwrap_or(0);
                 lens.push(len.min(usize::from(u16::MAX)) as u16);
                 let is_change = left.as_ref().is_some_and(|l| l.kind != LineKind::Context)
                     || right.as_ref().is_some_and(|l| l.kind != LineKind::Context);
@@ -103,7 +115,9 @@ pub fn split_minimap_source(rows: &[SplitRow]) -> (Vec<u16>, Vec<usize>) {
 
 /// Totals for the header chips: `(added, removed)` lines.
 pub fn totals(hunks: &[Hunk]) -> (usize, usize) {
-    hunks.iter().fold((0, 0), |(a, r), h| (a + h.added(), r + h.removed()))
+    hunks
+        .iter()
+        .fold((0, 0), |(a, r), h| (a + h.added(), r + h.removed()))
 }
 
 /// Digits needed for the widest line number of the diff (gutter width).
@@ -130,9 +144,15 @@ mod tests {
     fn unified_has_a_header_per_hunk() {
         let hunks = diff_text(OLD, NEW);
         let rows = unified_rows(&hunks);
-        let headers = rows.iter().filter(|r| matches!(r, UnifiedRow::Hunk(_))).count();
+        let headers = rows
+            .iter()
+            .filter(|r| matches!(r, UnifiedRow::Hunk(_)))
+            .count();
         assert_eq!(headers, hunks.len());
-        assert_eq!(rows.len(), hunks.iter().map(|h| h.lines.len()).sum::<usize>() + hunks.len());
+        assert_eq!(
+            rows.len(),
+            hunks.iter().map(|h| h.lines.len()).sum::<usize>() + hunks.len()
+        );
     }
 
     #[test]
@@ -143,7 +163,10 @@ mod tests {
         let pairs: Vec<_> = rows
             .iter()
             .filter_map(|r| match r {
-                SplitRow::Pair { left, right } => Some((left.as_ref().map(|l| l.text.as_str()), right.as_ref().map(|l| l.text.as_str()))),
+                SplitRow::Pair { left, right } => Some((
+                    left.as_ref().map(|l| l.text.as_str()),
+                    right.as_ref().map(|l| l.text.as_str()),
+                )),
                 SplitRow::Hunk(_) => None,
             })
             .collect();
@@ -162,7 +185,9 @@ mod tests {
     fn split_leaves_the_short_side_empty() {
         let hunks = diff_text("a\nb\nc\n", "a\nc\n");
         let rows = split_rows(&hunks);
-        let removed_only = rows.iter().any(|r| matches!(r, SplitRow::Pair { left: Some(l), right: None } if l.text == "b"));
+        let removed_only = rows
+            .iter()
+            .any(|r| matches!(r, SplitRow::Pair { left: Some(l), right: None } if l.text == "b"));
         assert!(removed_only, "{rows:?}");
     }
 

@@ -53,19 +53,23 @@ mod view;
 
 pub use form::{FormSpec, FormState, FormSubmit};
 pub use item::{ActionKind, Effect, ItemAction, PaletteEvent, PaletteItem};
-pub use model::{Confirmed, LayoutRow, PaletteModel, Results, Section, plan, run_blocking, run_source};
+pub use model::{
+    Confirmed, LayoutRow, PaletteModel, Results, Section, plan, run_blocking, run_source,
+};
 pub use query::{Query, Scope};
 pub use scorer::{Matcher, Needle, fold};
 pub use source::{
-    ALL_TYPED_LIMIT, Cancel, Latency, PaletteSource, SCOPED_LIMIT, SourceCtx, SourceQuery, ago, display_path,
+    ALL_TYPED_LIMIT, Cancel, Latency, PaletteSource, SCOPED_LIMIT, SourceCtx, SourceQuery, ago,
+    display_path,
 };
 pub use sources::{
-    ActionEntry, ActionsSource, GitSource, HistorySource, PresetsSource, ProjectsSource, SnippetsSource, TabsSource,
-    TasksSource,
+    ActionEntry, ActionsSource, GitSource, HistorySource, PresetsSource, ProjectsSource,
+    SnippetsSource, TabsSource, TasksSource,
 };
 pub use view::{
-    CommandPalette, Confirm, ConfirmAlt, DEBOUNCE, Dismiss, NextScope, OpenContext, PageDown, PageUp, PrevScope,
-    SelectNext, SelectPrev, Timings, TogglePalette, bind_toggle_key, command_palette, init,
+    CommandPalette, Confirm, ConfirmAlt, DEBOUNCE, Dismiss, NextScope, OpenContext, PageDown,
+    PageUp, PrevScope, SelectNext, SelectPrev, Timings, TogglePalette, bind_toggle_key,
+    command_palette, init,
 };
 
 use std::sync::Arc;

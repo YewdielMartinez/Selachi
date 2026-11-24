@@ -64,8 +64,12 @@ pub fn parse_number(text: &str) -> Result<f64, String> {
 
 /// Parse a non-negative integer typed by the user (`10000`, `10 000`).
 pub fn parse_count(text: &str) -> Result<u32, String> {
-    let t: String = text.chars().filter(|c| !c.is_whitespace() && *c != '_').collect();
-    t.parse::<u32>().map_err(|_| "Escribe un número entero.".to_string())
+    let t: String = text
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .collect();
+    t.parse::<u32>()
+        .map_err(|_| "Escribe un número entero.".to_string())
 }
 
 /// Split a command line into arguments: whitespace separated, `"double quotes"` group.
@@ -134,7 +138,10 @@ mod tests {
 
         let mut c = Config::default();
         c.terminal.completion.accept_word_key = "a'b".into();
-        assert_eq!(first_error(&c).unwrap().field, "terminal.completion.accept_word_key");
+        assert_eq!(
+            first_error(&c).unwrap().field,
+            "terminal.completion.accept_word_key"
+        );
 
         let mut c = Config::default();
         c.profiles.push(store::config::Profile::default());
@@ -159,11 +166,18 @@ mod tests {
 
     #[test]
     fn args_roundtrip() {
-        assert_eq!(split_args("-NoLogo -Command \"Write-Host hi\""), vec!["-NoLogo", "-Command", "Write-Host hi"]);
+        assert_eq!(
+            split_args("-NoLogo -Command \"Write-Host hi\""),
+            vec!["-NoLogo", "-Command", "Write-Host hi"]
+        );
         assert_eq!(split_args("  a   b "), vec!["a", "b"]);
         assert!(split_args("   ").is_empty());
         assert_eq!(split_args("\"\""), vec![""]);
-        let args = vec!["-File".to_string(), "C:\\a b\\x.ps1".to_string(), String::new()];
+        let args = vec![
+            "-File".to_string(),
+            "C:\\a b\\x.ps1".to_string(),
+            String::new(),
+        ];
         assert_eq!(split_args(&join_args(&args)), args);
     }
 }

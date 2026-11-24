@@ -49,7 +49,14 @@ impl PaletteSource for TabsSource {
                 Some(ordered_score(i) - if active { 0.5 } else { 0.0 })
             } else {
                 matcher
-                    .score(&needle, &[(&tab.title, 1.0), (sub, 0.6), (cwd.as_deref().unwrap_or(""), 0.5)])
+                    .score(
+                        &needle,
+                        &[
+                            (&tab.title, 1.0),
+                            (sub, 0.6),
+                            (cwd.as_deref().unwrap_or(""), 0.5),
+                        ],
+                    )
                     .map(|s| s - if active { 0.05 } else { 0.0 })
             };
             let Some(score) = score else { continue };

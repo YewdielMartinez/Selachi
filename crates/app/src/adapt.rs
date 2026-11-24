@@ -108,16 +108,40 @@ pub fn adapt_layout(intent: &ResolvedLayout, width: f32) -> AdaptedLayout {
 
     let (sidebar, right) = match bp {
         Breakpoint::Xs => (
-            if has_sidebar { SidebarMode::Drawer } else { SidebarMode::Off },
-            if has_right { RightMode::Drawer } else { RightMode::Off },
+            if has_sidebar {
+                SidebarMode::Drawer
+            } else {
+                SidebarMode::Off
+            },
+            if has_right {
+                RightMode::Drawer
+            } else {
+                RightMode::Off
+            },
         ),
         Breakpoint::S => (
-            if has_sidebar { SidebarMode::Collapsed } else { SidebarMode::Off },
-            if has_right { RightMode::Overlay } else { RightMode::Off },
+            if has_sidebar {
+                SidebarMode::Collapsed
+            } else {
+                SidebarMode::Off
+            },
+            if has_right {
+                RightMode::Overlay
+            } else {
+                RightMode::Off
+            },
         ),
         _ => (
-            if has_sidebar { SidebarMode::Docked } else { SidebarMode::Off },
-            if has_right { RightMode::Docked } else { RightMode::Off },
+            if has_sidebar {
+                SidebarMode::Docked
+            } else {
+                SidebarMode::Off
+            },
+            if has_right {
+                RightMode::Docked
+            } else {
+                RightMode::Off
+            },
         ),
     };
 
@@ -130,7 +154,7 @@ pub fn adapt_layout(intent: &ResolvedLayout, width: f32) -> AdaptedLayout {
             if layout.bottom_bar == BottomBar::Full {
                 layout.bottom_bar = BottomBar::Compact;
             }
-        },
+        }
         Breakpoint::S => {
             if layout.bottom_bar == BottomBar::Full {
                 layout.bottom_bar = BottomBar::Compact;
@@ -142,8 +166,8 @@ pub fn adapt_layout(intent: &ResolvedLayout, width: f32) -> AdaptedLayout {
             if matches!(layout.splits, Splits::Grid2x2 | Splits::OneAndTwoStacked) {
                 layout.splits = Splits::TwoVertical;
             }
-        },
-        _ => {},
+        }
+        _ => {}
     }
 
     AdaptedLayout {
@@ -164,9 +188,15 @@ pub fn adapt_layout(intent: &ResolvedLayout, width: f32) -> AdaptedLayout {
 /// would get narrower than [`MAIN_MIN_W`] (`other_zones` = rail + sidebar + margins already
 /// docked).
 pub fn right_panel_width(window_width: f32, stored: Option<f32>, other_zones: f32) -> f32 {
-    let wanted = stored.unwrap_or(window_width * 0.22).clamp(RIGHT_MIN_W, RIGHT_MAX_W);
+    let wanted = stored
+        .unwrap_or(window_width * 0.22)
+        .clamp(RIGHT_MIN_W, RIGHT_MAX_W);
     let room = window_width - other_zones - MAIN_MIN_W;
-    if room < wanted { RIGHT_MIN_W.max(room.min(wanted)) } else { wanted }
+    if room < wanted {
+        RIGHT_MIN_W.max(room.min(wanted))
+    } else {
+        wanted
+    }
 }
 
 /// Maximum width and horizontal margin of a reading column inside `available` px. Reading panels

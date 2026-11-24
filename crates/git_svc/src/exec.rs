@@ -70,7 +70,11 @@ pub(crate) fn run_git_with<S: AsRef<OsStr>>(
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(if opts.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if opts.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (k, v) in &opts.envs {

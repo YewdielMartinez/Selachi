@@ -37,11 +37,7 @@ jobs:
     name: rustfmt
     runs-on: windows-latest
     timeout-minutes: 10
-    # The repository is NOT rustfmt-clean today (264 files at the time this was written, also at HEAD).
-    # Until someone runs `cargo fmt --all` once and commits it, a failure here is reported but does not
-    # turn the run red. After that commit, set the repository variable SELACHI_FMT_ENFORCE=true
-    # (Settings > Secrets and variables > Actions > Variables) or delete the `continue-on-error` line.
-    continue-on-error: ${{ vars.SELACHI_FMT_ENFORCE != 'true' }}
+    # The workspace was formatted with `cargo fmt --all` on 2026-11-24: formatting is enforced.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install Rust (stable, rustfmt)

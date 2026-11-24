@@ -71,7 +71,8 @@ mod tests {
             let n = crate::db::latest_version();
             assert!(n >= 3);
             crate::db::migrate(&mut conn).unwrap();
-            conn.execute_batch("DROP TABLE meta; PRAGMA user_version = 2").unwrap();
+            conn.execute_batch("DROP TABLE meta; PRAGMA user_version = 2")
+                .unwrap();
         }
         let db = crate::StateDb::open(&path).unwrap();
         db.meta_set("k", "v").unwrap();

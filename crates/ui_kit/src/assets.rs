@@ -70,11 +70,20 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("icons/agents/cursor.svg", "icons/agents/cursor.svg"),
     asset!("icons/agents/copilot.svg", "icons/agents/copilot.svg"),
     asset!("icons/agents/windsurf.svg", "icons/agents/windsurf.svg"),
-    asset!("icons/agents/antigravity.svg", "icons/agents/antigravity.svg"),
+    asset!(
+        "icons/agents/antigravity.svg",
+        "icons/agents/antigravity.svg"
+    ),
     // The logo is multi-tone, so it is drawn as an image (an svg would be flattened to a mask).
     // One file per mode (DESIGN.md "Logo por modo"): light art for dark/OLED, dark art for light.
-    asset!("logo-dark-mode.png", "transparent-for-dark-mode/png/128x128@2x.png"),
-    asset!("logo-light-mode.png", "transparent-for-light-mode/png/128x128@2x.png"),
+    asset!(
+        "logo-dark-mode.png",
+        "transparent-for-dark-mode/png/128x128@2x.png"
+    ),
+    asset!(
+        "logo-light-mode.png",
+        "transparent-for-light-mode/png/128x128@2x.png"
+    ),
 ];
 
 /// The embedded asset source (icons + logos).
@@ -82,7 +91,10 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(ASSETS.iter().find(|(p, _)| *p == path).map(|(_, data)| Cow::Borrowed(*data)))
+        Ok(ASSETS
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, data)| Cow::Borrowed(*data)))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
@@ -113,7 +125,12 @@ mod tests {
             assert!(Assets.load(&path).unwrap().is_some(), "{path} missing");
         }
         for mode in [theme::Mode::Dark, theme::Mode::Light, theme::Mode::Oled] {
-            assert!(Assets.load(crate::logo::logo_asset(mode)).unwrap().is_some());
+            assert!(
+                Assets
+                    .load(crate::logo::logo_asset(mode))
+                    .unwrap()
+                    .is_some()
+            );
         }
     }
 }

@@ -14,8 +14,8 @@ use store::{
 };
 use theme::{Radius, Rgba, Theme};
 use ui_kit::{
-    Button, Card, Icon, InputModality, MeasuredWidth, Pill, SectionLabel, SegmentedControl, Slider, TextField,
-    TextFieldEvent, Toggle, Tooltip, icon, input_modality,
+    Button, Card, Icon, InputModality, MeasuredWidth, Pill, SectionLabel, SegmentedControl, Slider,
+    TextField, TextFieldEvent, Toggle, Tooltip, icon, input_modality,
 };
 
 use crate::state::{
@@ -174,7 +174,11 @@ impl LayoutPanel {
 
     /// Scroll the block that holds the focused control into view (after Tab / Shift+Tab).
     fn reveal_focus(&self, window: &Window, cx: &App) {
-        if let Some(slot) = self.blocks.iter().position(|h| h.contains_focused(window, cx)) {
+        if let Some(slot) = self
+            .blocks
+            .iter()
+            .position(|h| h.contains_focused(window, cx))
+        {
             self.scroll.scroll_to_item(self.block_ix[slot]);
         }
     }
@@ -226,7 +230,14 @@ impl LayoutPanel {
     }
 
     /// The arrow keys on the preset grid: pick the neighbour of the active card.
-    fn step_preset(&mut self, ids: &[PresetId], active: Option<usize>, dir: isize, window: &mut Window, cx: &mut Context<Self>) {
+    fn step_preset(
+        &mut self,
+        ids: &[PresetId],
+        active: Option<usize>,
+        dir: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ix = stepped(active, ids.len(), dir);
         if let Some(id) = ids.get(ix).cloned()
             && Some(ix) != active
@@ -351,7 +362,13 @@ impl LayoutPanel {
 
     /// The accent focus ring of a roving list: a 2 px border painted only while the list has the
     /// focus and the last input was the keyboard (the kit's controls draw their own ring).
-    fn ring(&self, el: Stateful<Div>, focus: &FocusHandle, window: &Window, radius: f32) -> Stateful<Div> {
+    fn ring(
+        &self,
+        el: Stateful<Div>,
+        focus: &FocusHandle,
+        window: &Window,
+        radius: f32,
+    ) -> Stateful<Div> {
         let c = self.theme.colors;
         let focused = input_modality() == InputModality::Keyboard && focus.is_focused(window);
         el.rounded(px(radius)).border_2().border_color(if focused {
@@ -448,7 +465,9 @@ impl LayoutPanel {
         let this = cx.entity();
         Toggle::new(SharedString::from(key.to_string()), &self.theme)
             .on(value)
-            .on_change(move |v, window, cx| this.update(cx, |p, cx| p.edit(window, cx, |l| set(l, v))))
+            .on_change(move |v, window, cx| {
+                this.update(cx, |p, cx| p.edit(window, cx, |l| set(l, v)))
+            })
             .into_any_element()
     }
 
@@ -489,7 +508,10 @@ impl LayoutPanel {
                     .flex_none()
                     .text_size(px(t.typography.ui_size_sm))
                     .text_color(t.colors.muted)
-                    .child(SharedString::from(format!("{} {unit}", value.round() as i32))),
+                    .child(SharedString::from(format!(
+                        "{} {unit}",
+                        value.round() as i32
+                    ))),
             )
             .into_any_element()
     }
@@ -725,7 +747,7 @@ impl LayoutPanel {
                 .flex()
                 .items_center()
                 .justify_center()
-                rounded(px(Radius::CHIP))
+                .rounded(px(Radius::CHIP))
                 .bg(c.surface_3)
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.surface_4))
@@ -762,7 +784,9 @@ impl LayoutPanel {
         }
         let active = self.state.active_preset();
         let ids: Rc<Vec<PresetId>> = Rc::new(entries.iter().map(|e| e.0.clone()).collect());
-        let active_ix = active.as_ref().and_then(|a| ids.iter().position(|i| i == a));
+        let active_ix = active
+            .as_ref()
+            .and_then(|a| ids.iter().position(|i| i == a));
 
         let cards: Vec<AnyElement> = entries
             .into_iter()
@@ -781,9 +805,8 @@ impl LayoutPanel {
                 let ids = ids.clone();
                 move |p, _: &StepPrev, window, cx| p.step_preset(&ids, active_ix, -1, window, cx)
             }))
-            .on_action(cx.listener({
-                let ids = ids.clone();
-                move |p, _: &StepNext, window, cx| p.step_preset(&ids, active_ix, 1, window, cx)
+            .on_action(cx.listener(move |p, _: &StepNext, window, cx| {
+                p.step_preset(&ids, active_ix, 1, window, cx)
             }))
             .flex()
             .flex_row()
@@ -801,7 +824,7 @@ impl LayoutPanel {
             .child(actions);
         if let Some(m) = &self.message {
             let c = t.colors;
-        let ty = t.typography;
+            let ty = t.typography;
             col = col.child(
                 div()
                     .px(px(4.0))
@@ -1010,36 +1033,41 @@ impl LayoutPanel {
                 p.edit(window, cx, |l| l.splits = v);
             }
         };
-        self.ring(div().id("splits-focus"), &self.splits_focus, window, Radius::SM + 2.0)
-            .track_focus(&self.splits_focus)
-            .key_context(STEP_CONTEXT)
-            .on_action(cx.listener(move |p, _: &StepPrev, window, cx| step(p, -1, window, cx)))
-            .on_action(cx.listener(move |p, _: &StepNext, window, cx| step(p, 1, window, cx)))
-            .flex()
-            .flex_row()
-            .gap(px(4.0))
-            .children(ALL.iter().map(|(s, name)| {
-                let this = this.clone();
-                let s = *s;
-                let sel = s == current;
-                div()
-                    .id(SharedString::from(format!("split-{name}")))
-                    .p(px(2.0))
-                    .rounded(px(Radius::SM))
-                    .border_2()
-                    .border_color(if sel {
-                        c.accent.into()
-                    } else {
-                        transparent_black()
-                    })
-                    .cursor_pointer()
-                    .tooltip(Tooltip::text(&t, *name))
-                    .child(wire::split_icon(&t, s, sel))
-                    .on_click(move |_, window, cx| {
-                        this.update(cx, |p, cx| p.edit(window, cx, |l| l.splits = s));
-                    })
-            }))
-            .into_any_element()
+        self.ring(
+            div().id("splits-focus"),
+            &self.splits_focus,
+            window,
+            Radius::SM + 2.0,
+        )
+        .track_focus(&self.splits_focus)
+        .key_context(STEP_CONTEXT)
+        .on_action(cx.listener(move |p, _: &StepPrev, window, cx| step(p, -1, window, cx)))
+        .on_action(cx.listener(move |p, _: &StepNext, window, cx| step(p, 1, window, cx)))
+        .flex()
+        .flex_row()
+        .gap(px(4.0))
+        .children(ALL.iter().map(|(s, name)| {
+            let this = this.clone();
+            let s = *s;
+            let sel = s == current;
+            div()
+                .id(SharedString::from(format!("split-{name}")))
+                .p(px(2.0))
+                .rounded(px(Radius::SM))
+                .border_2()
+                .border_color(if sel {
+                    c.accent.into()
+                } else {
+                    transparent_black()
+                })
+                .cursor_pointer()
+                .tooltip(Tooltip::text(&t, *name))
+                .child(wire::split_icon(&t, s, sel))
+                .on_click(move |_, window, cx| {
+                    this.update(cx, |p, cx| p.edit(window, cx, |l| l.splits = s));
+                })
+        }))
+        .into_any_element()
     }
 
     fn fine_options(
@@ -1060,7 +1088,9 @@ impl LayoutPanel {
                 (TabsPosition::Hidden, "Ocultas"),
             ],
             Some(l.tabs_position),
-            |l, v| l.tabs_position = v, cx);
+            |l, v| l.tabs_position = v,
+            cx,
+        );
         let tabs_group = self.group(
             "Pestañas",
             vec![self.row("Posición", tabs).into_any_element()],
@@ -1075,14 +1105,18 @@ impl LayoutPanel {
                 (SidebarSide::Hidden, "Oculta"),
             ],
             Some(l.sidebar.side),
-            |l, v| l.sidebar.side = v, cx);
+            |l, v| l.sidebar.side = v,
+            cx,
+        );
         let width = self.slider(
             "sidebar-width",
             (180.0, 480.0, 10.0),
             f32::from(l.sidebar.width_px),
             f32::from(base.sidebar.width_px),
             "px",
-            |l, v| l.sidebar.width_px = v as u16, cx);
+            |l, v| l.sidebar.width_px = v as u16,
+            cx,
+        );
         let sections = self.sections_row(l, cx);
         let group_by = self.seg(
             "group-by",
@@ -1093,13 +1127,45 @@ impl LayoutPanel {
                 (GroupBy::None, "Ninguno"),
             ],
             Some(l.sidebar.group_by),
-            |l, v| l.sidebar.group_by = v, cx);
-        let show_actions = self.toggle("sb-actions", l.sidebar.show_actions, |l, v| l.sidebar.show_actions = v, cx);
-        let panel_icons = self.toggle("sb-icons", l.sidebar.panel_icons, |l, v| l.sidebar.panel_icons = v, cx);
-        let nested = self.toggle("sb-nested", l.sidebar.nested_tabs, |l, v| l.sidebar.nested_tabs = v, cx);
-        let footer = self.toggle("sb-footer", l.sidebar.footer_usage, |l, v| l.sidebar.footer_usage = v, cx);
-        let row_model = self.toggle("sb-model", l.sidebar.row_model, |l, v| l.sidebar.row_model = v, cx);
-        let row_time = self.toggle("sb-time", l.sidebar.row_time, |l, v| l.sidebar.row_time = v, cx);
+            |l, v| l.sidebar.group_by = v,
+            cx,
+        );
+        let show_actions = self.toggle(
+            "sb-actions",
+            l.sidebar.show_actions,
+            |l, v| l.sidebar.show_actions = v,
+            cx,
+        );
+        let panel_icons = self.toggle(
+            "sb-icons",
+            l.sidebar.panel_icons,
+            |l, v| l.sidebar.panel_icons = v,
+            cx,
+        );
+        let nested = self.toggle(
+            "sb-nested",
+            l.sidebar.nested_tabs,
+            |l, v| l.sidebar.nested_tabs = v,
+            cx,
+        );
+        let footer = self.toggle(
+            "sb-footer",
+            l.sidebar.footer_usage,
+            |l, v| l.sidebar.footer_usage = v,
+            cx,
+        );
+        let row_model = self.toggle(
+            "sb-model",
+            l.sidebar.row_model,
+            |l, v| l.sidebar.row_model = v,
+            cx,
+        );
+        let row_time = self.toggle(
+            "sb-time",
+            l.sidebar.row_time,
+            |l, v| l.sidebar.row_time = v,
+            cx,
+        );
         let sidebar_group = self.group(
             "Sidebar",
             vec![
@@ -1126,10 +1192,11 @@ impl LayoutPanel {
         let chips = self.titlebar_chips(l, cx);
         let titlebar_group = self.group(
             "Barra de título",
-            vec![self
-                .row("Botones de paneles", chips)
-                .items_start()
-                .into_any_element()],
+            vec![
+                self.row("Botones de paneles", chips)
+                    .items_start()
+                    .into_any_element(),
+            ],
         );
 
         // Zonas.
@@ -1142,7 +1209,9 @@ impl LayoutPanel {
                 } else {
                     RailVisibility::Hidden
                 }
-            }, cx);
+            },
+            cx,
+        );
         let right_panel = self.seg(
             "right-panel",
             &[
@@ -1153,7 +1222,9 @@ impl LayoutPanel {
                 (None, "Ninguno"),
             ],
             Some(l.right_panel.clone()),
-            |l, v| l.right_panel = v, cx);
+            |l, v| l.right_panel = v,
+            cx,
+        );
         let bottom = self.seg(
             "bottom-bar",
             &[
@@ -1162,7 +1233,9 @@ impl LayoutPanel {
                 (BottomBar::Hidden, "Oculta"),
             ],
             Some(l.bottom_bar),
-            |l, v| l.bottom_bar = v, cx);
+            |l, v| l.bottom_bar = v,
+            cx,
+        );
         let splits = self.splits_row(l.splits, window, cx);
         let zones_group = self.group(
             "Zonas",
@@ -1182,22 +1255,25 @@ impl LayoutPanel {
                 (Density::Comfortable, "Cómoda"),
             ],
             Some(l.density),
-            |l, v| l.density = v, cx);
+            |l, v| l.density = v,
+            cx,
+        );
         let translucency = self.slider(
             "translucency",
             (0.0, 100.0, 5.0),
             f32::from(l.sidebar_translucency),
             f32::from(base.sidebar_translucency),
             "%",
-            |l, v| l.sidebar_translucency = v as u8, cx);
-        let breadcrumb = self.toggle(
-            "breadcrumb",
-            l.breadcrumb,
-            |l, v| l.breadcrumb = v, cx);
+            |l, v| l.sidebar_translucency = v as u8,
+            cx,
+        );
+        let breadcrumb = self.toggle("breadcrumb", l.breadcrumb, |l, v| l.breadcrumb = v, cx);
         let motion = self.toggle(
             "reduced-motion",
             l.reduced_motion,
-            |l, v| l.reduced_motion = v, cx);
+            |l, v| l.reduced_motion = v,
+            cx,
+        );
         let zen = self.toggle("zen", l.zen, |l, v| l.zen = v, cx);
         let look_group = self.group(
             "Apariencia",
@@ -1210,7 +1286,13 @@ impl LayoutPanel {
             ],
         );
 
-        [tabs_group, sidebar_group, titlebar_group, zones_group, look_group]
+        [
+            tabs_group,
+            sidebar_group,
+            titlebar_group,
+            zones_group,
+            look_group,
+        ]
     }
 
     /// One toggle chip per button the titlebar can show (right panels, review, layout). Each chip is
@@ -1291,7 +1373,15 @@ impl Render for LayoutPanel {
         let [tabs, sidebar, titlebar, zones, look] = self.fine_options(&layout, window, cx);
         // Child index of each block in the scroll container (see `reveal_focus`).
         let first = 1 + usize::from(notes.is_some());
-        self.block_ix = [0, first, first + 1, first + 2, first + 3, first + 4, first + 5];
+        self.block_ix = [
+            0,
+            first,
+            first + 1,
+            first + 2,
+            first + 3,
+            first + 4,
+            first + 5,
+        ];
         let embedded = self.embedded;
         let blocks = &self.blocks;
         let block = |ix: usize, el: Div| div().track_focus(&blocks[ix]).child(el);
@@ -1311,7 +1401,10 @@ impl Render for LayoutPanel {
             }))
             .relative()
             .when(!embedded, |d| {
-                d.w(px(PANEL_WIDTH)).flex_none().rounded(px(Radius::SM)).bg(c.surface_2)
+                d.w(px(PANEL_WIDTH))
+                    .flex_none()
+                    .rounded(px(Radius::SM))
+                    .bg(c.surface_2)
             })
             .when(embedded, |d| d.w_full().min_w_0())
             .text_color(c.text)
@@ -1322,7 +1415,10 @@ impl Render for LayoutPanel {
                 div()
                     .id("layout-panel-scroll")
                     .when(!embedded, |d| {
-                        d.max_h(px(max_h)).overflow_y_scroll().track_scroll(&self.scroll).p(px(PAD))
+                        d.max_h(px(max_h))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .p(px(PAD))
                     })
                     .flex()
                     .flex_col()
@@ -1338,3 +1434,7 @@ impl Render for LayoutPanel {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;

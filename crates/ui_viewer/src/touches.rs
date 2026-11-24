@@ -8,8 +8,9 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Subscription, Task, Window, div, prelude::*, px,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div,
+    prelude::*, px,
 };
 use panel_api::{TabEvent, TabIcon, TabModel};
 use theme::{Radius, Theme};
@@ -62,7 +63,11 @@ impl AgentSession {
             cost_usd: None,
             touches: touches
                 .iter()
-                .map(|t| Touch { path: PathBuf::from(&t.path), tool: t.tool.clone(), ts_ms: t.ts_ms })
+                .map(|t| Touch {
+                    path: PathBuf::from(&t.path),
+                    tool: t.tool.clone(),
+                    ts_ms: t.ts_ms,
+                })
                 .collect(),
         }
     }
@@ -76,10 +81,15 @@ impl AgentSession {
         base: Option<String>,
     ) -> Result<Self, String> {
         let touched = store.files_touched(session_id).map_err(|e| e.to_string())?;
-        let agent = touched.first().map_or("claude", |t| t.agent.as_str()).to_owned();
+        let agent = touched
+            .first()
+            .map_or("claude", |t| t.agent.as_str())
+            .to_owned();
         let mut session = Self::from_touches(&agent, session_id, project_root, &touched);
         session.base = base;
-        let usage = store.usage_summary(&agents_svc::Range::Session(session_id.to_owned())).map_err(|e| e.to_string())?;
+        let usage = store
+            .usage_summary(&agents_svc::Range::Session(session_id.to_owned()))
+            .map_err(|e| e.to_string())?;
         if !usage.is_empty() {
             session.tokens = Some(usage.iter().map(agents_svc::AgentUsage::total_tokens).sum());
             let costs: Vec<f64> = usage.iter().filter_map(|u| u.est_cost_usd).collect();
@@ -115,7 +125,10 @@ impl AgentSession {
 pub enum DiffStat {
     /// Not computed yet.
     Pending,
-    Changed { added: usize, removed: usize },
+    Changed {
+        added: usize,
+        removed: usize,
+    },
     /// The file equals the base (the agent's edit was reverted or committed).
     Unchanged,
     Failed(String),
@@ -139,7 +152,11 @@ pub struct FileEntry {
 pub fn group_touches(root: Option<&Path>, touches: &[Touch]) -> Vec<FileEntry> {
     let mut entries: Vec<FileEntry> = Vec::new();
     for t in touches {
-        let path = if t.path.is_relative() { root.map_or_else(|| t.path.clone(), |r| r.join(&t.path)) } else { t.path.clone() };
+        let path = if t.path.is_relative() {
+            root.map_or_else(|| t.path.clone(), |r| r.join(&t.path))
+        } else {
+            t.path.clone()
+        };
         match entries.iter_mut().find(|e| e.path == path) {
             Some(e) => {
                 e.touches += 1;
@@ -166,7 +183,11 @@ pub fn group_touches(root: Option<&Path>, touches: &[Touch]) -> Vec<FileEntry> {
             }
         }
     }
-    entries.sort_by(|a, b| b.last_ts_ms.cmp(&a.last_ts_ms).then_with(|| a.path.cmp(&b.path)));
+    entries.sort_by(|a, b| {
+        b.last_ts_ms
+            .cmp(&a.last_ts_ms)
+            .then_with(|| a.path.cmp(&b.path))
+    });
     entries
 }
 
@@ -180,7 +201,11 @@ pub fn totals(entries: &[FileEntry]) -> (usize, usize) {
 
 /// `~$1.23` (estimated), `<$0.01` for tiny amounts.
 pub fn format_cost(usd: f64) -> String {
-    if usd < 0.01 { "<$0.01".to_owned() } else { format!("~${usd:.2}") }
+    if usd < 0.01 {
+        "<$0.01".to_owned()
+    } else {
+        format!("~${usd:.2}")
+    }
 }
 
 /// The view entity.
@@ -198,12 +223,20 @@ const ROW_H: f32 = 52.0;
 
 impl AgentTouchesView {
     pub fn new(session: AgentSession, theme: Theme, cx: &mut Context<Self>) -> Self {
-        let root = session
-            .project_root
-            .clone()
-            .or_else(|| session.touches.first().and_then(|t| find_repo_root(&t.path)));
+        let root = session.project_root.clone().or_else(|| {
+            session
+                .touches
+                .first()
+                .and_then(|t| find_repo_root(&t.path))
+        });
         let entries = group_touches(root.as_deref(), &session.touches);
-        let mut v = Self { theme, session, root, entries, task: None };
+        let mut v = Self {
+            theme,
+            session,
+            root,
+            entries,
+            task: None,
+        };
         v.start_stats(cx);
         v
     }
@@ -223,10 +256,12 @@ impl AgentTouchesView {
 
     /// Replaces the session (a new checkpoint, more edits) and recomputes the diffs.
     pub fn set_session(&mut self, session: AgentSession, cx: &mut Context<Self>) {
-        self.root = session
-            .project_root
-            .clone()
-            .or_else(|| session.touches.first().and_then(|t| find_repo_root(&t.path)));
+        self.root = session.project_root.clone().or_else(|| {
+            session
+                .touches
+                .first()
+                .and_then(|t| find_repo_root(&t.path))
+        });
         self.entries = group_touches(self.root.as_deref(), &session.touches);
         self.session = session;
         self.start_stats(cx);
@@ -254,7 +289,9 @@ impl AgentTouchesView {
                         match viewer_svc::diff_against_git(&r, &p, b) {
                             Ok(h) if h.is_empty() => DiffStat::Unchanged,
                             Ok(h) => {
-                                let (added, removed) = h.iter().fold((0, 0), |(a, r), h| (a + h.added(), r + h.removed()));
+                                let (added, removed) = h
+                                    .iter()
+                                    .fold((0, 0), |(a, r), h| (a + h.added(), r + h.removed()));
                                 DiffStat::Changed { added, removed }
                             }
                             Err(e) => DiffStat::Failed(e.to_string()),
@@ -276,7 +313,10 @@ impl AgentTouchesView {
 
     fn open(&mut self, ix: usize, cx: &mut Context<Self>) {
         if let Some(e) = self.entries.get(ix) {
-            cx.emit(ViewerEvent::OpenDiff { path: e.path.clone(), base: self.session.base.clone() });
+            cx.emit(ViewerEvent::OpenDiff {
+                path: e.path.clone(),
+                base: self.session.base.clone(),
+            });
         }
     }
 
@@ -309,16 +349,31 @@ impl AgentTouchesView {
                 .gap(px(8.0))
                 .font_family(ty.mono_family)
                 .text_size(px(ty.ui_size_sm))
-                .child(div().text_color(green).child(SharedString::from(format!("+{added}"))))
-                .child(div().text_color(red).child(SharedString::from(format!("-{removed}"))))
+                .child(
+                    div()
+                        .text_color(green)
+                        .child(SharedString::from(format!("+{added}"))),
+                )
+                .child(
+                    div()
+                        .text_color(red)
+                        .child(SharedString::from(format!("-{removed}"))),
+                )
                 .into_any_element(),
-            DiffStat::Unchanged => div().text_size(px(ty.ui_size_sm)).text_color(c.outline).child("sin cambios").into_any_element(),
+            DiffStat::Unchanged => div()
+                .text_size(px(ty.ui_size_sm))
+                .text_color(c.outline)
+                .child("sin cambios")
+                .into_any_element(),
             DiffStat::Failed(_) => icon(Icon::Alert, 14.0, c.outline).into_any_element(),
         };
         let tools = e.tools.join(" + ");
         let this = this.clone();
         div()
-            .id(SharedString::from(format!("touch-row-{}", e.path.display())))
+            .id(SharedString::from(format!(
+                "touch-row-{}",
+                e.path.display()
+            )))
             .w_full()
             .h(px(ROW_H - 4.0))
             .my(px(2.0))
@@ -330,7 +385,11 @@ impl AgentTouchesView {
             .rounded(px(Radius::PILL))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
-            .child(ui_kit::file_icon(ui_kit::FileIcon::for_name(&e.name), 16.0, g.tint(&theme)))
+            .child(ui_kit::file_icon(
+                ui_kit::FileIcon::for_name(&e.name),
+                16.0,
+                g.tint(&theme),
+            ))
             .child(
                 div()
                     .flex_1()
@@ -353,11 +412,24 @@ impl AgentTouchesView {
                             .whitespace_nowrap()
                             .text_size(px(ty.ui_size_sm))
                             .text_color(c.muted)
-                            .child(SharedString::from(if e.dir.is_empty() { tools } else { format!("{} \u{b7} {tools}", e.dir) })),
+                            .child(SharedString::from(if e.dir.is_empty() {
+                                tools
+                            } else {
+                                format!("{} \u{b7} {tools}", e.dir)
+                            })),
                     ),
             )
-            .when(e.touches > 1, |d| d.child(self.chip(format!("x{}", e.touches))))
-            .child(div().flex_none().min_w(px(64.0)).flex().justify_end().child(stat))
+            .when(e.touches > 1, |d| {
+                d.child(self.chip(format!("x{}", e.touches)))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .min_w(px(64.0))
+                    .flex()
+                    .justify_end()
+                    .child(stat),
+            )
             .on_click(move |_, _, cx| this.update(cx, |v, cx| v.open(ix, cx)))
             .into_any_element()
     }
@@ -371,13 +443,24 @@ impl Render for AgentTouchesView {
         let this = cx.entity();
         let (added, removed) = totals(&self.entries);
 
-        let mut chips = div().flex().flex_row().flex_wrap().items_center().gap(px(6.0));
+        let mut chips = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.0));
         chips = chips.child(self.chip(format!("{} archivos", self.entries.len())));
         chips = chips.child(self.chip(format!("vs {}", self.session.base_label())));
         if added + removed > 0 {
             chips = chips
-                .child(self.chip(format!("+{added}")).text_color(theme.colors.success))
-                .child(self.chip(format!("-{removed}")).text_color(theme.colors.error));
+                .child(
+                    self.chip(format!("+{added}"))
+                        .text_color(theme.colors.success),
+                )
+                .child(
+                    self.chip(format!("-{removed}"))
+                        .text_color(theme.colors.error),
+                );
         }
         if let Some(t) = self.session.tokens {
             chips = chips.child(self.chip(format!("{} tokens", format_tokens(t))));
@@ -408,9 +491,17 @@ impl Render for AgentTouchesView {
                             .text_size(px(ty.ui_size_lg))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(c.text)
-                            .child(SharedString::from(format!("Que toco {}", self.session.agent))),
+                            .child(SharedString::from(format!(
+                                "Que toco {}",
+                                self.session.agent
+                            ))),
                     )
-                    .child(div().text_size(px(ty.ui_size_sm)).text_color(c.outline).child(SharedString::from(short))),
+                    .child(
+                        div()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.outline)
+                            .child(SharedString::from(short)),
+                    ),
             )
             .child(chips);
 
@@ -431,7 +522,9 @@ impl Render for AgentTouchesView {
             let n = self.entries.len();
             VirtualList::new("touch-list", n, ROW_H, move |range, _, cx| {
                 let me = this.read(cx);
-                range.filter_map(|i| me.entries.get(i).map(|e| me.row(i, e, &this))).collect()
+                range
+                    .filter_map(|i| me.entries.get(i).map(|e| me.row(i, e, &this)))
+                    .collect()
             })
             .size_full()
             .px(px(8.0))
@@ -471,7 +564,12 @@ impl AgentTouchesTab {
         let agent: SharedString = session.agent.clone().into();
         let view = cx.new(|cx| AgentTouchesView::new(session, theme, cx));
         let forward = cx.subscribe(&view, |_, _, ev: &ViewerEvent, cx| cx.emit(ev.clone()));
-        Self { view, title, agent, _forward: forward }
+        Self {
+            view,
+            title,
+            agent,
+            _forward: forward,
+        }
     }
 
     pub fn view(&self) -> &Entity<AgentTouchesView> {
@@ -511,7 +609,11 @@ mod tests {
     use super::*;
 
     fn touch(path: &str, tool: &str, ts: i64) -> Touch {
-        Touch { path: PathBuf::from(path), tool: tool.into(), ts_ms: ts }
+        Touch {
+            path: PathBuf::from(path),
+            tool: tool.into(),
+            ts_ms: ts,
+        }
     }
 
     #[test]
@@ -539,7 +641,10 @@ mod tests {
 
     #[test]
     fn files_outside_the_root_keep_their_full_path() {
-        let entries = group_touches(Some(Path::new("C:/proj")), &[touch("D:/other/x.rs", "Edit", 1)]);
+        let entries = group_touches(
+            Some(Path::new("C:/proj")),
+            &[touch("D:/other/x.rs", "Edit", 1)],
+        );
         assert_eq!(entries[0].name, "x.rs");
         assert_eq!(entries[0].dir, "D:/other");
     }
@@ -551,8 +656,18 @@ mod tests {
 
     #[test]
     fn totals_only_count_known_stats() {
-        let mut e = group_touches(None, &[touch("a.rs", "Edit", 1), touch("b.rs", "Edit", 2), touch("c.rs", "Edit", 3)]);
-        e[0].stat = DiffStat::Changed { added: 5, removed: 2 };
+        let mut e = group_touches(
+            None,
+            &[
+                touch("a.rs", "Edit", 1),
+                touch("b.rs", "Edit", 2),
+                touch("c.rs", "Edit", 3),
+            ],
+        );
+        e[0].stat = DiffStat::Changed {
+            added: 5,
+            removed: 2,
+        };
         e[1].stat = DiffStat::Unchanged;
         assert_eq!(totals(&e), (5, 2));
     }
@@ -603,13 +718,21 @@ mod tests {
                 session_id: "s1".into(),
                 ts_ms: 1_000,
                 model: "claude-opus-4-5".into(),
-                tokens: TokenCounts { input: 100, output: 50, cache_create: 0, cache_create_1h: 0, cache_read: 25 },
+                tokens: TokenCounts {
+                    input: 100,
+                    output: 50,
+                    cache_create: 0,
+                    cache_create_1h: 0,
+                    cache_read: 25,
+                },
                 cwd: None,
                 git_branch: None,
                 msg_key: "m1".into(),
             })
             .unwrap();
-        let s = AgentSession::from_store(&store, "s1", Some("C:/proj".into()), Some("abc1234".into())).unwrap();
+        let s =
+            AgentSession::from_store(&store, "s1", Some("C:/proj".into()), Some("abc1234".into()))
+                .unwrap();
         assert_eq!(s.agent, "claude");
         assert_eq!(s.touches.len(), 2);
         assert_eq!(s.tokens, Some(175));

@@ -22,17 +22,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds,
-    WindowOptions, AnyView, div, prelude::*, px, size,
+    AnyView, App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
 };
 use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
 use proc_svc::{JobGroup, JobOptions, OwnerMeta, Tracker};
 use theme::{Mode, Theme};
 use ui_kit::{Card, CardTone, Icon, Logo, Pill};
-use ui_procs::{ProcsModel, ProcsPanel, ProcsPanelProvider, SharedTracker, TrackerSource, open_owner};
+use ui_procs::{
+    ProcsModel, ProcsPanel, ProcsPanelProvider, SharedTracker, TrackerSource, open_owner,
+};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const LISTENER: &str = "$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$l.Start();Start-Sleep 90";
+const LISTENER: &str =
+    "$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0);$l.Start();Start-Sleep 90";
 
 fn pwsh(script: &str) -> Command {
     let mut c = Command::new("pwsh");
@@ -50,13 +53,24 @@ struct Fleet {
     _external: Option<JobGroup>,
 }
 
-fn start_fleet() -> (SharedTracker, Fleet, Vec<futures::channel::mpsc::UnboundedReceiver<proc_svc::JobEvent>>) {
+fn start_fleet() -> (
+    SharedTracker,
+    Fleet,
+    Vec<futures::channel::mpsc::UnboundedReceiver<proc_svc::JobEvent>>,
+) {
     let tracker: SharedTracker = Arc::new(Mutex::new(Tracker::new()));
-    let kill = JobOptions { kill_on_close: true, ..JobOptions::default() };
+    let kill = JobOptions {
+        kill_on_close: true,
+        ..JobOptions::default()
+    };
     let mut events = Vec::new();
 
     // Tab "api": shell alive for 90 s, with a dev server under it.
-    let meta = OwnerMeta { agent: Some("claude".into()), label: "api".into(), cwd: Some(PathBuf::from(r"C:\Users\venta\Desktop\Terminal")) };
+    let meta = OwnerMeta {
+        agent: Some("claude".into()),
+        label: "api".into(),
+        cwd: Some(PathBuf::from(r"C:\Users\venta\Desktop\Terminal")),
+    };
     if let Ok(job) = open_owner(&tracker, 1, meta, kill) {
         events.push(job.events);
         let mut t = tracker.lock().unwrap_or_else(|p| p.into_inner());
@@ -67,7 +81,11 @@ fn start_fleet() -> (SharedTracker, Fleet, Vec<futures::channel::mpsc::Unbounded
 
     // Tab "web": the shell dies after 4 s; the listener (spawned straight into the job, not a
     // registered root) outlives it: orphan -> port zombie.
-    let meta = OwnerMeta { agent: Some("codex".into()), label: "web".into(), cwd: Some(PathBuf::from(r"C:\Users\venta\Desktop\Terminal\crates")) };
+    let meta = OwnerMeta {
+        agent: Some("codex".into()),
+        label: "web".into(),
+        cwd: Some(PathBuf::from(r"C:\Users\venta\Desktop\Terminal\crates")),
+    };
     if let Ok(job) = open_owner(&tracker, 2, meta, kill) {
         events.push(job.events);
         let mut t = tracker.lock().unwrap_or_else(|p| p.into_inner());
@@ -85,24 +103,49 @@ fn start_fleet() -> (SharedTracker, Fleet, Vec<futures::channel::mpsc::Unbounded
 
     // Outside every tracked job: a renamed cmd.exe called codex-demo.exe -> heuristic attribution.
     let external = spawn_external_agent();
-    (tracker.clone(), Fleet { _tracker: tracker, _external: external }, events)
+    (
+        tracker.clone(),
+        Fleet {
+            _tracker: tracker,
+            _external: external,
+        },
+        events,
+    )
 }
 
 fn spawn_external_agent() -> Option<JobGroup> {
     let dir = std::env::temp_dir().join("selachi-procs-demo");
     std::fs::create_dir_all(&dir).ok()?;
     let exe = dir.join("codex-demo.exe");
-    let system = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32").join("cmd.exe");
-    if !exe.exists() && let Err(e) = std::fs::copy(system, &exe) {
+    let system = PathBuf::from(std::env::var_os("SystemRoot")?)
+        .join("System32")
+        .join("cmd.exe");
+    if !exe.exists()
+        && let Err(e) = std::fs::copy(system, &exe)
+    {
         eprintln!("copy cmd.exe: {e}");
         return None;
     }
-    let job = JobGroup::with_options("demo-external", JobOptions { kill_on_close: true, ..JobOptions::default() }).ok()?;
+    let job = JobGroup::with_options(
+        "demo-external",
+        JobOptions {
+            kill_on_close: true,
+            ..JobOptions::default()
+        },
+    )
+    .ok()?;
     let mut cmd = Command::new(&exe);
-    cmd.args(["/c", "pwsh", "-NoProfile", "-NonInteractive", "-Command", LISTENER])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args([
+        "/c",
+        "pwsh",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        LISTENER,
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
     if let Err(e) = job.spawn_command(&mut cmd, CREATE_NO_WINDOW) {
         eprintln!("spawn codex-demo: {e}");
         return None;
@@ -125,7 +168,11 @@ impl Render for Host {
         let t = self.theme;
         let c = t.colors;
         let card = |panel: AnyView, w: Option<f32>, h: Option<f32>| {
-            let mut d = Card::new(&t).tone(CardTone::Raised, &t).flex_none().overflow_hidden().child(panel);
+            let mut d = Card::new(&t)
+                .tone(CardTone::Raised, &t)
+                .flex_none()
+                .overflow_hidden()
+                .child(panel);
             d = match w {
                 Some(w) => d.w(px(w)),
                 None => d.flex_1(),
@@ -154,7 +201,12 @@ impl Render for Host {
             .items_center()
             .gap(px(8.0))
             .child(Logo::new(t.mode).size(22.0))
-            .child(Pill::new("t0", &t).icon(Icon::Terminal).label("api").active(true))
+            .child(
+                Pill::new("t0", &t)
+                    .icon(Icon::Terminal)
+                    .label("api")
+                    .active(true),
+            )
             .child(Pill::new("t1", &t).icon(Icon::Agents).label("web"));
 
         let body = match self.zone {
@@ -189,17 +241,32 @@ impl Render for Host {
                 .child(terminal)
                 .child(card(self.panel.clone(), None, self.panel_height)),
         };
-        div().size_full().bg(c.bg).text_color(c.text).font_family(t.typography.ui_family).flex().flex_col().child(titlebar).child(body)
+        div()
+            .size_full()
+            .bg(c.bg)
+            .text_color(c.text)
+            .font_family(t.typography.ui_family)
+            .flex()
+            .flex_col()
+            .child(titlebar)
+            .child(body)
     }
 }
 
 fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mode = if args.iter().any(|a| a == "light") { Mode::Light } else { Mode::Dark };
+    let mode = if args.iter().any(|a| a == "light") {
+        Mode::Light
+    } else {
+        Mode::Dark
+    };
     let zone = match arg_value(&args, "--zone") {
         Some("sidebar") => PanelZone::Sidebar,
         Some("main") => PanelZone::Main,
@@ -222,56 +289,70 @@ fn main() {
         _ => 392.0,
     };
 
-    Application::new().with_assets(ui_procs::Assets).run(move |cx: &mut App| {
-        if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
-            eprintln!("fonts: {e}");
-        }
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    Application::new()
+        .with_assets(ui_procs::Assets)
+        .run(move |cx: &mut App| {
+            if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
+                eprintln!("fonts: {e}");
             }
-        })
-        .detach();
-        let theme = Theme::for_mode(mode);
-        let (tracker, fleet, events) = start_fleet();
-        let model: Entity<ProcsModel> = cx.new(|cx| {
-            // Only the demo agent name, so real agents on this machine never show up.
-            let mut m = ProcsModel::new(Arc::new(TrackerSource::new(tracker).agents(["codex-demo"])));
-            for rx in events {
-                m.watch_job_events(rx, cx);
-            }
-            m
-        });
-        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-        let model_for_window = model;
-        let _ = cx.open_window(
-            WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
-            move |window, cx| {
-                let provider = ProcsPanelProvider::new(model_for_window.clone());
-                let ctx = PanelCtx::new(zone, WidthClass::from_width(if zone == PanelZone::Bottom { w } else { panel_width }), theme);
-                let panel = provider.build(ctx, window, cx);
-                if ports && let Ok(p) = panel.clone().downcast::<ProcsPanel>() {
-                    p.update(cx, |p, cx| p.select_ports(true, cx));
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
                 }
-                if confirm {
-                    let m = model_for_window.clone();
-                    cx.spawn(async move |cx| {
-                        cx.background_executor().timer(Duration::from_secs(6)).await;
-                        let _ = m.update(cx, |m, cx| m.request_clean_orphans(cx));
+            })
+            .detach();
+            let theme = Theme::for_mode(mode);
+            let (tracker, fleet, events) = start_fleet();
+            let model: Entity<ProcsModel> = cx.new(|cx| {
+                // Only the demo agent name, so real agents on this machine never show up.
+                let mut m =
+                    ProcsModel::new(Arc::new(TrackerSource::new(tracker).agents(["codex-demo"])));
+                for rx in events {
+                    m.watch_job_events(rx, cx);
+                }
+                m
+            });
+            let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+            let model_for_window = model;
+            let _ = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    let provider = ProcsPanelProvider::new(model_for_window.clone());
+                    let ctx = PanelCtx::new(
+                        zone,
+                        WidthClass::from_width(if zone == PanelZone::Bottom {
+                            w
+                        } else {
+                            panel_width
+                        }),
+                        theme,
+                    );
+                    let panel = provider.build(ctx, window, cx);
+                    if ports && let Ok(p) = panel.clone().downcast::<ProcsPanel>() {
+                        p.update(cx, |p, cx| p.select_ports(true, cx));
+                    }
+                    if confirm {
+                        let m = model_for_window.clone();
+                        cx.spawn(async move |cx| {
+                            cx.background_executor().timer(Duration::from_secs(6)).await;
+                            let _ = m.update(cx, |m, cx| m.request_clean_orphans(cx));
+                        })
+                        .detach();
+                    }
+                    // Keep the processes (and their kill-on-close jobs) alive as long as the window.
+                    cx.new(move |_| Host {
+                        theme,
+                        zone,
+                        panel,
+                        panel_width,
+                        panel_height: Some(h - 40.0 - 8.0 - 150.0),
+                        _fleet: fleet,
                     })
-                    .detach();
-                }
-                // Keep the processes (and their kill-on-close jobs) alive as long as the window.
-                cx.new(move |_| Host {
-                    theme,
-                    zone,
-                    panel,
-                    panel_width,
-                    panel_height: Some(h - 40.0 - 8.0 - 150.0),
-                    _fleet: fleet,
-                })
-            },
-        );
-        cx.activate(true);
-    });
+                },
+            );
+            cx.activate(true);
+        });
 }

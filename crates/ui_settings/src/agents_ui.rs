@@ -1,6 +1,9 @@
 //! Agents section: detected CLIs, default permission, Claude statusLine hook, usage options.
 
-use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px};
+use gpui::{
+    AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div,
+    prelude::*, px,
+};
 use store::config::{PermissionDefault, WeekStart};
 use ui_kit::{GhostButton, Spinner, agent_icon};
 
@@ -22,13 +25,18 @@ impl SettingsView {
     /// Run `agents_driver::detect()` on the background executor (once per opening, or when
     /// forced by "Volver a comprobar").
     pub(crate) fn ensure_agents(&mut self, force: bool, cx: &mut Context<Self>) {
-        if matches!(self.agents, AgentsState::Detecting) || (!force && matches!(self.agents, AgentsState::Done(_))) {
+        if matches!(self.agents, AgentsState::Detecting)
+            || (!force && matches!(self.agents, AgentsState::Done(_)))
+        {
             return;
         }
         self.agents = AgentsState::Detecting;
         cx.notify();
         self.agents_task = Some(cx.spawn(async move |this, cx| {
-            let found = cx.background_executor().spawn(async move { agents_driver::detect() }).await;
+            let found = cx
+                .background_executor()
+                .spawn(async move { agents_driver::detect() })
+                .await;
             let rows = agent_rows(&found);
             let _ = this.update(cx, |s, cx| {
                 s.agents = AgentsState::Done(rows);
@@ -38,7 +46,11 @@ impl SettingsView {
         }));
     }
 
-    pub(crate) fn agents_section(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(crate) fn agents_section(
+        &mut self,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
@@ -86,7 +98,11 @@ impl SettingsView {
                             .w_full()
                             .px(px(16.0))
                             .py(px(10.0))
-                            .child(agent_icon(r.mark, 18.0, if muted_out { c.outline } else { c.text }))
+                            .child(agent_icon(
+                                r.mark,
+                                18.0,
+                                if muted_out { c.outline } else { c.text },
+                            ))
                             .child(
                                 div()
                                     .flex_1()
@@ -145,9 +161,14 @@ impl SettingsView {
                 s.edit_cfg(cx, |c| c.agents.permission_default = p);
             },
         );
-        let hook = self.toggle(cx, "statusline-hook", self.cfg.agents.claude_statusline_hook, |s, on, cx| {
-            s.edit_cfg(cx, |c| c.agents.claude_statusline_hook = on);
-        });
+        let hook = self.toggle(
+            cx,
+            "statusline-hook",
+            self.cfg.agents.claude_statusline_hook,
+            |s, on, cx| {
+                s.edit_cfg(cx, |c| c.agents.claude_statusline_hook = on);
+            },
+        );
         let week_value = WEEK_DAYS
             .iter()
             .find(|(_, _, w)| *w == self.cfg.agents.usage_week_start)
@@ -155,7 +176,10 @@ impl SettingsView {
         let week = self.select(
             cx,
             "week-start",
-            WEEK_DAYS.iter().map(|(id, label, _)| ((*id).to_string(), (*label).to_string())).collect(),
+            WEEK_DAYS
+                .iter()
+                .map(|(id, label, _)| ((*id).to_string(), (*label).to_string()))
+                .collect(),
             week_value,
             |s, v, cx| {
                 if let Some((_, _, w)) = WEEK_DAYS.iter().find(|(id, _, _)| *id == v) {
@@ -164,9 +188,14 @@ impl SettingsView {
                 }
             },
         );
-        let estimates = self.toggle(cx, "show-estimates", self.cfg.agents.show_estimates, |s, on, cx| {
-            s.edit_cfg(cx, |c| c.agents.show_estimates = on);
-        });
+        let estimates = self.toggle(
+            cx,
+            "show-estimates",
+            self.cfg.agents.show_estimates,
+            |s, on, cx| {
+                s.edit_cfg(cx, |c| c.agents.show_estimates = on);
+            },
+        );
 
         vec![
             detected.into_any_element(),

@@ -1,8 +1,8 @@
 //! Surfaces: `SectionLabel` (micro label) and `Card` (tonal rounded container).
 
 use gpui::{
-    AnyElement, App, Div, IntoElement, ParentElement, RenderOnce, SharedString, Styled,
-    StyleRefinement, Window, div, px,
+    AnyElement, App, Div, IntoElement, ParentElement, RenderOnce, SharedString, StyleRefinement,
+    Styled, Window, div, px,
 };
 use theme::{Radius, Rgba, Theme};
 
@@ -21,7 +21,11 @@ pub struct SectionLabel {
 
 impl SectionLabel {
     pub fn new(theme: &Theme, text: impl Into<SharedString>) -> Self {
-        Self { theme: *theme, text: text.into(), uppercase: false }
+        Self {
+            theme: *theme,
+            text: text.into(),
+            uppercase: false,
+        }
     }
 
     pub fn uppercase(mut self, uppercase: bool) -> Self {
@@ -33,8 +37,11 @@ impl SectionLabel {
 impl RenderOnce for SectionLabel {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let ty = self.theme.typography;
-        let text: SharedString =
-            if self.uppercase { self.text.to_uppercase().into() } else { self.text };
+        let text: SharedString = if self.uppercase {
+            self.text.to_uppercase().into()
+        } else {
+            self.text
+        };
         div()
             .font_family(ty.ui_family)
             .text_size(px(11.0))
@@ -80,7 +87,11 @@ pub struct Card {
 impl Card {
     /// `surface_1` background, radius `MD` (16).
     pub fn new(theme: &Theme) -> Self {
-        Self { base: div().bg(CardTone::Raised.color(theme)).rounded(px(Radius::MD)) }
+        Self {
+            base: div()
+                .bg(CardTone::Raised.color(theme))
+                .rounded(px(Radius::MD)),
+        }
     }
 
     pub fn tone(mut self, tone: CardTone, theme: &Theme) -> Self {
@@ -139,7 +150,17 @@ pub fn glass_selected(theme: &Theme) -> gpui::Hsla {
 
 fn glass_pill(theme: &Theme, dark: f32, light: f32) -> gpui::Hsla {
     match theme.mode {
-        theme::Mode::Light => gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: light },
-        _ => gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: dark },
+        theme::Mode::Light => gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: light,
+        },
+        _ => gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 1.0,
+            a: dark,
+        },
     }
 }

@@ -8,8 +8,12 @@ pub const BREADCRUMB_MAX_CHARS: usize = 44;
 
 fn home_dir() -> Option<&'static Path> {
     static HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
-    HOME.get_or_init(|| std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from))
-        .as_deref()
+    HOME.get_or_init(|| {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+    })
+    .as_deref()
 }
 
 /// Strips the `\\?\` verbatim prefix that some APIs add.
@@ -23,7 +27,13 @@ fn keys(path: &Path) -> Vec<String> {
     plain(path)
         .split(['\\', '/'])
         .filter(|c| !c.is_empty())
-        .map(|c| if cfg!(windows) { c.to_lowercase() } else { c.to_string() })
+        .map(|c| {
+            if cfg!(windows) {
+                c.to_lowercase()
+            } else {
+                c.to_string()
+            }
+        })
         .collect()
 }
 
@@ -44,7 +54,11 @@ pub fn tilde(path: &Path, home: Option<&Path>) -> String {
                 .filter(|c| !c.is_empty())
                 .skip(h.len())
                 .collect();
-            return if rest.is_empty() { "~".to_string() } else { format!("~\\{}", rest.join("\\")) };
+            return if rest.is_empty() {
+                "~".to_string()
+            } else {
+                format!("~\\{}", rest.join("\\"))
+            };
         }
     }
     plain(path)
@@ -107,11 +121,23 @@ mod tests {
     #[test]
     fn home_becomes_tilde() {
         let home = Path::new(r"C:\Users\venta");
-        assert_eq!(tilde(Path::new(r"C:\Users\venta\Desktop\Terminal\crates"), Some(home)), r"~\Desktop\Terminal\crates");
+        assert_eq!(
+            tilde(
+                Path::new(r"C:\Users\venta\Desktop\Terminal\crates"),
+                Some(home)
+            ),
+            r"~\Desktop\Terminal\crates"
+        );
         assert_eq!(tilde(Path::new(r"c:\users\VENTA"), Some(home)), "~");
-        assert_eq!(tilde(Path::new(r"C:\Users\venta2\x"), Some(home)), r"C:\Users\venta2\x");
+        assert_eq!(
+            tilde(Path::new(r"C:\Users\venta2\x"), Some(home)),
+            r"C:\Users\venta2\x"
+        );
         assert_eq!(tilde(Path::new(r"D:\work"), Some(home)), r"D:\work");
-        assert_eq!(tilde(Path::new(r"\\?\C:\Users\venta\x"), Some(home)), r"~\x");
+        assert_eq!(
+            tilde(Path::new(r"\\?\C:\Users\venta\x"), Some(home)),
+            r"~\x"
+        );
     }
 
     #[test]
@@ -131,7 +157,10 @@ mod tests {
         assert!(t.chars().count() <= 24, "{t}");
         assert_eq!(middle_truncate(r"~\a\b", 24), r"~\a\b");
         // Always keeps the last segment, even if it alone is too long.
-        assert_eq!(middle_truncate(r"~\a\very-long-directory-name", 10), r"~\…\very-long-directory-name");
+        assert_eq!(
+            middle_truncate(r"~\a\very-long-directory-name", 10),
+            r"~\…\very-long-directory-name"
+        );
     }
 
     #[test]

@@ -8,7 +8,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div, prelude::*, px,
+    App, Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div,
+    prelude::*, px,
 };
 use store::BottomBar;
 use theme::{Radius, Theme, rgb};
@@ -16,7 +17,9 @@ use ui_kit::{AgentMark, DitherMeter, Icon, Pill, agent_icon};
 
 use crate::git_monitor::{GitInfo, GitMonitor};
 use crate::mem;
-use crate::usage_monitor::{Official, UsageInfo, UsageMonitor, compact_tokens, now_ms, usage_tooltip};
+use crate::usage_monitor::{
+    Official, UsageInfo, UsageMonitor, compact_tokens, now_ms, usage_tooltip,
+};
 
 /// Height of the compact bar in logical pixels.
 pub const STATUS_H: f32 = 28.0;
@@ -86,7 +89,12 @@ pub struct StatusBar {
 }
 
 impl StatusBar {
-    pub fn new(theme: Theme, mode: BottomBar, usage: Entity<UsageMonitor>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        theme: Theme,
+        mode: BottomBar,
+        usage: Entity<UsageMonitor>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // The monitors call `cx.notify()` when their data changes: repaint with it.
         let usage_sub = cx.observe(&usage, |_, _, cx| cx.notify());
         Self {
@@ -123,7 +131,11 @@ impl StatusBar {
     }
 
     /// Clicking the usage pill (or the full bar's usage block) calls `on_click`: opens the usage panel.
-    pub fn set_on_usage(&mut self, on_click: impl Fn(&mut Window, &mut App) + 'static, cx: &mut Context<Self>) {
+    pub fn set_on_usage(
+        &mut self,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
         self.on_usage = Some(Rc::new(on_click));
         cx.notify();
     }
@@ -150,7 +162,9 @@ impl StatusBar {
         let mut pill = Pill::compact("attention-pill", &self.theme)
             .icon(Icon::Attention)
             .label(n.to_string())
-            .tooltip("Algo espera tu atención (Ctrl+Shift+A salta al siguiente). Clic para ver la cola.");
+            .tooltip(
+                "Algo espera tu atención (Ctrl+Shift+A salta al siguiente). Clic para ver la cola.",
+            );
         if let Some(f) = self.on_attention.clone() {
             pill = pill.on_click(move |_, window, cx| f(window, cx));
         }
@@ -159,7 +173,10 @@ impl StatusBar {
 
     /// The orphan alert: shown only while there are orphans; the last thing to hide.
     fn orphan_pill(&self, cx: &Context<Self>) -> Option<Pill> {
-        let label = self.procs.as_ref().and_then(|p| p.read(cx).orphan_summary().label())?;
+        let label = self
+            .procs
+            .as_ref()
+            .and_then(|p| p.read(cx).orphan_summary().label())?;
         let mut pill = Pill::compact("orphan-pill", &self.theme)
             .icon(Icon::Alert)
             .label(label)
@@ -232,7 +249,11 @@ impl StatusBar {
     fn git_pill(&self, info: &GitInfo) -> Pill {
         let yellow = rgb(self.theme.terminal.ansi[3]);
         let mut tip = format!("Rama {}", info.branch);
-        tip.push_str(if info.dirty { " · cambios sin confirmar" } else { " · limpia" });
+        tip.push_str(if info.dirty {
+            " · cambios sin confirmar"
+        } else {
+            " · limpia"
+        });
         if info.ahead > 0 {
             tip.push_str(&format!(" · {} por subir", info.ahead));
         }
@@ -259,14 +280,19 @@ impl StatusBar {
         let official = info.fresh_official().cloned();
         let pill = Pill::compact("usage-pill", &self.theme)
             // The headline is what is billed: input + output + cache creation (not cache reads).
-            .label(format!("Claude {} · sem", compact_tokens(info.week.billable())))
+            .label(format!(
+                "Claude {} · sem",
+                compact_tokens(info.week.billable())
+            ))
             .tooltip(usage_tooltip(info, now_ms()));
         let pill = match self.on_usage.clone() {
             Some(f) => pill.on_click(move |_, window, cx| f(window, cx)),
             None => pill,
         };
         match official {
-            Some(o) => pill.child(DitherMeter::new(&self.theme).value(Some((o.percent / 100.0) as f32))),
+            Some(o) => {
+                pill.child(DitherMeter::new(&self.theme).value(Some((o.percent / 100.0) as f32)))
+            }
             None => pill,
         }
     }
@@ -279,7 +305,11 @@ impl StatusBar {
         let (value, text) = match official {
             Some(o) => (
                 Some((o.percent / 100.0) as f32),
-                format!("{:.0} %  ·  reinicia en {}", o.percent, format_reset(o.resets_at_ms, now_ms())),
+                format!(
+                    "{:.0} %  ·  reinicia en {}",
+                    o.percent,
+                    format_reset(o.resets_at_ms, now_ms())
+                ),
             ),
             None => (None, "sin datos".to_string()),
         };
@@ -288,9 +318,20 @@ impl StatusBar {
             .flex_row()
             .items_center()
             .gap(px(8.0))
-            .child(div().w(px(34.0)).text_color(c.muted).text_size(px(ty.ui_size_sm)).child(label))
+            .child(
+                div()
+                    .w(px(34.0))
+                    .text_color(c.muted)
+                    .text_size(px(ty.ui_size_sm))
+                    .child(label),
+            )
             .child(DitherMeter::new(&self.theme).value(value))
-            .child(div().text_color(c.text).text_size(px(ty.ui_size_sm)).child(text))
+            .child(
+                div()
+                    .text_color(c.text)
+                    .text_size(px(ty.ui_size_sm))
+                    .child(text),
+            )
     }
 
     /// The per-agent block of the full bar.
@@ -319,7 +360,12 @@ impl StatusBar {
                     .items_center()
                     .gap(px(8.0))
                     .child(agent_icon(AgentMark::from_name(name), 16.0, c.text))
-                    .child(div().text_size(px(ty.ui_size_md)).text_color(c.text).child(name)),
+                    .child(
+                        div()
+                            .text_size(px(ty.ui_size_md))
+                            .text_color(c.text)
+                            .child(name),
+                    ),
             )
             .child(
                 div()
@@ -329,10 +375,17 @@ impl StatusBar {
                     .child(self.meter_cell("5 h", info.fresh_five_hour()))
                     .child(self.meter_cell("sem", info.fresh_official())),
             )
-            .children(week.map(|w| div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(w)))
+            .children(week.map(|w| {
+                div()
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.muted)
+                    .child(w)
+            }))
             .cursor_pointer()
             .hover(move |s| s.bg(c.surface_2))
-            .when_some(self.on_usage.clone(), |d, f| d.on_click(move |_, window, cx| f(window, cx)))
+            .when_some(self.on_usage.clone(), |d, f| {
+                d.on_click(move |_, window, cx| f(window, cx))
+            })
     }
 
     fn read_label() -> SharedString {
@@ -346,7 +399,8 @@ impl StatusBar {
 impl Render for StatusBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ty = self.theme.typography;
-        let (full_fits, usage_fits, ram_fits) = visible_pieces(f32::from(window.viewport_size().width));
+        let (full_fits, usage_fits, ram_fits) =
+            visible_pieces(f32::from(window.viewport_size().width));
         let git = self.git.as_ref().and_then(|g| g.read(cx).info().cloned());
         let usage = self.usage.read(cx).info().cloned();
         let orphans = self.orphan_pill(cx);
@@ -368,16 +422,20 @@ impl Render for StatusBar {
                 .font_family(ty.ui_family)
                 .text_size(px(ty.ui_size_sm))
                 .children(usage.as_ref().map(|u| self.agent_block("Claude", u)))
-                .children(
-                    usage
-                        .is_none()
-                        .then(|| div().text_color(self.theme.colors.muted).child("Sin datos de uso todavía")),
-                )
+                .children(usage.is_none().then(|| {
+                    div()
+                        .text_color(self.theme.colors.muted)
+                        .child("Sin datos de uso todavía")
+                }))
                 .children(git.map(|g| self.git_pill(&g)))
                 .children(orphans)
                 .children(attention)
                 .child(div().flex_1())
-                .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
+                .children(
+                    ram_fits.then(|| {
+                        Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())
+                    }),
+                )
                 .into_any_element();
         }
         div()
@@ -394,9 +452,16 @@ impl Render for StatusBar {
             .children(git.map(|g| self.git_pill(&g)))
             .children(orphans_compact)
             .children(attention_compact)
-            .children(usage.filter(|_| usage_fits && !self.dedupe_usage).map(|u| self.usage_pill(&u)))
+            .children(
+                usage
+                    .filter(|_| usage_fits && !self.dedupe_usage)
+                    .map(|u| self.usage_pill(&u)),
+            )
             .child(div().flex_1())
-            .children(ram_fits.then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())))
+            .children(
+                ram_fits
+                    .then(|| Pill::compact("ram-pill", &self.theme).label(self.mem_label.clone())),
+            )
             .into_any_element()
     }
 }

@@ -30,11 +30,17 @@ fn update(sid: &str, u: Value) {
 }
 
 fn chunk(sid: &str, text: &str) {
-    update(sid, json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}));
+    update(
+        sid,
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}),
+    );
 }
 
 /// Read stdin lines until a message satisfying `pred` arrives.
-fn read_until(lines: &mut impl Iterator<Item = String>, pred: impl Fn(&Value) -> bool) -> Option<Value> {
+fn read_until(
+    lines: &mut impl Iterator<Item = String>,
+    pred: impl Fn(&Value) -> bool,
+) -> Option<Value> {
     for l in lines {
         if let Ok(v) = serde_json::from_str::<Value>(&l) {
             if pred(&v) {
@@ -60,7 +66,9 @@ fn fake_agent_main() {
     let mut model = "m1".to_string();
     let sid = "fake-session";
     while let Some(line) = lines.next() {
-        let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let id = msg.get("id").cloned();
         match (msg["method"].as_str(), id) {
             (Some("initialize"), Some(id)) => out(json!({"jsonrpc":"2.0","id":id,"result":{
@@ -80,59 +88,127 @@ fn fake_agent_main() {
                 out(json!({"jsonrpc":"2.0","id":id,"result":{"configOptions":[]}}));
             }
             (Some("session/prompt"), Some(id)) => {
-                let text = msg["params"]["prompt"][0]["text"].as_str().unwrap_or("").to_string();
+                let text = msg["params"]["prompt"][0]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 let mut stop = "end_turn";
                 match text.as_str() {
                     "hello" => {
-                        update(sid, json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}));
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}),
+                        );
                         for w in ["Hello", " ", "world"] {
                             chunk(sid, w);
                         }
-                        update(sid, json!({"sessionUpdate":"plan","entries":[
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"plan","entries":[
                             {"content":"step one","priority":"high","status":"completed"},
-                            {"content":"step two","priority":"high","status":"pending"}]}));
-                        update(sid, json!({"sessionUpdate":"usage_update","used":10,"size":1000,"cost":{"amount":0.5,"currency":"USD"}}));
+                            {"content":"step two","priority":"high","status":"pending"}]}),
+                        );
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"usage_update","used":10,"size":1000,"cost":{"amount":0.5,"currency":"USD"}}),
+                        );
                     }
                     "tool" => {
-                        update(sid, json!({"sessionUpdate":"tool_call","toolCallId":"c1","title":"read","kind":"read","status":"pending","rawInput":{"filePath":"a.txt"}}));
-                        update(sid, json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"in_progress"}));
-                        update(sid, json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"completed",
-                            "content":[{"type":"content","content":{"type":"text","text":"file contents"}}]}));
-                        update(sid, json!({"sessionUpdate":"tool_call","toolCallId":"c2","title":"bash","kind":"execute","status":"pending"}));
-                        update(sid, json!({"sessionUpdate":"tool_call_update","toolCallId":"c2","status":"failed","rawOutput":{"error":"exit 1"}}));
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"tool_call","toolCallId":"c1","title":"read","kind":"read","status":"pending","rawInput":{"filePath":"a.txt"}}),
+                        );
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"in_progress"}),
+                        );
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"completed",
+                            "content":[{"type":"content","content":{"type":"text","text":"file contents"}}]}),
+                        );
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"tool_call","toolCallId":"c2","title":"bash","kind":"execute","status":"pending"}),
+                        );
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"tool_call_update","toolCallId":"c2","status":"failed","rawOutput":{"error":"exit 1"}}),
+                        );
                     }
                     "perm" => {
-                        out(json!({"jsonrpc":"2.0","id":100,"method":"session/request_permission","params":{
+                        out(
+                            json!({"jsonrpc":"2.0","id":100,"method":"session/request_permission","params":{
                             "sessionId":sid,
                             "toolCall":{"toolCallId":"p1","title":"bash","kind":"execute","rawInput":{"command":"cargo build"}},
                             "options":[
                                 {"optionId":"once","kind":"allow_once","name":"Allow once"},
                                 {"optionId":"always","kind":"allow_always","name":"Always allow"},
-                                {"optionId":"reject","kind":"reject_once","name":"Reject"}]}}));
-                        let resp = read_until(&mut lines, |v| v["id"] == 100 && v.get("method").is_none()).unwrap();
+                                {"optionId":"reject","kind":"reject_once","name":"Reject"}]}}),
+                        );
+                        let resp =
+                            read_until(&mut lines, |v| v["id"] == 100 && v.get("method").is_none())
+                                .unwrap();
                         let outcome = &resp["result"]["outcome"];
-                        let chosen = outcome["optionId"].as_str().unwrap_or(outcome["outcome"].as_str().unwrap_or("?"));
+                        let chosen = outcome["optionId"]
+                            .as_str()
+                            .unwrap_or(outcome["outcome"].as_str().unwrap_or("?"));
                         chunk(sid, &format!("chosen:{chosen}"));
                         let ok = chosen != "reject" && chosen != "cancelled";
-                        update(sid, json!({"sessionUpdate":"tool_call_update","toolCallId":"p1","title":"bash",
-                            "kind":"execute","status": if ok {"completed"} else {"failed"}}));
+                        update(
+                            sid,
+                            json!({"sessionUpdate":"tool_call_update","toolCallId":"p1","title":"bash",
+                            "kind":"execute","status": if ok {"completed"} else {"failed"}}),
+                        );
                     }
                     "fsread" => {
-                        out(json!({"jsonrpc":"2.0","id":200,"method":"fs/read_text_file","params":{
-                            "sessionId":sid,"path":Path::new(&cwd).join("hello.txt")}}));
+                        out(
+                            json!({"jsonrpc":"2.0","id":200,"method":"fs/read_text_file","params":{
+                            "sessionId":sid,"path":Path::new(&cwd).join("hello.txt")}}),
+                        );
                         let r = read_until(&mut lines, |v| v["id"] == 200).unwrap();
-                        chunk(sid, &format!("inside:{}", r["result"]["content"].as_str().unwrap_or("ERR")));
+                        chunk(
+                            sid,
+                            &format!(
+                                "inside:{}",
+                                r["result"]["content"].as_str().unwrap_or("ERR")
+                            ),
+                        );
                         let outside = Path::new(&cwd).parent().unwrap().join("outside-secret.txt");
-                        out(json!({"jsonrpc":"2.0","id":201,"method":"fs/read_text_file","params":{
-                            "sessionId":sid,"path":outside}}));
+                        out(
+                            json!({"jsonrpc":"2.0","id":201,"method":"fs/read_text_file","params":{
+                            "sessionId":sid,"path":outside}}),
+                        );
                         let r = read_until(&mut lines, |v| v["id"] == 201).unwrap();
-                        chunk(sid, &format!("outside:{}", if r.get("error").is_some() { "denied" } else { "LEAKED" }));
+                        chunk(
+                            sid,
+                            &format!(
+                                "outside:{}",
+                                if r.get("error").is_some() {
+                                    "denied"
+                                } else {
+                                    "LEAKED"
+                                }
+                            ),
+                        );
                     }
                     "fswrite" => {
-                        out(json!({"jsonrpc":"2.0","id":300,"method":"fs/write_text_file","params":{
-                            "sessionId":sid,"path":Path::new(&cwd).join("written.txt"),"content":"from agent"}}));
+                        out(
+                            json!({"jsonrpc":"2.0","id":300,"method":"fs/write_text_file","params":{
+                            "sessionId":sid,"path":Path::new(&cwd).join("written.txt"),"content":"from agent"}}),
+                        );
                         let r = read_until(&mut lines, |v| v["id"] == 300).unwrap();
-                        chunk(sid, &format!("write:{}", if r.get("error").is_some() { "denied" } else { "ok" }));
+                        chunk(
+                            sid,
+                            &format!(
+                                "write:{}",
+                                if r.get("error").is_some() {
+                                    "denied"
+                                } else {
+                                    "ok"
+                                }
+                            ),
+                        );
                     }
                     "model" => chunk(sid, &format!("model:{model}")),
                     "slow" => {
@@ -154,7 +230,9 @@ fn fake_agent_main() {
                 }
                 out(json!({"jsonrpc":"2.0","id":id,"result":result}));
             }
-            (Some(other), Some(id)) => out(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":format!("no {other}")}})),
+            (Some(other), Some(id)) => out(
+                json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":format!("no {other}")}}),
+            ),
             _ => {}
         }
     }
@@ -168,7 +246,12 @@ fn fake_command() -> AcpCommand {
     let exe = std::env::current_exe().unwrap();
     let mut c = AcpCommand::new(
         exe,
-        vec!["--exact".into(), "fake_agent_main".into(), "--nocapture".into(), "--test-threads=1".into()],
+        vec![
+            "--exact".into(),
+            "fake_agent_main".into(),
+            "--nocapture".into(),
+            "--test-threads=1".into(),
+        ],
     );
     c.env.push(("FAKE_ACP_AGENT".into(), "1".into()));
     c.label = "fake-acp".into();
@@ -191,7 +274,10 @@ fn start(cfg: &ThreadConfig) -> (AcpDriver, UnboundedReceiver<AgentEvent>) {
 }
 
 /// Collect events until `stop` matches one (inclusive); panics after 20 s.
-fn collect_until(rx: &mut UnboundedReceiver<AgentEvent>, stop: impl Fn(&AgentEvent) -> bool) -> Vec<AgentEvent> {
+fn collect_until(
+    rx: &mut UnboundedReceiver<AgentEvent>,
+    stop: impl Fn(&AgentEvent) -> bool,
+) -> Vec<AgentEvent> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut v = Vec::new();
     loop {
@@ -204,7 +290,10 @@ fn collect_until(rx: &mut UnboundedReceiver<AgentEvent>, stop: impl Fn(&AgentEve
                 }
             }
             Err(_) => {
-                assert!(Instant::now() < deadline, "timed out; events so far: {v:#?}");
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out; events so far: {v:#?}"
+                );
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
@@ -235,22 +324,44 @@ fn handshake_streaming_plan_and_usage() {
     d.send("hello").unwrap();
     let evs = collect_until(&mut rx, is_done);
 
-    assert!(evs.iter().any(|e| matches!(e, AgentEvent::SessionStarted { session_id, model }
-        if session_id == "fake-session" && model.as_deref() == Some("m1"))), "{evs:#?}");
+    assert!(
+        evs.iter().any(
+            |e| matches!(e, AgentEvent::SessionStarted { session_id, model }
+        if session_id == "fake-session" && model.as_deref() == Some("m1"))
+        ),
+        "{evs:#?}"
+    );
     assert!(evs.contains(&AgentEvent::Status(AgentStatus::Working)));
-    assert!(evs.iter().any(|e| matches!(e, AgentEvent::Thinking { text, .. } if text == "thinking")));
+    assert!(evs
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Thinking { text, .. } if text == "thinking")));
     assert_eq!(text_of(&evs), "Hello world");
     assert!(evs.iter().any(|e| matches!(e, AgentEvent::Plan { tasks }
         if tasks == &vec![("step one".to_string(), TaskState::Done), ("step two".to_string(), TaskState::Pending)])));
     let usage = evs.iter().find_map(|e| match e {
-        AgentEvent::Usage { input, output, cache_create, cache_read, cost_usd, context_window } => {
-            Some((*input, *output, *cache_create, *cache_read, *cost_usd, *context_window))
-        }
+        AgentEvent::Usage {
+            input,
+            output,
+            cache_create,
+            cache_read,
+            cost_usd,
+            context_window,
+        } => Some((
+            *input,
+            *output,
+            *cache_create,
+            *cache_read,
+            *cost_usd,
+            *context_window,
+        )),
         _ => None,
     });
     assert_eq!(usage, Some((10, 25, 1, 4, Some(0.5), Some(1000))));
     // usage precedes Done (the UI sums usage per turn)
-    let ui = evs.iter().position(|e| matches!(e, AgentEvent::Usage { .. })).unwrap();
+    let ui = evs
+        .iter()
+        .position(|e| matches!(e, AgentEvent::Usage { .. }))
+        .unwrap();
     assert_eq!(ui, evs.len() - 2);
     assert_eq!(d.session_id().as_deref(), Some("fake-session"));
     d.shutdown();
@@ -265,18 +376,33 @@ fn tool_calls_map_to_call_and_result_events() {
     d.send("tool").unwrap();
     let evs = collect_until(&mut rx, is_done);
     assert!(evs.contains(&AgentEvent::ToolCall {
-        id: "c1".into(), kind: ToolKind::Read, title: "read".into(), input_json: json!({"filePath":"a.txt"})
+        id: "c1".into(),
+        kind: ToolKind::Read,
+        title: "read".into(),
+        input_json: json!({"filePath":"a.txt"})
     }));
-    assert!(evs.contains(&AgentEvent::ToolResult { id: "c1".into(), ok: true, summary: "file contents".into() }));
-    assert!(evs.iter().any(|e| matches!(e, AgentEvent::ToolCall { id, kind: ToolKind::Command, .. } if id == "c2")));
-    assert!(evs.contains(&AgentEvent::ToolResult { id: "c2".into(), ok: false, summary: "exit 1".into() }));
+    assert!(evs.contains(&AgentEvent::ToolResult {
+        id: "c1".into(),
+        ok: true,
+        summary: "file contents".into()
+    }));
+    assert!(evs.iter().any(
+        |e| matches!(e, AgentEvent::ToolCall { id, kind: ToolKind::Command, .. } if id == "c2")
+    ));
+    assert!(evs.contains(&AgentEvent::ToolResult {
+        id: "c2".into(),
+        ok: false,
+        summary: "exit 1".into()
+    }));
     d.shutdown();
 }
 
 fn approval(evs: &[AgentEvent]) -> (String, String, String) {
     evs.iter()
         .find_map(|e| match e {
-            AgentEvent::ApprovalRequest { id, tool, detail } => Some((id.clone(), tool.clone(), detail.clone())),
+            AgentEvent::ApprovalRequest { id, tool, detail } => {
+                Some((id.clone(), tool.clone(), detail.clone()))
+            }
             _ => None,
         })
         .expect("approval request")
@@ -288,9 +414,14 @@ fn permission_round_trip_allow_and_deny() {
     let (mut d, mut rx) = start(&ThreadConfig::new(&ws));
 
     d.send("perm").unwrap();
-    let evs = collect_until(&mut rx, |e| matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput)));
+    let evs = collect_until(&mut rx, |e| {
+        matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput))
+    });
     let (id, tool, detail) = approval(&evs);
-    assert_eq!((tool.as_str(), detail.as_str()), ("bash", "bash: cargo build"));
+    assert_eq!(
+        (tool.as_str(), detail.as_str()),
+        ("bash", "bash: cargo build")
+    );
     d.approve(&id, true).unwrap();
     let evs = collect_until(&mut rx, is_done);
     assert_eq!(text_of(&evs), "chosen:once");
@@ -298,14 +429,18 @@ fn permission_round_trip_allow_and_deny() {
     assert!(d.approve(&id, true).is_err(), "already answered");
 
     d.send("perm").unwrap();
-    let evs = collect_until(&mut rx, |e| matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput)));
+    let evs = collect_until(&mut rx, |e| {
+        matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput))
+    });
     let (id, ..) = approval(&evs);
     d.approve(&id, false).unwrap();
     let evs = collect_until(&mut rx, is_done);
     assert_eq!(text_of(&evs), "chosen:reject");
 
     d.send("perm").unwrap();
-    let evs = collect_until(&mut rx, |e| matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput)));
+    let evs = collect_until(&mut rx, |e| {
+        matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput))
+    });
     let (id, ..) = approval(&evs);
     d.approve_always(&id).unwrap();
     assert_eq!(text_of(&collect_until(&mut rx, is_done)), "chosen:always");
@@ -320,7 +455,9 @@ fn full_mode_answers_permissions_without_asking() {
     let (mut d, mut rx) = start(&cfg);
     d.send("perm").unwrap();
     let evs = collect_until(&mut rx, is_done);
-    assert!(!evs.iter().any(|e| matches!(e, AgentEvent::ApprovalRequest { .. })));
+    assert!(!evs
+        .iter()
+        .any(|e| matches!(e, AgentEvent::ApprovalRequest { .. })));
     assert_eq!(text_of(&evs), "chosen:once");
     d.shutdown();
 }
@@ -330,7 +467,10 @@ fn cancel_ends_the_turn_and_keeps_the_session_alive() {
     let ws = workspace("cancel");
     let (mut d, mut rx) = start(&ThreadConfig::new(&ws));
     d.send("slow").unwrap();
-    collect_until(&mut rx, |e| matches!(e, AgentEvent::Text { text, .. } if text.contains("working")));
+    collect_until(
+        &mut rx,
+        |e| matches!(e, AgentEvent::Text { text, .. } if text.contains("working")),
+    );
     d.interrupt().unwrap();
     collect_until(&mut rx, is_done);
     d.send("hello").unwrap();
@@ -349,19 +489,29 @@ fn client_fs_read_is_sandboxed_and_write_needs_approval() {
     assert_eq!(text_of(&evs), "inside:hi thereoutside:denied");
 
     d.send("fswrite").unwrap();
-    let evs = collect_until(&mut rx, |e| matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput)));
+    let evs = collect_until(&mut rx, |e| {
+        matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput))
+    });
     let (id, tool, detail) = approval(&evs);
     assert_eq!(tool, "write_text_file");
     assert!(detail.ends_with("written.txt"), "{detail}");
-    assert!(!ws.join("written.txt").exists(), "nothing written before approval");
+    assert!(
+        !ws.join("written.txt").exists(),
+        "nothing written before approval"
+    );
     d.approve(&id, true).unwrap();
     assert_eq!(text_of(&collect_until(&mut rx, is_done)), "write:ok");
-    assert_eq!(std::fs::read_to_string(ws.join("written.txt")).unwrap(), "from agent");
+    assert_eq!(
+        std::fs::read_to_string(ws.join("written.txt")).unwrap(),
+        "from agent"
+    );
 
     // denied write
     std::fs::remove_file(ws.join("written.txt")).unwrap();
     d.send("fswrite").unwrap();
-    let evs = collect_until(&mut rx, |e| matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput)));
+    let evs = collect_until(&mut rx, |e| {
+        matches!(e, AgentEvent::Status(AgentStatus::WaitingForInput))
+    });
     let (id, ..) = approval(&evs);
     d.approve(&id, false).unwrap();
     assert_eq!(text_of(&collect_until(&mut rx, is_done)), "write:denied");
@@ -397,8 +547,13 @@ fn command_line_parsing_resolves_quoted_program() {
     let exe = std::env::current_exe().unwrap();
     let mut cfg = ThreadConfig::new(".");
     cfg.extra_args = vec!["--extra".into()];
-    let c = AcpCommand::from_command_line(&format!("\"{}\" --flag \"two words\"", exe.display()), &cfg).unwrap();
+    let c =
+        AcpCommand::from_command_line(&format!("\"{}\" --flag \"two words\"", exe.display()), &cfg)
+            .unwrap();
     assert_eq!(c.program, exe);
     assert_eq!(c.args, vec!["--flag", "two words", "--extra"]);
-    assert!(matches!(AcpCommand::from_command_line("no-such-acp-binary-xyz", &cfg), Err(DriverError::NotFound(_))));
+    assert!(matches!(
+        AcpCommand::from_command_line("no-such-acp-binary-xyz", &cfg),
+        Err(DriverError::NotFound(_))
+    ));
 }

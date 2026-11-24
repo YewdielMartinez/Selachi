@@ -56,8 +56,13 @@ impl AgentResolver for FakeResolver {
             Some("claude") => Ok(AgentKind::ClaudeCode),
             Some("codex") => Ok(AgentKind::Codex),
             Some("opencode") => Ok(AgentKind::OpenCode),
-            Some(other) => Ok(AgentKind::Acp { command: format!("{other} --acp") }),
-            None => Err(Refusal::new(RefusalCode::UnknownAgent, format!("unknown agent `{}`", name.trim()))),
+            Some(other) => Ok(AgentKind::Acp {
+                command: format!("{other} --acp"),
+            }),
+            None => Err(Refusal::new(
+                RefusalCode::UnknownAgent,
+                format!("unknown agent `{}`", name.trim()),
+            )),
         }
     }
 }
@@ -72,16 +77,35 @@ struct FakeControl {
 }
 
 impl DriverFactory for FakeFactory {
-    fn spawn(&self, _kind: &AgentKind, cfg: &ThreadConfig, _job: Option<JobHandle>) -> agents_driver::Result<SpawnedAgent> {
+    fn spawn(
+        &self,
+        _kind: &AgentKind,
+        cfg: &ThreadConfig,
+        _job: Option<JobHandle>,
+    ) -> agents_driver::Result<SpawnedAgent> {
         let (tx, events) = unbounded();
-        let control = FakeControl { script: self.0.clone(), cwd: cfg.cwd.clone(), tx, stopped: Arc::new(AtomicBool::new(false)) };
-        Ok(SpawnedAgent { control: Box::new(control), events, pid: None })
+        let control = FakeControl {
+            script: self.0.clone(),
+            cwd: cfg.cwd.clone(),
+            tx,
+            stopped: Arc::new(AtomicBool::new(false)),
+        };
+        Ok(SpawnedAgent {
+            control: Box::new(control),
+            events,
+            pid: None,
+        })
     }
 }
 
 impl AgentControl for FakeControl {
     fn send(&mut self, text: &str) -> agents_driver::Result<()> {
-        let (script, cwd, tx, stopped) = (self.script.clone(), self.cwd.clone(), self.tx.clone(), self.stopped.clone());
+        let (script, cwd, tx, stopped) = (
+            self.script.clone(),
+            self.cwd.clone(),
+            self.tx.clone(),
+            self.stopped.clone(),
+        );
         let prompt_len = text.chars().count();
         let send = move |e: AgentEvent| tx.unbounded_send(e).map_err(|_| DriverError::Closed);
         send(AgentEvent::Status(AgentStatus::Working))?;
@@ -116,9 +140,19 @@ impl AgentControl for FakeControl {
             if script.echo_prompt_len {
                 reply.push_str(&format!(" prompt_len={prompt_len}"));
             }
-            emit(AgentEvent::Text { text: reply, delta: false });
+            emit(AgentEvent::Text {
+                text: reply,
+                delta: false,
+            });
             if let Some([i, o]) = script.usage {
-                emit(AgentEvent::Usage { input: i, output: o, cache_create: 0, cache_read: 0, cost_usd: None, context_window: None });
+                emit(AgentEvent::Usage {
+                    input: i,
+                    output: o,
+                    cache_create: 0,
+                    cache_read: 0,
+                    cost_usd: None,
+                    context_window: None,
+                });
             }
             emit(AgentEvent::Status(AgentStatus::Done));
         });
@@ -142,8 +176,14 @@ impl AgentControl for FakeControl {
 
 /// Install the scripted driver when `SELACHI_AGENT_FAKE` names a readable script.
 pub fn apply_env(builder: HarnessBuilder) -> Result<HarnessBuilder, String> {
-    let Some(path) = std::env::var_os(ENV_FAKE).filter(|p| !p.is_empty()) else { return Ok(builder) };
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{ENV_FAKE}: cannot read {}: {e}", path.to_string_lossy()))?;
-    let script: Script = serde_json::from_str(&text).map_err(|e| format!("{ENV_FAKE}: bad script: {e}"))?;
-    Ok(builder.factory(Arc::new(FakeFactory(script))).resolver(Arc::new(FakeResolver)))
+    let Some(path) = std::env::var_os(ENV_FAKE).filter(|p| !p.is_empty()) else {
+        return Ok(builder);
+    };
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("{ENV_FAKE}: cannot read {}: {e}", path.to_string_lossy()))?;
+    let script: Script =
+        serde_json::from_str(&text).map_err(|e| format!("{ENV_FAKE}: bad script: {e}"))?;
+    Ok(builder
+        .factory(Arc::new(FakeFactory(script)))
+        .resolver(Arc::new(FakeResolver)))
 }

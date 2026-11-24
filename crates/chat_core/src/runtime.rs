@@ -26,11 +26,15 @@ use crate::db::{ChatDb, StoredMessage};
 use crate::error::{ChatError, Result};
 use crate::handoff::{build_handoff, HandoffInput};
 use crate::hooks::{
-    driver_err_text, owner_agent_name, AgentControl, DriverFactory, JobHandle, OwnerInfo, ProcessHooks,
+    driver_err_text, owner_agent_name, AgentControl, DriverFactory, JobHandle, OwnerInfo,
+    ProcessHooks,
 };
-use crate::model::{agent_label, now_ms, should_checkpoint, ApprovalDecision, ThreadId, ThreadRecord, ThreadStatus};
+use crate::model::{
+    agent_label, now_ms, should_checkpoint, ApprovalDecision, ThreadId, ThreadRecord, ThreadStatus,
+};
 use crate::state::{
-    message_from_row, Changed, CheckpointRef, CostPolicy, Effects, Message, Persist, Plan, ThreadState,
+    message_from_row, Changed, CheckpointRef, CostPolicy, Effects, Message, Persist, Plan,
+    ThreadState,
 };
 
 /// Minimum spacing between two [`ThreadUpdate`]s of the same thread.
@@ -65,7 +69,14 @@ impl Shared {
         pricing: Arc<PricingTable>,
         policy: CostPolicy,
     ) -> Self {
-        Self { db, factory, hooks, pricing, policy, subs: Mutex::new(Vec::new()) }
+        Self {
+            db,
+            factory,
+            hooks,
+            pricing,
+            policy,
+            subs: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn subscribe(&self) -> UnboundedReceiver<ThreadUpdate> {
@@ -75,24 +86,43 @@ impl Shared {
     }
 
     pub fn publish(&self, u: ThreadUpdate) {
-        self.subs.lock().retain(|s| s.unbounded_send(u.clone()).is_ok());
+        self.subs
+            .lock()
+            .retain(|s| s.unbounded_send(u.clone()).is_ok());
     }
 }
 
 enum Cmd {
-    Send { text: String, attachments: Vec<PathBuf> },
+    Send {
+        text: String,
+        attachments: Vec<PathBuf>,
+    },
     Interrupt,
-    Approve { request_id: String, decision: ApprovalDecision },
-    Switch { agent: AgentKind, model: Option<String>, effort: Option<String> },
+    Approve {
+        request_id: String,
+        decision: ApprovalDecision,
+    },
+    Switch {
+        agent: AgentKind,
+        model: Option<String>,
+        effort: Option<String>,
+    },
     SetPermission(PermissionMode),
     /// The pump saw the agent process exit.
-    DriverExited { gen: u64 },
-    Close { reply: Option<std::sync::mpsc::SyncSender<()>> },
+    DriverExited {
+        gen: u64,
+    },
+    Close {
+        reply: Option<std::sync::mpsc::SyncSender<()>>,
+    },
 }
 
 enum Slot {
     NotStarted,
-    Running { tx: Sender<Cmd>, handle: Option<JoinHandle<()>> },
+    Running {
+        tx: Sender<Cmd>,
+        handle: Option<JoinHandle<()>>,
+    },
     Closed,
 }
 
@@ -122,7 +152,9 @@ pub type ThreadHandle = ThreadRuntime;
 
 impl std::fmt::Debug for ThreadRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ThreadRuntime").field("id", &self.core.id).finish()
+        f.debug_struct("ThreadRuntime")
+            .field("id", &self.core.id)
+            .finish()
     }
 }
 
@@ -144,14 +176,23 @@ pub(crate) fn decode_messages(rows: Vec<StoredMessage>) -> Vec<Message> {
 }
 
 pub(crate) fn load_plan(db: &ChatDb, id: ThreadId) -> Option<Plan> {
-    db.load_plan(id).ok().flatten().and_then(|j| serde_json::from_str(&j).ok())
+    db.load_plan(id)
+        .ok()
+        .flatten()
+        .and_then(|j| serde_json::from_str(&j).ok())
 }
 
 impl ThreadRuntime {
     pub(crate) fn load(shared: Arc<Shared>, record: ThreadRecord) -> Result<ThreadRuntime> {
         let messages = decode_messages(shared.db.load_messages(record.id)?);
         let plan = load_plan(&shared.db, record.id);
-        let state = ThreadState::from_stored(&record, messages, plan, shared.pricing.clone(), shared.policy);
+        let state = ThreadState::from_stored(
+            &record,
+            messages,
+            plan,
+            shared.pricing.clone(),
+            shared.policy,
+        );
         Ok(ThreadRuntime {
             core: Arc::new(Core {
                 id: record.id,
@@ -229,7 +270,10 @@ impl ThreadRuntime {
         if !known {
             return Err(ChatError::NotFound(format!("approval {request_id}")));
         }
-        self.core.dispatch(Cmd::Approve { request_id: request_id.to_string(), decision })
+        self.core.dispatch(Cmd::Approve {
+            request_id: request_id.to_string(),
+            decision,
+        })
     }
 
     /// B7: move the thread to another agent and/or model. Runs on the worker: the old driver is
@@ -241,30 +285,55 @@ impl ThreadRuntime {
     /// * **Same agent, other model**: the session is resumed with the new model, no handoff.
     pub fn switch_agent_or_model(&self, agent: AgentKind, model: Option<String>) -> Result<()> {
         let effort = self.core.record.lock().effort.clone();
-        self.core.dispatch(Cmd::Switch { agent, model, effort })
+        self.core.dispatch(Cmd::Switch {
+            agent,
+            model,
+            effort,
+        })
     }
 
     /// [`Self::switch_agent_or_model`] that also sets the reasoning effort (`None` = the agent's
     /// default). Effort is dropped when the agent has no such knob.
-    pub fn switch_with_effort(&self, agent: AgentKind, model: Option<String>, effort: Option<String>) -> Result<()> {
-        self.core.dispatch(Cmd::Switch { agent, model, effort })
+    pub fn switch_with_effort(
+        &self,
+        agent: AgentKind,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<()> {
+        self.core.dispatch(Cmd::Switch {
+            agent,
+            model,
+            effort,
+        })
     }
 
     /// The handoff text a switch to `to` would send now, built from what is stored (`None` when
     /// the thread has no user message yet). Blocks briefly (flushes the database).
-    pub fn handoff_preview(&self, to: &AgentKind, to_model: Option<&str>) -> Result<Option<String>> {
+    pub fn handoff_preview(
+        &self,
+        to: &AgentKind,
+        to_model: Option<&str>,
+    ) -> Result<Option<String>> {
         self.core.shared.db.flush()?;
         let from = self.core.record.lock().agent.clone();
         let messages = decode_messages(self.core.shared.db.load_messages(self.core.id)?);
         let plan = load_plan(&self.core.shared.db, self.core.id);
-        Ok(build_handoff(&HandoffInput { from: &from, to, to_model, messages: &messages, plan: plan.as_ref() }))
+        Ok(build_handoff(&HandoffInput {
+            from: &from,
+            to,
+            to_model,
+            messages: &messages,
+            plan: plan.as_ref(),
+        }))
     }
 
     /// Change the permission pill. Takes effect by restarting the agent (resuming the session) on
     /// the next message; refused while a turn is running.
     pub fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         if self.status().is_busy() {
-            return Err(ChatError::Invalid("cannot change permissions during a turn".into()));
+            return Err(ChatError::Invalid(
+                "cannot change permissions during a turn".into(),
+            ));
         }
         self.core.dispatch(Cmd::SetPermission(mode))
     }
@@ -310,8 +379,20 @@ impl Core {
             let core = self.clone();
             let handle = std::thread::Builder::new()
                 .name(format!("chat-worker-{}", self.id))
-                .spawn(move || Worker { core, rx, driver: None, job: None, owner_open: false }.run())?;
-            *slot = Slot::Running { tx, handle: Some(handle) };
+                .spawn(move || {
+                    Worker {
+                        core,
+                        rx,
+                        driver: None,
+                        job: None,
+                        owner_open: false,
+                    }
+                    .run()
+                })?;
+            *slot = Slot::Running {
+                tx,
+                handle: Some(handle),
+            };
         }
         match &*slot {
             Slot::Running { tx, .. } => tx.send(cmd).map_err(|_| ChatError::Closed),
@@ -370,7 +451,10 @@ impl Core {
         let db = &self.shared.db;
         let log = |what: &str, r: Result<()>| {
             if let Err(e) = r {
-                log::warn!("chat_core: persisting {what} of thread {} failed: {e}", self.id);
+                log::warn!(
+                    "chat_core: persisting {what} of thread {} failed: {e}",
+                    self.id
+                );
             }
         };
         for p in items {
@@ -419,7 +503,12 @@ impl Core {
             let st = self.state.read();
             (st.revision, st.status)
         };
-        self.shared.publish(ThreadUpdate { thread_id: self.id, revision, status, changed });
+        self.shared.publish(ThreadUpdate {
+            thread_id: self.id,
+            revision,
+            status,
+            changed,
+        });
     }
 
     /// Fold one event from the pump. `false`: the event belongs to a replaced process or the
@@ -429,7 +518,9 @@ impl Core {
             return false;
         }
         let auto = match &ev {
-            AgentEvent::ApprovalRequest { id, tool, .. } if self.always.lock().contains(tool) => Some(id.clone()),
+            AgentEvent::ApprovalRequest { id, tool, .. } if self.always.lock().contains(tool) => {
+                Some(id.clone())
+            }
             _ => None,
         };
         let exited = matches!(ev, AgentEvent::Exited { .. });
@@ -438,7 +529,10 @@ impl Core {
         self.notify_waiters();
         changed.merge(fx.changed);
         if let Some(request_id) = auto {
-            let _ = self.dispatch(Cmd::Approve { request_id, decision: ApprovalDecision::Always });
+            let _ = self.dispatch(Cmd::Approve {
+                request_id,
+                decision: ApprovalDecision::Always,
+            });
         }
         if exited {
             let _ = self.dispatch(Cmd::DriverExited { gen });
@@ -450,7 +544,9 @@ impl Core {
 fn pump(core: Arc<Core>, gen: u64, mut events: UnboundedReceiver<AgentEvent>) {
     let mut done = false;
     while !done {
-        let Some(first) = futures::executor::block_on(events.next()) else { break };
+        let Some(first) = futures::executor::block_on(events.next()) else {
+            break;
+        };
         let mut changed = Changed::default();
         if !core.handle_event(gen, first, &mut changed) {
             break;
@@ -518,8 +614,15 @@ impl Worker {
             match cmd {
                 Cmd::Send { text, attachments } => self.on_send(text, attachments),
                 Cmd::Interrupt => self.on_interrupt(),
-                Cmd::Approve { request_id, decision } => self.on_approve(&request_id, decision),
-                Cmd::Switch { agent, model, effort } => self.on_switch(agent, model, effort),
+                Cmd::Approve {
+                    request_id,
+                    decision,
+                } => self.on_approve(&request_id, decision),
+                Cmd::Switch {
+                    agent,
+                    model,
+                    effort,
+                } => self.on_switch(agent, model, effort),
                 Cmd::SetPermission(mode) => self.on_set_permission(mode),
                 Cmd::DriverExited { gen } => {
                     if self.driver.as_ref().is_some_and(|d| d.gen == gen) {
@@ -581,7 +684,10 @@ impl Worker {
         cfg.effort = rec.effort.clone();
         cfg.permission_mode = rec.permission;
         cfg.resume_session = rec.agent_session_id.clone();
-        let spawned = shared.factory.spawn(&rec.agent, &cfg, self.job).map_err(|e| driver_err_text(&e))?;
+        let spawned = shared
+            .factory
+            .spawn(&rec.agent, &cfg, self.job)
+            .map_err(|e| driver_err_text(&e))?;
         let gen = self.core.gen.fetch_add(1, Ordering::SeqCst) + 1;
         {
             let mut st = self.core.state.write();
@@ -596,7 +702,10 @@ impl Worker {
             .name(format!("chat-events-{}", self.core.id))
             .spawn(move || pump(core, gen, events))
             .map_err(|e| format!("No se pudo iniciar el hilo de eventos: {e}"))?;
-        self.driver = Some(Active { control: spawned.control, gen });
+        self.driver = Some(Active {
+            control: spawned.control,
+            gen,
+        });
         Ok(())
     }
 
@@ -604,7 +713,9 @@ impl Worker {
     fn deliver(&mut self, prompt: &str) -> std::result::Result<(), String> {
         for attempt in 0..2 {
             self.ensure_driver()?;
-            let Some(d) = self.driver.as_mut() else { return Err("agente no disponible".into()) };
+            let Some(d) = self.driver.as_mut() else {
+                return Err("agente no disponible".into());
+            };
             match d.control.send(prompt) {
                 Ok(()) => return Ok(()),
                 Err(agents_driver::DriverError::Closed) if attempt == 0 => {
@@ -634,18 +745,30 @@ impl Worker {
                     let label = format!("antes del turno {turn}");
                     match repo.create_checkpoint(&label) {
                         Ok(cp) => {
-                            let cp = CheckpointRef { id: cp.id, label: cp.label };
+                            let cp = CheckpointRef {
+                                id: cp.id,
+                                label: cp.label,
+                            };
                             core.run_state(|st| (st.attach_checkpoint(seq, cp), ()));
                         }
                         Err(e) => {
                             log::warn!("chat_core: checkpoint failed: {e}");
                             core.run_state(|st| {
-                                (st.add_system_message(&format!("No se pudo crear el checkpoint: {e}"), now_ms()), ())
+                                (
+                                    st.add_system_message(
+                                        &format!("No se pudo crear el checkpoint: {e}"),
+                                        now_ms(),
+                                    ),
+                                    (),
+                                )
                             });
                         }
                     }
                 }
-                Ok(None) => log::debug!("chat_core: {} is not a git repo, no checkpoint", rec.cwd().display()),
+                Ok(None) => log::debug!(
+                    "chat_core: {} is not a git repo, no checkpoint",
+                    rec.cwd().display()
+                ),
                 Err(e) => log::warn!("chat_core: checkpoint discovery failed: {e}"),
             }
         }
@@ -673,14 +796,18 @@ impl Worker {
             .find(|a| a.request_id == request_id)
             .map(|a| a.tool.clone());
         let Some(tool) = tool else { return };
-        core.run_state(|st| match st.resolve_approval(request_id, decision, now_ms()) {
-            Some(fx) => (fx, ()),
-            None => (Effects::default(), ()),
-        });
+        core.run_state(
+            |st| match st.resolve_approval(request_id, decision, now_ms()) {
+                Some(fx) => (fx, ()),
+                None => (Effects::default(), ()),
+            },
+        );
         if decision == ApprovalDecision::Always {
             core.always.lock().insert(tool);
         }
-        let Some(d) = self.driver.as_mut() else { return };
+        let Some(d) = self.driver.as_mut() else {
+            return;
+        };
         if let Err(e) = d.control.approve(request_id, decision) {
             log::warn!("chat_core: approve failed: {e}");
             self.fail(format!("No se pudo responder a la aprobación: {e}"));
@@ -703,7 +830,11 @@ impl Worker {
         self.stop_driver();
         core.always.lock().clear();
         core.notify_waiters();
-        core.emit(Changed { list: true, status: true, ..Changed::default() });
+        core.emit(Changed {
+            list: true,
+            status: true,
+            ..Changed::default()
+        });
     }
 
     fn on_switch(&mut self, agent: AgentKind, model: Option<String>, effort: Option<String>) {
@@ -721,7 +852,12 @@ impl Worker {
         }
         // 2. Handoff text from what is stored (not for a plain model change that can resume).
         let handoff = if agent_changed || old.agent_session_id.is_none() {
-            let messages = core.shared.db.load_messages(core.id).map(decode_messages).unwrap_or_default();
+            let messages = core
+                .shared
+                .db
+                .load_messages(core.id)
+                .map(decode_messages)
+                .unwrap_or_default();
             let plan = load_plan(&core.shared.db, core.id);
             build_handoff(&HandoffInput {
                 from: &old.agent,
@@ -738,7 +874,11 @@ impl Worker {
         core.always.lock().clear();
         // 4. Re-point the thread.
         let keep_session = !agent_changed;
-        let session = if keep_session { old.agent_session_id } else { None };
+        let session = if keep_session {
+            old.agent_session_id
+        } else {
+            None
+        };
         {
             let mut rec = core.record.lock();
             rec.agent = agent.clone();
@@ -746,7 +886,11 @@ impl Worker {
             rec.effort = effort.clone();
             rec.agent_session_id = session.clone();
         }
-        if let Err(e) = core.shared.db.set_agent(core.id, &agent, model.clone(), effort, session) {
+        if let Err(e) = core
+            .shared
+            .db
+            .set_agent(core.id, &agent, model.clone(), effort, session)
+        {
             log::warn!("chat_core: persisting agent switch failed: {e}");
         }
         let note = match &model {

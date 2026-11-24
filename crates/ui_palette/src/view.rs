@@ -7,9 +7,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, BoxShadow, ClickEvent, Context, Entity, EventEmitter, FocusHandle, IntoElement,
-    KeyBinding, ListAlignment, ListOffset, ListState, MouseButton, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window, actions, div, list, point, prelude::*, px,
+    AnyElement, App, BoxShadow, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
+    IntoElement, KeyBinding, ListAlignment, ListOffset, ListState, MouseButton, ParentElement,
+    Render, SharedString, Styled, Subscription, Task, Window, actions, div, list, point,
+    prelude::*, px,
 };
 use panel_api::{TabId, TabInfo};
 use store::StateDb;
@@ -143,9 +144,16 @@ pub fn command_palette(
 }
 
 impl CommandPalette {
-    pub fn new(theme: Theme, db: Option<StateDb>, sources: Vec<Arc<dyn PaletteSource>>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        theme: Theme,
+        db: Option<StateDb>,
+        sources: Vec<Arc<dyn PaletteSource>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let input = cx.new(|cx| {
-            let mut field = TextField::new(theme, cx).bare().placeholder(Scope::All.placeholder());
+            let mut field = TextField::new(theme, cx)
+                .bare()
+                .placeholder(Scope::All.placeholder());
             field.set_capture_nav(true);
             field
         });
@@ -176,8 +184,10 @@ impl CommandPalette {
         if self._input_sub.is_some() {
             return;
         }
-        self._input_sub = Some(cx.subscribe_in(&self.input, window, |this, _, event: &TextFieldEvent, window, cx| {
-            match event {
+        self._input_sub = Some(cx.subscribe_in(
+            &self.input,
+            window,
+            |this, _, event: &TextFieldEvent, window, cx| match event {
                 TextFieldEvent::Changed => this.on_text_changed(cx),
                 TextFieldEvent::Submit => this.confirm(false, window, cx),
                 TextFieldEvent::Cancel => this.dismiss(window, cx),
@@ -185,8 +195,8 @@ impl CommandPalette {
                 TextFieldEvent::Nav(Nav::Down) => this.move_selection(1, false, cx),
                 TextFieldEvent::Nav(Nav::Tab) => this.tab(1, cx),
                 TextFieldEvent::SubmitReverse | TextFieldEvent::Blur => {}
-            }
-        }));
+            },
+        ));
     }
 
     pub fn is_open(&self) -> bool {
@@ -301,7 +311,8 @@ impl CommandPalette {
         }
         let query = Query::parse(&text);
         if query.scope != self.query.scope {
-            self.input.update(cx, |i, cx| i.set_placeholder(query.scope.placeholder(), cx));
+            self.input
+                .update(cx, |i, cx| i.set_placeholder(query.scope.placeholder(), cx));
         }
         self.query = query;
         self.run_query(false, cx);
@@ -320,7 +331,9 @@ impl CommandPalette {
         self.timings = Timings::default();
 
         let planned = plan(&self.sources, &self.query);
-        self.model.results.begin(generation, |id| planned.iter().any(|(s, _)| s.id() == id));
+        self.model
+            .results
+            .begin(generation, |id| planned.iter().any(|(s, _)| s.id() == id));
         self.model.query_changed();
         self.pending = planned.len();
         self.relayout(cx);
@@ -346,7 +359,13 @@ impl CommandPalette {
         }
     }
 
-    fn on_section(&mut self, generation: u64, section: Section, elapsed: Duration, cx: &mut Context<Self>) {
+    fn on_section(
+        &mut self,
+        generation: u64,
+        section: Section,
+        elapsed: Duration,
+        cx: &mut Context<Self>,
+    ) {
         let id = section.id;
         if !self.open || !self.model.results.push(generation, section) {
             return;
@@ -366,11 +385,20 @@ impl CommandPalette {
     }
 
     fn reveal_selection(&self) {
-        let Some(row) = self.model.selected_row() else { return };
+        let Some(row) = self.model.selected_row() else {
+            return;
+        };
         // The first item sits under its section header: show the header too.
-        let first_item = self.model.rows.iter().position(|r| matches!(r, LayoutRow::Item(_)));
+        let first_item = self
+            .model
+            .rows
+            .iter()
+            .position(|r| matches!(r, LayoutRow::Item(_)));
         if first_item == Some(row) {
-            self.list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.0) });
+            self.list.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.0),
+            });
         } else {
             self.list.scroll_to_reveal_item(row);
         }
@@ -462,7 +490,11 @@ impl CommandPalette {
 
     /// Tab outside a form: next scope prefix.
     fn cycle_scope(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let scope = if delta >= 0 { self.query.scope.next() } else { self.query.scope.prev() };
+        let scope = if delta >= 0 {
+            self.query.scope.next()
+        } else {
+            self.query.scope.prev()
+        };
         let raw = self.query.rewritten(scope);
         self.input.update(cx, |i, cx| i.set_text(&raw, cx));
         self.on_text_changed(cx);
@@ -475,7 +507,11 @@ impl CommandPalette {
         let choice = form.active_is_choice();
         let hint = form
             .active_param()
-            .map(|p| p.default.as_ref().map_or_else(|| p.name.clone(), |d| format!("{} ({d})", p.name)))
+            .map(|p| {
+                p.default
+                    .as_ref()
+                    .map_or_else(|| p.name.clone(), |d| format!("{} ({d})", p.name))
+            })
             .unwrap_or_default();
         self.input.update(cx, |i, cx| {
             i.set_text(&value, cx);
@@ -487,7 +523,10 @@ impl CommandPalette {
 
     /// The active form parameter is a pick-one (its field is read-only: arrows cycle the options).
     fn on_choice(&self) -> bool {
-        self.model.form.as_ref().is_some_and(|f| f.active_is_choice())
+        self.model
+            .form
+            .as_ref()
+            .is_some_and(|f| f.active_is_choice())
     }
 
     fn cycle_choice(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -519,11 +558,14 @@ impl CommandPalette {
                 .child(SectionLabel::new(&theme, *title))
                 .into_any_element(),
             Some(LayoutRow::Item(item)) => {
-                let mut row = ListRow::new(SharedString::from(format!("palette-row-{}", item.key)), &theme)
-                    .title(item.title.clone())
-                    .selected(selected)
-                    // The search field keeps the keyboard focus; the arrows move `selected`.
-                    .focusable(false);
+                let mut row = ListRow::new(
+                    SharedString::from(format!("palette-row-{}", item.key)),
+                    &theme,
+                )
+                .title(item.title.clone())
+                .selected(selected)
+                // The search field keeps the keyboard focus; the arrows move `selected`.
+                .focusable(false);
                 if let Some(s) = &item.subtitle {
                     row = row.subtitle(s.clone());
                 }
@@ -621,11 +663,16 @@ impl CommandPalette {
     fn render_form(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
-        let Some(form) = &self.model.form else { return div().into_any_element() };
+        let Some(form) = &self.model.form else {
+            return div().into_any_element();
+        };
         let preview = form.preview();
         let this = cx.entity();
         let mut col = div().flex().flex_col().gap(px(2.0)).p(px(10.0)).child(
-            div().px(px(8.0)).pb(px(6.0)).child(SectionLabel::new(&t, format!("{} · parámetros", form.spec.title))),
+            div().px(px(8.0)).pb(px(6.0)).child(SectionLabel::new(
+                &t,
+                format!("{} · parámetros", form.spec.title),
+            )),
         );
         for (i, p) in form.spec.params.iter().enumerate() {
             let active = i == form.active;
@@ -633,7 +680,11 @@ impl CommandPalette {
             let label: SharedString = p.name.replace(['_', '-'], " ").into();
             let this = this.clone();
             let field: AnyElement = if p.options.is_empty() {
-                let shown: SharedString = if value.is_empty() { "—".into() } else { value.into() };
+                let shown: SharedString = if value.is_empty() {
+                    "—".into()
+                } else {
+                    value.into()
+                };
                 div()
                     .flex_1()
                     .min_w_0()
@@ -671,7 +722,13 @@ impl CommandPalette {
                     .when(active, |d| d.bg(c.surface_3))
                     .when(!active, |d| d.hover(move |s| s.bg(c.surface_2)))
                     .on_click(move |_, _, cx| this.update(cx, |p, cx| p.select_field(i, cx)))
-                    .child(div().w(px(110.0)).flex_none().text_color(c.muted).child(label))
+                    .child(
+                        div()
+                            .w(px(110.0))
+                            .flex_none()
+                            .text_color(c.muted)
+                            .child(label),
+                    )
                     .child(field),
             );
         }
@@ -688,7 +745,10 @@ impl CommandPalette {
                 .rounded(px(Radius::PILL))
                 .bg(c.surface_0)
                 .text_color(color)
-                .when(mono, |d| d.font_family(t.typography.mono_family).text_size(px(t.typography.mono_size)))
+                .when(mono, |d| {
+                    d.font_family(t.typography.mono_family)
+                        .text_size(px(t.typography.mono_size))
+                })
                 .when(!mono, |d| d.text_size(px(t.typography.ui_size_md)))
                 .child(text),
         );
@@ -712,10 +772,15 @@ impl Render for CommandPalette {
         // Space left for the list: card max height minus input row, footer and margins.
         let list_budget = (max_card_h - INPUT_ROW_H - FOOTER_H - 8.0).max(120.0);
         let empty = !in_form && self.model.rows.is_empty();
-        let list_h = if empty { 72.0 } else { self.content_height().min(list_budget) };
+        let list_h = if empty {
+            72.0
+        } else {
+            self.content_height().min(list_budget)
+        };
 
         let chip: Option<SharedString> = if let Some(f) = &self.model.form {
-            f.active_param().map(|p| SharedString::from(p.name.replace(['_', '-'], " ")))
+            f.active_param()
+                .map(|p| SharedString::from(p.name.replace(['_', '-'], " ")))
         } else if self.query.scope != Scope::All {
             Some(self.query.scope.label().into())
         } else {
@@ -731,7 +796,14 @@ impl Render for CommandPalette {
             .items_center()
             .gap(px(10.0))
             .child(icon(Icon::Search, 16.0, c.muted))
-            .when_some(chip, |d, label| d.child(Pill::compact("palette-scope", &t).label(label).active(true).focusable(false)))
+            .when_some(chip, |d, label| {
+                d.child(
+                    Pill::compact("palette-scope", &t)
+                        .label(label)
+                        .active(true)
+                        .focusable(false),
+                )
+            })
             .child(self.input.clone());
 
         let body: AnyElement = if in_form {
@@ -757,7 +829,13 @@ impl Render for CommandPalette {
             div()
                 .size_full()
                 .pt(px(LIST_PAD / 2.0))
-                .child(list(self.list.clone(), cx.processor(|this, ix, _window, cx| this.render_row(ix, cx))).size_full())
+                .child(
+                    list(
+                        self.list.clone(),
+                        cx.processor(|this, ix, _window, cx| this.render_row(ix, cx)),
+                    )
+                    .size_full(),
+                )
                 .into_any_element()
         };
 
@@ -794,11 +872,15 @@ impl Render for CommandPalette {
             .text_color(c.text)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_selection(1, false, cx)))
-            .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_selection(-1, false, cx)))
+            .on_action(
+                cx.listener(|this, _: &SelectPrev, _, cx| this.move_selection(-1, false, cx)),
+            )
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.move_selection(PAGE, true, cx)))
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.move_selection(-PAGE, true, cx)))
             .on_action(cx.listener(|this, _: &Confirm, window, cx| this.confirm(false, window, cx)))
-            .on_action(cx.listener(|this, _: &ConfirmAlt, window, cx| this.confirm(true, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ConfirmAlt, window, cx| this.confirm(true, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(cx.listener(|this, _: &TogglePalette, window, cx| this.close(window, cx)))
             .on_action(cx.listener(|this, _: &NextScope, _, cx| this.tab(1, cx)))
@@ -843,7 +925,10 @@ impl Render for CommandPalette {
             .flex()
             .flex_col()
             .items_center()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.close(window, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.close(window, cx)),
+            )
             .child(card)
             .into_any_element()
     }

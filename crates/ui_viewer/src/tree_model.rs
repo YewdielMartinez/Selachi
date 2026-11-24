@@ -104,7 +104,10 @@ pub struct FileTree {
 impl FileTree {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
-        let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| root.to_string_lossy().into_owned());
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.to_string_lossy().into_owned());
         let node = TreeNode {
             name,
             path: root,
@@ -116,7 +119,11 @@ impl FileTree {
             loaded: false,
             loading: false,
         };
-        Self { nodes: vec![node], rows: Vec::new(), respect_ignore: true }
+        Self {
+            nodes: vec![node],
+            rows: Vec::new(),
+            respect_ignore: true,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -182,7 +189,9 @@ impl FileTree {
 
     /// Expands or collapses a directory row.
     pub fn toggle(&mut self, index: usize) -> Toggle {
-        let Some(node) = self.nodes.get_mut(index) else { return Toggle::None };
+        let Some(node) = self.nodes.get_mut(index) else {
+            return Toggle::None;
+        };
         if !node.is_dir || index == 0 {
             return Toggle::None;
         }
@@ -193,13 +202,19 @@ impl FileTree {
             self.nodes[index].loading = true;
         }
         self.rebuild();
-        if need_load { Toggle::Load { index, path } } else { Toggle::Changed }
+        if need_load {
+            Toggle::Load { index, path }
+        } else {
+            Toggle::Changed
+        }
     }
 
     /// Installs the listing of directory `index`. Children that already existed (a refresh) keep
     /// their expansion state.
     pub fn set_children(&mut self, index: usize, entries: Vec<Entry>) {
-        let Some(parent) = self.nodes.get(index) else { return };
+        let Some(parent) = self.nodes.get(index) else {
+            return;
+        };
         let (parent_path, depth) = (parent.path.clone(), parent.depth + u16::from(index != 0));
         let previous: HashMap<String, bool> = parent
             .children
@@ -244,11 +259,18 @@ impl FileTree {
     /// Expands every ancestor of `path` (which must be under the root) so the file is visible.
     /// Returns the directories that still need a listing.
     pub fn reveal(&mut self, path: &Path) -> Vec<(usize, PathBuf)> {
-        let Ok(rel) = path.strip_prefix(self.root()) else { return Vec::new() };
+        let Ok(rel) = path.strip_prefix(self.root()) else {
+            return Vec::new();
+        };
         let mut cur = 0usize;
         for comp in rel.components() {
             let name = comp.as_os_str().to_string_lossy();
-            let Some(next) = self.nodes[cur].children.iter().copied().find(|&c| self.nodes[c].name == name) else {
+            let Some(next) = self.nodes[cur]
+                .children
+                .iter()
+                .copied()
+                .find(|&c| self.nodes[c].name == name)
+            else {
                 break;
             };
             if self.nodes[next].is_dir {
@@ -307,7 +329,10 @@ impl GitMark {
 
 /// Resolves host paths (absolute, or relative to `root`) to absolute ones.
 pub fn normalize_marks(root: &Path, marks: HashMap<PathBuf, GitMark>) -> HashMap<PathBuf, GitMark> {
-    marks.into_iter().map(|(p, m)| (if p.is_relative() { root.join(p) } else { p }, m)).collect()
+    marks
+        .into_iter()
+        .map(|(p, m)| (if p.is_relative() { root.join(p) } else { p }, m))
+        .collect()
 }
 
 /// Directories under `root` that contain at least one marked file (they get a dot in the tree).
@@ -372,7 +397,11 @@ pub fn filter_files(root: &Path, query: &str, respect_ignore: bool) -> Vec<Filte
             continue;
         }
         let path = entry.path();
-        let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
         let rel_lc = rel.to_lowercase();
         if !words.iter().all(|w| rel_lc.contains(w.as_str())) {
             continue;
@@ -380,9 +409,19 @@ pub fn filter_files(root: &Path, query: &str, respect_ignore: bool) -> Vec<Filte
         let name = entry.file_name().to_string_lossy().into_owned();
         let name_lc = name.to_lowercase();
         let in_name = words.iter().all(|w| name_lc.contains(w.as_str()));
-        hits.push(FilterHit { path: path.to_path_buf(), rel, name, in_name });
+        hits.push(FilterHit {
+            path: path.to_path_buf(),
+            rel,
+            name,
+            in_name,
+        });
     }
-    hits.sort_by(|a, b| b.in_name.cmp(&a.in_name).then(a.rel.len().cmp(&b.rel.len())).then_with(|| a.rel.cmp(&b.rel)));
+    hits.sort_by(|a, b| {
+        b.in_name
+            .cmp(&a.in_name)
+            .then(a.rel.len().cmp(&b.rel.len()))
+            .then_with(|| a.rel.cmp(&b.rel))
+    });
     hits.truncate(MAX_HITS);
     hits
 }
@@ -417,7 +456,10 @@ mod tests {
     fn lists_one_level_dirs_first_and_skips_ignored_and_git() {
         let p = project();
         let top = list_dir(p.path(), true);
-        assert_eq!(names(&top), ["src", ".gitignore", "Cargo.toml", "README.md"]);
+        assert_eq!(
+            names(&top),
+            ["src", ".gitignore", "Cargo.toml", "README.md"]
+        );
         assert!(top[0].is_dir && !top[1].is_dir);
         let src = list_dir(&p.path().join("src"), true);
         // the parent's `*.log` rule applies inside the subdirectory
@@ -441,10 +483,22 @@ mod tests {
     #[test]
     fn sorting_is_case_insensitive_dirs_first() {
         let mut e = vec![
-            Entry { name: "b.txt".into(), is_dir: false },
-            Entry { name: "Zeta".into(), is_dir: true },
-            Entry { name: "A.txt".into(), is_dir: false },
-            Entry { name: "alpha".into(), is_dir: true },
+            Entry {
+                name: "b.txt".into(),
+                is_dir: false,
+            },
+            Entry {
+                name: "Zeta".into(),
+                is_dir: true,
+            },
+            Entry {
+                name: "A.txt".into(),
+                is_dir: false,
+            },
+            Entry {
+                name: "alpha".into(),
+                is_dir: true,
+            },
         ];
         sort_entries(&mut e);
         assert_eq!(names(&e), ["alpha", "Zeta", "A.txt", "b.txt"]);
@@ -467,7 +521,9 @@ mod tests {
         assert_eq!(t.node(src).unwrap().name, "src");
         assert!(!t.node(src).unwrap().loaded);
         // Expanding asks for a listing and does not touch deeper directories.
-        let Toggle::Load { index, path } = t.toggle(src) else { panic!("expected a load") };
+        let Toggle::Load { index, path } = t.toggle(src) else {
+            panic!("expected a load")
+        };
         assert_eq!(index, src);
         assert_eq!(path, p.path().join("src"));
         assert!(t.pending_loads().is_empty(), "already in flight");
@@ -503,7 +559,11 @@ mod tests {
         }
         t.invalidate();
         let pending = t.pending_loads();
-        assert_eq!(pending.len(), 1, "only the root: children are discovered by its listing");
+        assert_eq!(
+            pending.len(),
+            1,
+            "only the root: children are discovered by its listing"
+        );
         t.set_children(0, list_dir(p.path(), true));
         let pending = t.pending_loads();
         assert_eq!(pending.len(), 1);
@@ -522,7 +582,11 @@ mod tests {
         let need = t.reveal(&p.path().join("src/inner/deep.rs"));
         assert_eq!(need[0].1, p.path().join("src/inner"));
         t.set_children(need[0].0, list_dir(&need[0].1, true));
-        let names: Vec<_> = t.rows().iter().map(|&i| t.node(i).unwrap().name.clone()).collect();
+        let names: Vec<_> = t
+            .rows()
+            .iter()
+            .map(|&i| t.node(i).unwrap().name.clone())
+            .collect();
         assert!(names.contains(&"deep.rs".to_string()), "{names:?}");
         // Paths outside the root are ignored.
         assert!(t.reveal(Path::new("C:/elsewhere/x.rs")).is_empty());
@@ -537,7 +601,10 @@ mod tests {
         ]
         .into();
         let marks = normalize_marks(root, marks);
-        assert_eq!(marks.get(&root.join("src/inner/deep.rs")), Some(&GitMark::Modified));
+        assert_eq!(
+            marks.get(&root.join("src/inner/deep.rs")),
+            Some(&GitMark::Modified)
+        );
         let dirty = dirty_dirs(root, &marks);
         assert!(dirty.contains(&root.join("src")));
         assert!(dirty.contains(&root.join("src/inner")));

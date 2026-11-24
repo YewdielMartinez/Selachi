@@ -17,7 +17,10 @@ pub struct ReviewMessage {
 
 /// Markdown language tag for a path (empty = no tag).
 pub fn fence_language(path: &str) -> &'static str {
-    let ext = path.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
+    let ext = path
+        .rsplit_once('.')
+        .map_or("", |(_, e)| e)
+        .to_ascii_lowercase();
     match ext.as_str() {
         "rs" => "rust",
         "ts" | "mts" | "cts" => "ts",
@@ -65,7 +68,12 @@ fn excerpt_block(note: &Note) -> (String, usize) {
     if note.snippet.is_empty() {
         return (String::new(), 0);
     }
-    let raw: String = note.snippet.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n");
+    let raw: String = note
+        .snippet
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let (clean, hits) = term_core::redact(&raw);
     let clean_lines: Vec<&str> = clean.split('\n').collect();
     let numbered = clean_lines.len() == note.snippet.len();
@@ -74,7 +82,11 @@ fn excerpt_block(note: &Note) -> (String, usize) {
     let mut body = String::new();
     if numbered {
         for ((n, _), text) in note.snippet.iter().zip(&clean_lines) {
-            let mark = if (note.start..=note.end).contains(n) { '>' } else { ' ' };
+            let mark = if (note.start..=note.end).contains(n) {
+                '>'
+            } else {
+                ' '
+            };
             let _ = writeln!(body, "{mark} {n:>width$} | {text}");
         }
     } else {
@@ -116,7 +128,10 @@ pub fn build_markdown(label: &str, notes: &[&Note]) -> ReviewMessage {
             }
             out.push('\n');
             if note.stale {
-                let _ = writeln!(out, "_Las líneas pudieron cambiar desde que escribí la nota; busca el fragmento._\n");
+                let _ = writeln!(
+                    out,
+                    "_Las líneas pudieron cambiar desde que escribí la nota; busca el fragmento._\n"
+                );
             }
             let (block, hits) = excerpt_block(note);
             redactions += hits;
@@ -127,9 +142,15 @@ pub fn build_markdown(label: &str, notes: &[&Note]) -> ReviewMessage {
         }
     }
     if redactions > 0 {
-        let _ = writeln!(out, "_Se ocultaron {redactions} secreto(s) antes de enviar._");
+        let _ = writeln!(
+            out,
+            "_Se ocultaron {redactions} secreto(s) antes de enviar._"
+        );
     }
-    ReviewMessage { markdown: out.trim_end().to_string() + "\n", redactions }
+    ReviewMessage {
+        markdown: out.trim_end().to_string() + "\n",
+        redactions,
+    }
 }
 
 #[cfg(test)]
@@ -152,11 +173,20 @@ mod tests {
         let c = note(3, "src/b.rs", 3, 3, "tercera");
         let m = build_markdown("los cambios del worktree", &[&a, &b, &c]);
         let md = &m.markdown;
-        assert!(md.starts_with("He revisado los cambios del worktree y tengo 3 notas."), "{md}");
-        let (ia, ib) = (md.find("## `src/a.rs`").unwrap(), md.find("## `src/b.rs`").unwrap());
+        assert!(
+            md.starts_with("He revisado los cambios del worktree y tengo 3 notas."),
+            "{md}"
+        );
+        let (ia, ib) = (
+            md.find("## `src/a.rs`").unwrap(),
+            md.find("## `src/b.rs`").unwrap(),
+        );
         assert!(ia < ib, "files in path order");
         assert_eq!(md.matches("\n## `src/").count(), 2, "one header per file");
-        let (i3, i20) = (md.find("### `src/b.rs:3`").unwrap(), md.find("### `src/b.rs:20`").unwrap());
+        let (i3, i20) = (
+            md.find("### `src/b.rs:3`").unwrap(),
+            md.find("### `src/b.rs:20`").unwrap(),
+        );
         assert!(i3 < i20, "notes in line order");
         assert!(md.contains("> primera") && md.contains("> segunda") && md.contains("> tercera"));
         assert_eq!(m.redactions, 0);
@@ -168,12 +198,18 @@ mod tests {
         let md = build_markdown("x", &[&n]).markdown;
         assert!(md.contains("```rust\n"), "{md}");
         for l in 7..=14 {
-            assert!(md.contains(&format!("linea {l}\n")), "line {l} missing in {md}");
+            assert!(
+                md.contains(&format!("linea {l}\n")),
+                "line {l} missing in {md}"
+            );
         }
         assert!(!md.contains("linea 6\n") && !md.contains("linea 15\n"));
         assert!(md.contains("> 10 | linea 10"));
         assert!(md.contains("> 11 | linea 11"));
-        assert!(md.contains("   9 | linea 9") || md.contains("  9 | linea 9"), "{md}");
+        assert!(
+            md.contains("   9 | linea 9") || md.contains("  9 | linea 9"),
+            "{md}"
+        );
         assert!(md.contains("### `src/lib.rs:10-11`"));
     }
 
@@ -190,8 +226,20 @@ mod tests {
     #[test]
     fn secrets_are_redacted_in_excerpts_and_texts() {
         let mut lines = file(10);
-        lines.insert(5, "let key = \"sk-abcdefghijklmnopqrstuvwxyz0123456789\";".to_string());
-        let n = Note::new(NoteId(1), "src/cfg.rs", Side::New, 5, 5, "no subas ghp_abcdefghijklmnopqrstuvwxyz0123456789 al repo", &lines, 0);
+        lines.insert(
+            5,
+            "let key = \"sk-abcdefghijklmnopqrstuvwxyz0123456789\";".to_string(),
+        );
+        let n = Note::new(
+            NoteId(1),
+            "src/cfg.rs",
+            Side::New,
+            5,
+            5,
+            "no subas ghp_abcdefghijklmnopqrstuvwxyz0123456789 al repo",
+            &lines,
+            0,
+        );
         let m = build_markdown("x", &[&n]);
         assert!(!m.markdown.contains("sk-abcdef"), "{}", m.markdown);
         assert!(!m.markdown.contains("ghp_abcdef"), "{}", m.markdown);
@@ -206,7 +254,16 @@ mod tests {
         lines.insert(2, "-----BEGIN RSA PRIVATE KEY-----".to_string());
         lines.insert(3, "MIIEpAIBAAKCAQEA".to_string());
         lines.insert(4, "-----END RSA PRIVATE KEY-----".to_string());
-        let n = Note::new(NoteId(1), "k.pem", Side::New, 3, 3, "esto es una clave", &lines, 0);
+        let n = Note::new(
+            NoteId(1),
+            "k.pem",
+            Side::New,
+            3,
+            3,
+            "esto es una clave",
+            &lines,
+            0,
+        );
         let m = build_markdown("x", &[&n]);
         assert!(!m.markdown.contains("MIIEpAIBAAKCAQEA"));
         assert!(m.redactions >= 1);
@@ -233,7 +290,16 @@ mod tests {
     #[test]
     fn old_side_notes_say_so() {
         let lines: SideLines = (1..=5).map(|i| (i, format!("vieja {i}"))).collect();
-        let n = Note::new(NoteId(1), "a.rs", Side::Old, 2, 2, "por qué se borra", &lines, 0);
+        let n = Note::new(
+            NoteId(1),
+            "a.rs",
+            Side::Old,
+            2,
+            2,
+            "por qué se borra",
+            &lines,
+            0,
+        );
         let md = build_markdown("x", &[&n]).markdown;
         assert!(md.contains("a.rs:2 (versión anterior)"), "{md}");
     }

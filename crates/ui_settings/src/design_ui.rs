@@ -2,8 +2,8 @@
 //! preview cards / future palettes used by Apariencia.
 
 use gpui::{
-    AnyElement, Context, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, prelude::*, px,
+    AnyElement, Context, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, div, prelude::*, px,
 };
 use store::config::ThemeMode;
 use theme::{Radius, Theme};
@@ -41,7 +41,9 @@ pub const FUTURE_PALETTES: [&str; 19] = [
 ];
 
 fn preview(theme: &Theme) -> Wireframe {
-    Wireframe::new(theme).rects(WirePreset::Terminal.rects()).cell(CELL)
+    Wireframe::new(theme)
+        .rects(WirePreset::Terminal.rects())
+        .cell(CELL)
 }
 
 impl SettingsView {
@@ -74,7 +76,13 @@ impl SettingsView {
                             .flex_row()
                             .w(px(TILE_W))
                             .overflow_hidden()
-                            .child(div().w(px(half)).flex_none().overflow_hidden().child(preview(&Theme::dark())))
+                            .child(
+                                div()
+                                    .w(px(half))
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .child(preview(&Theme::dark())),
+                            )
                             .child(
                                 div()
                                     .w(px(half))
@@ -95,7 +103,9 @@ impl SettingsView {
                 };
                 let this = this.clone();
                 div()
-                    .id(ElementId::Name(SharedString::from(format!("theme-card-{label}"))))
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "theme-card-{label}"
+                    ))))
                     .occlude()
                     // A tab stop: Enter / Space run the click; `Tab` is moved by the view root.
                     .tab_index(0)
@@ -107,10 +117,20 @@ impl SettingsView {
                     .rounded(px(Radius::SM))
                     .cursor_pointer()
                     .border_2()
-                    .border_color(if selected { c.accent_strong } else { c.surface_1 })
+                    .border_color(if selected {
+                        c.accent_strong
+                    } else {
+                        c.surface_1
+                    })
                     .bg(c.surface_2)
                     .hover(move |s| s.bg(c.surface_3))
-                    .child(div().rounded(px(Radius::PILL)).overflow_hidden().bg(backdrop).child(tile))
+                    .child(
+                        div()
+                            .rounded(px(Radius::PILL))
+                            .overflow_hidden()
+                            .bg(backdrop)
+                            .child(tile),
+                    )
                     .child(
                         div()
                             .flex()
@@ -130,7 +150,12 @@ impl SettingsView {
                                             .child(label),
                                     )
                                     .when(!hint.is_empty(), |d| {
-                                        d.child(div().text_size(px(ty.ui_size_xs)).text_color(c.muted).child(hint))
+                                        d.child(
+                                            div()
+                                                .text_size(px(ty.ui_size_xs))
+                                                .text_color(c.muted)
+                                                .child(hint),
+                                        )
                                     }),
                             )
                             .when(selected, |d| d.child(icon(Icon::Check, 14.0, c.text))),
@@ -159,7 +184,11 @@ impl SettingsView {
                 .text_size(px(ty.ui_size_sm))
                 .text_color(if base { c.text } else { c.outline })
                 .when(!base, |d| d.opacity(0.7))
-                .child(if base { "black (base)".to_string() } else { (*name).to_string() })
+                .child(if base {
+                    "black (base)".to_string()
+                } else {
+                    (*name).to_string()
+                })
         });
         ui::group(
             &t,

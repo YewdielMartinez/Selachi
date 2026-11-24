@@ -8,11 +8,15 @@ use std::path::{Path, PathBuf};
 
 use futures::StreamExt;
 use gpui::{
-    App, Bounds, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Hsla, KeyDownEvent,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task,
-    UTF16Selection, Window, div, font, prelude::*, px,
+    App, Bounds, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Hsla,
+    KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
+    Render, ScrollWheelEvent, SharedString, Task, UTF16Selection, Window, div, font, prelude::*,
+    px,
 };
-use term_core::{Block, JobAttachment, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent, SpawnOptions, encode_key};
+use term_core::{
+    Block, JobAttachment, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent,
+    SpawnOptions, encode_key,
+};
 use theme::{Radius, TerminalColors, Theme, Typography};
 
 use crate::app_shell::{RAIL_W, TAB_H, TERM_PAD};
@@ -32,7 +36,12 @@ pub enum TerminalEvent {
     /// The finished block itself (command, duration, exit code), for notifications.
     BlockFinished(Block),
     /// Ctrl+click on a path of the output that exists on disk.
-    OpenPath { path: PathBuf, line: Option<u32>, col: Option<u32>, is_dir: bool },
+    OpenPath {
+        path: PathBuf,
+        line: Option<u32>,
+        col: Option<u32>,
+        is_dir: bool,
+    },
     /// "Arreglar con agente" on a failed block: the block and its output (not redacted yet).
     FixWithAgent { block: Block, output: String },
 }
@@ -148,7 +157,12 @@ pub struct TerminalView {
 impl TerminalView {
     /// `cwd` is the directory the shell starts in (`None` = the process directory).
     #[allow(dead_code)] // the `empty_window` example has no job tracker
-    pub fn new(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        theme: Theme,
+        cwd: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self::build(theme, cwd, false, None, window, cx)
     }
 
@@ -165,7 +179,12 @@ impl TerminalView {
 
     /// Like [`TerminalView::new`] but the shell starts the first time the view is painted.
     #[allow(dead_code)] // the `empty_window` example has no job tracker
-    pub fn new_deferred(theme: Theme, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new_deferred(
+        theme: Theme,
+        cwd: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self::build(theme, cwd, true, None, window, cx)
     }
 
@@ -188,7 +207,10 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        log::info!("[startup] TerminalView::new at {} since process start", crate::mem::uptime_label());
+        log::info!(
+            "[startup] TerminalView::new at {} since process start",
+            crate::mem::uptime_label()
+        );
         let focus_handle = cx.focus_handle();
         if !defer {
             focus_handle.focus(window);
@@ -199,8 +221,12 @@ impl TerminalView {
         let vp = window.viewport_size();
         let avail_w = f32::from(vp.width) - RAIL_W - 2.0 * TERM_PAD;
         let avail_h = f32::from(vp.height) - TAB_H - STATUS_H - 2.0 * TERM_PAD;
-        let cols = (avail_w / f32::from(metrics.width)).floor().clamp(10.0, 500.0) as u16;
-        let rows = (avail_h / f32::from(metrics.height)).floor().clamp(3.0, 300.0) as u16;
+        let cols = (avail_w / f32::from(metrics.width))
+            .floor()
+            .clamp(10.0, 500.0) as u16;
+        let rows = (avail_h / f32::from(metrics.height))
+            .floor()
+            .clamp(3.0, 300.0) as u16;
 
         let (mut program, args) = term_core::default_shell();
         // `SELACHI_SHELL=powershell.exe` picks another PowerShell (same shell integration). Useful
@@ -209,8 +235,11 @@ impl TerminalView {
         if let Some(p) = std::env::var_os("SELACHI_SHELL").and_then(|p| p.into_string().ok()) {
             program = p;
         }
-        let shell_name: SharedString =
-            program.strip_suffix(".exe").unwrap_or(&program).to_string().into();
+        let shell_name: SharedString = program
+            .strip_suffix(".exe")
+            .unwrap_or(&program)
+            .to_string()
+            .into();
         let cfg = SessionConfig {
             program,
             args,
@@ -259,13 +288,18 @@ impl TerminalView {
 
     /// Spawns the shell of a deferred view (no-op when it already runs).
     fn spawn_pending(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(mut cfg) = self.pending.take() else { return };
+        let Some(mut cfg) = self.pending.take() else {
+            return;
+        };
         // The real size is known now: the pane's card is laid out like the window, so estimate
         // from the window again (the element resizes the PTY on its first paint anyway).
         let metrics = self.metrics(window);
         cfg.cell_width = f32::from(metrics.width) as u16;
         cfg.cell_height = f32::from(metrics.height) as u16;
-        log::info!("[lazy] spawning deferred shell at {}", crate::mem::uptime_label());
+        log::info!(
+            "[lazy] spawning deferred shell at {}",
+            crate::mem::uptime_label()
+        );
         self.start_session(cfg, cx);
     }
 
@@ -277,21 +311,41 @@ impl TerminalView {
     fn start_session(&mut self, cfg: SessionConfig, cx: &mut Context<Self>) {
         let program = cfg.program.clone();
         let (cols, rows) = (cfg.cols, cfg.rows);
-        let env = cx.try_global::<TermEnv>().map(|e| e.0.clone()).unwrap_or_default();
-        log::debug!("spawning with job {:?}", self.job.as_ref().map(|j| (j.owner, j.handle)));
-        let options = SpawnOptions { env, job: self.job.as_ref().map(|j| j.handle) };
+        let env = cx
+            .try_global::<TermEnv>()
+            .map(|e| e.0.clone())
+            .unwrap_or_default();
+        log::debug!(
+            "spawning with job {:?}",
+            self.job.as_ref().map(|j| (j.owner, j.handle))
+        );
+        let options = SpawnOptions {
+            env,
+            job: self.job.as_ref().map(|j| j.handle),
+        };
         self.starting = true;
-        let spawn = cx.background_executor().spawn(async move { Session::spawn_with_options(cfg, options) });
+        let spawn = cx
+            .background_executor()
+            .spawn(async move { Session::spawn_with_options(cfg, options) });
         self._start = Some(cx.spawn(async move |this, cx| {
             let result = spawn.await;
-            this.update(cx, |view, cx| view.finish_start(result, &program, (cols, rows), cx)).ok();
+            this.update(cx, |view, cx| {
+                view.finish_start(result, &program, (cols, rows), cx)
+            })
+            .ok();
         }));
     }
 
     /// The shell exists (or failed): wire it up, flush what was typed meanwhile, repaint.
     fn finish_start(
         &mut self,
-        result: Result<(Session, futures::channel::mpsc::UnboundedReceiver<SessionEvent>), term_core::TermError>,
+        result: Result<
+            (
+                Session,
+                futures::channel::mpsc::UnboundedReceiver<SessionEvent>,
+            ),
+            term_core::TermError,
+        >,
         program: &str,
         (cols, rows): (u16, u16),
         cx: &mut Context<Self>,
@@ -310,8 +364,13 @@ impl TerminalView {
                 let attachment = session.job_attachment();
                 if let (Some(job), Some(pid)) = (&view.job, session.pid()) {
                     let mut tracker = job.tracker.lock().unwrap_or_else(|p| p.into_inner());
-                    let result = if matches!(attachment, JobAttachment::AssignFailed | JobAttachment::None) {
-                        log::info!("shell pid {pid} has no job ({attachment:?}): tracking its process tree");
+                    let result = if matches!(
+                        attachment,
+                        JobAttachment::AssignFailed | JobAttachment::None
+                    ) {
+                        log::info!(
+                            "shell pid {pid} has no job ({attachment:?}): tracking its process tree"
+                        );
                         tracker.register_root_untracked_job(job.owner, pid)
                     } else {
                         tracker.register_root(job.owner, pid)
@@ -330,7 +389,10 @@ impl TerminalView {
                 // One repaint per batch: Wakeup is coalesced by term_core until the next snapshot.
                 view._pump = Some(cx.spawn(async move |this, cx| {
                     while let Some(event) = rx.next().await {
-                        if this.update(cx, |view, cx| view.on_session_event(event, cx)).is_err() {
+                        if this
+                            .update(cx, |view, cx| view.on_session_event(event, cx))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -422,7 +484,10 @@ impl TerminalView {
                 self.refresh_blocks();
                 cx.notify();
                 cx.emit(TerminalEvent::CommandFinished(exit_code));
-                let block = self.session.as_ref().and_then(|s| s.blocks().into_iter().find(|b| b.id == id));
+                let block = self
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.blocks().into_iter().find(|b| b.id == id));
                 if let Some(block) = block {
                     cx.emit(TerminalEvent::BlockFinished(block));
                 }
@@ -583,7 +648,10 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        Some(UTF16Selection { range: 0..0, reversed: false })
+        Some(UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
     }
 
     fn marked_text_range(
@@ -667,13 +735,17 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .when(self.block_ui.link.is_some(), |d| d.cursor_pointer())
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.on_pointer_move(e, cx)))
+            .on_mouse_move(
+                cx.listener(|this, e: &MouseMoveEvent, _, cx| this.on_pointer_move(e, cx)),
+            )
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered {
                     this.on_pointer_leave(cx);
                 }
             }))
-            .on_modifiers_changed(cx.listener(|this, e: &ModifiersChangedEvent, _, cx| this.on_modifiers(e, cx)))
+            .on_modifiers_changed(
+                cx.listener(|this, e: &ModifiersChangedEvent, _, cx| this.on_modifiers(e, cx)),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
@@ -681,7 +753,12 @@ impl Render for TerminalView {
                     this.click_special(e, cx);
                 }),
             )
-            .child(div().size_full().p(px(TERM_PAD)).child(TerminalElement::new(cx.entity())))
+            .child(
+                div()
+                    .size_full()
+                    .p(px(TERM_PAD))
+                    .child(TerminalElement::new(cx.entity())),
+            )
             .children(self.block_bar(cx))
             .child({
                 let this = cx.entity();

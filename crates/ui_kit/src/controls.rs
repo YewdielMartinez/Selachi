@@ -31,7 +31,10 @@ pub struct Segment {
 
 impl Segment {
     pub fn new(label: impl Into<SharedString>) -> Self {
-        Self { label: label.into(), icon: None }
+        Self {
+            label: label.into(),
+            icon: None,
+        }
     }
 
     pub fn icon(mut self, icon: Icon) -> Self {
@@ -125,7 +128,11 @@ impl RenderOnce for SegmentedControl {
         let ty = self.theme.typography;
         let track = self.track.unwrap_or(c.surface_1);
         // On a `surface_2` track the pill must still read: step one tone up.
-        let pill = if track == c.surface_2 { c.surface_4 } else { c.surface_3 };
+        let pill = if track == c.surface_2 {
+            c.surface_4
+        } else {
+            c.surface_3
+        };
         let on_change = self.on_change;
         let id = self.id;
         let focusable = self.focusable && on_change.is_some();
@@ -199,7 +206,13 @@ pub struct Toggle {
 
 impl Toggle {
     pub fn new(id: impl Into<SharedString>, theme: &Theme) -> Self {
-        Self { id: id.into(), theme: *theme, on: false, focusable: true, on_change: None }
+        Self {
+            id: id.into(),
+            theme: *theme,
+            on: false,
+            focusable: true,
+            on_change: None,
+        }
     }
 
     /// Keyboard focus (tab stop + ring; `Space` / `Enter` flip it). On by default; a toggle
@@ -226,8 +239,18 @@ impl RenderOnce for Toggle {
         let c = self.theme.colors;
         let on = self.on;
         let id = ElementId::from(self.id.clone());
-        let focus = (self.focusable && self.on_change.is_some()).then(|| focus::handle(window, cx, &id));
-        let knob = if on { Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 } } else { c.outline };
+        let focus =
+            (self.focusable && self.on_change.is_some()).then(|| focus::handle(window, cx, &id));
+        let knob = if on {
+            Rgba {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            }
+        } else {
+            c.outline
+        };
         let mut el = div()
             .id(id.clone())
             .occlude()
@@ -291,7 +314,13 @@ pub(crate) fn bind_slider_keys(cx: &mut App) {
 
 /// A keyboard move of `delta` units (`step` when set, else 5 % of the range per unit), clamped to
 /// the range and rounded to `step`. Pure, so it is unit tested.
-pub(crate) fn slider_key_value(value: f32, min: f32, max: f32, step: Option<f32>, delta: f32) -> f32 {
+pub(crate) fn slider_key_value(
+    value: f32,
+    min: f32,
+    max: f32,
+    step: Option<f32>,
+    delta: f32,
+) -> f32 {
     let unit = step.filter(|s| *s > 0.0).unwrap_or((max - min) * 0.05);
     let mut v = (value + delta * unit).clamp(min, max);
     if let Some(step) = step.filter(|s| *s > 0.0) {
@@ -400,7 +429,11 @@ pub(crate) fn slider_value(
     step: Option<f32>,
     default: Option<f32>,
 ) -> f32 {
-    let t = if width > 0.0 { ((x - left) / width).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if width > 0.0 {
+        ((x - left) / width).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let mut v = min + t * (max - min);
     if let Some(step) = step.filter(|s| *s > 0.0) {
         v = (min + ((v - min) / step).round() * step).clamp(min, max);
@@ -433,24 +466,39 @@ impl RenderOnce for Slider {
         let id = self.id.clone();
         let drag_id = self.id.clone();
         let el_id = ElementId::from(self.id.clone());
-        let focus = (self.focusable && self.on_change.is_some()).then(|| focus::handle(window, cx, &el_id));
+        let focus =
+            (self.focusable && self.on_change.is_some()).then(|| focus::handle(window, cx, &el_id));
         let on_change = self.on_change;
         let value = self.value;
         let key = {
             let on_change = on_change.clone();
             move |delta: f32, to: Option<f32>, window: &mut Window, cx: &mut App| {
                 if let Some(f) = &on_change {
-                    f(to.unwrap_or_else(|| slider_key_value(value, min, max, step, delta)), window, cx);
+                    f(
+                        to.unwrap_or_else(|| slider_key_value(value, min, max, step, delta)),
+                        window,
+                        cx,
+                    );
                 }
             }
         };
-        let (k_dec, k_inc, k_pgd, k_pgu, k_min, k_max) =
-            (key.clone(), key.clone(), key.clone(), key.clone(), key.clone(), key);
+        let (k_dec, k_inc, k_pgd, k_pgu, k_min, k_max) = (
+            key.clone(),
+            key.clone(),
+            key.clone(),
+            key.clone(),
+            key.clone(),
+            key,
+        );
         let set = {
             let on_change = on_change.clone();
             move |x: f32, left: f32, w: f32, window: &mut Window, cx: &mut App| {
                 if let Some(f) = &on_change {
-                    f(slider_value(x, left, w, min, max, step, default), window, cx);
+                    f(
+                        slider_value(x, left, w, min, max, step, default),
+                        window,
+                        cx,
+                    );
                 }
             }
         };
@@ -478,7 +526,9 @@ impl RenderOnce for Slider {
             .relative()
             .cursor_pointer()
             .child(
-                canvas(move |b, _, _| bounds_cell.set(b), |_, (), _, _| {}).absolute().size_full(),
+                canvas(move |b, _, _| bounds_cell.set(b), |_, (), _, _| {})
+                    .absolute()
+                    .size_full(),
             )
             // Track.
             .child(
@@ -634,7 +684,12 @@ impl RenderOnce for SwatchRow {
                     .rounded_full()
                     .cursor_pointer()
                     .when(is_sel, |d| d.border_2().border_color(c.text))
-                    .child(div().size(px(if is_sel { 12.0 } else { 18.0 })).rounded_full().bg(color))
+                    .child(
+                        div()
+                            .size(px(if is_sel { 12.0 } else { 18.0 }))
+                            .rounded_full()
+                            .bg(color),
+                    )
                     .on_click(move |_, window, cx| {
                         if let Some(f) = &on_select {
                             f(ix, window, cx);
@@ -643,7 +698,12 @@ impl RenderOnce for SwatchRow {
                 focus::wire(el, focus, &sw_id, 12.0, c.accent)
             })
             .collect();
-        div().flex().flex_row().items_center().gap(px(6.0)).children(items)
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .children(items)
     }
 }
 
@@ -665,8 +725,16 @@ mod tests {
     fn slider_keys_step_clamp_and_round() {
         // Free slider: 5 % of the range per key press.
         assert_eq!(slider_key_value(50.0, 0.0, 100.0, None, 1.0), 55.0);
-        assert_eq!(slider_key_value(50.0, 0.0, 100.0, None, -10.0), 0.0, "page down clamps");
-        assert_eq!(slider_key_value(98.0, 0.0, 100.0, None, 1.0), 100.0, "clamps at the end");
+        assert_eq!(
+            slider_key_value(50.0, 0.0, 100.0, None, -10.0),
+            0.0,
+            "page down clamps"
+        );
+        assert_eq!(
+            slider_key_value(98.0, 0.0, 100.0, None, 1.0),
+            100.0,
+            "clamps at the end"
+        );
         // Stepped slider: exactly one step, on the grid.
         assert_eq!(slider_key_value(20.0, 0.0, 100.0, Some(10.0), 1.0), 30.0);
         assert_eq!(slider_key_value(23.0, 0.0, 100.0, Some(10.0), -1.0), 10.0);
@@ -677,9 +745,25 @@ mod tests {
         let stepped = slider_value(137.0, 100.0, 200.0, 0.0, 100.0, Some(10.0), None);
         assert_eq!(stepped, 20.0);
         // 61.0 is within 2 % of the default 60 -> snaps.
-        let snapped = slider_value(100.0 + 200.0 * 0.61, 100.0, 200.0, 0.0, 100.0, None, Some(60.0));
+        let snapped = slider_value(
+            100.0 + 200.0 * 0.61,
+            100.0,
+            200.0,
+            0.0,
+            100.0,
+            None,
+            Some(60.0),
+        );
         assert_eq!(snapped, 60.0);
-        let free = slider_value(100.0 + 200.0 * 0.70, 100.0, 200.0, 0.0, 100.0, None, Some(60.0));
+        let free = slider_value(
+            100.0 + 200.0 * 0.70,
+            100.0,
+            200.0,
+            0.0,
+            100.0,
+            None,
+            Some(60.0),
+        );
         assert!((free - 70.0).abs() < 1e-3);
     }
 }

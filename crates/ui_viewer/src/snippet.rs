@@ -7,28 +7,36 @@ use crate::spans::LineSpans;
 
 /// The language of a code fence info string (`rust`, `rs`, `c#`, `ts`...).
 pub fn lang_of_fence(info: &str) -> Option<Lang> {
-    let word = info.split(|c: char| c.is_whitespace() || c == ',' || c == '{').next().unwrap_or("").trim();
+    let word = info
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+        .next()
+        .unwrap_or("")
+        .trim();
     if word.is_empty() {
         return None;
     }
     let lower = word.to_ascii_lowercase();
-    Lang::from_name(&lower).or_else(|| Lang::from_extension(&lower)).or(match lower.as_str() {
-        "c#" => Some(Lang::CSharp),
-        "sh" | "shell" | "zsh" => Some(Lang::Bash),
-        "ps1" | "pwsh" => Some(Lang::PowerShell),
-        "js" => Some(Lang::JavaScript),
-        "ts" => Some(Lang::TypeScript),
-        "py" => Some(Lang::Python),
-        "yml" => Some(Lang::Yaml),
-        _ => None,
-    })
+    Lang::from_name(&lower)
+        .or_else(|| Lang::from_extension(&lower))
+        .or(match lower.as_str() {
+            "c#" => Some(Lang::CSharp),
+            "sh" | "shell" | "zsh" => Some(Lang::Bash),
+            "ps1" | "pwsh" => Some(Lang::PowerShell),
+            "js" => Some(Lang::JavaScript),
+            "ts" => Some(Lang::TypeScript),
+            "py" => Some(Lang::Python),
+            "yml" => Some(Lang::Yaml),
+            _ => None,
+        })
 }
 
 /// Highlight spans per line of `text`, or empty spans when the language has no grammar here.
 pub fn highlight_snippet(info: &str, text: &str) -> Vec<LineSpans> {
     let n = text.lines().count();
     let empty = || vec![Vec::new(); n];
-    let Some(lang) = lang_of_fence(info) else { return empty() };
+    let Some(lang) = lang_of_fence(info) else {
+        return empty();
+    };
     if n == 0 || !lang.has_grammar() {
         return empty();
     }

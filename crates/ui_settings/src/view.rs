@@ -11,7 +11,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Task, actions, point, px};
+use gpui::{
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle,
+    Subscription, Task, actions, point, px,
+};
 use store::Config;
 use theme::Theme;
 use ui_kit::{Icon, Select, TextField, TextFieldEvent};
@@ -245,12 +248,22 @@ pub fn init(cx: &mut App) {
 }
 
 /// Create the view as an entity.
-pub fn settings_view(config: Config, theme: Theme, options: SettingsOptions, cx: &mut App) -> Entity<SettingsView> {
+pub fn settings_view(
+    config: Config,
+    theme: Theme,
+    options: SettingsOptions,
+    cx: &mut App,
+) -> Entity<SettingsView> {
     cx.new(|cx| SettingsView::new(config, theme, options, cx))
 }
 
 impl SettingsView {
-    pub fn new(config: Config, theme: Theme, options: SettingsOptions, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        config: Config,
+        theme: Theme,
+        options: SettingsOptions,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let registry = options.registry.clone().unwrap_or_else(|| {
             viewer_svc::grammars::plugin_registry().unwrap_or_else(|| {
                 let dir = options
@@ -261,19 +274,30 @@ impl SettingsView {
                 Arc::new(GrammarRegistry::new(dir))
             })
         });
-        let fetcher: Arc<dyn Fetcher> = options.fetcher.clone().unwrap_or_else(|| Arc::new(HttpFetcher));
+        let fetcher: Arc<dyn Fetcher> = options
+            .fetcher
+            .clone()
+            .unwrap_or_else(|| Arc::new(HttpFetcher));
         let index_url = config.plugins.effective_index_url().to_string();
         let plugins = cx.new(|_| PluginsModel::new(registry, fetcher, index_url));
         let mut subs = Vec::new();
         subs.push(cx.observe(&plugins, |_, _, cx| cx.notify()));
-        subs.push(cx.subscribe(&plugins, |_, _, ev: &PluginsEvent, cx| match ev {
-            PluginsEvent::Installed { id, restart } => {
-                cx.emit(SettingsEvent::PluginInstalled { id: id.clone(), restart: *restart });
-            }
-            PluginsEvent::Removed { id, restart } => {
-                cx.emit(SettingsEvent::PluginRemoved { id: id.clone(), restart: *restart });
-            }
-        }));
+        subs.push(
+            cx.subscribe(&plugins, |_, _, ev: &PluginsEvent, cx| match ev {
+                PluginsEvent::Installed { id, restart } => {
+                    cx.emit(SettingsEvent::PluginInstalled {
+                        id: id.clone(),
+                        restart: *restart,
+                    });
+                }
+                PluginsEvent::Removed { id, restart } => {
+                    cx.emit(SettingsEvent::PluginRemoved {
+                        id: id.clone(),
+                        restart: *restart,
+                    });
+                }
+            }),
+        );
         Self {
             theme,
             base: config.clone(),
@@ -403,7 +427,12 @@ impl SettingsView {
     pub fn open_plugin(&mut self, id: &str, cx: &mut Context<Self>) {
         self.set_section(Section::Plugins, cx);
         self.plugin_focus = Some(id.to_string());
-        let installed = self.plugins.read(cx).rows().iter().any(|r| r.id == id && !r.can_install());
+        let installed = self
+            .plugins
+            .read(cx)
+            .rows()
+            .iter()
+            .any(|r| r.id == id && !r.can_install());
         // The confirmation needs the index (size and version), so it opens once the row is
         // installable; until the index arrives the row is simply highlighted.
         self.confirm = (!installed).then(|| (id.to_string(), ConfirmKind::Install));
@@ -456,7 +485,11 @@ impl SettingsView {
     // ----- editing ----------------------------------------------------------------------------
 
     /// Apply `f` to a copy of the config; adopt it if it is valid (and different).
-    pub(crate) fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Config)) -> Result<(), FieldError> {
+    pub(crate) fn edit(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Config),
+    ) -> Result<(), FieldError> {
         let mut candidate = self.cfg.clone();
         f(&mut candidate);
         if candidate == self.cfg {
@@ -484,7 +517,12 @@ impl SettingsView {
     }
 
     /// [`edit`](Self::edit) for a text field: the error (or its absence) is tied to `key`.
-    pub(crate) fn edit_field(&mut self, key: &str, cx: &mut Context<Self>, f: impl FnOnce(&mut Config)) {
+    pub(crate) fn edit_field(
+        &mut self,
+        key: &str,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Config),
+    ) {
         match self.edit(cx, f) {
             Ok(()) => {
                 self.errors.remove(key);
@@ -530,7 +568,10 @@ impl SettingsView {
         let path = self.path.clone();
         cx.spawn(async move |this, cx| {
             let (c, p) = (cfg.clone(), path);
-            let result = cx.background_executor().spawn(async move { c.save_to(&p).map_err(|e| e.to_string()) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { c.save_to(&p).map_err(|e| e.to_string()) })
+                .await;
             let _ = this.update(cx, |s, cx| s.write_done(cfg, result, cx));
         })
         .detach();
@@ -591,7 +632,15 @@ impl SettingsView {
 
     /// After an external config change: refresh the fields whose value moved, drop profile fields.
     fn sync_fields(&mut self, before: &Config, cx: &mut Context<Self>) {
-        for key in ["ui_font", "mono_font", "accent_hex", "scrollback", "accept_word_key", "external_editor", "index_url"] {
+        for key in [
+            "ui_font",
+            "mono_font",
+            "accent_hex",
+            "scrollback",
+            "accept_word_key",
+            "external_editor",
+            "index_url",
+        ] {
             let (o, n) = (config_field_value(before, key), self.field_value(key));
             if o != n
                 && let (Some(f), Some(v)) = (self.fields.get(key), n)
@@ -621,7 +670,12 @@ impl SettingsView {
         let text = initial(self);
         let theme = self.theme;
         let placeholder = placeholder.to_string();
-        let f = cx.new(|cx| TextField::new(theme, cx).placeholder(placeholder).with_text(&text).monospace(mono));
+        let f = cx.new(|cx| {
+            TextField::new(theme, cx)
+                .placeholder(placeholder)
+                .with_text(&text)
+                .monospace(mono)
+        });
         let this_key = key.to_string();
         let sub = cx.subscribe(&f, move |this, _, ev: &TextFieldEvent, cx| {
             if matches!(ev, TextFieldEvent::Changed) {
@@ -643,7 +697,10 @@ impl SettingsView {
 
     /// Text of field `key` as typed.
     pub(crate) fn field_text(&self, key: &str, cx: &App) -> String {
-        self.fields.get(key).map(|f| f.read(cx).text().to_string()).unwrap_or_default()
+        self.fields
+            .get(key)
+            .map(|f| f.read(cx).text().to_string())
+            .unwrap_or_default()
     }
 
     fn on_field_change(&mut self, key: &str, cx: &mut Context<Self>) {

@@ -101,7 +101,10 @@ pub fn range_hash(lines: &SideLines, start: usize, end: usize) -> Option<u64> {
 pub fn excerpt(lines: &SideLines, start: usize, end: usize) -> Vec<(usize, String)> {
     let from = start.saturating_sub(EXCERPT_RADIUS).max(1);
     let to = end + EXCERPT_RADIUS;
-    lines.range(from..=to).map(|(n, t)| (*n, t.clone())).collect()
+    lines
+        .range(from..=to)
+        .map(|(n, t)| (*n, t.clone()))
+        .collect()
 }
 
 /// What [`Note::reanchor`] did.
@@ -142,8 +145,21 @@ pub struct Note {
 impl Note {
     /// A new draft anchored to `start..=end` of `lines`.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(id: NoteId, path: &str, side: Side, start: usize, end: usize, text: &str, lines: &SideLines, created: u64) -> Self {
-        let (start, end) = if end < start { (end, start) } else { (start, end) };
+    pub fn new(
+        id: NoteId,
+        path: &str,
+        side: Side,
+        start: usize,
+        end: usize,
+        text: &str,
+        lines: &SideLines,
+        created: u64,
+    ) -> Self {
+        let (start, end) = if end < start {
+            (end, start)
+        } else {
+            (start, end)
+        };
         Self {
             id,
             path: path.to_string(),
@@ -171,7 +187,11 @@ impl Note {
 
     /// `path:12`, `path:12-15`, plus `(antes)` for the old side.
     pub fn location(&self) -> String {
-        let range = if self.start == self.end { self.start.to_string() } else { format!("{}-{}", self.start, self.end) };
+        let range = if self.start == self.end {
+            self.start.to_string()
+        } else {
+            format!("{}-{}", self.start, self.end)
+        };
         match self.side {
             Side::New => format!("{}:{range}", self.path),
             Side::Old => format!("{}:{range} (versión anterior)", self.path),
@@ -203,7 +223,11 @@ impl Note {
                 self.end = s + len - 1;
                 self.stale = false;
                 self.snippet = excerpt(lines, self.start, self.end);
-                if delta == 0 { Reanchor::Kept } else { Reanchor::Moved(delta) }
+                if delta == 0 {
+                    Reanchor::Kept
+                } else {
+                    Reanchor::Moved(delta)
+                }
             }
             None => {
                 self.stale = true;
@@ -224,7 +248,11 @@ pub struct NoteRef {
 
 impl From<&Note> for NoteRef {
     fn from(n: &Note) -> Self {
-        Self { id: n.id, path: n.path.clone(), line: n.start }
+        Self {
+            id: n.id,
+            path: n.path.clone(),
+            line: n.start,
+        }
     }
 }
 
@@ -371,20 +399,29 @@ impl NoteSet {
 
     /// `{"version":1,"notes":[...]}`.
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(&Export { version: 1, notes: self.notes.clone() }).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string_pretty(&Export {
+            version: 1,
+            notes: self.notes.clone(),
+        })
+        .unwrap_or_else(|_| "{}".to_string())
     }
 
     /// Merges notes exported with [`NoteSet::to_json`]: a note that already exists (same place,
     /// text and anchor) is skipped, the rest get fresh ids. Returns how many were added.
     pub fn merge_json(&mut self, json: &str) -> Result<usize, String> {
-        let export: Export = serde_json::from_str(json).map_err(|e| format!("notas ilegibles: {e}"))?;
+        let export: Export =
+            serde_json::from_str(json).map_err(|e| format!("notas ilegibles: {e}"))?;
         if export.version != 1 {
             return Err(format!("versión de notas no soportada: {}", export.version));
         }
         let mut added = 0;
         for mut note in export.notes {
             let dup = self.notes.iter().any(|n| {
-                n.path == note.path && n.side == note.side && n.start == note.start && n.end == note.end && n.text == note.text
+                n.path == note.path
+                    && n.side == note.side
+                    && n.start == note.start
+                    && n.end == note.end
+                    && n.text == note.text
             });
             if dup || note.text.trim().is_empty() || note.start == 0 || note.end < note.start {
                 continue;
@@ -440,7 +477,16 @@ mod tests {
 
     #[test]
     fn new_note_captures_anchor_and_excerpt() {
-        let n = Note::new(NoteId(1), "a.rs", Side::New, 10, 10, "  usa ?  ", &base(), 7);
+        let n = Note::new(
+            NoteId(1),
+            "a.rs",
+            Side::New,
+            10,
+            10,
+            "  usa ?  ",
+            &base(),
+            7,
+        );
         assert_eq!(n.text, "usa ?");
         assert_eq!(n.state, NoteState::Draft);
         assert_eq!(n.snippet.first().map(|s| s.0), Some(7));
@@ -459,7 +505,13 @@ mod tests {
         assert_eq!(out, Reanchor::Moved(4));
         assert_eq!((n.start, n.end), (24, 25));
         assert!(!n.stale);
-        assert_eq!(n.snippet.iter().find(|(l, _)| *l == 24).map(|(_, t)| t.as_str()), Some("let value_20 = compute(20);"));
+        assert_eq!(
+            n.snippet
+                .iter()
+                .find(|(l, _)| *l == 24)
+                .map(|(_, t)| t.as_str()),
+            Some("let value_20 = compute(20);")
+        );
     }
 
     #[test]
@@ -503,7 +555,14 @@ mod tests {
     fn duplicate_lines_resolve_to_the_nearest() {
         let mut l = SideLines::new();
         for n in 1..=20usize {
-            l.insert(n, if n % 5 == 0 { "}".to_string() } else { format!("line {n}") });
+            l.insert(
+                n,
+                if n % 5 == 0 {
+                    "}".to_string()
+                } else {
+                    format!("line {n}")
+                },
+            );
         }
         let mut note = Note::new(NoteId(1), "a.rs", Side::New, 10, 10, "x", &l, 0);
         // One line inserted at the top: every `}` moves down by one (6, 11, 16, 21).
@@ -520,7 +579,16 @@ mod tests {
     fn removed_side_anchors_independently() {
         let old = lines(1..=5, |n| format!("old {n}"));
         let new = lines(1..=5, |n| format!("new {n}"));
-        let mut note = Note::new(NoteId(1), "a.rs", Side::Old, 3, 3, "por que se borra?", &old, 0);
+        let mut note = Note::new(
+            NoteId(1),
+            "a.rs",
+            Side::Old,
+            3,
+            3,
+            "por que se borra?",
+            &old,
+            0,
+        );
         let mut set = NoteSet::new();
         set.push(note.clone());
         set.reanchor_path("a.rs", &old, &new);
@@ -555,7 +623,16 @@ mod tests {
     fn json_round_trip_and_merge() {
         let mut set = NoteSet::new();
         let id = set.next_id();
-        set.push(Note::new(id, "src/a.rs", Side::New, 4, 5, "revisa esto", &base(), 99));
+        set.push(Note::new(
+            id,
+            "src/a.rs",
+            Side::New,
+            4,
+            5,
+            "revisa esto",
+            &base(),
+            99,
+        ));
         let json = set.to_json();
 
         let mut other = NoteSet::new();
@@ -565,12 +642,25 @@ mod tests {
         // Importing twice does not duplicate.
         assert_eq!(other.merge_json(&json), Ok(0));
         // Fresh ids never collide with existing ones.
-        let mut third = NoteSet::from_notes(vec![Note::new(NoteId(0), "z", Side::New, 1, 1, "z", &base(), 0)]);
+        let mut third = NoteSet::from_notes(vec![Note::new(
+            NoteId(0),
+            "z",
+            Side::New,
+            1,
+            1,
+            "z",
+            &base(),
+            0,
+        )]);
         assert_eq!(third.merge_json(&json), Ok(1));
         assert_ne!(third.notes()[0].id, third.notes()[1].id);
 
         assert!(NoteSet::new().merge_json("no es json").is_err());
-        assert!(NoteSet::new().merge_json("{\"version\":9,\"notes\":[]}").is_err());
+        assert!(
+            NoteSet::new()
+                .merge_json("{\"version\":9,\"notes\":[]}")
+                .is_err()
+        );
     }
 
     #[test]
@@ -579,7 +669,16 @@ mod tests {
         assert_eq!(n.location(), "src/a.rs:12");
         let m = Note::new(NoteId(1), "src/a.rs", Side::New, 12, 15, "x", &base(), 0);
         assert_eq!(m.location(), "src/a.rs:12-15");
-        let o = Note::new(NoteId(1), "src/a.rs", Side::Old, 3, 3, "x", &lines(1..=5, |n| n.to_string()), 0);
+        let o = Note::new(
+            NoteId(1),
+            "src/a.rs",
+            Side::Old,
+            3,
+            3,
+            "x",
+            &lines(1..=5, |n| n.to_string()),
+            0,
+        );
         assert_eq!(o.location(), "src/a.rs:3 (versión anterior)");
     }
 

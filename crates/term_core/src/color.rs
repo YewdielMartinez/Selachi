@@ -23,13 +23,21 @@ impl Rgb8 {
 
 impl From<Rgb> for Rgb8 {
     fn from(c: Rgb) -> Self {
-        Rgb8 { r: c.r, g: c.g, b: c.b }
+        Rgb8 {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+        }
     }
 }
 
 impl From<Rgb8> for Rgb {
     fn from(c: Rgb8) -> Self {
-        Rgb { r: c.r, g: c.g, b: c.b }
+        Rgb {
+            r: c.r,
+            g: c.g,
+            b: c.b,
+        }
     }
 }
 
@@ -87,12 +95,16 @@ pub fn indexed_color(palette: &Palette, idx: u8) -> Rgb8 {
         0..=15 => palette.ansi[idx as usize],
         16..=231 => {
             let i = (idx - 16) as usize;
-            Rgb8::new(CUBE_LEVELS[i / 36], CUBE_LEVELS[(i / 6) % 6], CUBE_LEVELS[i % 6])
-        },
+            Rgb8::new(
+                CUBE_LEVELS[i / 36],
+                CUBE_LEVELS[(i / 6) % 6],
+                CUBE_LEVELS[i % 6],
+            )
+        }
         232..=255 => {
             let v = 8 + 10 * (idx - 232);
             Rgb8::new(v, v, v)
-        },
+        }
     }
 }
 
@@ -108,14 +120,14 @@ fn named_color(palette: &Palette, n: NamedColor) -> Rgb8 {
         Black | Red | Green | Yellow | Blue | Magenta | Cyan | White | BrightBlack | BrightRed
         | BrightGreen | BrightYellow | BrightBlue | BrightMagenta | BrightCyan | BrightWhite => {
             palette.ansi[(n as usize).min(15)]
-        },
+        }
         Foreground | BrightForeground => palette.foreground,
         DimForeground => dim(palette.foreground),
         Background => palette.background,
         Cursor => palette.cursor,
         DimBlack | DimRed | DimGreen | DimYellow | DimBlue | DimMagenta | DimCyan | DimWhite => {
             dim(palette.ansi[(n as usize - DimBlack as usize).min(7)])
-        },
+        }
     }
 }
 
@@ -168,16 +180,28 @@ mod tests {
     fn named_and_overrides() {
         let p = Palette::default();
         let mut colors = Colors::default();
-        assert_eq!(resolve_color(Color::Named(NamedColor::Foreground), &p, &colors), p.foreground);
-        assert_eq!(resolve_color(Color::Named(NamedColor::BrightRed), &p, &colors), p.ansi[9]);
-        assert_eq!(resolve_color(Color::Named(NamedColor::DimRed), &p, &colors), dim(p.ansi[1]));
+        assert_eq!(
+            resolve_color(Color::Named(NamedColor::Foreground), &p, &colors),
+            p.foreground
+        );
+        assert_eq!(
+            resolve_color(Color::Named(NamedColor::BrightRed), &p, &colors),
+            p.ansi[9]
+        );
+        assert_eq!(
+            resolve_color(Color::Named(NamedColor::DimRed), &p, &colors),
+            dim(p.ansi[1])
+        );
         colors[NamedColor::Background as usize] = Some(Rgb { r: 1, g: 2, b: 3 });
         colors[4usize] = Some(Rgb { r: 9, g: 9, b: 9 });
         assert_eq!(
             resolve_color(Color::Named(NamedColor::Background), &p, &colors),
             Rgb8::new(1, 2, 3)
         );
-        assert_eq!(resolve_color(Color::Indexed(4), &p, &colors), Rgb8::new(9, 9, 9));
+        assert_eq!(
+            resolve_color(Color::Indexed(4), &p, &colors),
+            Rgb8::new(9, 9, 9)
+        );
         assert_eq!(
             resolve_color(Color::Spec(Rgb { r: 7, g: 8, b: 9 }), &p, &colors),
             Rgb8::new(7, 8, 9)

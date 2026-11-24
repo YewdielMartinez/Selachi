@@ -343,7 +343,10 @@ mod tests {
                 ("SELACHI_TAB_MODE".to_string(), "smart".to_string()),
                 ("SELACHI_PREDICTION".to_string(), "history".to_string()),
                 ("SELACHI_PREDICTION_VIEW".to_string(), "inline".to_string()),
-                ("SELACHI_ACCEPT_WORD_KEY".to_string(), "Ctrl+RightArrow".to_string()),
+                (
+                    "SELACHI_ACCEPT_WORD_KEY".to_string(),
+                    "Ctrl+RightArrow".to_string()
+                ),
             ]
         );
         let text = "[terminal.completion]\ntab = \"menu\"\nprediction = \"history_and_plugin\"\nprediction_view = \"list\"\naccept_word_key = \" Alt+j \"\n";
@@ -365,7 +368,10 @@ mod tests {
         assert!(Config::parse("[terminal.completion]\ntab = \"tabby\"").is_err());
         assert!(Config::parse("[terminal.completion]\nprediction = \"magic\"").is_err());
         assert!(Config::parse("[terminal.completion]\naccept_word_key = \"a'b\"").is_err());
-        assert!(Config::parse("[terminal.completion]\nsparkle = 1").unwrap().warnings.contains(&"terminal.completion.sparkle".to_string()));
+        assert!(Config::parse("[terminal.completion]\nsparkle = 1")
+            .unwrap()
+            .warnings
+            .contains(&"terminal.completion.sparkle".to_string()));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! `Wireframe`: a layout preset drawn as 1-bit pixel-art blocks (thumbnails of the layout panel).
 
-use gpui::{App, Bounds, IntoElement, RenderOnce, Window, canvas, div, fill, point, prelude::*, px, size};
+use gpui::{
+    App, Bounds, IntoElement, RenderOnce, Window, canvas, div, fill, point, prelude::*, px, size,
+};
 use theme::Theme;
 
 /// How a block is filled. The thumbnails are 1-bit: a cell is either ink or paper.
@@ -123,7 +125,14 @@ pub struct Wireframe {
 
 impl Wireframe {
     pub fn new(theme: &Theme) -> Self {
-        Self { theme: *theme, cols: 32, rows: 20, cell: 4.0, rects: Vec::new(), selected: false }
+        Self {
+            theme: *theme,
+            cols: 32,
+            rows: 20,
+            cell: 4.0,
+            rects: Vec::new(),
+            selected: false,
+        }
     }
 
     pub fn preset(theme: &Theme, preset: WirePreset) -> Self {
@@ -183,7 +192,11 @@ pub(crate) fn ink_cells(r: WireRect, cols: u8, rows: u8) -> Vec<(u8, u8)> {
 impl RenderOnce for Wireframe {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let c = self.theme.colors;
-        let (tile, ink) = if self.selected { (c.surface_3, c.text) } else { (c.surface_2, c.outline) };
+        let (tile, ink) = if self.selected {
+            (c.surface_3, c.text)
+        } else {
+            (c.surface_2, c.outline)
+        };
         let (cols, rows, cell) = (self.cols, self.rows, self.cell);
         let rects = self.rects;
         let w = f32::from(cols) * cell;
@@ -203,7 +216,10 @@ impl RenderOnce for Wireframe {
                                     bounds.origin.x + px(f32::from(x) * cell),
                                     bounds.origin.y + px(f32::from(y) * cell),
                                 );
-                                window.paint_quad(fill(Bounds::new(origin, size(px(cell), px(cell))), ink));
+                                window.paint_quad(fill(
+                                    Bounds::new(origin, size(px(cell), px(cell))),
+                                    ink,
+                                ));
                             }
                         }
                     },
@@ -220,7 +236,10 @@ mod tests {
 
     #[test]
     fn solid_covers_the_block() {
-        assert_eq!(ink_cells(WireRect::new(1, 1, 3, 2, WireFill::Solid), 32, 20).len(), 6);
+        assert_eq!(
+            ink_cells(WireRect::new(1, 1, 3, 2, WireFill::Solid), 32, 20).len(),
+            6
+        );
     }
 
     #[test]
@@ -232,7 +251,10 @@ mod tests {
 
     #[test]
     fn dither_is_a_checkerboard_and_blocks_clip_to_the_grid() {
-        assert_eq!(ink_cells(WireRect::new(0, 0, 4, 4, WireFill::Dither), 32, 20).len(), 8);
+        assert_eq!(
+            ink_cells(WireRect::new(0, 0, 4, 4, WireFill::Dither), 32, 20).len(),
+            8
+        );
         assert!(ink_cells(WireRect::new(30, 18, 10, 10, WireFill::Solid), 32, 20).len() <= 4);
     }
 

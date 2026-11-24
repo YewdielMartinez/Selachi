@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
-use viewer_svc::{Document, GitBase, Hunk, HighlightKind, Limits, LineKind};
+use viewer_svc::{Document, GitBase, HighlightKind, Hunk, Limits, LineKind};
 
 /// Rows kept for one preview; the rest is summarised in a "…N líneas más" row.
 pub const MAX_ROWS: usize = 2_500;
@@ -53,7 +53,11 @@ pub fn parse_unified(text: &str) -> Vec<FileDiff> {
                     files.push(f);
                 }
                 let path = rest.rsplit_once(" b/").map_or("", |(_, b)| b).to_string();
-                cur = Some(FileDiff { path, hunks: Vec::new(), binary: false });
+                cur = Some(FileDiff {
+                    path,
+                    hunks: Vec::new(),
+                    binary: false,
+                });
                 continue;
             }
             if let Some(f) = cur.as_mut() {
@@ -76,7 +80,11 @@ pub fn parse_unified(text: &str) -> Vec<FileDiff> {
             }
             if let Some(h) = parse_hunk_header(line) {
                 if cur.is_none() {
-                    cur = Some(FileDiff { path: String::new(), hunks: Vec::new(), binary: false });
+                    cur = Some(FileDiff {
+                        path: String::new(),
+                        hunks: Vec::new(),
+                        binary: false,
+                    });
                 }
                 flush(&mut cur, &mut hunk);
                 old_left = h.old_len;
@@ -116,7 +124,13 @@ pub fn parse_unified(text: &str) -> Vec<FileDiff> {
                 (Some(old_no - 1), Some(new_no - 1))
             }
         };
-        h.lines.push(viewer_svc::DiffLine { kind, old_line, new_line, text: body.to_string(), inline: Vec::new() });
+        h.lines.push(viewer_svc::DiffLine {
+            kind,
+            old_line,
+            new_line,
+            text: body.to_string(),
+            inline: Vec::new(),
+        });
     }
     flush(&mut cur, &mut hunk);
     if let Some(f) = cur.take() {
@@ -127,7 +141,10 @@ pub fn parse_unified(text: &str) -> Vec<FileDiff> {
 
 fn clean_path(p: &str) -> String {
     let p = p.split('\t').next().unwrap_or(p).trim();
-    let p = p.strip_prefix("a/").or_else(|| p.strip_prefix("b/")).unwrap_or(p);
+    let p = p
+        .strip_prefix("a/")
+        .or_else(|| p.strip_prefix("b/"))
+        .unwrap_or(p);
     p.trim_matches('"').to_string()
 }
 
@@ -144,7 +161,13 @@ fn parse_hunk_header(line: &str) -> Option<Hunk> {
     };
     let (old_start, old_len) = range(old)?;
     let (new_start, new_len) = range(new)?;
-    Some(Hunk { old_start, old_len, new_start, new_len, lines: Vec::new() })
+    Some(Hunk {
+        old_start,
+        old_len,
+        new_start,
+        new_len,
+        lines: Vec::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -197,11 +220,21 @@ fn expand_tabs(text: &str, spans: Spans) -> (String, Spans) {
     if !text.contains('\t') {
         return (text.to_string(), spans);
     }
-    let tabs_before = |off: usize| text.as_bytes()[..off.min(text.len())].iter().filter(|b| **b == b'\t').count();
+    let tabs_before = |off: usize| {
+        text.as_bytes()[..off.min(text.len())]
+            .iter()
+            .filter(|b| **b == b'\t')
+            .count()
+    };
     let extra = TAB.len() - 1;
     let spans = spans
         .into_iter()
-        .map(|(r, k)| (r.start + extra * tabs_before(r.start)..r.end + extra * tabs_before(r.end), k))
+        .map(|(r, k)| {
+            (
+                r.start + extra * tabs_before(r.start)..r.end + extra * tabs_before(r.end),
+                k,
+            )
+        })
         .collect();
     (text.replace('\t', TAB), spans)
 }
@@ -291,7 +324,12 @@ pub fn build_preview(
                 LineKind::Removed => l.old_line,
                 _ => l.new_line,
             };
-            rows.push(DiffRow::Line(PreviewLine { kind: l.kind, num, text, spans }));
+            rows.push(DiffRow::Line(PreviewLine {
+                kind: l.kind,
+                num,
+                text,
+                spans,
+            }));
         }
     }
     if hidden > 0 {
@@ -320,7 +358,9 @@ const DIR_LIST_MAX: usize = 200;
 /// Preview of an untracked directory: its files, as plain rows.
 fn preview_directory(abs: &Path, rel_text: &str) -> DiffPreview {
     fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut entries: Vec<_> = entries.flatten().collect();
         entries.sort_by_key(std::fs::DirEntry::file_name);
         for e in entries {
@@ -341,9 +381,17 @@ fn preview_directory(abs: &Path, rel_text: &str) -> DiffPreview {
     walk(abs, abs, &mut files);
     let more = files.len().saturating_sub(DIR_LIST_MAX);
     files.truncate(DIR_LIST_MAX);
-    let mut rows = vec![DiffRow::Hunk(format!("carpeta sin seguimiento · {}", crate::fmt::plural(files.len() + more, "archivo", "archivos")))];
+    let mut rows = vec![DiffRow::Hunk(format!(
+        "carpeta sin seguimiento · {}",
+        crate::fmt::plural(files.len() + more, "archivo", "archivos")
+    ))];
     rows.extend(files.into_iter().map(|f| {
-        DiffRow::Line(PreviewLine { kind: LineKind::Context, num: None, text: f, spans: Vec::new() })
+        DiffRow::Line(PreviewLine {
+            kind: LineKind::Context,
+            num: None,
+            text: f,
+            spans: Vec::new(),
+        })
     }));
     if more > 0 {
         rows.push(DiffRow::More(more));
@@ -365,7 +413,8 @@ pub fn preview_untracked(repo_root: &Path, rel: &Path) -> Result<DiffPreview, St
     if abs.is_dir() {
         return Ok(preview_directory(&abs, &crate::fmt::slashes(rel)));
     }
-    let hunks = viewer_svc::diff_against_git(repo_root, &abs, GitBase::Head).map_err(|e| e.to_string())?;
+    let hunks =
+        viewer_svc::diff_against_git(repo_root, &abs, GitBase::Head).map_err(|e| e.to_string())?;
     let path = crate::fmt::slashes(rel);
     let highlights = highlight_new_lines(&abs, &hunks);
     Ok(build_preview(&path, &hunks, false, highlights.as_ref()))
@@ -374,7 +423,10 @@ pub fn preview_untracked(repo_root: &Path, rel: &Path) -> Result<DiffPreview, St
 /// Markdown for "Preguntar al agente": the file, where it comes from and the diff (capped).
 pub fn agent_markdown(context: &str, preview: &DiffPreview) -> String {
     const MAX_LINES: usize = 300;
-    let mut out = format!("## Revisión de cambios\n\nArchivo: `{}` ({context})\n\n```diff\n", preview.path);
+    let mut out = format!(
+        "## Revisión de cambios\n\nArchivo: `{}` ({context})\n\n```diff\n",
+        preview.path
+    );
     let mut n = 0;
     for row in preview.rows.iter() {
         match row {
@@ -412,7 +464,10 @@ mod tests {
         assert_eq!(files[0].path, "src/lib.rs");
         assert_eq!(files[0].hunks.len(), 2);
         let h = &files[0].hunks[0];
-        assert_eq!((h.old_start, h.old_len, h.new_start, h.new_len), (1, 4, 1, 5));
+        assert_eq!(
+            (h.old_start, h.old_len, h.new_start, h.new_len),
+            (1, 4, 1, 5)
+        );
         assert_eq!(h.lines.len(), 6);
         assert_eq!(h.lines[1].kind, LineKind::Removed);
         assert_eq!((h.lines[1].old_line, h.lines[1].new_line), (Some(2), None));
@@ -454,7 +509,11 @@ mod tests {
         let p = build_preview("big", &[big], false, None);
         assert_eq!(p.rows.len(), MAX_ROWS + 1);
         assert_eq!(p.rows.last(), Some(&DiffRow::More(11)));
-        assert_eq!(p.removed, MAX_ROWS + 10, "totals count every line, not only the loaded rows");
+        assert_eq!(
+            p.removed,
+            MAX_ROWS + 10,
+            "totals count every line, not only the loaded rows"
+        );
     }
 
     #[test]
@@ -470,12 +529,18 @@ mod tests {
     fn sanitize_drops_invalid_spans() {
         let spans = vec![
             (0..2, HighlightKind::Keyword),
-            (1..3, HighlightKind::String), // overlaps
+            (1..3, HighlightKind::String),  // overlaps
             (4..99, HighlightKind::Number), // out of range
             (3..4, HighlightKind::Comment),
         ];
         let out = sanitize("abcdef", spans);
-        assert_eq!(out, vec![(0..2, HighlightKind::Keyword), (3..4, HighlightKind::Comment)]);
+        assert_eq!(
+            out,
+            vec![
+                (0..2, HighlightKind::Keyword),
+                (3..4, HighlightKind::Comment)
+            ]
+        );
         // Inside a multibyte char.
         assert!(sanitize("ñ", vec![(1..2, HighlightKind::Keyword)]).is_empty());
     }
@@ -488,8 +553,17 @@ mod tests {
         map.insert(2, vec![(0..2, HighlightKind::Keyword)]);
         let p = build_preview("src/lib.rs", &files[0].hunks, false, Some(&map));
         assert!(p.highlighted);
-        let lines: Vec<&PreviewLine> =
-            p.rows.iter().filter_map(|r| if let DiffRow::Line(l) = r { Some(l) } else { None }).collect();
+        let lines: Vec<&PreviewLine> = p
+            .rows
+            .iter()
+            .filter_map(|r| {
+                if let DiffRow::Line(l) = r {
+                    Some(l)
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(lines[0].spans.len(), 1, "context line 1");
         assert!(lines[1].spans.is_empty(), "removed lines are plain");
         assert_eq!(lines[2].spans.len(), 1, "added line 2");

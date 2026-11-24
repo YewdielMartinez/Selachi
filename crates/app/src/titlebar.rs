@@ -5,8 +5,8 @@
 //! swallowed by the caption hit test.
 
 use gpui::{
-    App, ClickEvent, Div, IntoElement, SharedString, Stateful, Window, WindowControlArea, div, prelude::*,
-    px, rgb,
+    App, ClickEvent, Div, IntoElement, SharedString, Stateful, Window, WindowControlArea, div,
+    prelude::*, px, rgb,
 };
 use panel_api::TabInfo;
 use theme::Theme;
@@ -20,12 +20,7 @@ const CTL_W: f32 = 46.0;
 const TAB_PILL_H: f32 = 28.0;
 const CLOSE_HOVER: u32 = 0xC42B1C;
 
-fn control(
-    theme: &Theme,
-    id: &'static str,
-    area: WindowControlArea,
-    name: Icon,
-) -> Stateful<Div> {
+fn control(theme: &Theme, id: &'static str, area: WindowControlArea, name: Icon) -> Stateful<Div> {
     let c = theme.colors;
     let close = area == WindowControlArea::Close;
     div()
@@ -81,7 +76,13 @@ pub fn breadcrumb(theme: &Theme, detail: SharedString, last_only: bool) -> impl 
     let c = theme.colors;
     let sep = || icon(Icon::ChevronRight, 16.0, c.outline);
     if last_only {
-        return div().min_w_0().max_w(px(220.0)).flex().flex_row().items_center().child(segment(theme, detail, true));
+        return div()
+            .min_w_0()
+            .max_w(px(220.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(segment(theme, detail, true));
     }
     div()
         .min_w_0()
@@ -155,14 +156,28 @@ pub fn window_controls(theme: &Theme, maximized: bool) -> impl IntoElement + use
         .flex_none()
         .flex()
         .flex_row()
-        .child(control(theme, "ctl-min", WindowControlArea::Min, Icon::Minimize))
+        .child(control(
+            theme,
+            "ctl-min",
+            WindowControlArea::Min,
+            Icon::Minimize,
+        ))
         .child(control(
             theme,
             "ctl-max",
             WindowControlArea::Max,
-            if maximized { Icon::Restore } else { Icon::Maximize },
+            if maximized {
+                Icon::Restore
+            } else {
+                Icon::Maximize
+            },
         ))
-        .child(control(theme, "ctl-close", WindowControlArea::Close, Icon::Close))
+        .child(control(
+            theme,
+            "ctl-close",
+            WindowControlArea::Close,
+            Icon::Close,
+        ))
 }
 
 /// An empty 40 px drag row with the shell's font; the caller adds the content.

@@ -12,8 +12,8 @@
 //! At most one per view; the secondary actions are `Button::tonal` / `ghost`.
 
 use gpui::{
-    App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, IntoElement, RenderOnce, SharedString, Stateful,
-    Window, div, linear_color_stop, linear_gradient, point, prelude::*, px,
+    App, BoxShadow, ClickEvent, Div, ElementId, FontWeight, IntoElement, RenderOnce, SharedString,
+    Stateful, Window, div, linear_color_stop, linear_gradient, point, prelude::*, px,
 };
 use theme::Theme;
 
@@ -143,7 +143,8 @@ impl RenderOnce for ActionButton {
         let ty = self.theme.typography;
         let enabled = !self.disabled;
         let id = ElementId::from(self.id.clone());
-        let focus = (enabled && self.focusable && self.on_click.is_some()).then(|| focus::handle(window, cx, &id));
+        let focus = (enabled && self.focusable && self.on_click.is_some())
+            .then(|| focus::handle(window, cx, &id));
         let ring_radius = self.size.height() / 2.0;
         let fg = if enabled { c.on_accent_strong } else { c.muted };
         let (hover, press) = (c.accent_strong_hover, c.accent_strong_press);

@@ -20,8 +20,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::{ChatError, Result};
 use crate::model::{
-    agent_from_db, agent_to_db, now_ms, permission_from_db, permission_to_db, Role, ThreadId, ThreadLink,
-    ThreadRecord, ThreadSpec, ThreadStatus,
+    agent_from_db, agent_to_db, now_ms, permission_from_db, permission_to_db, Role, ThreadId,
+    ThreadLink, ThreadRecord, ThreadSpec, ThreadStatus,
 };
 use crate::state::{ApprovalWrite, MessageWrite};
 
@@ -116,7 +116,10 @@ pub fn latest_version() -> u32 {
 pub fn migrate(conn: &mut Connection) -> Result<u32> {
     let current: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if current > latest_version() {
-        return Err(ChatError::NewerSchema { found: current, supported: latest_version() });
+        return Err(ChatError::NewerSchema {
+            found: current,
+            supported: latest_version(),
+        });
     }
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
         let tx = conn.transaction()?;
@@ -209,7 +212,9 @@ pub struct ChatDb {
 
 impl std::fmt::Debug for ChatDb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatDb").field("path", &self.inner.path).finish()
+        f.debug_struct("ChatDb")
+            .field("path", &self.inner.path)
+            .finish()
     }
 }
 
@@ -241,7 +246,10 @@ impl ChatDb {
         writer.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut writer)?;
         if reset_busy {
-            writer.execute("UPDATE threads SET status = 'idle' WHERE status IN ('working', 'waiting')", [])?;
+            writer.execute(
+                "UPDATE threads SET status = 'idle' WHERE status IN ('working', 'waiting')",
+                [],
+            )?;
         }
 
         let reader = Connection::open(path)?;
@@ -310,7 +318,10 @@ impl ChatDb {
     }
 
     /// Queue a write and wait until it is committed; returns the closure's value.
-    fn exec_sync<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> Result<T> + Send + 'static) -> Result<T> {
+    fn exec_sync<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
         let (rtx, rrx) = sync_channel::<Result<T>>(1);
         self.send(Op {
             urgent: true,
@@ -375,8 +386,9 @@ impl ChatDb {
     /// Direct children (threads whose `parent_thread_id` is `parent`), newest first.
     pub fn list_children(&self, parent: ThreadId) -> Result<Vec<ThreadId>> {
         self.read(|c| {
-            let mut st =
-                c.prepare("SELECT id FROM threads WHERE parent_thread_id = ?1 ORDER BY updated DESC, id DESC")?;
+            let mut st = c.prepare(
+                "SELECT id FROM threads WHERE parent_thread_id = ?1 ORDER BY updated DESC, id DESC",
+            )?;
             let rows = st.query_map([parent.0], |r| Ok(ThreadId(r.get(0)?)))?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
@@ -405,8 +417,12 @@ impl ChatDb {
 
     pub fn get_thread(&self, id: ThreadId) -> Result<Option<ThreadRecord>> {
         self.read(|c| {
-            Ok(c.query_row(&format!("{THREAD_SELECT} WHERE id = ?1"), [id.0], thread_from_row)
-                .optional()?)
+            Ok(c.query_row(
+                &format!("{THREAD_SELECT} WHERE id = ?1"),
+                [id.0],
+                thread_from_row,
+            )
+            .optional()?)
         })
     }
 
@@ -431,21 +447,30 @@ impl ChatDb {
 
     pub fn set_session(&self, id: ThreadId, session: Option<String>) -> Result<()> {
         self.exec_async("set_session", move |c| {
-            c.execute("UPDATE threads SET agent_session_id = ?2 WHERE id = ?1", params![id.0, session])?;
+            c.execute(
+                "UPDATE threads SET agent_session_id = ?2 WHERE id = ?1",
+                params![id.0, session],
+            )?;
             Ok(())
         })
     }
 
     pub fn set_title(&self, id: ThreadId, title: String) -> Result<()> {
         self.exec_sync(move |c| {
-            c.execute("UPDATE threads SET title = ?2 WHERE id = ?1", params![id.0, title])?;
+            c.execute(
+                "UPDATE threads SET title = ?2 WHERE id = ?1",
+                params![id.0, title],
+            )?;
             Ok(())
         })
     }
 
     pub fn set_archived(&self, id: ThreadId, archived: bool) -> Result<()> {
         self.exec_sync(move |c| {
-            c.execute("UPDATE threads SET archived = ?2, updated = ?3 WHERE id = ?1", params![id.0, archived, now_ms()])?;
+            c.execute(
+                "UPDATE threads SET archived = ?2, updated = ?3 WHERE id = ?1",
+                params![id.0, archived, now_ms()],
+            )?;
             Ok(())
         })
     }
@@ -558,7 +583,13 @@ impl ChatDb {
     }
 
     pub fn message_count(&self, id: ThreadId) -> Result<usize> {
-        self.read(|c| Ok(c.query_row("SELECT count(*) FROM messages WHERE thread_id = ?1", [id.0], |r| r.get::<_, i64>(0))? as usize))
+        self.read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM messages WHERE thread_id = ?1",
+                [id.0],
+                |r| r.get::<_, i64>(0),
+            )? as usize)
+        })
     }
 
     pub fn load_tool_runs(&self, id: ThreadId) -> Result<Vec<StoredToolRun>> {
@@ -647,13 +678,18 @@ impl ChatDb {
 
     pub fn load_plan(&self, id: ThreadId) -> Result<Option<String>> {
         self.read(|c| {
-            Ok(c.query_row("SELECT json FROM plans WHERE thread_id = ?1", [id.0], |r| r.get::<_, String>(0))
-                .optional()?)
+            Ok(
+                c.query_row("SELECT json FROM plans WHERE thread_id = ?1", [id.0], |r| {
+                    r.get::<_, String>(0)
+                })
+                .optional()?,
+            )
         })
     }
 }
 
-const THREAD_SELECT: &str = "SELECT id, title, project_root, worktree_path, agent_kind, model, permission_mode, status, \
+const THREAD_SELECT: &str =
+    "SELECT id, title, project_root, worktree_path, agent_kind, model, permission_mode, status, \
      created, updated, agent_session_id, archived, checkpoint_before_turn, effort FROM threads";
 
 const LINK_COLS: &str = "parent_thread_id, parent_tab, depth, delegated_by";
@@ -758,7 +794,12 @@ mod tests {
         spec.model = Some("claude-sonnet-5-5".into());
         spec.permission = PermissionMode::AcceptEdits;
         spec.checkpoint_before_turn = true;
-        db.insert_thread(NewThread { spec, title: title.into(), worktree_path: None }).unwrap()
+        db.insert_thread(NewThread {
+            spec,
+            title: title.into(),
+            worktree_path: None,
+        })
+        .unwrap()
     }
 
     #[test]
@@ -788,16 +829,26 @@ mod tests {
     fn newer_database_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("chat.db");
-        Connection::open(&path).unwrap().execute_batch("PRAGMA user_version = 999").unwrap();
-        assert!(matches!(ChatDb::open(&path), Err(ChatError::NewerSchema { found: 999, .. })));
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version = 999")
+            .unwrap();
+        assert!(matches!(
+            ChatDb::open(&path),
+            Err(ChatError::NewerSchema { found: 999, .. })
+        ));
     }
 
     #[test]
     fn wal_and_read_only_reader() {
         let (_d, db) = temp_db();
-        let mode: String = db.read(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?)).unwrap();
+        let mode: String = db
+            .read(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
+            .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
-        assert!(db.read(|c| Ok(c.execute("DELETE FROM threads", [])?)).is_err());
+        assert!(db
+            .read(|c| Ok(c.execute("DELETE FROM threads", [])?))
+            .is_err());
     }
 
     #[test]
@@ -812,10 +863,20 @@ mod tests {
         db.set_status(id, ThreadStatus::Done).unwrap();
         db.set_session(id, Some("sess".into())).unwrap();
         db.set_archived(id, true).unwrap();
-        db.set_agent(id, &AgentKind::Codex, Some("gpt".into()), Some("high".into()), None).unwrap();
+        db.set_agent(
+            id,
+            &AgentKind::Codex,
+            Some("gpt".into()),
+            Some("high".into()),
+            None,
+        )
+        .unwrap();
         db.flush().unwrap();
         let t = db.get_thread(id).unwrap().unwrap();
-        assert_eq!((t.status, t.archived, t.agent_session_id.clone()), (ThreadStatus::Done, true, None));
+        assert_eq!(
+            (t.status, t.archived, t.agent_session_id.clone()),
+            (ThreadStatus::Done, true, None)
+        );
         assert_eq!(t.agent, AgentKind::Codex);
         assert_eq!(t.model.as_deref(), Some("gpt"));
         assert_eq!(t.effort.as_deref(), Some("high"));
@@ -833,7 +894,10 @@ mod tests {
             id
         };
         let db = ChatDb::open(&path).unwrap();
-        assert_eq!(db.get_thread(id).unwrap().unwrap().status, ThreadStatus::Idle);
+        assert_eq!(
+            db.get_thread(id).unwrap().unwrap().status,
+            ThreadStatus::Idle
+        );
     }
 
     fn mw(seq: u32, role: Role, text: &str) -> MessageWrite {
@@ -864,16 +928,26 @@ mod tests {
         db.upsert_message(id, mw(0, Role::User, "hola")).unwrap();
         db.upsert_message(id, mw(1, Role::Assistant, "v1")).unwrap();
         let mut again = mw(1, Role::Assistant, "v2");
-        again.cost = Some(crate::state::MessageCost { usd: 0.5, source: crate::model::CostSource::Reported });
+        again.cost = Some(crate::state::MessageCost {
+            usd: 0.5,
+            source: crate::model::CostSource::Reported,
+        });
         again.tool_runs.clear();
         db.upsert_message(id, again).unwrap();
         db.flush().unwrap();
         let msgs = db.load_messages(id).unwrap();
         assert_eq!(msgs.len(), 2);
         assert!(msgs[1].content_json.contains("v2"));
-        assert_eq!((msgs[1].cost_usd, msgs[1].cost_source.as_deref()), (Some(0.5), Some("reported")));
+        assert_eq!(
+            (msgs[1].cost_usd, msgs[1].cost_source.as_deref()),
+            (Some(0.5), Some("reported"))
+        );
         let runs = db.load_tool_runs(id).unwrap();
-        assert_eq!(runs.len(), 1, "the replaced message dropped its tool run, the first kept its own");
+        assert_eq!(
+            runs.len(),
+            1,
+            "the replaced message dropped its tool run, the first kept its own"
+        );
         assert_eq!(runs[0].message_seq, Some(0));
     }
 
@@ -896,7 +970,10 @@ mod tests {
         db.flush().unwrap();
         let a = db.load_approvals(id).unwrap();
         assert_eq!(a.len(), 1);
-        assert_eq!((a[0].decision.as_deref(), a[0].decided_ms), (Some("allow"), Some(9)));
+        assert_eq!(
+            (a[0].decision.as_deref(), a[0].decided_ms),
+            (Some("allow"), Some(9))
+        );
         assert_eq!(db.load_plan(id).unwrap().unwrap(), "{\"items\":[1]}");
         db.delete_thread(id).unwrap();
         assert!(db.load_messages(id).unwrap().is_empty());

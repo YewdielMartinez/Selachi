@@ -12,8 +12,8 @@ use std::time::Duration;
 use agents_svc::{Range, Store};
 
 use crate::data::{
-    AGENT_ORDER, CHART_DAYS, DayUsage, LIMIT_AGENTS, LimitWindow, UsageQuery, UsageRange, UsageSnapshot,
-    aggregate_agents, chart_day_bounds, local_now,
+    AGENT_ORDER, CHART_DAYS, DayUsage, LIMIT_AGENTS, LimitWindow, UsageQuery, UsageRange,
+    UsageSnapshot, aggregate_agents, chart_day_bounds, local_now,
 };
 
 /// A blocking provider of [`UsageSnapshot`]s. Implemented over `agents_svc` by [`StoreSource`];
@@ -29,7 +29,10 @@ pub const FORECAST_RECENT: Duration = Duration::from_secs(3600);
 enum Inner {
     Shared(Arc<Mutex<Store>>),
     /// Opens the database on first use (and again after a failure).
-    Path { path: PathBuf, store: Option<Store> },
+    Path {
+        path: PathBuf,
+        store: Option<Store>,
+    },
 }
 
 /// [`UsageSource`] over an `agents_svc` database.
@@ -40,13 +43,20 @@ pub struct StoreSource {
 impl StoreSource {
     /// Shares the store the host already has (for example next to its `Ingestor`).
     pub fn shared(store: Arc<Mutex<Store>>) -> Self {
-        Self { inner: Mutex::new(Inner::Shared(store)) }
+        Self {
+            inner: Mutex::new(Inner::Shared(store)),
+        }
     }
 
     /// Opens its own connection to `path` (SQLite WAL lets it read while the app scans and
     /// writes). The file is opened lazily, on the background executor, at the first refresh.
     pub fn path(path: impl Into<PathBuf>) -> Self {
-        Self { inner: Mutex::new(Inner::Path { path: path.into(), store: None }) }
+        Self {
+            inner: Mutex::new(Inner::Path {
+                path: path.into(),
+                store: None,
+            }),
+        }
     }
 }
 
@@ -79,7 +89,10 @@ impl UsageSource for StoreSource {
 pub fn load_from(store: &Store, query: &UsageQuery) -> Result<UsageSnapshot, String> {
     let err = |e: anyhow::Error| format!("{e:#}");
     let now = local_now();
-    let mut snap = UsageSnapshot { query: query.clone(), ..UsageSnapshot::default() };
+    let mut snap = UsageSnapshot {
+        query: query.clone(),
+        ..UsageSnapshot::default()
+    };
 
     // Selected range: per-agent totals and (when a project is known) per-branch cost.
     match query.range.to_range(query.session_id.as_deref()) {

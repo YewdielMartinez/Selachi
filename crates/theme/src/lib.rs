@@ -259,7 +259,12 @@ impl Theme {
                 on_warning: rgb(0x2B2000),
                 info: rgb(0x5CC0FF),
                 on_info: rgb(0x00263A),
-                scrim: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.45 },
+                scrim: Rgba {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.45,
+                },
                 glass: rgb(0x2A2A2E),
             },
             terminal: TerminalColors {
@@ -301,7 +306,12 @@ impl Theme {
                 on_warning: rgb(0xFFFFFF),
                 info: rgb(0x0067B3),
                 on_info: rgb(0xFFFFFF),
-                scrim: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.32 },
+                scrim: Rgba {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.32,
+                },
                 glass: rgb(0xFFFFFF),
             },
             terminal: TerminalColors {
@@ -343,7 +353,12 @@ impl Theme {
                 on_warning: rgb(0x2B2000),
                 info: rgb(0x5CC0FF),
                 on_info: rgb(0x00263A),
-                scrim: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.6 },
+                scrim: Rgba {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.6,
+                },
                 glass: rgb(0x121214),
             },
             terminal: TerminalColors {
@@ -375,16 +390,24 @@ impl Default for Theme {
 /// Parses `#RRGGBB` (the `#` is optional) into `0xRRGGBB`.
 pub fn parse_hex(s: &str) -> Option<u32> {
     let h = s.trim().trim_start_matches('#');
-    (h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit())).then(|| u32::from_str_radix(h, 16).ok()).flatten()
+    (h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| u32::from_str_radix(h, 16).ok())
+        .flatten()
 }
 
 fn linear(c: u32) -> f64 {
     let c = f64::from(c) / 255.0;
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn luminance(hex: u32) -> f64 {
-    0.2126 * linear((hex >> 16) & 0xFF) + 0.7152 * linear((hex >> 8) & 0xFF) + 0.0722 * linear(hex & 0xFF)
+    0.2126 * linear((hex >> 16) & 0xFF)
+        + 0.7152 * linear((hex >> 8) & 0xFF)
+        + 0.0722 * linear(hex & 0xFF)
 }
 
 /// WCAG contrast ratio of two `0xRRGGBB` colours (1.0 ..= 21.0).
@@ -397,7 +420,10 @@ pub fn contrast_ratio(a: u32, b: u32) -> f64 {
 /// `hex` blended over `base` at `alpha` (0.0 ..= 1.0), per channel.
 fn blend(hex: u32, base: u32, alpha: f64) -> u32 {
     let ch = |shift: u32| {
-        let (a, b) = (f64::from((hex >> shift) & 0xFF), f64::from((base >> shift) & 0xFF));
+        let (a, b) = (
+            f64::from((hex >> shift) & 0xFF),
+            f64::from((base >> shift) & 0xFF),
+        );
         ((a * alpha + b * (1.0 - alpha)).round() as u32).min(255) << shift
     };
     ch(16) | ch(8) | ch(0)
@@ -479,7 +505,11 @@ fn strong_for(accent: u32, mode: Mode, text: u32, bg: u32) -> (u32, u32, u32, u3
     let s = {
         let c = |shift: u32| f64::from((accent >> shift) & 0xFF) / 255.0;
         let max = c(16).max(c(8)).max(c(0));
-        if max < 1e-9 { 0.0 } else { (max - c(16).min(c(8)).min(c(0))) / max }
+        if max < 1e-9 {
+            0.0
+        } else {
+            (max - c(16).min(c(8)).min(c(0))) / max
+        }
     };
     let shift = |hex: u32, dl: f64| {
         let (h, s, l) = to_hsl(hex);
@@ -494,7 +524,8 @@ fn strong_for(accent: u32, mode: Mode, text: u32, bg: u32) -> (u32, u32, u32, u3
     let mut l = 0.60;
     let mut rest = from_hsl(h, STRONG_SATURATION, l);
     // The rest tone reads (>= 4.5) and so does its +8 % hover (>= 3, it is only a moment).
-    while (contrast_ratio(rest, 0xFFFFFF) < LABEL_CONTRAST || contrast_ratio(shift(rest, 0.08), 0xFFFFFF) < HOVER_CONTRAST)
+    while (contrast_ratio(rest, 0xFFFFFF) < LABEL_CONTRAST
+        || contrast_ratio(shift(rest, 0.08), 0xFFFFFF) < HOVER_CONTRAST)
         && l > 0.05
     {
         l -= 0.005;
@@ -519,7 +550,12 @@ impl Theme {
         }
         self.terminal.selection = blend(hex, hex_of(self.colors.bg), 0.25);
         if hex != ACCENT {
-            let (rest, hover, press, label) = strong_for(hex, self.mode, hex_of(self.colors.text), hex_of(self.colors.bg));
+            let (rest, hover, press, label) = strong_for(
+                hex,
+                self.mode,
+                hex_of(self.colors.text),
+                hex_of(self.colors.bg),
+            );
             self.colors.accent_strong = rgb(rest);
             self.colors.accent_strong_hover = rgb(hover);
             self.colors.accent_strong_gradient_top = rgb(hover);
@@ -552,7 +588,9 @@ mod tests {
     }
 
     fn luminance(hex: u32) -> f64 {
-        0.2126 * lin((hex >> 16) & 0xFF) + 0.7152 * lin((hex >> 8) & 0xFF) + 0.0722 * lin(hex & 0xFF)
+        0.2126 * lin((hex >> 16) & 0xFF)
+            + 0.7152 * lin((hex >> 8) & 0xFF)
+            + 0.0722 * lin(hex & 0xFF)
     }
 
     fn contrast(a: u32, b: u32) -> f64 {
@@ -595,12 +633,17 @@ mod tests {
     #[test]
     fn a_custom_accent_reaches_accent_cursor_selection_and_ink() {
         for base in all() {
-            for hex in [0x7FCB8F, 0xE0B96A, 0xBC8CE8, 0xE8707B, 0x4FC9D6, 0xECEEF2, 0x112233] {
+            for hex in [
+                0x7FCB8F, 0xE0B96A, 0xBC8CE8, 0xE8707B, 0x4FC9D6, 0xECEEF2, 0x112233,
+            ] {
                 let t = base.with_accent(hex);
                 assert_eq!(hex_of(t.colors.accent), hex);
                 // Whichever ink reads better is chosen: never worse than the other candidate.
                 let ink = contrast_ratio(hex, hex_of(t.colors.on_accent));
-                assert!(ink >= contrast_ratio(hex, 0xFFFFFF).min(contrast_ratio(hex, ON_ACCENT)), "{hex:06X} ink {ink}");
+                assert!(
+                    ink >= contrast_ratio(hex, 0xFFFFFF).min(contrast_ratio(hex, ON_ACCENT)),
+                    "{hex:06X} ink {ink}"
+                );
                 assert_eq!(t.colors.error, base.colors.error);
             }
         }
@@ -622,7 +665,9 @@ mod tests {
     }
 
     /// The swatches of Ajustes > Apariencia (`ui_settings::ACCENTS`).
-    const SWATCHES: [u32; 8] = [0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2];
+    const SWATCHES: [u32; 8] = [
+        0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2,
+    ];
 
     #[test]
     fn the_action_button_reads_on_every_swatch_and_mode() {
@@ -631,7 +676,11 @@ mod tests {
                 let t = base.with_accent(hex);
                 let c = t.colors;
                 let label = contrast_ratio(hex_of(c.accent_strong), hex_of(c.on_accent_strong));
-                assert!(label >= 4.5, "{:?} {hex:06X}: label contrast {label}", base.mode);
+                assert!(
+                    label >= 4.5,
+                    "{:?} {hex:06X}: label contrast {label}",
+                    base.mode
+                );
                 // Hover and press are other tones of the same button, still readable.
                 for state in [c.accent_strong_hover, c.accent_strong_press] {
                     let k = contrast_ratio(hex_of(state), hex_of(c.on_accent_strong));
@@ -706,7 +755,12 @@ mod tests {
     fn terminal_background_matches_card() {
         // The terminal is a floating card painted in surface_0 (DESIGN.md).
         for t in all() {
-            assert_eq!(hex_of(t.colors.surface_0), t.terminal.background, "{:?}", t.mode);
+            assert_eq!(
+                hex_of(t.colors.surface_0),
+                t.terminal.background,
+                "{:?}",
+                t.mode
+            );
         }
         assert_eq!(Theme::dark().terminal.background, 0x0D0E10);
         assert_eq!(Theme::oled().terminal.background, 0x050505);
@@ -730,9 +784,21 @@ mod tests {
     fn ui_text_contrast() {
         for t in all() {
             let bg = hex_of(t.colors.bg);
-            assert!(contrast(hex_of(t.colors.text), bg) >= 7.0, "{:?} text", t.mode);
-            assert!(contrast(hex_of(t.colors.muted), bg) >= 4.5, "{:?} muted", t.mode);
-            assert!(contrast(hex_of(t.colors.error), bg) >= 4.5, "{:?} error", t.mode);
+            assert!(
+                contrast(hex_of(t.colors.text), bg) >= 7.0,
+                "{:?} text",
+                t.mode
+            );
+            assert!(
+                contrast(hex_of(t.colors.muted), bg) >= 4.5,
+                "{:?} muted",
+                t.mode
+            );
+            assert!(
+                contrast(hex_of(t.colors.error), bg) >= 4.5,
+                "{:?} error",
+                t.mode
+            );
             assert!(
                 contrast(hex_of(t.colors.on_accent), hex_of(t.colors.accent)) >= 4.5,
                 "{:?} on_accent",
@@ -749,7 +815,12 @@ mod tests {
             assert_eq!(hex_of(c.accent_strong), 0x005EEB, "{:?}", t.mode);
             assert_eq!(hex_of(c.accent_strong_hover), 0x1A72FF, "{:?}", t.mode);
             assert_eq!(hex_of(c.accent_strong_press), 0x0052CC, "{:?}", t.mode);
-            assert_eq!(hex_of(c.accent_strong_gradient_top), 0x1A72FF, "{:?}", t.mode);
+            assert_eq!(
+                hex_of(c.accent_strong_gradient_top),
+                0x1A72FF,
+                "{:?}",
+                t.mode
+            );
             assert_eq!(hex_of(c.on_accent_strong), 0xFFFFFF, "{:?}", t.mode);
         }
     }
@@ -767,13 +838,25 @@ mod tests {
                 ("gradient_top", c.accent_strong_gradient_top),
             ] {
                 let r = contrast(fg, hex_of(bg));
-                let floor = if name == "rest" || name == "press" { 4.5 } else { 3.9 };
-                assert!(r >= floor, "{:?} on_accent_strong over {name}: {r:.2}", t.mode);
+                let floor = if name == "rest" || name == "press" {
+                    4.5
+                } else {
+                    3.9
+                };
+                assert!(
+                    r >= floor,
+                    "{:?} on_accent_strong over {name}: {r:.2}",
+                    t.mode
+                );
             }
             // The strong blue is a fill only: as text on a dark surface it must stay
             // below AA, which is why `accent` is the text/link color.
             if t.mode != Mode::Light {
-                assert!(contrast(hex_of(c.accent_strong), hex_of(c.bg)) < 4.5, "{:?}", t.mode);
+                assert!(
+                    contrast(hex_of(c.accent_strong), hex_of(c.bg)) < 4.5,
+                    "{:?}",
+                    t.mode
+                );
             }
         }
     }
@@ -808,7 +891,11 @@ mod tests {
             let sel = t.terminal.selection;
             assert!(contrast(t.terminal.foreground, sel) >= 7.0, "{:?}", t.mode);
             for i in [1, 2, 3, 4, 5, 6] {
-                assert!(contrast(t.terminal.ansi[i], sel) >= 3.0, "{:?} ansi[{i}]", t.mode);
+                assert!(
+                    contrast(t.terminal.ansi[i], sel) >= 3.0,
+                    "{:?} ansi[{i}]",
+                    t.mode
+                );
             }
         }
     }
@@ -846,18 +933,33 @@ mod tests {
     fn semantic_roles_read_as_text_on_every_surface() {
         for t in all() {
             let c = t.colors;
-            for (name, role) in [("success", c.success), ("warning", c.warning), ("info", c.info)] {
-                for (sname, surface) in
-                    [("bg", c.bg), ("surface_0", c.surface_0), ("surface_1", c.surface_1), ("surface_2", c.surface_2)]
-                {
+            for (name, role) in [
+                ("success", c.success),
+                ("warning", c.warning),
+                ("info", c.info),
+            ] {
+                for (sname, surface) in [
+                    ("bg", c.bg),
+                    ("surface_0", c.surface_0),
+                    ("surface_1", c.surface_1),
+                    ("surface_2", c.surface_2),
+                ] {
                     let r = contrast(hex_of(role), hex_of(surface));
                     assert!(r >= 4.5, "{:?} {name} on {sname}: {r:.2}", t.mode);
                 }
                 // Also fine as an indicator (>= 3:1) on the highest tone in use.
                 let r = contrast(hex_of(role), hex_of(c.surface_4));
-                assert!(r >= 3.0, "{:?} {name} indicator on surface_4: {r:.2}", t.mode);
+                assert!(
+                    r >= 3.0,
+                    "{:?} {name} indicator on surface_4: {r:.2}",
+                    t.mode
+                );
             }
-            assert!(contrast(hex_of(c.error), hex_of(c.surface_2)) >= 4.5, "{:?} error on surface_2", t.mode);
+            assert!(
+                contrast(hex_of(c.error), hex_of(c.surface_2)) >= 4.5,
+                "{:?} error on surface_2",
+                t.mode
+            );
         }
     }
 
@@ -895,7 +997,10 @@ mod tests {
         let d = Theme::dark();
         assert_eq!(hex_of(d.colors.success), d.terminal.ansi[2]);
         assert_eq!(hex_of(d.colors.warning), d.terminal.ansi[3]);
-        assert!((d.colors.scrim.a - 0.45).abs() < 1e-6, "thread_list scrim was black at 0.45");
+        assert!(
+            (d.colors.scrim.a - 0.45).abs() < 1e-6,
+            "thread_list scrim was black at 0.45"
+        );
         assert_eq!(hex_of(d.colors.scrim), 0x000000);
     }
 
@@ -905,11 +1010,19 @@ mod tests {
             let s = t.colors.scrim;
             assert!(s.a > 0.2 && s.a < 0.8, "{:?} alpha {}", t.mode, s.a);
             let dimmed = over(s, hex_of(t.colors.bg));
-            assert!(luminance(dimmed) < luminance(hex_of(t.colors.bg)) || hex_of(t.colors.bg) == 0, "{:?}", t.mode);
+            assert!(
+                luminance(dimmed) < luminance(hex_of(t.colors.bg)) || hex_of(t.colors.bg) == 0,
+                "{:?}",
+                t.mode
+            );
             // What sits on top of the scrim (a surface_2 popover) stays distinguishable from it.
             // (OLED is black on black: the popover's own tone is what separates it there.)
             if t.mode != Mode::Oled {
-                assert!(contrast(hex_of(t.colors.surface_2), dimmed) >= 1.2, "{:?} popover vs dimmed bg", t.mode);
+                assert!(
+                    contrast(hex_of(t.colors.surface_2), dimmed) >= 1.2,
+                    "{:?} popover vs dimmed bg",
+                    t.mode
+                );
             }
         }
     }
@@ -943,17 +1056,36 @@ mod tests {
 
     #[test]
     fn component_radii_follow_design_md() {
-        assert_eq!((Radius::PILL, Radius::CONTROL, Radius::CHIP), (10.0, 8.0, 6.0));
-        const { assert!(Radius::CHIP < Radius::CONTROL && Radius::CONTROL < Radius::PILL && Radius::PILL < Radius::SM) };
+        assert_eq!(
+            (Radius::PILL, Radius::CONTROL, Radius::CHIP),
+            (10.0, 8.0, 6.0)
+        );
+        const {
+            assert!(
+                Radius::CHIP < Radius::CONTROL
+                    && Radius::CONTROL < Radius::PILL
+                    && Radius::PILL < Radius::SM
+            )
+        };
     }
 
     #[test]
     fn type_scale_is_strictly_ascending_and_keeps_old_steps() {
         let ty = Typography::new();
-        let steps =
-            [ty.ui_size_xs, ty.ui_size_sm, ty.ui_size_md, ty.ui_size_body, ty.ui_size_lg, ty.ui_size_xl, ty.ui_size_display];
+        let steps = [
+            ty.ui_size_xs,
+            ty.ui_size_sm,
+            ty.ui_size_md,
+            ty.ui_size_body,
+            ty.ui_size_lg,
+            ty.ui_size_xl,
+            ty.ui_size_display,
+        ];
         assert!(steps.windows(2).all(|w| w[0] < w[1]), "{steps:?}");
-        assert_eq!((ty.ui_size_sm, ty.ui_size_md, ty.ui_size_lg), (12.0, 13.0, 15.0));
+        assert_eq!(
+            (ty.ui_size_sm, ty.ui_size_md, ty.ui_size_lg),
+            (12.0, 13.0, 15.0)
+        );
         assert_eq!(ty.ui_size_xs, 11.0);
     }
 }

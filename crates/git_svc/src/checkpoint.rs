@@ -32,7 +32,14 @@ const REF_PREFIX: &str = "refs/selachi/checkpoints/";
 /// Snapshots may hash many files; allow more than the 20 s used for reads.
 const SNAP_TIMEOUT: Duration = NETWORK_TIMEOUT;
 /// Config forced on every snapshot/restore command so bytes are stored and written verbatim.
-const RAW_CFG: [&str; 6] = ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "-c", "commit.gpgsign=false"];
+const RAW_CFG: [&str; 6] = [
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.safecrlf=false",
+    "-c",
+    "commit.gpgsign=false",
+];
 
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
@@ -124,7 +131,9 @@ impl TempIndex {
     fn copy_of(repo: &Repo) -> Result<Self> {
         let real = repo.git_dir.join("index");
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = repo.git_dir.join(format!("selachi-tmp-index-{}-{n}", std::process::id()));
+        let path = repo
+            .git_dir
+            .join(format!("selachi-tmp-index-{}-{n}", std::process::id()));
         let tmp = Self { path };
         if real.is_file() {
             std::fs::copy(&real, &tmp.path)?;
@@ -134,11 +143,18 @@ impl TempIndex {
 
     fn empty(repo: &Repo) -> Self {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        Self { path: repo.git_dir.join(format!("selachi-tmp-index-{}-{n}", std::process::id())) }
+        Self {
+            path: repo
+                .git_dir
+                .join(format!("selachi-tmp-index-{}-{n}", std::process::id())),
+        }
     }
 
     fn opts(&self) -> Opts<'_> {
-        Opts { envs: vec![("GIT_INDEX_FILE", self.path.clone().into_os_string())], stdin: None }
+        Opts {
+            envs: vec![("GIT_INDEX_FILE", self.path.clone().into_os_string())],
+            stdin: None,
+        }
     }
 }
 
@@ -163,12 +179,16 @@ fn parse_raw_diff(out: &[u8]) -> Result<Vec<Entry>> {
     let mut v = Vec::new();
     while let Some(meta) = toks.next() {
         let meta = String::from_utf8_lossy(meta);
-        let meta = meta.strip_prefix(':').ok_or_else(|| Error::Parse(format!("bad raw diff line {meta:?}")))?;
+        let meta = meta
+            .strip_prefix(':')
+            .ok_or_else(|| Error::Parse(format!("bad raw diff line {meta:?}")))?;
         let f: Vec<&str> = meta.split(' ').collect();
         if f.len() < 5 {
             return Err(Error::Parse(format!("bad raw diff line {meta:?}")));
         }
-        let path = toks.next().ok_or_else(|| Error::Parse("raw diff: missing path".into()))?;
+        let path = toks
+            .next()
+            .ok_or_else(|| Error::Parse("raw diff: missing path".into()))?;
         v.push(Entry {
             status: f[4].chars().next().unwrap_or('M'),
             old_mode: f[0].to_owned(),
@@ -180,14 +200,20 @@ fn parse_raw_diff(out: &[u8]) -> Result<Vec<Entry>> {
 }
 
 fn validate_id(id: &str) -> Result<()> {
-    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err(Error::InvalidArgument(format!("invalid checkpoint id {id:?}")));
+    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(Error::InvalidArgument(format!(
+            "invalid checkpoint id {id:?}"
+        )));
     }
     Ok(())
 }
 
 fn one_line(s: &str) -> String {
-    let t: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let t: String = s
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     let t = t.trim();
     let t: String = t.chars().take(200).collect();
     if t.is_empty() {
@@ -205,14 +231,19 @@ fn parse_checkpoints(out: &str) -> Vec<Checkpoint> {
         let (Some(name), Some(oid), Some(body)) = (f.next(), f.next(), f.next()) else {
             continue;
         };
-        let Some(id) = name.strip_prefix(REF_PREFIX) else { continue };
+        let Some(id) = name.strip_prefix(REF_PREFIX) else {
+            continue;
+        };
         let trailer = |key: &str| {
-            body.lines().find_map(|l| l.strip_prefix(key).map(|r| r.trim().to_owned()))
+            body.lines()
+                .find_map(|l| l.strip_prefix(key).map(|r| r.trim().to_owned()))
         };
         if trailer("Selachi-Checkpoint:").is_none() {
             continue;
         }
-        let ms: u64 = trailer("Selachi-Created-Ms:").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let ms: u64 = trailer("Selachi-Created-Ms:")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         v.push(Checkpoint {
             id: id.to_owned(),
             label: trailer("Selachi-Label:").unwrap_or_default(),
@@ -249,8 +280,15 @@ impl Repo {
     }
 
     fn empty_tree(&self) -> Result<String> {
-        let opts = Opts { envs: Vec::new(), stdin: Some(b"") };
-        Ok(self.snap_git(&opts, &["mktree"])?.stdout_string().trim().to_owned())
+        let opts = Opts {
+            envs: Vec::new(),
+            stdin: Some(b""),
+        };
+        Ok(self
+            .snap_git(&opts, &["mktree"])?
+            .stdout_string()
+            .trim()
+            .to_owned())
     }
 
     /// `(index_tree, worktree_tree)` of the current state. Writes objects only.
@@ -264,7 +302,11 @@ impl Repo {
                 let it = run_git_with(&self.root, &["write-tree"], &opts, SNAP_TIMEOUT)?;
                 let it = it.success().then(|| it.stdout_string().trim().to_owned());
                 self.snap_git(&opts, &["add", if include_untracked { "-A" } else { "-u" }])?;
-                let wt = self.snap_git(&opts, &["write-tree"])?.stdout_string().trim().to_owned();
+                let wt = self
+                    .snap_git(&opts, &["write-tree"])?
+                    .stdout_string()
+                    .trim()
+                    .to_owned();
                 Ok((it, wt))
             })();
             match attempt {
@@ -300,7 +342,10 @@ impl Repo {
         let label = one_line(label);
         let (index_tree, wt_tree) = self.snapshot_trees(include_untracked)?;
         let head = self.head_oid();
-        let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let when = format!("{} +0000", ms / 1000);
         let envs: Vec<(&str, std::ffi::OsString)> = vec![
             ("GIT_AUTHOR_NAME", "Selachi".into()),
@@ -317,7 +362,11 @@ impl Repo {
             idx_args.extend(["-p", h.as_str()]);
         }
         idx_args.extend(["-m", "index on selachi checkpoint"]);
-        let idx_commit = self.snap_git(&opts, &idx_args)?.stdout_string().trim().to_owned();
+        let idx_commit = self
+            .snap_git(&opts, &idx_args)?
+            .stdout_string()
+            .trim()
+            .to_owned();
 
         for nonce in 0..16u32 {
             let message = format!(
@@ -333,7 +382,11 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
                 args.extend(["-p", h.as_str()]);
             }
             args.extend(["-p", idx_commit.as_str(), "-m", message.as_str()]);
-            let commit = self.snap_git(&opts, &args)?.stdout_string().trim().to_owned();
+            let commit = self
+                .snap_git(&opts, &args)?
+                .stdout_string()
+                .trim()
+                .to_owned();
             let id = format!("{ms}-{}", &commit[..commit.len().min(7)]);
             let refname = format!("{REF_PREFIX}{id}");
             // Empty old value: create only if it does not exist yet.
@@ -356,7 +409,9 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
                 });
             }
         }
-        Err(Error::Parse("could not allocate a unique checkpoint id".into()))
+        Err(Error::Parse(
+            "could not allocate a unique checkpoint id".into(),
+        ))
     }
 
     fn all_checkpoints_raw(&self) -> Result<Vec<Checkpoint>> {
@@ -411,7 +466,10 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
         let mut keys = Vec::new();
         for f in files {
             if has_parent_dir(f) {
-                return Err(Error::InvalidArgument(format!("{} contains '..'", f.display())));
+                return Err(Error::InvalidArgument(format!(
+                    "{} contains '..'",
+                    f.display()
+                )));
             }
             let rel = if f.is_absolute() {
                 let k = norm_key(f);
@@ -429,25 +487,36 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
             };
             let rel = rel.trim_start_matches("./").trim_matches('/').to_owned();
             if rel.is_empty() {
-                return Err(Error::InvalidArgument("restore path is the worktree root; use RestoreMode::All".into()));
+                return Err(Error::InvalidArgument(
+                    "restore path is the worktree root; use RestoreMode::All".into(),
+                ));
             }
             keys.push(rel);
         }
         Ok(keys)
     }
 
-    fn plan_between(&self, now_tree: &str, cp_tree: &str, filter: Option<&[String]>) -> Result<RestorePlan> {
+    fn plan_between(
+        &self,
+        now_tree: &str,
+        cp_tree: &str,
+        filter: Option<&[String]>,
+    ) -> Result<RestorePlan> {
         let mut plan = RestorePlan::default();
         for e in self.diff_trees(now_tree, cp_tree)? {
             let rel = PathBuf::from(&e.path);
             if let Some(f) = filter {
                 let key = fold_case(&e.path);
-                if !f.iter().any(|k| key == *k || key.starts_with(&format!("{k}/"))) {
+                if !f
+                    .iter()
+                    .any(|k| key == *k || key.starts_with(&format!("{k}/")))
+                {
                     continue;
                 }
             }
             if e.old_mode == "160000" || e.new_mode == "160000" {
-                plan.skipped.push((rel, "submodule / nested repository is not restored".into()));
+                plan.skipped
+                    .push((rel, "submodule / nested repository is not restored".into()));
                 continue;
             }
             match e.status {
@@ -455,7 +524,8 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
                     // In the snapshot, absent from the current (non-ignored) tree. If something is
                     // on disk there it can only be an ignored file: leave it alone.
                     if std::fs::symlink_metadata(self.root.join(&rel)).is_ok() {
-                        plan.skipped.push((rel, "an ignored file is in the way; not touched".into()));
+                        plan.skipped
+                            .push((rel, "an ignored file is in the way; not touched".into()));
                     } else {
                         plan.create.push(rel);
                     }
@@ -477,7 +547,11 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
 
     /// Like [`Repo::create_checkpoint`] with a choice: `include_untracked = false` snapshots only
     /// tracked files (restoring such a checkpoint never deletes or recreates untracked files).
-    pub fn create_checkpoint_with(&self, label: &str, include_untracked: bool) -> Result<Checkpoint> {
+    pub fn create_checkpoint_with(
+        &self,
+        label: &str,
+        include_untracked: bool,
+    ) -> Result<Checkpoint> {
         self.create_checkpoint_inner(label, include_untracked, None)
     }
 
@@ -503,7 +577,14 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
         let from = format!("{}^{{tree}}", cp.commit);
         let raw = run_git_ok(
             &self.root,
-            &["diff", "--no-color", "--no-ext-diff", "--no-renames", &from, &now],
+            &[
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-renames",
+                &from,
+                &now,
+            ],
         )?;
         Ok(raw.stdout_string())
     }
@@ -545,7 +626,10 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
     pub fn preflight_restore(&self, id: &str, mode: &RestoreMode) -> Result<Preflight> {
         let cp = self.own_checkpoint(id)?;
         let plan = self.restore_plan(id, mode)?;
-        let mut pf = Preflight { requires_confirmation: !plan.is_empty(), ..Preflight::default() };
+        let mut pf = Preflight {
+            requires_confirmation: !plan.is_empty(),
+            ..Preflight::default()
+        };
         for p in &plan.create {
             pf.warnings.push(format!("will re-create: {}", p.display()));
         }
@@ -553,22 +637,32 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
             pf.warnings.push(format!("will overwrite: {}", p.display()));
         }
         for p in &plan.delete {
-            pf.warnings.push(format!("will delete (created after the checkpoint): {}", p.display()));
+            pf.warnings.push(format!(
+                "will delete (created after the checkpoint): {}",
+                p.display()
+            ));
         }
         for (p, why) in &plan.skipped {
-            pf.warnings.push(format!("will skip {}: {why}", p.display()));
+            pf.warnings
+                .push(format!("will skip {}: {why}", p.display()));
         }
         if matches!(mode, RestoreMode::All) && self.head_oid() != cp.head {
-            pf.warnings.push("HEAD moved since the checkpoint; the index will be reset to HEAD".into());
+            pf.warnings
+                .push("HEAD moved since the checkpoint; the index will be reset to HEAD".into());
         }
         if !plan.is_empty() {
-            pf.warnings.push("an automatic \"antes de restaurar\" checkpoint will be created first".into());
+            pf.warnings.push(
+                "an automatic \"antes de restaurar\" checkpoint will be created first".into(),
+            );
             let now = self.worktree_tree_now(cp.includes_untracked)?;
             let to = format!("{}^{{tree}}", cp.commit);
-            pf.diff_stat = run_git_ok(&self.root, &["diff", "--stat", "--no-color", "--no-renames", &now, &to])
-                .ok()
-                .map(|r| r.stdout_string())
-                .filter(|s| !s.trim().is_empty());
+            pf.diff_stat = run_git_ok(
+                &self.root,
+                &["diff", "--stat", "--no-color", "--no-renames", &now, &to],
+            )
+            .ok()
+            .map(|r| r.stdout_string())
+            .filter(|s| !s.trim().is_empty());
         }
         Ok(pf)
     }
@@ -590,7 +684,11 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
             cp.includes_untracked,
             Some("restore"),
         )?;
-        let plan = self.plan_between(&format!("{}^{{tree}}", auto.commit), &cp_tree, filter.as_deref())?;
+        let plan = self.plan_between(
+            &format!("{}^{{tree}}", auto.commit),
+            &cp_tree,
+            filter.as_deref(),
+        )?;
         if plan.is_empty() {
             self.remove_checkpoint_ref(&auto.id)?;
             return Ok(RestoreReport {
@@ -626,7 +724,10 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
                 stdin.extend_from_slice(p.to_string_lossy().replace('\\', "/").as_bytes());
                 stdin.push(0);
             }
-            let opts = Opts { envs: opts.envs, stdin: Some(&stdin) };
+            let opts = Opts {
+                envs: opts.envs,
+                stdin: Some(&stdin),
+            };
             self.snap_git(&opts, &["checkout-index", "-f", "-q", "-z", "--stdin"])?;
         }
 
@@ -644,7 +745,12 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
             } else {
                 self.snap_git(&o, &["read-tree", "--empty"])?;
             }
-            let _ = run_git_with(&self.root, &["update-index", "-q", "--refresh"], &o, SNAP_TIMEOUT);
+            let _ = run_git_with(
+                &self.root,
+                &["update-index", "-q", "--refresh"],
+                &o,
+                SNAP_TIMEOUT,
+            );
         }
 
         let mut restored = plan.create;
@@ -658,7 +764,10 @@ Selachi-Worktree: {}\nSelachi-Created-Ms: {ms}\nSelachi-Head: {}\nSelachi-Untrac
     }
 
     fn remove_checkpoint_ref(&self, id: &str) -> Result<()> {
-        run_git_ok(&self.root, &["update-ref", "-d", &format!("{REF_PREFIX}{id}")])?;
+        run_git_ok(
+            &self.root,
+            &["update-ref", "-d", &format!("{REF_PREFIX}{id}")],
+        )?;
         Ok(())
     }
 

@@ -26,13 +26,19 @@ pub enum ReviewSource {
     /// What changed since a checkpoint (A10): "Qué tocó el agente".
     SinceCheckpoint { root: PathBuf, id: String },
     /// Specific files against `base`.
-    Files { root: PathBuf, base: GitBase, paths: Vec<PathBuf> },
+    Files {
+        root: PathBuf,
+        base: GitBase,
+        paths: Vec<PathBuf>,
+    },
 }
 
 impl ReviewSource {
     pub fn root(&self) -> &Path {
         match self {
-            ReviewSource::Worktree { root } | ReviewSource::SinceCheckpoint { root, .. } | ReviewSource::Files { root, .. } => root,
+            ReviewSource::Worktree { root }
+            | ReviewSource::SinceCheckpoint { root, .. }
+            | ReviewSource::Files { root, .. } => root,
         }
     }
 
@@ -46,9 +52,15 @@ impl ReviewSource {
                     GitBase::Head => "HEAD".to_string(),
                     GitBase::Commit(c) => c.clone(),
                 };
-                let mut p: Vec<String> = paths.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect();
+                let mut p: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .collect();
                 p.sort();
-                format!("files:{base}:{}", crate::note::lines_hash(p.iter().map(String::as_str)))
+                format!(
+                    "files:{base}:{}",
+                    crate::note::lines_hash(p.iter().map(String::as_str))
+                )
             }
         }
     }
@@ -69,7 +81,9 @@ impl ReviewSource {
             ReviewSource::SinceCheckpoint { .. } => "Qué tocó el agente".to_string(),
             ReviewSource::Files { base, .. } => match base {
                 GitBase::Head => "Archivos contra HEAD".to_string(),
-                GitBase::Commit(c) => format!("Archivos contra {}", c.chars().take(8).collect::<String>()),
+                GitBase::Commit(c) => {
+                    format!("Archivos contra {}", c.chars().take(8).collect::<String>())
+                }
             },
         }
     }
@@ -147,7 +161,16 @@ impl FileDiff {
                 rows.push(DiffRow::Line(l.clone()));
             }
         }
-        Self { path: path.replace('\\', "/"), status, body, rows, added, removed, new_index, old_index }
+        Self {
+            path: path.replace('\\', "/"),
+            status,
+            body,
+            rows,
+            added,
+            removed,
+            new_index,
+            old_index,
+        }
     }
 
     /// A diff of two texts (for hosts that already have both sides, and for tests).
@@ -159,7 +182,12 @@ impl FileDiff {
         } else {
             FileStatus::Modified
         };
-        Self::new(path, status, FileBody::Text, &viewer_svc::diff_text(old, new))
+        Self::new(
+            path,
+            status,
+            FileBody::Text,
+            &viewer_svc::diff_text(old, new),
+        )
     }
 
     /// Row index of `line` on `side`.
@@ -190,7 +218,10 @@ impl FileDiff {
 
     /// Number of text lines (rows that are not hunk headers).
     pub fn line_count(&self) -> usize {
-        self.rows.iter().filter(|r| matches!(r, DiffRow::Line(_))).count()
+        self.rows
+            .iter()
+            .filter(|r| matches!(r, DiffRow::Line(_)))
+            .count()
     }
 
     /// File name without its directory.
@@ -243,7 +274,11 @@ fn diff_one(root: &Path, rel: &Path, status: FileStatus, base: GitBase) -> FileD
     match diff_against_git(root, &abs, base) {
         Ok(hunks) => {
             // `git show` of a missing path reads as empty: classify from the disk.
-            let status = if !abs.exists() { FileStatus::Deleted } else { status };
+            let status = if !abs.exists() {
+                FileStatus::Deleted
+            } else {
+                status
+            };
             FileDiff::new(&name, status, FileBody::Text, &hunks)
         }
         Err(_) => FileDiff::new(&name, status, FileBody::Text, &[]),
@@ -259,7 +294,9 @@ fn expand_untracked(root: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
     }
     let mut stack = vec![abs];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             if out.len() >= MAX_UNTRACKED_FILES {
                 return;
@@ -282,7 +319,9 @@ pub fn load_source(source: &ReviewSource) -> Result<Vec<FileDiff>, String> {
     let root = source.root();
     let mut files: Vec<FileDiff> = match source {
         ReviewSource::Worktree { .. } => {
-            let repo = Repo::discover(root).map_err(|e| e.to_string())?.ok_or_else(|| format!("{} no es un repositorio git", root.display()))?;
+            let repo = Repo::discover(root)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{} no es un repositorio git", root.display()))?;
             let repo_root = repo.root.clone();
             let st = repo.status().map_err(|e| e.to_string())?;
             let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
@@ -306,10 +345,14 @@ pub fn load_source(source: &ReviewSource) -> Result<Vec<FileDiff>, String> {
                     list.push((u, FileStatus::Added));
                 }
             }
-            list.into_iter().map(|(p, s)| diff_one(&repo_root, &p, s, GitBase::Head)).collect()
+            list.into_iter()
+                .map(|(p, s)| diff_one(&repo_root, &p, s, GitBase::Head))
+                .collect()
         }
         ReviewSource::SinceCheckpoint { id, .. } => {
-            let repo = Repo::discover(root).map_err(|e| e.to_string())?.ok_or_else(|| format!("{} no es un repositorio git", root.display()))?;
+            let repo = Repo::discover(root)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{} no es un repositorio git", root.display()))?;
             let cp = repo
                 .checkpoints()
                 .map_err(|e| e.to_string())?
@@ -325,7 +368,12 @@ pub fn load_source(source: &ReviewSource) -> Result<Vec<FileDiff>, String> {
                         DeltaKind::Deleted => FileStatus::Deleted,
                         _ => FileStatus::Modified,
                     };
-                    diff_one(&repo.root, &c.path, status, GitBase::Commit(cp.commit.clone()))
+                    diff_one(
+                        &repo.root,
+                        &c.path,
+                        status,
+                        GitBase::Commit(cp.commit.clone()),
+                    )
                 })
                 .collect()
         }
@@ -350,7 +398,14 @@ mod tests {
 
     fn git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .current_dir(dir)
             .stdin(Stdio::null())
@@ -383,14 +438,30 @@ mod tests {
 
     #[test]
     fn status_from_texts() {
-        assert_eq!(FileDiff::from_texts("a", "", "x\n").status, FileStatus::Added);
-        assert_eq!(FileDiff::from_texts("a", "x\n", "").status, FileStatus::Deleted);
+        assert_eq!(
+            FileDiff::from_texts("a", "", "x\n").status,
+            FileStatus::Added
+        );
+        assert_eq!(
+            FileDiff::from_texts("a", "x\n", "").status,
+            FileStatus::Deleted
+        );
     }
 
     #[test]
     fn click_side() {
         let f = FileDiff::from_texts("a", "a\nb\n", "a\nc\n");
-        let lines: Vec<&DiffLine> = f.rows.iter().filter_map(|r| if let DiffRow::Line(l) = r { Some(l) } else { None }).collect();
+        let lines: Vec<&DiffLine> = f
+            .rows
+            .iter()
+            .filter_map(|r| {
+                if let DiffRow::Line(l) = r {
+                    Some(l)
+                } else {
+                    None
+                }
+            })
+            .collect();
         let removed = lines.iter().find(|l| l.kind == LineKind::Removed).unwrap();
         let added = lines.iter().find(|l| l.kind == LineKind::Added).unwrap();
         assert_eq!(anchor_of(removed), Some((Side::Old, 2)));
@@ -400,10 +471,25 @@ mod tests {
     #[test]
     fn source_keys_differ() {
         let w = ReviewSource::Worktree { root: "r".into() };
-        let c = ReviewSource::SinceCheckpoint { root: "r".into(), id: "123-abc".into() };
-        let f1 = ReviewSource::Files { root: "r".into(), base: GitBase::Head, paths: vec!["a".into(), "b".into()] };
-        let f2 = ReviewSource::Files { root: "r".into(), base: GitBase::Head, paths: vec!["b".into(), "a".into()] };
-        let f3 = ReviewSource::Files { root: "r".into(), base: GitBase::Head, paths: vec!["a".into()] };
+        let c = ReviewSource::SinceCheckpoint {
+            root: "r".into(),
+            id: "123-abc".into(),
+        };
+        let f1 = ReviewSource::Files {
+            root: "r".into(),
+            base: GitBase::Head,
+            paths: vec!["a".into(), "b".into()],
+        };
+        let f2 = ReviewSource::Files {
+            root: "r".into(),
+            base: GitBase::Head,
+            paths: vec!["b".into(), "a".into()],
+        };
+        let f3 = ReviewSource::Files {
+            root: "r".into(),
+            base: GitBase::Head,
+            paths: vec!["a".into()],
+        };
         assert_ne!(w.key(), c.key());
         assert_eq!(f1.key(), f2.key(), "path order does not matter");
         assert_ne!(f1.key(), f3.key());
@@ -427,9 +513,15 @@ mod tests {
         std::fs::write(root.join("new_dir").join("fresh.txt"), "hola\n").unwrap();
         std::fs::write(root.join("blob.bin"), [0u8, 1, 2, 3, 0]).unwrap();
 
-        let files = load_source(&ReviewSource::Worktree { root: root.to_path_buf() }).unwrap();
+        let files = load_source(&ReviewSource::Worktree {
+            root: root.to_path_buf(),
+        })
+        .unwrap();
         let by: HashMap<&str, &FileDiff> = files.iter().map(|f| (f.path.as_str(), f)).collect();
-        assert!(!by.contains_key("same.txt"), "unchanged files are not listed");
+        assert!(
+            !by.contains_key("same.txt"),
+            "unchanged files are not listed"
+        );
         assert_eq!(by["keep.txt"].status, FileStatus::Modified);
         assert_eq!((by["keep.txt"].added, by["keep.txt"].removed), (2, 1));
         assert_eq!(by["gone.txt"].status, FileStatus::Deleted);
@@ -447,7 +539,10 @@ mod tests {
     #[test]
     fn not_a_repository_is_an_error_message() {
         let dir = tempfile::tempdir().unwrap();
-        let err = load_source(&ReviewSource::Worktree { root: dir.path().to_path_buf() }).unwrap_err();
+        let err = load_source(&ReviewSource::Worktree {
+            root: dir.path().to_path_buf(),
+        })
+        .unwrap_err();
         assert!(!err.is_empty());
     }
 
@@ -467,13 +562,21 @@ mod tests {
         std::fs::write(root.join("a.txt"), "uno\ndos\n").unwrap();
         std::fs::write(root.join("c.txt"), "nuevo\n").unwrap();
 
-        let files = load_source(&ReviewSource::SinceCheckpoint { root: root.to_path_buf(), id: cp.id }).unwrap();
+        let files = load_source(&ReviewSource::SinceCheckpoint {
+            root: root.to_path_buf(),
+            id: cp.id,
+        })
+        .unwrap();
         let names: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(names, vec!["a.txt", "c.txt"], "{files:?}");
         assert_eq!(files[0].added, 1);
         assert_eq!(files[1].status, FileStatus::Added);
 
-        let err = load_source(&ReviewSource::SinceCheckpoint { root: root.to_path_buf(), id: "nope".into() }).unwrap_err();
+        let err = load_source(&ReviewSource::SinceCheckpoint {
+            root: root.to_path_buf(),
+            id: "nope".into(),
+        })
+        .unwrap_err();
         assert!(err.contains("nope"));
     }
 
@@ -486,7 +589,12 @@ mod tests {
         git(root, &["add", "-A"]);
         git(root, &["commit", "-q", "-m", "init"]);
         std::fs::write(root.join("a.txt"), "uno\ndos\n").unwrap();
-        let files = load_source(&ReviewSource::Files { root: root.to_path_buf(), base: GitBase::Head, paths: vec![root.join("a.txt")] }).unwrap();
+        let files = load_source(&ReviewSource::Files {
+            root: root.to_path_buf(),
+            base: GitBase::Head,
+            paths: vec![root.join("a.txt")],
+        })
+        .unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].added, 1);
     }

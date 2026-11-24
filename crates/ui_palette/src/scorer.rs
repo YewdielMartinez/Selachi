@@ -144,7 +144,8 @@ impl Matcher {
                     let score = if i == 0 {
                         j as f32 * GAP_LEADING + self.bonus[j]
                     } else if j > 0 {
-                        (self.m_prev[j - 1] + self.bonus[j]).max(self.d_prev[j - 1] + MATCH_CONSECUTIVE)
+                        (self.m_prev[j - 1] + self.bonus[j])
+                            .max(self.d_prev[j - 1] + MATCH_CONSECUTIVE)
                     } else {
                         NEG_INF
                     };
@@ -222,20 +223,41 @@ mod tests {
             // Word starts beat scattered letters.
             (
                 "gs",
-                &["git status", "gist search results", "agents settings", "xgxsx"],
+                &[
+                    "git status",
+                    "gist search results",
+                    "agents settings",
+                    "xgxsx",
+                ],
                 &["git status", "gist search results", "agents settings"],
             ),
             // Prefix beats contained.
-            ("term", &["Nueva terminal", "Terminal", "determinar"], &["Terminal", "Nueva terminal", "determinar"]),
+            (
+                "term",
+                &["Nueva terminal", "Terminal", "determinar"],
+                &["Terminal", "Nueva terminal", "determinar"],
+            ),
             // Exact beats prefix beats the rest.
-            ("git", &["git", "git status", "digit"], &["git", "git status", "digit"]),
+            (
+                "git",
+                &["git", "git status", "digit"],
+                &["git", "git status", "digit"],
+            ),
             // Consecutive beats gapped.
             ("sta", &["status", "s_t_a"], &["status", "s_t_a"]),
             // Accents and case are folded.
-            ("pestana", &["Nueva Pestaña", "Cerrar pestana", "Perfil"], &["Nueva Pestaña", "Cerrar pestana"]),
+            (
+                "pestana",
+                &["Nueva Pestaña", "Cerrar pestana", "Perfil"],
+                &["Nueva Pestaña", "Cerrar pestana"],
+            ),
             ("PEST", &["pestaña", "mi pest"], &["pestaña", "mi pest"]),
             // Tokens in any order, all required.
-            ("login feat", &["feat/login-form", "fix/login", "feat/signup"], &["feat/login-form"]),
+            (
+                "login feat",
+                &["feat/login-form", "fix/login", "feat/signup"],
+                &["feat/login-form"],
+            ),
             // Path separators are word boundaries.
             (
                 "ter",
@@ -245,7 +267,11 @@ mod tests {
             // camelCase initials.
             ("fb", &["fooBar", "foobar"], &["fooBar", "foobar"]),
             // Letters scattered over a long text are noise, not a match.
-            ("nueva", &["dotnet build -c {cfg|Debug|Release} -v {v:minimal}"], &[]),
+            (
+                "nueva",
+                &["dotnet build -c {cfg|Debug|Release} -v {v:minimal}"],
+                &[],
+            ),
             // No subsequence, no match.
             ("zzz", &["git", "terminal"], &[]),
         ];
@@ -279,12 +305,16 @@ mod tests {
     #[test]
     fn scoring_is_fast() {
         // 5 000 candidates x a 3-token query must stay far below a frame budget even unoptimised.
-        let cands: Vec<String> =
-            (0..5000).map(|i| format!("C:/Users/venta/Desktop/project-{i}/src/module_{i}.rs")).collect();
+        let cands: Vec<String> = (0..5000)
+            .map(|i| format!("C:/Users/venta/Desktop/project-{i}/src/module_{i}.rs"))
+            .collect();
         let needle = Needle::new("proj mod rs");
         let mut m = Matcher::new();
         let t = std::time::Instant::now();
-        let hits = cands.iter().filter(|c| m.score(&needle, &[(c, 1.0)]).is_some()).count();
+        let hits = cands
+            .iter()
+            .filter(|c| m.score(&needle, &[(c, 1.0)]).is_some())
+            .count();
         assert_eq!(hits, 5000);
         assert!(t.elapsed().as_millis() < 1500, "{:?}", t.elapsed());
     }

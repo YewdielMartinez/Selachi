@@ -73,7 +73,10 @@ impl StopPlan {
     /// Dialog title: `Detener 3 procesos`, `Limpiar 2 huérfanos · 435 MB`.
     pub fn title(&self) -> String {
         match self.kind {
-            PlanKind::Tree => format!("Detener {}", plural(self.items.len(), "proceso", "procesos")),
+            PlanKind::Tree => format!(
+                "Detener {}",
+                plural(self.items.len(), "proceso", "procesos")
+            ),
             PlanKind::Orphans => format!(
                 "Limpiar {} · {}",
                 plural(self.items.len(), "huérfano", "huérfanos"),
@@ -90,8 +93,9 @@ impl StopPlan {
                 Ok(()) => kept.push(root),
                 Err(reason) => {
                     let gone: HashSet<u32> = root.tree.iter().copied().collect();
-                    let (out, stay): (Vec<_>, Vec<_>) =
-                        std::mem::take(&mut self.items).into_iter().partition(|i| gone.contains(&i.pid));
+                    let (out, stay): (Vec<_>, Vec<_>) = std::mem::take(&mut self.items)
+                        .into_iter()
+                        .partition(|i| gone.contains(&i.pid));
                     self.items = stay;
                     if let Some(item) = out.into_iter().find(|i| i.pid == root.pid) {
                         self.refused.push((item, reason));
@@ -124,7 +128,13 @@ fn tree_of(c: &Collected, pid: u32) -> Vec<u32> {
     t
 }
 
-fn finish(kind: PlanKind, c: &Collected, snap: &Snapshot, roots: Vec<StopRoot>, denied: usize) -> StopPlan {
+fn finish(
+    kind: PlanKind,
+    c: &Collected,
+    snap: &Snapshot,
+    roots: Vec<StopRoot>,
+    denied: usize,
+) -> StopPlan {
     let mut seen = HashSet::new();
     let items: Vec<PlanItem> = roots
         .iter()
@@ -133,7 +143,14 @@ fn finish(kind: PlanKind, c: &Collected, snap: &Snapshot, roots: Vec<StopRoot>, 
         .filter_map(|pid| item_of(c, snap, pid))
         .collect();
     let outside_jobs = roots.iter().any(|r| r.owner.is_none());
-    StopPlan { kind, roots, items, denied, outside_jobs, refused: Vec::new() }
+    StopPlan {
+        kind,
+        roots,
+        items,
+        denied,
+        outside_jobs,
+        refused: Vec::new(),
+    }
 }
 
 /// Plan for "Detener" on `pid`. `None` when the process is gone.
@@ -142,27 +159,57 @@ pub fn plan_tree(c: &Collected, snap: &Snapshot, pid: u32) -> Option<StopPlan> {
     if tree.is_empty() {
         return None;
     }
-    let start = c.procs.iter().find(|p| p.pid == pid).and_then(|p| p.start_time);
+    let start = c
+        .procs
+        .iter()
+        .find(|p| p.pid == pid)
+        .and_then(|p| p.start_time);
     let owner = snap.find_row(pid).and_then(|r| r.owner);
-    Some(finish(PlanKind::Tree, c, snap, vec![StopRoot { pid, start, owner, tree }], 0))
+    Some(finish(
+        PlanKind::Tree,
+        c,
+        snap,
+        vec![StopRoot {
+            pid,
+            start,
+            owner,
+            tree,
+        }],
+        0,
+    ))
 }
 
 /// Plan for "Limpiar huérfanos": every orphan / port zombie of our jobs that can be inspected,
 /// each tree once. Heuristic ("probable") rows are never part of it.
 pub fn plan_orphans(c: &Collected, snap: &Snapshot) -> StopPlan {
-    let orphans: Vec<_> = snap.rows().filter(|r| !r.probable && r.state.is_orphan()).collect();
+    let orphans: Vec<_> = snap
+        .rows()
+        .filter(|r| !r.probable && r.state.is_orphan())
+        .collect();
     let denied = orphans.iter().filter(|r| r.access_denied).count();
     let candidates: Vec<_> = orphans.into_iter().filter(|r| !r.access_denied).collect();
-    let trees: Vec<(u32, Vec<u32>)> = candidates.iter().map(|r| (r.pid, tree_of(c, r.pid))).collect();
+    let trees: Vec<(u32, Vec<u32>)> = candidates
+        .iter()
+        .map(|r| (r.pid, tree_of(c, r.pid)))
+        .collect();
     let mut roots = Vec::new();
     for r in &candidates {
-        let tree = trees.iter().find(|(p, _)| *p == r.pid).map(|(_, t)| t.clone()).unwrap_or_default();
+        let tree = trees
+            .iter()
+            .find(|(p, _)| *p == r.pid)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_default();
         if tree.is_empty() {
             continue;
         }
         let inside_other = trees.iter().any(|(p, t)| *p != r.pid && t.contains(&r.pid));
         if !inside_other {
-            roots.push(StopRoot { pid: r.pid, start: r.start, owner: r.owner, tree });
+            roots.push(StopRoot {
+                pid: r.pid,
+                start: r.start,
+                owner: r.owner,
+                tree,
+            });
         }
     }
     finish(PlanKind::Orphans, c, snap, roots, denied)
@@ -181,7 +228,10 @@ mod tests {
         let plan = plan_orphans(&c, &snap);
         // dotnet (102) is an orphan root; esbuild (103) is its child: one root, two items.
         assert_eq!(plan.roots.iter().map(|r| r.pid).collect::<Vec<_>>(), [102]);
-        assert_eq!(plan.items.iter().map(|i| i.pid).collect::<Vec<_>>(), [102, 103]);
+        assert_eq!(
+            plan.items.iter().map(|i| i.pid).collect::<Vec<_>>(),
+            [102, 103]
+        );
         assert_eq!(plan.roots[0].owner, Some(1));
         assert!(!plan.outside_jobs);
         assert_eq!(plan.title(), "Limpiar 2 huérfanos · 435 MB");
@@ -193,7 +243,11 @@ mod tests {
     fn orphan_plan_skips_access_denied_and_counts_them() {
         let mut c = sample();
         c.reports[0].processes[3].info.access_denied = true; // esbuild
-        c.procs.iter_mut().find(|p| p.pid == 103).unwrap().access_denied = true;
+        c.procs
+            .iter_mut()
+            .find(|p| p.pid == 103)
+            .unwrap()
+            .access_denied = true;
         let snap = build_snapshot(&c);
         let plan = plan_orphans(&c, &snap);
         assert_eq!(plan.denied, 1);
@@ -216,9 +270,18 @@ mod tests {
         let c = sample();
         let snap = build_snapshot(&c);
         let mut plan = plan_tree(&c, &snap, 102).unwrap();
-        assert_eq!(plan.items.iter().map(|i| i.pid).collect::<Vec<_>>(), [102, 103]);
+        assert_eq!(
+            plan.items.iter().map(|i| i.pid).collect::<Vec<_>>(),
+            [102, 103]
+        );
         assert_eq!(plan.items[0].ports[0].port, 5000);
-        plan.vet(|pid| if pid == 102 { Err("proceso crítico".into()) } else { Ok(()) });
+        plan.vet(|pid| {
+            if pid == 102 {
+                Err("proceso crítico".into())
+            } else {
+                Ok(())
+            }
+        });
         assert!(plan.is_empty() && plan.items.is_empty());
         assert_eq!(plan.refused.len(), 1);
         assert_eq!(plan.refused[0].0.pid, 102);

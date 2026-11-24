@@ -21,7 +21,12 @@ pub enum ThemeChoice {
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 4] = [ThemeChoice::System, ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::Oled];
+    pub const ALL: [ThemeChoice; 4] = [
+        ThemeChoice::System,
+        ThemeChoice::Dark,
+        ThemeChoice::Light,
+        ThemeChoice::Oled,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -83,7 +88,9 @@ pub const ACCENTS: [(&str, &str); 6] = [
 
 /// Index of `hex` in [`ACCENTS`] (case-insensitive).
 pub fn accent_index(hex: &str) -> Option<usize> {
-    ACCENTS.iter().position(|(_, h)| h.eq_ignore_ascii_case(hex.trim()))
+    ACCENTS
+        .iter()
+        .position(|(_, h)| h.eq_ignore_ascii_case(hex.trim()))
 }
 
 /// Where new git worktrees go by default.
@@ -104,7 +111,9 @@ impl WorktreeLocation {
         match self {
             WorktreeLocation::Beside => store::WorktreeLocation::Beside,
             WorktreeLocation::Inside => store::WorktreeLocation::Inside,
-            WorktreeLocation::Custom(p) => store::WorktreeLocation::Custom(p.to_string_lossy().into_owned()),
+            WorktreeLocation::Custom(p) => {
+                store::WorktreeLocation::Custom(p.to_string_lossy().into_owned())
+            }
         }
     }
 
@@ -152,7 +161,9 @@ impl Draft {
             accent: config.appearance.accent.clone(),
             layout: match &config.layout.preset {
                 // Untouched layout (the stock default): recommend the new default.
-                PresetId::Builtin(BuiltinPreset::Terminal) if config.layout.overrides.is_empty() => {
+                PresetId::Builtin(BuiltinPreset::Terminal)
+                    if config.layout.overrides.is_empty() =>
+                {
                     Some(LayoutCard::Unified)
                 }
                 PresetId::Builtin(BuiltinPreset::EspaciosUnificados) => Some(LayoutCard::Unified),
@@ -253,9 +264,7 @@ pub fn persist(dir: &Path, outcome: &Outcome, db: Option<&StateDb>) -> Result<()
             }
         }
     }
-    if config_saved
-        && let Err(e) = crate::flag::mark_done_with(db, dir)
-    {
+    if config_saved && let Err(e) = crate::flag::mark_done_with(db, dir) {
         note("no se pudo guardar la bandera de primer arranque", &e);
     }
     first_error.map_or(Ok(()), Err)
@@ -289,9 +298,17 @@ pub fn summary_lines(
         step,
         title,
         skipped: skipped.contains(&step),
-        value: if skipped.contains(&step) { "Omitido: se queda como está".to_string() } else { value },
+        value: if skipped.contains(&step) {
+            "Omitido: se queda como está".to_string()
+        } else {
+            value
+        },
     };
-    let ready: Vec<&str> = agents.iter().filter(|a| a.status == AgentStatus::Ready).map(|a| a.cli.name()).collect();
+    let ready: Vec<&str> = agents
+        .iter()
+        .filter(|a| a.status == AgentStatus::Ready)
+        .map(|a| a.cli.name())
+        .collect();
     let pending = agents
         .iter()
         .filter(|a| a.status.offers_login() || a.status == AgentStatus::NotInstalled)
@@ -302,8 +319,18 @@ pub fn summary_lines(
         (false, 0) => format!("{} listos", ready.join(", ")),
         (false, n) => format!("{} listos · {n} por configurar", ready.join(", ")),
     };
-    let hook = if draft.claude_statusline_hook { " · hook statusLine de Claude" } else { "" };
-    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+    let hook = if draft.claude_statusline_hook {
+        " · hook statusLine de Claude"
+    } else {
+        ""
+    };
+    let plural = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
     let projects_value = format!(
         "{} · {} · worktrees {}",
         plural(projects.selected, "proyecto", "proyectos"),
@@ -317,7 +344,11 @@ pub fn summary_lines(
         draft.accent.to_uppercase(),
         preset,
         draft.mono_size,
-        if draft.density == Density::Compact { "compacta" } else { "cómoda" },
+        if draft.density == Density::Compact {
+            "compacta"
+        } else {
+            "cómoda"
+        },
     );
     let tab = match draft.tab {
         TabMode::Smart => "Tab inteligente",
@@ -331,12 +362,20 @@ pub fn summary_lines(
         PredictionSource::Off => "sin predicción",
         PredictionSource::Native => "predicción nativa",
     };
-    let restore = if draft.restore_session { "restaura la sesión" } else { "no restaura la sesión" };
+    let restore = if draft.restore_session {
+        "restaura la sesión"
+    } else {
+        "no restaura la sesión"
+    };
     vec![
         line(Step::Agents, "Agentes", format!("{agents_value}{hook}")),
         line(Step::Projects, "Proyectos", projects_value),
         line(Step::Appearance, "Apariencia", appearance_value),
-        line(Step::Terminal, "Terminal", format!("{shell_label} · {tab} · {prediction} · {restore}")),
+        line(
+            Step::Terminal,
+            "Terminal",
+            format!("{shell_label} · {tab} · {prediction} · {restore}"),
+        ),
     ]
 }
 
@@ -366,8 +405,14 @@ mod tests {
         let draft = Draft::from_config(&base);
         let mut expected = base.clone();
         // Only the recommended layout is applied on an untouched stock config.
-        expected.layout.select_preset(layouts::resolve(LayoutCard::Unified));
-        assert_eq!(draft.layout, Some(LayoutCard::Unified), "recommended by default");
+        expected
+            .layout
+            .select_preset(layouts::resolve(LayoutCard::Unified));
+        assert_eq!(
+            draft.layout,
+            Some(LayoutCard::Unified),
+            "recommended by default"
+        );
         assert_eq!(draft.build_config(&base, &BTreeSet::new()), expected);
         let mut skipped = BTreeSet::new();
         skipped.insert(Step::Appearance);
@@ -394,7 +439,10 @@ mod tests {
         assert_eq!(cfg.appearance.mode, ThemeMode::Light);
         assert_eq!(cfg.appearance.accent, "#BC8CE8");
         assert_eq!(cfg.appearance.mono_size, 15.0);
-        assert_eq!(cfg.layout.preset, PresetId::Builtin(BuiltinPreset::Espacios));
+        assert_eq!(
+            cfg.layout.preset,
+            PresetId::Builtin(BuiltinPreset::Espacios)
+        );
         let l = cfg.layout.resolve();
         assert_eq!(l.sidebar_translucency, 35);
         assert_eq!(l.density, Density::Compact);
@@ -415,7 +463,10 @@ mod tests {
         d.theme = ThemeChoice::Oled;
         d.tab = TabMode::Native;
         d.shell = Some(cmd_shell());
-        let cfg = d.build_config(&base, &skipped(&[Step::Agents, Step::Appearance, Step::Terminal]));
+        let cfg = d.build_config(
+            &base,
+            &skipped(&[Step::Agents, Step::Appearance, Step::Terminal]),
+        );
         assert_eq!(cfg, base);
         // Only the appearance one is applied when the others are skipped.
         let cfg = d.build_config(&base, &skipped(&[Step::Agents, Step::Terminal]));
@@ -428,7 +479,11 @@ mod tests {
     #[test]
     fn an_existing_profile_is_replaced_not_duplicated() {
         let mut base = Config::default();
-        base.profiles.push(Profile { name: "Símbolo del sistema".into(), program: "old.exe".into(), ..Profile::default() });
+        base.profiles.push(Profile {
+            name: "Símbolo del sistema".into(),
+            program: "old.exe".into(),
+            ..Profile::default()
+        });
         let mut d = Draft::from_config(&base);
         d.shell = Some(cmd_shell());
         let cfg = d.build_config(&base, &BTreeSet::new());
@@ -439,7 +494,8 @@ mod tests {
     #[test]
     fn keeping_a_custom_preset_and_its_overrides() {
         let mut base = Config::default();
-        base.layout.select_preset(PresetId::Custom("Mi layout".into()));
+        base.layout
+            .select_preset(PresetId::Custom("Mi layout".into()));
         let d = Draft::from_config(&base);
         assert_eq!(d.layout, None);
         let cfg = d.build_config(&base, &BTreeSet::new());
@@ -450,7 +506,10 @@ mod tests {
     fn saving_through_store_keeps_comments_and_unknown_keys() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let text = format!("# my hand-written header\n{}\n[experimental]\nkeep_me = true\n", store::config::TEMPLATE);
+        let text = format!(
+            "# my hand-written header\n{}\n[experimental]\nkeep_me = true\n",
+            store::config::TEMPLATE
+        );
         std::fs::write(&path, &text).unwrap();
         let base = Config::load_from(&path).unwrap().config;
         let mut d = Draft::from_config(&base);
@@ -467,15 +526,24 @@ mod tests {
         persist(dir.path(), &outcome, None).unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.starts_with("# my hand-written header"));
-        assert!(saved.contains("# Edit by hand; changes are picked up"), "template comments survive");
+        assert!(
+            saved.contains("# Edit by hand; changes are picked up"),
+            "template comments survive"
+        );
         assert!(saved.contains("[experimental]") && saved.contains("keep_me = true"));
         assert!(saved.contains("mode = \"light\""));
         assert!(saved.contains("preset = \"chat\""));
         assert!(saved.contains("default_profile = \"Símbolo del sistema\""));
         let reloaded = Config::load_from(&path).unwrap();
         assert_eq!(reloaded.config, outcome.config);
-        assert!(reloaded.warnings.iter().any(|w| w == "experimental"), "unknown keys only warn");
-        assert!(!crate::flag::needs_onboarding_in(dir.path()), "flag written after a good save");
+        assert!(
+            reloaded.warnings.iter().any(|w| w == "experimental"),
+            "unknown keys only warn"
+        );
+        assert!(
+            !crate::flag::needs_onboarding_in(dir.path()),
+            "flag written after a good save"
+        );
     }
 
     #[test]
@@ -490,7 +558,10 @@ mod tests {
         let err = persist(dir.path(), &outcome, None).unwrap_err();
         assert!(err.contains("config.toml"), "{err}");
         assert!(crate::flag::needs_onboarding_in(dir.path()));
-        assert_eq!(std::fs::read_to_string(dir.path().join("config.toml")).unwrap(), "this = is [not toml");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.toml")).unwrap(),
+            "this = is [not toml"
+        );
     }
 
     #[test]
@@ -562,14 +633,37 @@ mod tests {
     fn summary_describes_choices_and_marks_skipped_steps() {
         let d = Draft::from_config(&Config::default());
         let agents = vec![
-            AgentRow { cli: AgentCli::Claude, status: AgentStatus::Ready, version: None, path: None },
-            AgentRow { cli: AgentCli::Codex, status: AgentStatus::NotInstalled, version: None, path: None },
+            AgentRow {
+                cli: AgentCli::Claude,
+                status: AgentStatus::Ready,
+                version: None,
+                path: None,
+            },
+            AgentRow {
+                cli: AgentCli::Codex,
+                status: AgentStatus::NotInstalled,
+                version: None,
+                path: None,
+            },
         ];
-        let lines = summary_lines(&d, &skipped(&[Step::Terminal]), &agents, ProjectCounts { selected: 5, favorites: 1 }, "PowerShell 7");
+        let lines = summary_lines(
+            &d,
+            &skipped(&[Step::Terminal]),
+            &agents,
+            ProjectCounts {
+                selected: 5,
+                favorites: 1,
+            },
+            "PowerShell 7",
+        );
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0].value, "Claude Code listos · 1 por configurar");
         assert!(lines[1].value.starts_with("5 proyectos · 1 favorito"));
-        assert!(lines[2].value.contains("Oscuro") && lines[2].value.contains("#00AAFF") && lines[2].value.contains("Espacios unificados"));
+        assert!(
+            lines[2].value.contains("Oscuro")
+                && lines[2].value.contains("#00AAFF")
+                && lines[2].value.contains("Espacios unificados")
+        );
         assert!(lines[3].skipped && lines[3].value.starts_with("Omitido"));
         let none = summary_lines(&d, &BTreeSet::new(), &[], ProjectCounts::default(), "auto");
         assert_eq!(none[0].value, "Sin agentes detectados");

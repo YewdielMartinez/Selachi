@@ -105,7 +105,8 @@ impl Block {
 
     /// Number of output lines (for a running block: up to its last known line).
     pub fn output_lines(&self) -> u64 {
-        self.output_end.map_or(0, |e| e.saturating_sub(self.output_start))
+        self.output_end
+            .map_or(0, |e| e.saturating_sub(self.output_start))
     }
 }
 
@@ -113,7 +114,11 @@ impl Block {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum BlockEvent {
     Started(BlockId),
-    Finished { id: BlockId, exit_code: Option<i32>, duration: Duration },
+    Finished {
+        id: BlockId,
+        exit_code: Option<i32>,
+        duration: Duration,
+    },
 }
 
 /// "Now" in both clocks, injectable for tests.
@@ -125,7 +130,10 @@ pub(crate) struct Clock {
 
 impl Clock {
     pub(crate) fn now() -> Self {
-        Self { instant: Instant::now(), wall: SystemTime::now() }
+        Self {
+            instant: Instant::now(),
+            wall: SystemTime::now(),
+        }
     }
 }
 
@@ -190,7 +198,12 @@ impl BlockTracker {
     }
 
     /// Absolute line shown at viewport row `row` given the scroll offset.
-    pub(crate) fn abs_of_viewport_row(&self, hist: usize, display_offset: usize, row: usize) -> AbsLine {
+    pub(crate) fn abs_of_viewport_row(
+        &self,
+        hist: usize,
+        display_offset: usize,
+        row: usize,
+    ) -> AbsLine {
         self.abs(hist, row as i64 - display_offset as i64)
     }
 
@@ -212,7 +225,8 @@ impl BlockTracker {
     /// Drops blocks whose lines are all gone and clamps the rest.
     fn expire(&mut self) {
         let dropped = self.dropped;
-        self.blocks.retain(|b| b.output_end.is_none_or(|end| end > dropped));
+        self.blocks
+            .retain(|b| b.output_end.is_none_or(|end| end > dropped));
         for b in &mut self.blocks {
             b.prompt_line = b.prompt_line.max(dropped);
             b.command_line = b.command_line.max(dropped);
@@ -263,10 +277,20 @@ impl BlockTracker {
     pub(crate) fn prev(&self, from: Option<BlockId>, top: AbsLine) -> Option<BlockId> {
         match from {
             Some(id) => {
-                let i = self.blocks.binary_search_by_key(&id.0, |b| b.id.0).unwrap_or_else(|i| i);
-                i.checked_sub(1).and_then(|i| self.blocks.get(i)).map(|b| b.id)
-            },
-            None => self.blocks.iter().rev().find(|b| b.prompt_line < top).map(|b| b.id),
+                let i = self
+                    .blocks
+                    .binary_search_by_key(&id.0, |b| b.id.0)
+                    .unwrap_or_else(|i| i);
+                i.checked_sub(1)
+                    .and_then(|i| self.blocks.get(i))
+                    .map(|b| b.id)
+            }
+            None => self
+                .blocks
+                .iter()
+                .rev()
+                .find(|b| b.prompt_line < top)
+                .map(|b| b.id),
         }
     }
 
@@ -277,12 +301,21 @@ impl BlockTracker {
                 Ok(i) => self.blocks.get(i + 1).map(|b| b.id),
                 Err(i) => self.blocks.get(i).map(|b| b.id),
             },
-            None => self.blocks.iter().find(|b| b.prompt_line > top).map(|b| b.id),
+            None => self
+                .blocks
+                .iter()
+                .find(|b| b.prompt_line > top)
+                .map(|b| b.id),
         }
     }
 
     /// Plain text of the grid lines `[from, to)` (absolute), trailing whitespace trimmed.
-    pub(crate) fn text_between<L: EventListener>(&self, term: &Term<L>, from: AbsLine, to: AbsLine) -> String {
+    pub(crate) fn text_between<L: EventListener>(
+        &self,
+        term: &Term<L>,
+        from: AbsLine,
+        to: AbsLine,
+    ) -> String {
         let hist = term.grid().history_size();
         let first = -(hist as i64);
         let last = term.screen_lines() as i64 - 1;
@@ -316,7 +349,12 @@ impl BlockTracker {
     }
 
     /// Applies one OSC event to the model; `term` has parsed everything up to that sequence.
-    pub(crate) fn on_osc<L: EventListener>(&mut self, term: &Term<L>, event: OscEvent, clock: Clock) -> Vec<BlockEvent> {
+    pub(crate) fn on_osc<L: EventListener>(
+        &mut self,
+        term: &Term<L>,
+        event: OscEvent,
+        clock: Clock,
+    ) -> Vec<BlockEvent> {
         let mut out = Vec::new();
         if let OscEvent::Cwd(path) = event {
             self.cwd = Some(path);
@@ -330,49 +368,80 @@ impl BlockTracker {
         // First line after the cursor's content: the cursor line itself if it is still empty.
         let excl = if col == 0 { line } else { line + 1 };
         match event {
-            OscEvent::Cwd(_) => {},
+            OscEvent::Cwd(_) => {}
             OscEvent::Mark(Mark::PromptStart) => {
                 self.just_started = false;
                 self.finish_running(None, excl, clock, &mut out);
                 // A prompt at or above an old block means the screen was cleared over it.
                 self.blocks.retain(|b| b.prompt_line < line);
-                self.pending = Some(Pending { prompt_line: line, cmd_start: None, exact: None });
-            },
+                self.pending = Some(Pending {
+                    prompt_line: line,
+                    cmd_start: None,
+                    exact: None,
+                });
+            }
             OscEvent::Mark(Mark::CommandStart) => {
                 self.just_started = false;
-                let p = self.pending.get_or_insert(Pending { prompt_line: line, cmd_start: None, exact: None });
+                let p = self.pending.get_or_insert(Pending {
+                    prompt_line: line,
+                    cmd_start: None,
+                    exact: None,
+                });
                 p.cmd_start = Some((line, col));
-            },
+            }
             OscEvent::Command(text) => {
                 let text = cap_command(text.trim());
-                if self.just_started && self.blocks.back().is_some_and(|b| b.state == BlockState::Running) {
+                if self.just_started
+                    && self
+                        .blocks
+                        .back()
+                        .is_some_and(|b| b.state == BlockState::Running)
+                {
                     if let Some(b) = self.blocks.back_mut() {
                         b.command = non_empty(text);
                     }
                     self.running_exact = true;
                 } else {
-                    let p = self.pending.get_or_insert(Pending { prompt_line: line, cmd_start: None, exact: None });
+                    let p = self.pending.get_or_insert(Pending {
+                        prompt_line: line,
+                        cmd_start: None,
+                        exact: None,
+                    });
                     p.exact = Some(text);
                 }
                 self.just_started = false;
-            },
+            }
             OscEvent::Mark(Mark::Executed) => self.start_block(term, line, col, clock, &mut out),
             OscEvent::Mark(Mark::Finished(code)) => {
                 self.just_started = false;
                 self.finish_running(code, excl, clock, &mut out);
-            },
+            }
         }
         out
     }
 
-    fn start_block<L: EventListener>(&mut self, term: &Term<L>, line: AbsLine, col: usize, clock: Clock, out: &mut Vec<BlockEvent>) {
-        let pending = self.pending.take().unwrap_or(Pending { prompt_line: line, cmd_start: None, exact: None });
+    fn start_block<L: EventListener>(
+        &mut self,
+        term: &Term<L>,
+        line: AbsLine,
+        col: usize,
+        clock: Clock,
+        out: &mut Vec<BlockEvent>,
+    ) {
+        let pending = self.pending.take().unwrap_or(Pending {
+            prompt_line: line,
+            cmd_start: None,
+            exact: None,
+        });
         self.finish_running(None, if col == 0 { line } else { line + 1 }, clock, out);
 
         let exact = pending.exact.is_some();
         let command = match pending.exact {
             Some(text) => non_empty(text),
-            None => pending.cmd_start.and_then(|start| self.scrape_command(term, start, (line, col))).and_then(non_empty),
+            None => pending
+                .cmd_start
+                .and_then(|start| self.scrape_command(term, start, (line, col)))
+                .and_then(non_empty),
         };
         let id = BlockId(self.next_id);
         self.next_id += 1;
@@ -402,7 +471,12 @@ impl BlockTracker {
     }
 
     /// Text typed between `B` and `C`, joined across wrapped lines.
-    fn scrape_command<L: EventListener>(&self, term: &Term<L>, start: (AbsLine, usize), cursor: (AbsLine, usize)) -> Option<String> {
+    fn scrape_command<L: EventListener>(
+        &self,
+        term: &Term<L>,
+        start: (AbsLine, usize),
+        cursor: (AbsLine, usize),
+    ) -> Option<String> {
         let hist = term.grid().history_size();
         let cols = term.columns();
         let first = -(hist as i64);
@@ -424,8 +498,18 @@ impl BlockTracker {
         Some(cap_command(raw.trim()))
     }
 
-    fn finish_running(&mut self, exit: Option<i32>, end: AbsLine, clock: Clock, out: &mut Vec<BlockEvent>) {
-        let Some(b) = self.blocks.back_mut().filter(|b| b.state == BlockState::Running) else {
+    fn finish_running(
+        &mut self,
+        exit: Option<i32>,
+        end: AbsLine,
+        clock: Clock,
+        out: &mut Vec<BlockEvent>,
+    ) {
+        let Some(b) = self
+            .blocks
+            .back_mut()
+            .filter(|b| b.state == BlockState::Running)
+        else {
             return;
         };
         let duration = clock.instant.saturating_duration_since(b.started_at);
@@ -440,7 +524,11 @@ impl BlockTracker {
         };
         b.output_end = Some(end.max(b.output_start));
         self.running_exact = false;
-        out.push(BlockEvent::Finished { id: b.id, exit_code: exit, duration });
+        out.push(BlockEvent::Finished {
+            id: b.id,
+            exit_code: exit,
+            duration,
+        });
     }
 
     /// Called after every parsed slice, with the terminal locked: keeps the grid's history at
@@ -538,7 +626,12 @@ pub(crate) fn truncate_middle(text: &str, max_bytes: usize) -> String {
             start += 1;
         }
         let omitted = lines.len().saturating_sub(2);
-        return format!("{}\n{}\n{}", &first[..end], marker_for(omitted), &last[start..]);
+        return format!(
+            "{}\n{}\n{}",
+            &first[..end],
+            marker_for(omitted),
+            &last[start..]
+        );
     }
     let mut out = head.join("\n");
     if !out.is_empty() {
@@ -614,9 +707,16 @@ mod tests {
                 tracker: BlockTracker::new(scrollback),
                 events: Vec::new(),
             })));
-            let cfg = Config { scrolling_history: term_history_cap(scrollback), ..Config::default() };
+            let cfg = Config {
+                scrolling_history: term_history_cap(scrollback),
+                ..Config::default()
+            };
             let term = Term::new(cfg, &Size(cols, rows), hooks.clone());
-            Self { term, ingest: Ingest::default(), hooks }
+            Self {
+                term,
+                ingest: Ingest::default(),
+                hooks,
+            }
         }
 
         fn feed(&mut self, s: &str) {
@@ -673,10 +773,16 @@ mod tests {
         assert_eq!(b.state, BlockState::Succeeded);
         assert_eq!(b.exit_code, Some(0));
         assert!(b.duration.is_some() && b.finished_at.is_some() && b.finished_wall.is_some());
-        assert_eq!((b.prompt_line, b.command_line, b.output_start, b.output_end), (0, 0, 1, Some(2)));
+        assert_eq!(
+            (b.prompt_line, b.command_line, b.output_start, b.output_end),
+            (0, 0, 1, Some(2))
+        );
         assert_eq!(h.output(b.id), "hi");
         assert_eq!(
-            h.events().iter().map(|e| matches!(e, BlockEvent::Started(_))).collect::<Vec<_>>(),
+            h.events()
+                .iter()
+                .map(|e| matches!(e, BlockEvent::Started(_)))
+                .collect::<Vec<_>>(),
             vec![true, false]
         );
     }
@@ -687,7 +793,13 @@ mod tests {
         run(&mut h, "cmd /c exit 3", "", 3);
         let b = &h.blocks()[0];
         assert_eq!((b.state, b.exit_code), (BlockState::Failed, Some(3)));
-        assert!(matches!(h.events()[1], BlockEvent::Finished { exit_code: Some(3), .. }));
+        assert!(matches!(
+            h.events()[1],
+            BlockEvent::Finished {
+                exit_code: Some(3),
+                ..
+            }
+        ));
         assert_eq!(h.output(b.id), "");
     }
 
@@ -716,10 +828,17 @@ mod tests {
     fn exact_command_from_osc633_wins_over_the_grid() {
         let mut h = Harness::new(40, 10, 100);
         let exact = "echo \"a;b\" # ñ\tx";
-        h.feed(&format!("{A}PS> {B}ec\r\n\x1b]633;E;{}\x07{C}out\r\n{}", escape_command(exact), d(0)));
+        h.feed(&format!(
+            "{A}PS> {B}ec\r\n\x1b]633;E;{}\x07{C}out\r\n{}",
+            escape_command(exact),
+            d(0)
+        ));
         assert_eq!(h.blocks()[0].command.as_deref(), Some(exact.trim()));
         // E arriving after C (other integrations) also works.
-        h.feed(&format!("{A}PS> {B}x\r\n{C}\x1b]633;E;late\x07out\r\n{}", d(0)));
+        h.feed(&format!(
+            "{A}PS> {B}x\r\n{C}\x1b]633;E;late\x07out\r\n{}",
+            d(0)
+        ));
         assert_eq!(h.blocks()[1].command.as_deref(), Some("late"));
         // An E without any following C does not leak into the next block.
         h.feed(&format!("{A}PS> {B}y\r\n{C}z\r\n{}", d(0)));
@@ -733,8 +852,14 @@ mod tests {
         h.feed(&format!("{A}PS> {B}sleep 9\r\n{C}^C\r\n\x1b]133;D\x07"));
         h.feed(&format!("{A}PS> {B}sleep 9\r\n{C}^C\r\n{}", d(130)));
         let blocks = h.blocks();
-        assert_eq!((blocks[0].state, blocks[0].exit_code), (BlockState::Unknown, None));
-        assert_eq!((blocks[1].state, blocks[1].exit_code), (BlockState::Failed, Some(130)));
+        assert_eq!(
+            (blocks[0].state, blocks[0].exit_code),
+            (BlockState::Unknown, None)
+        );
+        assert_eq!(
+            (blocks[1].state, blocks[1].exit_code),
+            (BlockState::Failed, Some(130))
+        );
     }
 
     #[test]
@@ -766,7 +891,10 @@ mod tests {
     fn cwd_is_captured_when_the_command_starts() {
         let mut h = Harness::new(40, 10, 100);
         h.feed("\x1b]7;file:///C:/one\x07");
-        h.feed(&format!("{A}PS> {B}cd two\r\n{C}\x1b]7;file:///C:/two\x07{}", d(0)));
+        h.feed(&format!(
+            "{A}PS> {B}cd two\r\n{C}\x1b]7;file:///C:/two\x07{}",
+            d(0)
+        ));
         h.feed(&format!("{A}PS> {B}ls\r\n{C}"));
         let blocks = h.blocks();
         let norm = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().replace('\\', "/"));
@@ -777,7 +905,9 @@ mod tests {
     #[test]
     fn running_block_output_follows_the_cursor() {
         let mut h = Harness::new(40, 10, 100);
-        h.feed(&format!("{A}PS> {B}build\r\n{C}line 1\r\nline 2\r\npartial"));
+        h.feed(&format!(
+            "{A}PS> {B}build\r\n{C}line 1\r\nline 2\r\npartial"
+        ));
         let b = &h.blocks()[0];
         assert_eq!(b.state, BlockState::Running);
         assert_eq!(h.output(b.id), "line 1\nline 2\npartial");
@@ -806,7 +936,11 @@ mod tests {
         }
         // 80 lines printed, 5 on screen, at most 20 in history.
         assert!(h.history() <= 20);
-        assert_eq!(h.dropped() + h.history() as u64 + 5, 81, "numbering stays exact (cursor on line 80)");
+        assert_eq!(
+            h.dropped() + h.history() as u64 + 5,
+            81,
+            "numbering stays exact (cursor on line 80)"
+        );
         let blocks = h.blocks();
         assert!(blocks.len() < 40 && blocks.len() >= 10, "{}", blocks.len());
         // The surviving blocks are the newest ones and their text is still right.
@@ -814,8 +948,17 @@ mod tests {
         assert_eq!(last.command.as_deref(), Some("cmd39"));
         assert_eq!(h.output(last.id), "out39");
         let first = &blocks[0];
-        assert!(first.prompt_line >= h.dropped(), "clamped into the surviving range");
-        let n: usize = first.command.as_deref().unwrap().trim_start_matches("cmd").parse().unwrap();
+        assert!(
+            first.prompt_line >= h.dropped(),
+            "clamped into the surviving range"
+        );
+        let n: usize = first
+            .command
+            .as_deref()
+            .unwrap()
+            .trim_start_matches("cmd")
+            .parse()
+            .unwrap();
         assert_eq!(h.output(first.id), format!("out{n}"));
     }
 
@@ -848,7 +991,10 @@ mod tests {
         h.feed("\x1b[3J");
         assert_eq!(h.history(), 0);
         let after = h.blocks();
-        assert!(after.len() < before, "blocks living only in the cleared history are gone");
+        assert!(
+            after.len() < before,
+            "blocks living only in the cleared history are gone"
+        );
         // New work after the clear still lines up.
         run(&mut h, "fresh", "new\r\n", 0);
         let last = h.blocks().last().unwrap().clone();
@@ -930,7 +1076,11 @@ mod tests {
         assert_eq!(t.prev(Some(blocks[0].id), 0), None);
         assert_eq!(t.next(Some(blocks[2].id), 0), Some(blocks[3].id));
         assert_eq!(t.next(Some(blocks[3].id), 0), None);
-        assert_eq!(t.prev(None, 4), Some(blocks[1].id), "starts at 2 < 4, next at 4 is not < 4");
+        assert_eq!(
+            t.prev(None, 4),
+            Some(blocks[1].id),
+            "starts at 2 < 4, next at 4 is not < 4"
+        );
         assert_eq!(t.next(None, 4), Some(blocks[3].id));
         assert_eq!(t.prev(None, 0), None);
         assert_eq!(t.get(BlockId(3)).map(|b| b.id), Some(BlockId(3)));
@@ -957,14 +1107,23 @@ mod tests {
 
     #[test]
     fn truncation_marks_the_omitted_lines() {
-        let text: String = (1..=100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let text: String = (1..=100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(truncate_middle(&text, text.len()), text);
         let out = truncate_middle(&text, 200);
         assert!(out.len() <= 200, "{} bytes", out.len());
         assert!(out.starts_with("line 1\nline 2"));
         assert!(out.ends_with("line 99\nline 100"));
         let marker = out.lines().find(|l| l.contains("omitidas")).unwrap();
-        let n: usize = marker.trim_start_matches("… ").split(' ').next().unwrap().parse().unwrap();
+        let n: usize = marker
+            .trim_start_matches("… ")
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         let kept = out.lines().count() - 1;
         assert_eq!(n + kept, 100, "{out}");
         // A single enormous line is cut on char boundaries.

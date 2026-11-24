@@ -27,7 +27,12 @@ pub struct VisRow {
 
 impl VisRow {
     const fn blank() -> Self {
-        Self { term_row: None, block: None, abs: None, summary: None }
+        Self {
+            term_row: None,
+            block: None,
+            abs: None,
+            summary: None,
+        }
     }
 }
 
@@ -57,7 +62,8 @@ pub fn viewport_abs(row_block: &[Option<BlockId>], blocks: &[Block]) -> Vec<Opti
                 Some(b.prompt_line)
             } else if e + 1 < n {
                 // The run ends inside the screen: its last row is the block's last line.
-                b.output_end.and_then(|end| end.checked_sub(1 + (e - r) as u64))
+                b.output_end
+                    .and_then(|end| end.checked_sub(1 + (e - r) as u64))
             } else {
                 None
             };
@@ -79,7 +85,8 @@ pub fn foldable(b: &Block) -> bool {
 
 /// Is `abs` one of the output lines of `b`?
 fn in_output(b: &Block, abs: AbsLine) -> bool {
-    b.output_end.is_some_and(|end| abs >= b.output_start && abs < end)
+    b.output_end
+        .is_some_and(|end| abs >= b.output_start && abs < end)
 }
 
 /// Is `abs` the prompt or command line of `b` (the rows the action bar hangs from)?
@@ -103,20 +110,32 @@ pub fn layout_rows(
     for (r, &block) in row_block.iter().enumerate() {
         let line = abs.get(r).copied().flatten();
         let hide = match (block, line) {
-            (Some(id), Some(a)) if folded.contains(&id) => find_block(blocks, id).filter(|b| in_output(b, a)),
+            (Some(id), Some(a)) if folded.contains(&id) => {
+                find_block(blocks, id).filter(|b| in_output(b, a))
+            }
             _ => None,
         };
         match hide {
             Some(b) => {
                 if summarized != Some(b.id) {
                     summarized = Some(b.id);
-                    rows.push(VisRow { term_row: None, block, abs: None, summary: Some(b.output_lines()) });
+                    rows.push(VisRow {
+                        term_row: None,
+                        block,
+                        abs: None,
+                        summary: Some(b.output_lines()),
+                    });
                 }
-            },
+            }
             None => {
                 summarized = None;
-                rows.push(VisRow { term_row: Some(r), block, abs: line, summary: None });
-            },
+                rows.push(VisRow {
+                    term_row: Some(r),
+                    block,
+                    abs: line,
+                    summary: None,
+                });
+            }
         }
     }
     let missing = n.saturating_sub(rows.len());
@@ -147,7 +166,12 @@ pub fn gutter_runs(rows: &[VisRow]) -> Vec<(usize, usize, BlockId)> {
 
 /// The block the action bar shows for, given the hovered painted row and whether the pointer is in
 /// the gutter: the block of a prompt/command row, or any row of the block when in the gutter.
-pub fn hover_target(rows: &[VisRow], blocks: &[Block], vis: usize, in_gutter: bool) -> Option<BlockId> {
+pub fn hover_target(
+    rows: &[VisRow],
+    blocks: &[Block],
+    vis: usize,
+    in_gutter: bool,
+) -> Option<BlockId> {
     let row = rows.get(vis)?;
     let id = row.block?;
     if in_gutter || row.summary.is_some() {
@@ -172,7 +196,13 @@ mod tests {
 
     use super::*;
 
-    fn block(id: u64, prompt: u64, out_start: u64, out_end: Option<u64>, state: BlockState) -> Block {
+    fn block(
+        id: u64,
+        prompt: u64,
+        out_start: u64,
+        out_end: Option<u64>,
+        state: BlockState,
+    ) -> Block {
         Block {
             id: BlockId(id),
             command: Some(format!("cmd{id}")),
@@ -198,8 +228,20 @@ mod tests {
     #[test]
     fn abs_from_a_run_that_starts_inside_the_screen() {
         // rows: [none, B1 x4, B2 x3]
-        let blocks = [block(1, 10, 11, Some(14), BlockState::Succeeded), block(2, 14, 15, Some(17), BlockState::Failed)];
-        let rows = ids(&[None, Some(1), Some(1), Some(1), Some(1), Some(2), Some(2), Some(2)]);
+        let blocks = [
+            block(1, 10, 11, Some(14), BlockState::Succeeded),
+            block(2, 14, 15, Some(17), BlockState::Failed),
+        ];
+        let rows = ids(&[
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(2),
+        ]);
         // B1 has 4 lines (10..14) and B2 starts right after at 14.
         let abs = viewport_abs(&rows, &blocks);
         assert_eq!(abs[0], None);
@@ -211,7 +253,10 @@ mod tests {
 
     #[test]
     fn abs_from_the_end_when_the_run_starts_above_the_screen() {
-        let blocks = [block(1, 0, 1, Some(100), BlockState::Succeeded), block(2, 100, 101, None, BlockState::Running)];
+        let blocks = [
+            block(1, 0, 1, Some(100), BlockState::Succeeded),
+            block(2, 100, 101, None, BlockState::Running),
+        ];
         // Viewport shows the last 3 lines of B1, then B2.
         let rows = ids(&[Some(1), Some(1), Some(1), Some(2), Some(2)]);
         let abs = viewport_abs(&rows, &blocks);
@@ -229,7 +274,10 @@ mod tests {
 
     #[test]
     fn folding_keeps_one_summary_row_and_pads_the_bottom_in_history() {
-        let blocks = [block(1, 10, 11, Some(15), BlockState::Succeeded), block(2, 15, 16, None, BlockState::Running)];
+        let blocks = [
+            block(1, 10, 11, Some(15), BlockState::Succeeded),
+            block(2, 15, 16, None, BlockState::Running),
+        ];
         let rb = ids(&[Some(1), Some(1), Some(1), Some(1), Some(1), Some(2)]);
         let abs = viewport_abs(&rb, &blocks);
         // Row 0 is B1's prompt, rows 1..=4 its output (11..15), row 5 is B2's prompt at 15.
@@ -241,12 +289,19 @@ mod tests {
         assert_eq!(rows[1].summary, Some(4));
         assert_eq!(rows[1].block, Some(BlockId(1)));
         assert_eq!(rows[2].term_row, Some(5));
-        assert!(rows[3..].iter().all(|r| r.term_row.is_none() && r.summary.is_none()));
+        assert!(
+            rows[3..]
+                .iter()
+                .all(|r| r.term_row.is_none() && r.summary.is_none())
+        );
     }
 
     #[test]
     fn folding_at_the_live_bottom_keeps_the_prompt_on_the_last_row() {
-        let blocks = [block(1, 10, 11, Some(15), BlockState::Succeeded), block(2, 15, 16, None, BlockState::Running)];
+        let blocks = [
+            block(1, 10, 11, Some(15), BlockState::Succeeded),
+            block(2, 15, 16, None, BlockState::Running),
+        ];
         let rb = ids(&[Some(1), Some(1), Some(1), Some(1), Some(1), Some(2)]);
         let abs = viewport_abs(&rb, &blocks);
         let folded: HashSet<_> = [BlockId(1)].into();
@@ -263,7 +318,10 @@ mod tests {
         let abs = viewport_abs(&rb, &blocks);
         let folded: HashSet<_> = [BlockId(1)].into();
         let rows = layout_rows(&rb, &abs, &blocks, &folded, true);
-        assert_eq!(rows.iter().filter_map(|r| r.term_row).collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(
+            rows.iter().filter_map(|r| r.term_row).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
         assert!(foldable(&blocks[0]));
         assert!(!foldable(&block(2, 5, 6, None, BlockState::Running)));
         assert!(!foldable(&block(3, 5, 6, Some(6), BlockState::Succeeded)));
@@ -271,7 +329,12 @@ mod tests {
 
     #[test]
     fn gutter_runs_split_by_block_and_gaps() {
-        let r = |b: Option<u64>| VisRow { term_row: Some(0), block: b.map(BlockId), abs: None, summary: None };
+        let r = |b: Option<u64>| VisRow {
+            term_row: Some(0),
+            block: b.map(BlockId),
+            abs: None,
+            summary: None,
+        };
         let rows = [r(Some(1)), r(Some(1)), r(None), r(Some(1)), r(Some(2))];
         assert_eq!(
             gutter_runs(&rows),

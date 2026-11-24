@@ -60,14 +60,15 @@ mod tab;
 mod tone;
 
 pub use attention::{
-    AttentionEvent, AttentionId, AttentionItem, AttentionKind, AttentionModel, FocusTarget, agent_label, format_wait,
+    AttentionEvent, AttentionId, AttentionItem, AttentionKind, AttentionModel, FocusTarget,
+    agent_label, format_wait,
 };
 pub use attention_view::{AttentionPanelProvider, AttentionView, PANEL_ID as ATTENTION_PANEL_ID};
 pub use diff::{DiffRow, FileBody, FileDiff, FileStatus, ReviewSource, load_source};
 pub use markdown::{ReviewMessage, build_markdown, fence_language};
 pub use note::{
-    EXCERPT_RADIUS, Note, NoteId, NoteRef, NoteSet, NoteState, Reanchor, SEARCH_WINDOW, Side, SideLines, excerpt, line_hash,
-    lines_hash, range_hash,
+    EXCERPT_RADIUS, Note, NoteId, NoteRef, NoteSet, NoteState, Reanchor, SEARCH_WINDOW, Side,
+    SideLines, excerpt, line_hash, lines_hash, range_hash,
 };
 pub use review::{ROW_PAGE, ReviewEvent, ReviewView};
 pub use store::{DraftKey, ReviewStore, draft_key, root_key};

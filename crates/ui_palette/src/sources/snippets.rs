@@ -29,7 +29,11 @@ fn one_line(template: &str) -> String {
 /// The item for `s`, with the form or the direct actions.
 fn snippet_item(s: &Snippet, cwd: Option<&std::path::Path>, score: f32) -> PaletteItem {
     let params = s.params();
-    let subtitle = if s.description.is_empty() { one_line(&s.template) } else { s.description.clone() };
+    let subtitle = if s.description.is_empty() {
+        one_line(&s.template)
+    } else {
+        s.description.clone()
+    };
     let key = format!("snippet:{}", s.id);
     let used = Effect::SnippetUsed(s.id);
     let (primary, alt, meta) = if params.is_empty() {
@@ -37,26 +41,44 @@ fn snippet_item(s: &Snippet, cwd: Option<&std::path::Path>, score: f32) -> Palet
         let line = store::render(&s.template, &Default::default(), store::Quoting::PowerShell)
             .unwrap_or_else(|_| s.template.clone());
         (
-            ItemAction::emit("Insertar", PaletteEvent::InsertText(line.clone())).with_effect(used.clone()),
+            ItemAction::emit("Insertar", PaletteEvent::InsertText(line.clone()))
+                .with_effect(used.clone()),
             Some(
                 ItemAction::emit(
                     "Ejecutar",
-                    PaletteEvent::RunCommand { line, cwd: cwd.map(Into::into), new_tab: false },
+                    PaletteEvent::RunCommand {
+                        line,
+                        cwd: cwd.map(Into::into),
+                        new_tab: false,
+                    },
                 )
                 .with_effect(used),
             ),
-            if s.uses > 0 { format!("{}×", s.uses) } else { String::new() },
+            if s.uses > 0 {
+                format!("{}×", s.uses)
+            } else {
+                String::new()
+            },
         )
     } else {
         let n = params.len();
-        let spec = FormSpec::snippet(s.id, s.name.clone(), s.template.clone(), params, cwd.map(Into::into));
+        let spec = FormSpec::snippet(
+            s.id,
+            s.name.clone(),
+            s.template.clone(),
+            params,
+            cwd.map(Into::into),
+        );
         (
             ItemAction::form("Rellenar parámetros", spec),
             None,
             format!("{n} {}", if n == 1 { "parámetro" } else { "parámetros" }),
         )
     };
-    let mut item = PaletteItem::new(key, s.name.clone(), primary).subtitle(subtitle).icon(Icon::Snippet).score(score);
+    let mut item = PaletteItem::new(key, s.name.clone(), primary)
+        .subtitle(subtitle)
+        .icon(Icon::Snippet)
+        .score(score);
     item.alt = alt;
     if !meta.is_empty() {
         item.meta = Some(meta.into());
@@ -94,7 +116,10 @@ impl PaletteSource for SnippetsSource {
         let cwd = q.ctx.cwd.as_deref();
         if q.is_empty() {
             // Most used first (the store orders by usage and recency).
-            let rows = self.db.search_snippets("", cwd_text.as_deref()).unwrap_or_default();
+            let rows = self
+                .db
+                .search_snippets("", cwd_text.as_deref())
+                .unwrap_or_default();
             return rows
                 .iter()
                 .take(q.limit)

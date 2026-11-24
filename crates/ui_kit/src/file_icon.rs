@@ -72,14 +72,22 @@ impl FileIcon {
 
     /// The icon of a file path (only its name matters; nothing is read from disk).
     pub fn for_path(path: &Path) -> FileIcon {
-        path.file_name().map_or(FileIcon::Generic, |n| Self::for_name(&n.to_string_lossy()))
+        path.file_name()
+            .map_or(FileIcon::Generic, |n| Self::for_name(&n.to_string_lossy()))
     }
 
     /// The icon of a file name.
     pub fn for_name(name: &str) -> FileIcon {
         let lower = name.to_ascii_lowercase();
-        if matches!(lower.as_str(), "cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb")
-            || lower.ends_with(".lock")
+        if matches!(
+            lower.as_str(),
+            "cargo.lock"
+                | "package-lock.json"
+                | "pnpm-lock.yaml"
+                | "yarn.lock"
+                | "bun.lock"
+                | "bun.lockb"
+        ) || lower.ends_with(".lock")
         {
             return FileIcon::Lock;
         }
@@ -98,14 +106,14 @@ impl FileIcon {
             "html" | "htm" | "svg" | "xml" => FileIcon::Html,
             "css" | "scss" | "less" => FileIcon::Css,
             "md" | "mdx" => FileIcon::Markdown,
-            "toml" | "yaml" | "yml" | "ini" | "env" | "editorconfig" | "config" | "csproj" | "props" => FileIcon::Config,
+            "toml" | "yaml" | "yml" | "ini" | "env" | "editorconfig" | "config" | "csproj"
+            | "props" => FileIcon::Config,
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" => FileIcon::Image,
             "go" => FileIcon::Go,
             "py" => FileIcon::Python,
             "ps1" | "psm1" | "sh" | "bash" | "cmd" | "bat" => FileIcon::Shell,
-            "cs" | "c" | "cpp" | "h" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "sql" | "vue" | "svelte" => {
-                FileIcon::Code
-            },
+            "cs" | "c" | "cpp" | "h" | "java" | "kt" | "swift" | "rb" | "php" | "lua" | "sql"
+            | "vue" | "svelte" => FileIcon::Code,
             _ => FileIcon::Generic,
         }
     }
@@ -113,7 +121,11 @@ impl FileIcon {
 
 /// A file-type icon drawn at `size` logical px in `color`.
 pub fn file_icon(icon: FileIcon, size: f32, color: impl Into<Hsla>) -> Svg {
-    svg().path(icon.path()).flex_none().size(px(size)).text_color(color)
+    svg()
+        .path(icon.path())
+        .flex_none()
+        .size(px(size))
+        .text_color(color)
 }
 
 #[cfg(test)]

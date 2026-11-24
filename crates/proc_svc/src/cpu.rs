@@ -104,6 +104,8 @@ mod tests {
         s.sample_at(&[p(1, 1000)], t0);
         let mut reused = p(1, 5);
         reused.start_time = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(200));
-        assert!(s.sample_at(&[reused], t0 + Duration::from_secs(1)).is_empty());
+        assert!(s
+            .sample_at(&[reused], t0 + Duration::from_secs(1))
+            .is_empty());
     }
 }

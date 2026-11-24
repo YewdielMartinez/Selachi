@@ -48,8 +48,16 @@ pub fn format_duration(d: Duration) -> String {
 /// Title and two lines of a command's toast.
 pub fn toast_text(block: &Block) -> (String, String, String) {
     let ok = block.state == BlockState::Succeeded;
-    let title = if ok { "Comando terminado" } else { "Comando fallido" };
-    let command = block.command.as_deref().map(|c| term_core::redact(c).0).unwrap_or_default();
+    let title = if ok {
+        "Comando terminado"
+    } else {
+        "Comando fallido"
+    };
+    let command = block
+        .command
+        .as_deref()
+        .map(|c| term_core::redact(c).0)
+        .unwrap_or_default();
     let command = command.lines().next().unwrap_or("").trim().to_string();
     let command = if command.chars().count() > 90 {
         format!("{}…", command.chars().take(89).collect::<String>())
@@ -80,27 +88,36 @@ pub fn attention_toast(tab: u64, title: &str, line1: &str, line2: &str) {
 /// `s` cut to `max` characters with an ellipsis, first line only.
 pub fn clip(s: &str, max: usize) -> String {
     let line = s.lines().next().unwrap_or("").trim();
-    if line.chars().count() > max { format!("{}…", line.chars().take(max.saturating_sub(1)).collect::<String>()) } else { line.to_string() }
+    if line.chars().count() > max {
+        format!(
+            "{}…",
+            line.chars().take(max.saturating_sub(1)).collect::<String>()
+        )
+    } else {
+        line.to_string()
+    }
 }
 
 #[cfg(windows)]
 fn toast(tab: u64, title: String, line1: String, line2: String) {
     use tauri_winrt_notification::Toast;
-    let spawned = std::thread::Builder::new().name("selachi-toast".into()).spawn(move || {
-        let toast = Toast::new(Toast::POWERSHELL_APP_ID)
-            .title(&title)
-            .text1(&line1)
-            .text2(&line2)
-            .on_activated(move |_| {
-                if let Some(tx) = CLICKS.get() {
-                    let _ = tx.unbounded_send(tab);
-                }
-                Ok(())
-            });
-        if let Err(e) = toast.show() {
-            log::warn!("could not show the notification: {e}");
-        }
-    });
+    let spawned = std::thread::Builder::new()
+        .name("selachi-toast".into())
+        .spawn(move || {
+            let toast = Toast::new(Toast::POWERSHELL_APP_ID)
+                .title(&title)
+                .text1(&line1)
+                .text2(&line2)
+                .on_activated(move |_| {
+                    if let Some(tx) = CLICKS.get() {
+                        let _ = tx.unbounded_send(tab);
+                    }
+                    Ok(())
+                });
+            if let Err(e) = toast.show() {
+                log::warn!("could not show the notification: {e}");
+            }
+        });
     if let Err(e) = spawned {
         log::warn!("could not start the notification thread: {e}");
     }
@@ -115,8 +132,14 @@ mod tests {
 
     #[test]
     fn clip_keeps_one_short_line() {
-        assert_eq!(clip("hola
-mundo", 10), "hola");
+        assert_eq!(
+            clip(
+                "hola
+mundo",
+                10
+            ),
+            "hola"
+        );
         assert_eq!(clip("abcdefghij", 5), "abcd…");
         assert_eq!(clip("abc", 5), "abc");
     }

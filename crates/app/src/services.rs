@@ -64,7 +64,17 @@ impl Services {
         let files = FileTreeProvider::new().on_event(move |ev, _| {
             let _ = tx.unbounded_send(ev.clone());
         });
-        Self { tracker, procs, doctor, git, usage, attention, files, chat: Rc::new(RefCell::new(None)), viewer_events: Rc::new(RefCell::new(Some(rx))) }
+        Self {
+            tracker,
+            procs,
+            doctor,
+            git,
+            usage,
+            attention,
+            files,
+            chat: Rc::new(RefCell::new(None)),
+            viewer_events: Rc::new(RefCell::new(Some(rx))),
+        }
     }
 }
 
@@ -74,17 +84,32 @@ impl Services {
 pub fn open_tab_job(owner: u64, cwd: Option<&std::path::Path>, cx: &mut App) -> Option<JobCtx> {
     let services = cx.try_global::<Services>().cloned()?;
     let label = cwd.map_or_else(|| "Terminal".to_string(), crate::paths::tab_label);
-    let meta = proc_svc::OwnerMeta { agent: None, label, cwd: cwd.map(std::path::Path::to_path_buf) };
-    match ui_procs::open_owner(&services.tracker, owner, meta, proc_svc::JobOptions::default()) {
+    let meta = proc_svc::OwnerMeta {
+        agent: None,
+        label,
+        cwd: cwd.map(std::path::Path::to_path_buf),
+    };
+    match ui_procs::open_owner(
+        &services.tracker,
+        owner,
+        meta,
+        proc_svc::JobOptions::default(),
+    ) {
         Ok(job) => {
             let handle = job.job_handle as isize;
             log::debug!("tab job: owner {owner} handle {handle:#x}");
-            services.procs.update(cx, |m, cx| m.watch_job_events(job.events, cx));
-            Some(JobCtx { tracker: services.tracker.clone(), owner, handle })
-        },
+            services
+                .procs
+                .update(cx, |m, cx| m.watch_job_events(job.events, cx));
+            Some(JobCtx {
+                tracker: services.tracker.clone(),
+                owner,
+                handle,
+            })
+        }
         Err(e) => {
             log::warn!("could not create the process job of a tab: {e}");
             None
-        },
+        }
     }
 }

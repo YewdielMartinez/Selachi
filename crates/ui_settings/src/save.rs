@@ -222,7 +222,10 @@ mod tests {
         let base = Config::default();
         let ours = cfg(|c| c.terminal.scrollback = 5_000);
         let theirs = cfg(|c| c.terminal.scrollback = 7_000);
-        assert_eq!(merge_external(&base, &ours, &theirs).terminal.scrollback, 5_000);
+        assert_eq!(
+            merge_external(&base, &ours, &theirs).terminal.scrollback,
+            5_000
+        );
     }
 
     #[test]

@@ -6,12 +6,8 @@
 
 use std::time::{Duration, Instant};
 
-use proc_svc::{
-    JobGroup, JobOptions, OwnerMeta, ProcState, Tracker, snapshot, terminate_job,
-};
-use term_core::{
-    JobAttachment, Palette, Session, SessionConfig, SessionEvent, SpawnOptions,
-};
+use proc_svc::{JobGroup, JobOptions, OwnerMeta, ProcState, Tracker, snapshot, terminate_job};
+use term_core::{JobAttachment, Palette, Session, SessionConfig, SessionEvent, SpawnOptions};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
@@ -104,7 +100,10 @@ impl Drop for Cleanup {
 fn shell_and_grandchild_are_born_in_the_job() {
     let job = JobGroup::with_options(
         "born-in-job",
-        JobOptions { kill_on_close: true, ..Default::default() },
+        JobOptions {
+            kill_on_close: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     let (session, _rx) =
@@ -112,45 +111,91 @@ fn shell_and_grandchild_are_born_in_the_job() {
     let shell = session.pid().expect("shell pid");
     assert_eq!(session.job_attachment(), JobAttachment::AtBirth);
     // Immediately after spawning, no polling needed: the shell was born inside.
-    assert!(job.contains(shell), "shell {shell} not in job {:?}", job.members());
+    assert!(
+        job.contains(shell),
+        "shell {shell} not in job {:?}",
+        job.members()
+    );
 
     start_ping(&session);
     wait_until("ping in the job", || ping_in(&job.members()).is_some());
     let ping = ping_in(&job.members()).unwrap();
     let members = job.members();
-    assert!(members.contains(&shell) && members.contains(&ping), "{members:?}");
+    assert!(
+        members.contains(&shell) && members.contains(&ping),
+        "{members:?}"
+    );
 }
 
 #[test]
 fn grandchild_outlives_the_shell_and_is_reported_orphan() {
     let mut cleanup = Cleanup(Tracker::new());
-    let meta = OwnerMeta { agent: None, label: "orphan-test".into(), cwd: None };
+    let meta = OwnerMeta {
+        agent: None,
+        label: "orphan-test".into(),
+        cwd: None,
+    };
     // kill_on_close = false: members survive the job handle, like in the app.
-    cleanup.0.create_owner(1, meta, JobOptions::default()).unwrap();
+    cleanup
+        .0
+        .create_owner(1, meta, JobOptions::default())
+        .unwrap();
     let handle = cleanup.0.job(1).unwrap().raw_handle();
-    let (session, _rx) =
-        Session::spawn_with_options(powershell(), SpawnOptions::default().with_job_handle(handle))
-            .expect("spawn");
+    let (session, _rx) = Session::spawn_with_options(
+        powershell(),
+        SpawnOptions::default().with_job_handle(handle),
+    )
+    .expect("spawn");
     let shell = session.pid().expect("shell pid");
     cleanup.0.register_root(1, shell).unwrap();
 
     start_detached(&session);
-    wait_until("ping in the job", || ping_in(&cleanup.0.job(1).unwrap().members()).is_some());
+    wait_until("ping in the job", || {
+        ping_in(&cleanup.0.job(1).unwrap().members()).is_some()
+    });
     let ping = ping_in(&cleanup.0.job(1).unwrap().members()).unwrap();
     let members = cleanup.0.job(1).unwrap().members();
-    assert!(members.len() >= 3, "shell, cmd and ping expected: {members:?}");
+    assert!(
+        members.len() >= 3,
+        "shell, cmd and ping expected: {members:?}"
+    );
 
     // While the shell lives everything is Active.
-    let report = cleanup.0.report().into_iter().find(|r| r.owner == 1).unwrap();
-    assert!(report.processes.iter().all(|p| p.state == ProcState::Active), "{report:?}");
-    assert!(report.processes.iter().any(|p| p.is_root && p.info.pid == shell));
+    let report = cleanup
+        .0
+        .report()
+        .into_iter()
+        .find(|r| r.owner == 1)
+        .unwrap();
+    assert!(
+        report
+            .processes
+            .iter()
+            .all(|p| p.state == ProcState::Active),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .processes
+            .iter()
+            .any(|p| p.is_root && p.info.pid == shell)
+    );
 
     // The shell dies (killed, as a crash would).
     kill(shell);
     wait_until("shell exit", || !alive(shell));
     assert!(alive(ping), "ping must survive its shell");
-    let report = cleanup.0.report().into_iter().find(|r| r.owner == 1).unwrap();
-    let ping_state = report.processes.iter().find(|p| p.info.pid == ping).map(|p| p.state);
+    let report = cleanup
+        .0
+        .report()
+        .into_iter()
+        .find(|r| r.owner == 1)
+        .unwrap();
+    let ping_state = report
+        .processes
+        .iter()
+        .find(|p| p.info.pid == ping)
+        .map(|p| p.state);
     assert_eq!(ping_state, Some(ProcState::Orphan), "{report:?}");
     assert!(report.orphans().any(|p| p.info.pid == ping));
 
@@ -165,26 +210,49 @@ fn grandchild_outlives_the_shell_and_is_reported_orphan() {
 #[test]
 fn detached_grandchild_survives_dropping_the_session_and_is_reported_orphan() {
     let mut cleanup = Cleanup(Tracker::new());
-    let meta = OwnerMeta { agent: None, label: "drop-orphan".into(), cwd: None };
-    cleanup.0.create_owner(7, meta, JobOptions::default()).unwrap();
+    let meta = OwnerMeta {
+        agent: None,
+        label: "drop-orphan".into(),
+        cwd: None,
+    };
+    cleanup
+        .0
+        .create_owner(7, meta, JobOptions::default())
+        .unwrap();
     let handle = cleanup.0.job(7).unwrap().raw_handle();
-    let (session, _rx) =
-        Session::spawn_with_options(powershell(), SpawnOptions::default().with_job_handle(handle))
-            .expect("spawn");
+    let (session, _rx) = Session::spawn_with_options(
+        powershell(),
+        SpawnOptions::default().with_job_handle(handle),
+    )
+    .expect("spawn");
     let shell = session.pid().expect("shell pid");
     cleanup.0.register_root(7, shell).unwrap();
     start_detached(&session);
-    wait_until("ping in the job", || ping_in(&cleanup.0.job(7).unwrap().members()).is_some());
+    wait_until("ping in the job", || {
+        ping_in(&cleanup.0.job(7).unwrap().members()).is_some()
+    });
     let ping = ping_in(&cleanup.0.job(7).unwrap().members()).unwrap();
 
     let started = Instant::now();
     drop(session);
-    assert!(started.elapsed() < Duration::from_secs(2), "dropping the session blocked");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "dropping the session blocked"
+    );
     wait_until("shell closed with its console", || !alive(shell));
     assert!(alive(ping), "the detached ping must outlive the session");
 
-    let report = cleanup.0.report().into_iter().find(|r| r.owner == 7).unwrap();
-    let ping_state = report.processes.iter().find(|p| p.info.pid == ping).map(|p| p.state);
+    let report = cleanup
+        .0
+        .report()
+        .into_iter()
+        .find(|r| r.owner == 7)
+        .unwrap();
+    let ping_state = report
+        .processes
+        .iter()
+        .find(|p| p.info.pid == ping)
+        .map(|p| p.state);
     assert_eq!(ping_state, Some(ProcState::Orphan), "{report:?}");
 
     terminate_job(cleanup.0.job(7).unwrap()).unwrap();
@@ -198,7 +266,10 @@ fn dropping_a_session_with_attached_children_neither_hangs_nor_breaks_the_job() 
     // handle stay valid, and the drop neither hangs nor panics.
     let job = JobGroup::with_options(
         "drop-session",
-        JobOptions { kill_on_close: true, ..Default::default() },
+        JobOptions {
+            kill_on_close: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     let (session, _rx) =
@@ -209,12 +280,18 @@ fn dropping_a_session_with_attached_children_neither_hangs_nor_breaks_the_job() 
     let ping = ping_in(&job.members()).unwrap();
     let started = Instant::now();
     drop(session);
-    assert!(started.elapsed() < Duration::from_secs(2), "dropping the session blocked");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "dropping the session blocked"
+    );
     wait_until("shell closed with its console", || !alive(shell));
     // Whether console-attached children survive is up to the console host (observed: they are
     // closed with the pseudoconsole); only report it.
     std::thread::sleep(Duration::from_millis(500));
-    println!("attached ping alive after the session was dropped: {}", alive(ping));
+    println!(
+        "attached ping alive after the session was dropped: {}",
+        alive(ping)
+    );
     // The job object is still usable.
     assert!(job.try_members().is_ok());
     terminate_job(&job).unwrap();
@@ -224,7 +301,10 @@ fn dropping_a_session_with_attached_children_neither_hangs_nor_breaks_the_job() 
 fn a_flooding_session_can_be_dropped_without_hanging() {
     // ClosePseudoConsole blocks while output is unread: the drop must not.
     let (session, _rx) = Session::spawn_with_options(
-        config("cmd.exe", &["/c", "for /l %i in (1,1,200000) do @echo flood-line-%i"]),
+        config(
+            "cmd.exe",
+            &["/c", "for /l %i in (1,1,200000) do @echo flood-line-%i"],
+        ),
         SpawnOptions::default(),
     )
     .expect("spawn");
@@ -238,7 +318,10 @@ fn a_flooding_session_can_be_dropped_without_hanging() {
 
 #[test]
 fn an_invalid_job_handle_does_not_fail_the_session() {
-    let options = SpawnOptions { job: Some(0x1234), ..Default::default() };
+    let options = SpawnOptions {
+        job: Some(0x1234),
+        ..Default::default()
+    };
     let (session, _rx) =
         Session::spawn_with_options(config("cmd.exe", &["/c", "echo", "no-job-ok"]), options)
             .expect("the session must start even if the job is unusable");
@@ -258,11 +341,17 @@ fn an_invalid_job_handle_does_not_fail_the_session() {
 fn env_cwd_and_exit_still_work_with_a_job() {
     let job = JobGroup::with_options(
         "env-cwd",
-        JobOptions { kill_on_close: true, ..Default::default() },
+        JobOptions {
+            kill_on_close: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     let dir = std::env::temp_dir();
-    let mut cfg = config("cmd.exe", &["/c", "echo", "%SELACHI_TEST_VAR%-%TERM_PROGRAM%-%CD%"]);
+    let mut cfg = config(
+        "cmd.exe",
+        &["/c", "echo", "%SELACHI_TEST_VAR%-%TERM_PROGRAM%-%CD%"],
+    );
     cfg.cwd = Some(dir.clone());
     let options = SpawnOptions {
         env: vec![("SELACHI_TEST_VAR".to_string(), "from-options".to_string())],
@@ -283,7 +372,8 @@ fn env_cwd_and_exit_still_work_with_a_job() {
     assert!(text.contains("from-options-Selachi-"), "{text}");
     let dir_text = dir.display().to_string();
     assert!(
-        text.to_lowercase().contains(&dir_text.trim_end_matches('\\').to_lowercase()),
+        text.to_lowercase()
+            .contains(&dir_text.trim_end_matches('\\').to_lowercase()),
         "cwd {dir_text} missing in:\n{text}"
     );
 }

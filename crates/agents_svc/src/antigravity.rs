@@ -72,7 +72,11 @@ pub fn default_gemini_dir() -> Option<PathBuf> {
 
 /// `<gemini>/<app dir>/conversations` directories that exist.
 pub fn conversation_dirs(gemini: &Path) -> Vec<PathBuf> {
-    APP_DIRS.iter().map(|a| gemini.join(a).join("conversations")).filter(|d| d.is_dir()).collect()
+    APP_DIRS
+        .iter()
+        .map(|a| gemini.join(a).join("conversations"))
+        .filter(|d| d.is_dir())
+        .collect()
 }
 
 /// Conversation databases (`*.db`) in `dir`, sorted. The `.pb` legacy files are not listed.
@@ -91,13 +95,21 @@ pub fn find_dbs(dir: &Path) -> Vec<PathBuf> {
 /// Is `path` (pure string work) a conversation database file or its `-wal` / `-shm` companion
 /// directly inside `<gemini>/<app dir>/conversations`?
 pub fn is_conversation_db(gemini: &Path, path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
     if !(name.ends_with(".db") || name.ends_with(".db-wal") || name.ends_with(".db-shm")) {
         return false;
     }
-    let Some(dir) = path.parent() else { return false };
+    let Some(dir) = path.parent() else {
+        return false;
+    };
     dir.file_name().is_some_and(|n| n == "conversations")
-        && dir.parent().is_some_and(|app| app.starts_with(gemini) && app.parent() == Some(gemini) && APP_DIRS.iter().any(|a| app.ends_with(a)))
+        && dir.parent().is_some_and(|app| {
+            app.starts_with(gemini)
+                && app.parent() == Some(gemini)
+                && APP_DIRS.iter().any(|a| app.ends_with(a))
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +218,13 @@ fn usage_key(u: &[u8]) -> [u64; 6] {
 
 fn tokens_of(u: &[u8]) -> (TokenCounts, u64) {
     let n = |f| int(u, f).unwrap_or(0);
-    let counts = TokenCounts { input: n(2), output: n(3), cache_create: n(4), cache_create_1h: 0, cache_read: n(5) };
+    let counts = TokenCounts {
+        input: n(2),
+        output: n(3),
+        cache_create: n(4),
+        cache_create_1h: 0,
+        cache_read: n(5),
+    };
     (counts, n(9).min(counts.output))
 }
 
@@ -220,14 +238,27 @@ pub fn parse_generation(idx: i64, data: &[u8]) -> Option<Generation> {
         .map(str::trim)
         .filter(|m| !m.is_empty() && m.len() <= 80 && m.bytes().all(|b| b.is_ascii_graphic()))
         .map(str::to_string);
-    let ts_s = msg(g, &[9, 4]).and_then(|t| int(t, 1)).and_then(|s| i64::try_from(s).ok()).filter(|s| *s > 1_000_000_000);
-    Some(Generation { idx, model, model_enum: int(u, 1), tokens, reasoning, ts_s, key: usage_key(u) })
+    let ts_s = msg(g, &[9, 4])
+        .and_then(|t| int(t, 1))
+        .and_then(|s| i64::try_from(s).ok())
+        .filter(|s| *s > 1_000_000_000);
+    Some(Generation {
+        idx,
+        model,
+        model_enum: int(u, 1),
+        tokens,
+        reasoning,
+        ts_s,
+        key: usage_key(u),
+    })
 }
 
 /// Usage tuple and unix seconds of a model-response step (`steps.metadata`), if it has usage.
 pub fn parse_step(meta: &[u8]) -> Option<([u64; 6], i64)> {
     let u = msg(meta, &[9])?;
-    let ts = msg(meta, &[1]).and_then(|t| int(t, 1)).and_then(|s| i64::try_from(s).ok())?;
+    let ts = msg(meta, &[1])
+        .and_then(|t| int(t, 1))
+        .and_then(|s| i64::try_from(s).ok())?;
     Some((usage_key(u), ts))
 }
 
@@ -236,14 +267,25 @@ pub fn uri_to_path(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("file://")?;
     // `file:///c%3A/x`: the slash before a drive letter is not part of the path.
     let rest = match rest.strip_prefix('/') {
-        Some(r) if r.as_bytes().get(1).is_some_and(|c| matches!(c, b':' | b'%')) => r,
+        Some(r)
+            if r.as_bytes()
+                .get(1)
+                .is_some_and(|c| matches!(c, b':' | b'%')) =>
+        {
+            r
+        }
         _ => rest,
     };
     let b = rest.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        let hex = (b[i] == b'%').then(|| rest.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())).flatten();
+        let hex = (b[i] == b'%')
+            .then(|| {
+                rest.get(i + 1..i + 3)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            })
+            .flatten();
         match hex {
             Some(x) => {
                 out.push(x);
@@ -262,7 +304,9 @@ pub fn uri_to_path(uri: &str) -> Option<String> {
 /// First workspace of a `workspace_uris` JSON array (`["file:///c%3A/x"]`).
 pub fn first_workspace(workspace_uris_json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(workspace_uris_json).ok()?;
-    v.as_array()?.iter().find_map(|u| u.as_str().and_then(uri_to_path))
+    v.as_array()?
+        .iter()
+        .find_map(|u| u.as_str().and_then(uri_to_path))
 }
 
 // ---------------------------------------------------------------------------
@@ -284,14 +328,23 @@ pub struct ConvRead {
 
 fn open_ro(path: &Path) -> Result<rusqlite::Connection, String> {
     use rusqlite::OpenFlags;
-    let conn = rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| format!("open read-only: {e}"))?;
-    conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("open read-only: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
     Ok(conn)
 }
 
 fn has_table(conn: &rusqlite::Connection, t: &str) -> bool {
-    conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [t], |_| Ok(())).is_ok()
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+        [t],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 /// Workspace folder of `conversation_id` from the app dir's `conversation_summaries.db`.
@@ -301,31 +354,48 @@ pub fn workspace_of(summaries_db: &Path, conversation_id: &str) -> Option<String
     }
     let conn = open_ro(summaries_db).ok()?;
     let json: String = conn
-        .query_row("SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1", [conversation_id], |r| r.get(0))
+        .query_row(
+            "SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1",
+            [conversation_id],
+            |r| r.get(0),
+        )
         .ok()?;
     first_workspace(&json)
 }
 
 /// Read the generations of `db` with `idx >= from_idx`. `fallback_ts_ms` (the file's mtime) is used
 /// only for a generation whose time cannot be found anywhere.
-pub fn read_conversation(db: &Path, from_idx: i64, fallback_ts_ms: i64) -> Result<ConvRead, String> {
+pub fn read_conversation(
+    db: &Path,
+    from_idx: i64,
+    fallback_ts_ms: i64,
+) -> Result<ConvRead, String> {
     let conn = open_ro(db)?;
     if !has_table(&conn, "gen_metadata") {
         return Err("no `gen_metadata` table (unsupported Antigravity schema)".into());
     }
-    let session = db.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+    let session = db
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
     let cwd = db
         .parent()
         .and_then(Path::parent)
         .map(|app| app.join("conversation_summaries.db"))
         .and_then(|s| workspace_of(&s, &session));
 
-    let mut out = ConvRead { next_idx: from_idx, ..Default::default() };
+    let mut out = ConvRead {
+        next_idx: from_idx,
+        ..Default::default()
+    };
     let mut stmt = conn
         .prepare("SELECT idx, data FROM gen_metadata WHERE idx >= ?1 ORDER BY idx")
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([from_idx], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+        .query_map([from_idx], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+        })
         .map_err(|e| e.to_string())?;
     let mut gens = Vec::new();
     for r in rows {
@@ -346,18 +416,25 @@ pub fn read_conversation(db: &Path, from_idx: i64, fallback_ts_ms: i64) -> Resul
         let mut s = conn
             .prepare("SELECT metadata FROM steps WHERE metadata IS NOT NULL ORDER BY idx")
             .map_err(|e| e.to_string())?;
-        let rows = s.query_map([], |r| r.get::<_, Vec<u8>>(0)).map_err(|e| e.to_string())?;
-        rows.filter_map(Result::ok).filter_map(|m| parse_step(&m)).collect()
+        let rows = s
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(Result::ok)
+            .filter_map(|m| parse_step(&m))
+            .collect()
     } else {
         Vec::new()
     };
     let mut cursor = 0usize;
     for g in gens {
-        let step_ts = steps[cursor..].iter().position(|(k, _)| *k == g.key).map(|p| {
-            let ts = steps[cursor + p].1;
-            cursor += p + 1;
-            ts
-        });
+        let step_ts = steps[cursor..]
+            .iter()
+            .position(|(k, _)| *k == g.key)
+            .map(|p| {
+                let ts = steps[cursor + p].1;
+                cursor += p + 1;
+                ts
+            });
         let ts_ms = g.ts_s.or(step_ts).map_or(fallback_ts_ms, |s| s * 1000);
         let model = g
             .model
@@ -374,7 +451,12 @@ pub fn read_conversation(db: &Path, from_idx: i64, fallback_ts_ms: i64) -> Resul
             git_branch: None,
             msg_key: format!("antigravity:{session}:{}", g.idx),
         };
-        let extras = UsageExtras { reasoning: g.reasoning, reported_cost_usd: None, cost_source: None, provider: None };
+        let extras = UsageExtras {
+            reasoning: g.reasoning,
+            reported_cost_usd: None,
+            cost_source: None,
+            provider: None,
+        };
         out.events.push((event, extras));
     }
     Ok(out)
@@ -466,22 +548,45 @@ mod tests {
 
     #[test]
     fn generation_decodes_tokens_model_and_time() {
-        let g = parse_generation(7, &gen_blob(Some("claude-opus-5-5-medium"), U2, Some(1_780_969_402))).unwrap();
+        let g = parse_generation(
+            7,
+            &gen_blob(Some("claude-opus-5-5-medium"), U2, Some(1_780_969_402)),
+        )
+        .unwrap();
         assert_eq!(g.idx, 7);
         assert_eq!(g.model.as_deref(), Some("claude-opus-5-5-medium"));
         assert_eq!(g.model_enum, Some(1401));
-        assert_eq!(g.tokens, TokenCounts { input: 1_965, output: 1_830, cache_create: 0, cache_create_1h: 0, cache_read: 18_459 });
+        assert_eq!(
+            g.tokens,
+            TokenCounts {
+                input: 1_965,
+                output: 1_830,
+                cache_create: 0,
+                cache_create_1h: 0,
+                cache_read: 18_459
+            }
+        );
         assert_eq!(g.reasoning, 803);
         assert_eq!(g.ts_s, Some(1_780_969_402));
         // no cache field -> 0, no thinking field -> 0, no timestamp / name -> None
         let g = parse_generation(0, &gen_blob(None, [1318, 5, 6, 0, 0, 6], None)).unwrap();
-        assert_eq!((g.tokens.cache_read, g.reasoning, g.ts_s, g.model.clone()), (0, 0, None, None));
+        assert_eq!(
+            (g.tokens.cache_read, g.reasoning, g.ts_s, g.model.clone()),
+            (0, 0, None, None)
+        );
         assert_eq!(g.model_enum, Some(1318));
     }
 
     #[test]
     fn reader_never_panics_on_garbage() {
-        for bad in [&b""[..], &[0xff; 16], &[0x0a, 0x7f], &[0x08], &[0x0a, 0x03, 1, 2], &[0x0b]] {
+        for bad in [
+            &b""[..],
+            &[0xff; 16],
+            &[0x0a, 0x7f],
+            &[0x08],
+            &[0x0a, 0x03, 1, 2],
+            &[0x0b],
+        ] {
             assert!(parse_generation(0, bad).is_none(), "{bad:?}");
             assert!(parse_step(bad).is_none());
         }
@@ -500,12 +605,21 @@ mod tests {
 
     #[test]
     fn workspace_uris_become_paths() {
-        assert_eq!(uri_to_path("file:///c%3A/Users/a%20b/proj").as_deref(), Some("c:/Users/a b/proj"));
+        assert_eq!(
+            uri_to_path("file:///c%3A/Users/a%20b/proj").as_deref(),
+            Some("c:/Users/a b/proj")
+        );
         assert_eq!(uri_to_path("file:///c:/x").as_deref(), Some("c:/x"));
-        assert_eq!(uri_to_path("file:///home/u/p").as_deref(), Some("/home/u/p"));
+        assert_eq!(
+            uri_to_path("file:///home/u/p").as_deref(),
+            Some("/home/u/p")
+        );
         assert_eq!(uri_to_path("file:///c%3A/100%").as_deref(), Some("c:/100%"));
         assert_eq!(uri_to_path("https://x"), None);
-        assert_eq!(first_workspace(r#"["file:///c%3A/w/p","file:///c%3A/other"]"#).as_deref(), Some("c:/w/p"));
+        assert_eq!(
+            first_workspace(r#"["file:///c%3A/w/p","file:///c%3A/other"]"#).as_deref(),
+            Some("c:/w/p")
+        );
         assert_eq!(first_workspace("[]"), None);
         assert_eq!(first_workspace("nope"), None);
     }

@@ -92,7 +92,11 @@ impl Results {
             rows.push(LayoutRow::Header(s.title));
             let mut items: Vec<&PaletteItem> = s.items.iter().collect();
             items.sort_by(|a, b| b.score.total_cmp(&a.score));
-            rows.extend(items.into_iter().map(|i| LayoutRow::Item(Box::new(i.clone()))));
+            rows.extend(
+                items
+                    .into_iter()
+                    .map(|i| LayoutRow::Item(Box::new(i.clone()))),
+            );
         }
         rows
     }
@@ -133,10 +137,18 @@ impl PaletteModel {
     pub fn relayout(&mut self, query_is_empty: bool) {
         let keep = self.selected_item().map(|i| i.key.clone());
         self.rows = self.results.layout(query_is_empty);
-        self.selectable =
-            self.rows.iter().enumerate().filter_map(|(i, r)| matches!(r, LayoutRow::Item(_)).then_some(i)).collect();
+        self.selectable = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| matches!(r, LayoutRow::Item(_)).then_some(i))
+            .collect();
         self.selected = match (self.navigated, keep) {
-            (true, Some(key)) => self.selectable.iter().position(|&r| self.row_key(r) == Some(key.as_str())).unwrap_or(0),
+            (true, Some(key)) => self
+                .selectable
+                .iter()
+                .position(|&r| self.row_key(r) == Some(key.as_str()))
+                .unwrap_or(0),
             _ => 0,
         };
     }
@@ -199,7 +211,11 @@ impl PaletteModel {
     /// Enter (`alt = false`) or Ctrl+Enter on the selected item, or on the open form.
     pub fn confirm(&mut self, alt: bool) -> Confirmed {
         if let Some(form) = &mut self.form {
-            if !alt && !form.is_last() && form.spec.labels().1.is_some() && form.spec.params.len() > 1 {
+            if !alt
+                && !form.is_last()
+                && form.spec.labels().1.is_some()
+                && form.spec.params.len() > 1
+            {
                 // Enter walks through the fields; the last one submits.
                 form.move_active(1);
                 return Confirmed::NextField;
@@ -209,7 +225,9 @@ impl PaletteModel {
                 None => Confirmed::FormInvalid,
             };
         }
-        let Some(item) = self.selected_item() else { return Confirmed::Nothing };
+        let Some(item) = self.selected_item() else {
+            return Confirmed::Nothing;
+        };
         let action: ItemAction = match (&item.alt, alt) {
             (Some(a), true) => a.clone(),
             _ => item.primary.clone(),
@@ -250,7 +268,10 @@ impl PaletteModel {
 // ---------------------------------------------------------------------------------------------
 
 /// The sources a query is routed to, with the row budget of each.
-pub fn plan(sources: &[Arc<dyn PaletteSource>], query: &Query) -> Vec<(Arc<dyn PaletteSource>, usize)> {
+pub fn plan(
+    sources: &[Arc<dyn PaletteSource>],
+    query: &Query,
+) -> Vec<(Arc<dyn PaletteSource>, usize)> {
     let empty = query.is_empty();
     sources
         .iter()
@@ -268,18 +289,36 @@ pub fn run_source(
     ctx: &SourceCtx,
     cancel: &Cancel,
 ) -> Section {
-    let items = source.query(&SourceQuery { text: &query.text, scope: query.scope, limit, ctx, cancel });
-    Section { id: source.id(), title: source.title(), order: source.order(), weight: source.weight(), items }
+    let items = source.query(&SourceQuery {
+        text: &query.text,
+        scope: query.scope,
+        limit,
+        ctx,
+        cancel,
+    });
+    Section {
+        id: source.id(),
+        title: source.title(),
+        order: source.order(),
+        weight: source.weight(),
+        items,
+    }
 }
 
 /// Runs every applicable source in sequence and returns the merged model (blocking; the view runs
 /// them concurrently on the background executor instead).
-pub fn run_blocking(sources: &[Arc<dyn PaletteSource>], raw: &str, ctx: &SourceCtx) -> PaletteModel {
+pub fn run_blocking(
+    sources: &[Arc<dyn PaletteSource>],
+    raw: &str,
+    ctx: &SourceCtx,
+) -> PaletteModel {
     let query = Query::parse(raw);
     let cancel = Cancel::new();
     let mut model = PaletteModel::default();
     let planned = plan(sources, &query);
-    model.results.begin(1, |id| planned.iter().any(|(s, _)| s.id() == id));
+    model
+        .results
+        .begin(1, |id| planned.iter().any(|(s, _)| s.id() == id));
     for (s, limit) in &planned {
         let section = run_source(s.as_ref(), *limit, &query, ctx, &cancel);
         model.results.push(1, section);

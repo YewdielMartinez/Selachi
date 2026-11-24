@@ -60,10 +60,14 @@ fn discover_none_outside_repo_and_some_inside_subdir() {
     assert!(r.root.join(".git").exists());
     // Works from a file path too.
     fs::write(td.path().join("a/b/f.txt"), "x").unwrap();
-    let r2 = Repo::discover(td.path().join("a/b/f.txt")).unwrap().unwrap();
+    let r2 = Repo::discover(td.path().join("a/b/f.txt"))
+        .unwrap()
+        .unwrap();
     assert_eq!(r, r2);
     // Non-existent path: no repo, no error.
-    assert!(Repo::discover(td.path().join("missing/dir")).unwrap().is_none());
+    assert!(Repo::discover(td.path().join("missing/dir"))
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -83,7 +87,12 @@ fn status_counts_and_kinds() {
     git(d, &["add", "first.txt"]);
     git(d, &["commit", "-q", "-m", "first commit"]);
     commit_file(d, "tracked.txt", "line\n", "add tracked");
-    commit_file(d, "old name.txt", "some content here\nmore\n", "add old name");
+    commit_file(
+        d,
+        "old name.txt",
+        "some content here\nmore\n",
+        "add old name",
+    );
 
     // staged: modification, new file, rename; unstaged: modification; untracked; spaces + unicode.
     fs::write(d.join("tracked.txt"), "line\nstaged edit\n").unwrap();
@@ -102,7 +111,10 @@ fn status_counts_and_kinds() {
     assert_eq!(st.staged.len(), 3, "{:?}", st.staged);
     assert_eq!(st.unstaged.len(), 1);
     assert_eq!(st.unstaged[0].kind, ChangeKind::Modified);
-    assert_eq!(st.untracked, vec![Path::new("ñandú 日本.txt").to_path_buf()]);
+    assert_eq!(
+        st.untracked,
+        vec![Path::new("ñandú 日本.txt").to_path_buf()]
+    );
     assert!(st.conflicted.is_empty());
     let rename = st
         .staged
@@ -140,13 +152,19 @@ fn detached_head_and_conflicts() {
     commit_file(d, "f.txt", "other\n", "other change");
     git(d, &["switch", "-q", "main"]);
     commit_file(d, "f.txt", "main\n", "main change");
-    let merge = Command::new("git").args(["merge", "other"]).current_dir(d).output().unwrap();
+    let merge = Command::new("git")
+        .args(["merge", "other"])
+        .current_dir(d)
+        .output()
+        .unwrap();
     assert!(!merge.status.success());
 
     let st = repo.status().unwrap();
     assert_eq!(st.conflicted, vec![Path::new("f.txt").to_path_buf()]);
     let pf = repo
-        .preflight(&GitAction::Commit { message: "x".into() })
+        .preflight(&GitAction::Commit {
+            message: "x".into(),
+        })
         .unwrap();
     assert!(pf.warnings.iter().any(|w| w.contains("conflict")));
 
@@ -163,7 +181,10 @@ fn ahead_behind_against_local_bare_remote() {
     let d = td.path();
     let remote = tempfile::tempdir().unwrap();
     git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
-    git(d, &["remote", "add", "origin", remote.path().to_str().unwrap()]);
+    git(
+        d,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
     commit_file(d, "a.txt", "a\n", "c1");
     git(d, &["push", "-q", "-u", "origin", "main"]);
 
@@ -183,7 +204,10 @@ fn ahead_behind_against_local_bare_remote() {
     // Push through the typed action API.
     let out = repo.run(&GitAction::Push).unwrap();
     assert!(out.success(), "{}", out.stderr);
-    assert_eq!((repo.status().unwrap().ahead, repo.status().unwrap().behind), (0, 0));
+    assert_eq!(
+        (repo.status().unwrap().ahead, repo.status().unwrap().behind),
+        (0, 0)
+    );
 
     // Another clone pushes one commit; fetch -> behind 1.
     let other = tempfile::tempdir().unwrap();
@@ -221,7 +245,9 @@ fn actions_preflight_and_run() {
     git(d, &["branch", "feature"]);
 
     // Clean tree: switching needs no confirmation.
-    let sw = GitAction::Switch { branch: "feature".into() };
+    let sw = GitAction::Switch {
+        branch: "feature".into(),
+    };
     let pf = repo.preflight(&sw).unwrap();
     assert!(!pf.requires_confirmation);
     assert!(sw.is_sensitive());
@@ -233,7 +259,9 @@ fn actions_preflight_and_run() {
     assert!(pf.diff_stat.as_deref().unwrap_or("").contains("a.txt"));
 
     // Commit with nothing staged warns; after AddAll it does not.
-    let commit = GitAction::Commit { message: "second".into() };
+    let commit = GitAction::Commit {
+        message: "second".into(),
+    };
     let pf = repo.preflight(&commit).unwrap();
     assert!(pf.warnings.iter().any(|w| w.contains("staged")));
     assert!(repo.run(&GitAction::AddAll).unwrap().success());
@@ -247,18 +275,28 @@ fn actions_preflight_and_run() {
     // Switch + status/log/diff actions.
     assert!(repo.run(&sw).unwrap().success());
     assert_eq!(repo.status().unwrap().branch.as_deref(), Some("feature"));
-    assert!(repo.run(&GitAction::Status).unwrap().stdout.contains("feature"));
+    assert!(repo
+        .run(&GitAction::Status)
+        .unwrap()
+        .stdout
+        .contains("feature"));
     assert!(repo.run(&GitAction::Log).unwrap().stdout.contains("c1"));
     assert!(repo.run(&GitAction::Diff).unwrap().success());
 
     // Failure is reported via the output, not an error.
-    let bad = repo.run(&GitAction::Checkout { target: "no-such-branch".into() }).unwrap();
+    let bad = repo
+        .run(&GitAction::Checkout {
+            target: "no-such-branch".into(),
+        })
+        .unwrap();
     assert!(!bad.success());
     assert!(!bad.stderr.is_empty());
 
     // Option-looking targets are rejected before reaching git.
     assert!(repo
-        .run(&GitAction::Switch { branch: "--orphan".into() })
+        .run(&GitAction::Switch {
+            branch: "--orphan".into()
+        })
         .is_err());
 }
 
@@ -286,8 +324,10 @@ fn wait_event(rx: &mut futures::channel::mpsc::UnboundedReceiver<()>, within: Du
 fn watcher_follows_directories_created_after_start() {
     let (td, repo) = new_repo();
     let d = td.path();
-    commit_file(d, "a.txt", "a
-", "c1");
+    commit_file(
+        d, "a.txt", "a
+", "c1",
+    );
     fs::create_dir_all(d.join("existing")).unwrap();
 
     let (_handle, mut rx) = repo.watch(Duration::from_millis(100)).unwrap();
@@ -296,17 +336,26 @@ fn watcher_follows_directories_created_after_start() {
 
     // A file inside a top-level directory that existed at start.
     fs::write(d.join("existing/x.txt"), "x").unwrap();
-    assert!(wait_event(&mut rx, Duration::from_secs(5)), "no event for existing dir");
+    assert!(
+        wait_event(&mut rx, Duration::from_secs(5)),
+        "no event for existing dir"
+    );
 
     // A new top-level directory: its creation fires, and so do later edits inside it.
     sleep(Duration::from_millis(400));
     drain(&mut rx);
     fs::create_dir_all(d.join("fresh")).unwrap();
-    assert!(wait_event(&mut rx, Duration::from_secs(5)), "no event for new dir");
+    assert!(
+        wait_event(&mut rx, Duration::from_secs(5)),
+        "no event for new dir"
+    );
     sleep(Duration::from_millis(600));
     drain(&mut rx);
     fs::write(d.join("fresh/y.txt"), "y").unwrap();
-    assert!(wait_event(&mut rx, Duration::from_secs(5)), "new dir was not watched");
+    assert!(
+        wait_event(&mut rx, Duration::from_secs(5)),
+        "new dir was not watched"
+    );
 }
 
 #[test]
@@ -332,7 +381,10 @@ fn watcher_fires_after_git_add_and_stops_on_drop() {
     sleep(Duration::from_millis(400));
     drain(&mut rx);
     fs::write(d.join("a.txt"), "changed\n").unwrap();
-    assert!(wait_event(&mut rx, Duration::from_secs(5)), "no event after edit");
+    assert!(
+        wait_event(&mut rx, Duration::from_secs(5)),
+        "no event after edit"
+    );
 
     // A burst coalesces into few events.
     sleep(Duration::from_millis(400));

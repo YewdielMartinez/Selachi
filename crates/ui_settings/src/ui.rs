@@ -4,7 +4,9 @@
 //! separated by space), titles 13 medium, descriptions 12 muted, the accent only where a state is
 //! active. At narrow widths a row stacks its control under the text.
 
-use gpui::{AnyElement, Div, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui::{
+    AnyElement, Div, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
+};
 use theme::{Radius, Rgba, Theme};
 use ui_kit::{Icon, SettingRow, icon};
 
@@ -18,7 +20,7 @@ pub const NAV_WIDTH: f32 = 208.0;
 /// Page title + subtitle at the top of a section.
 pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
     let c = theme.colors;
-        let ty = theme.typography;
+    let ty = theme.typography;
     div()
         .flex()
         .flex_col()
@@ -31,13 +33,18 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
                 .text_color(c.text)
                 .child(SharedString::from(title.to_string())),
         )
-        .child(div().text_size(px(ty.ui_size_md)).text_color(c.muted).child(SharedString::from(subtitle.to_string())))
+        .child(
+            div()
+                .text_size(px(ty.ui_size_md))
+                .text_color(c.muted)
+                .child(SharedString::from(subtitle.to_string())),
+        )
 }
 
 /// A titled card of rows. `title` is the 11 px micro label above it.
 pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
     let c = theme.colors;
-        let ty = theme.typography;
+    let ty = theme.typography;
     let mut wrap = div().flex().flex_col().gap(px(8.0)).w_full();
     if let Some(t) = title {
         wrap = wrap.child(
@@ -62,9 +69,14 @@ pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
 }
 
 /// A group header with a trailing action (for instance "Volver a comprobar").
-pub fn group_with_action(theme: &Theme, title: &str, action: impl IntoElement, rows: Vec<AnyElement>) -> Div {
+pub fn group_with_action(
+    theme: &Theme,
+    title: &str,
+    action: impl IntoElement,
+    rows: Vec<AnyElement>,
+) -> Div {
     let c = theme.colors;
-        let ty = theme.typography;
+    let ty = theme.typography;
     div()
         .flex()
         .flex_col()
@@ -109,18 +121,29 @@ pub fn row(
     control: impl IntoElement,
     error: Option<SharedString>,
 ) -> Div {
-    div().w_full().child(SettingRow::new(theme, title, control).description_opt(desc).error(error).stacked(narrow))
+    div().w_full().child(
+        SettingRow::new(theme, title, control)
+            .description_opt(desc)
+            .error(error)
+            .stacked(narrow),
+    )
 }
 
 /// Free-form row: arbitrary content padded like a setting row.
 pub fn plain_row(content: impl IntoElement) -> Div {
-    div().flex().flex_col().w_full().px(px(16.0)).py(px(12.0)).child(content)
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .px(px(16.0))
+        .py(px(12.0))
+        .child(content)
 }
 
 /// Small rounded label ("Listo", "v0.24.2", "Instalado").
 pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone) -> Div {
     let c = theme.colors;
-        let ty = theme.typography;
+    let ty = theme.typography;
     let (bg, fg): (Rgba, Rgba) = match tone {
         PillTone::Neutral => (c.surface_3, c.muted),
         PillTone::Ok => (c.surface_3, c.text),
@@ -152,9 +175,15 @@ pub enum PillTone {
 }
 
 /// A tonal info banner with an icon ("Reinicia Selachi para completar").
-pub fn banner(theme: &Theme, ic: Icon, title: &str, body: &str, trailing: Option<AnyElement>) -> Div {
+pub fn banner(
+    theme: &Theme,
+    ic: Icon,
+    title: &str,
+    body: &str,
+    trailing: Option<AnyElement>,
+) -> Div {
     let c = theme.colors;
-        let ty = theme.typography;
+    let ty = theme.typography;
     div()
         .flex()
         .flex_row()
@@ -173,8 +202,19 @@ pub fn banner(theme: &Theme, ic: Icon, title: &str, body: &str, trailing: Option
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .child(div().text_size(px(ty.ui_size_md)).font_weight(FontWeight::MEDIUM).text_color(c.text).child(SharedString::from(title.to_string())))
-                .child(div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(SharedString::from(body.to_string()))),
+                .child(
+                    div()
+                        .text_size(px(ty.ui_size_md))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c.text)
+                        .child(SharedString::from(title.to_string())),
+                )
+                .child(
+                    div()
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.muted)
+                        .child(SharedString::from(body.to_string())),
+                ),
         )
         .children(trailing)
 }
@@ -195,7 +235,11 @@ pub fn value_label(theme: &Theme, text: impl Into<SharedString>) -> Div {
 /// Muted explanatory paragraph.
 pub fn note(theme: &Theme, text: impl Into<SharedString>) -> Div {
     let ty = theme.typography;
-    div().px(px(4.0)).text_size(px(ty.ui_size_sm)).text_color(theme.colors.muted).child(text.into())
+    div()
+        .px(px(4.0))
+        .text_size(px(ty.ui_size_sm))
+        .text_color(theme.colors.muted)
+        .child(text.into())
 }
 
 /// Spanish decimal comma for display (`1.3` -> `1,3`).

@@ -2,9 +2,8 @@
 
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Bounds, ClipboardItem, Context, Entity, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window, canvas, div,
-    fill, point, px, size,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, canvas, div, fill, point, px, size,
 };
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
 use theme::{Radius, Rgba, Theme};
@@ -27,7 +26,10 @@ pub struct DoctorPanelProvider {
 impl DoctorPanelProvider {
     /// `version` is printed in the copied diagnosis (`env!("CARGO_PKG_VERSION")` of the app).
     pub fn new(model: Entity<DoctorModel>, version: impl Into<SharedString>) -> Self {
-        Self { model, version: version.into() }
+        Self {
+            model,
+            version: version.into(),
+        }
     }
 }
 
@@ -45,16 +47,30 @@ impl PanelProvider for DoctorPanelProvider {
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {
-        &[PanelZone::Sidebar, PanelZone::Right, PanelZone::Main, PanelZone::Bottom]
+        &[
+            PanelZone::Sidebar,
+            PanelZone::Right,
+            PanelZone::Main,
+            PanelZone::Bottom,
+        ]
     }
 
     fn build(&self, ctx: PanelCtx, _window: &mut Window, cx: &mut App) -> AnyView {
         let (model, version) = (self.model.clone(), self.version.clone());
-        cx.new(|cx| DoctorPanel::new(ctx, model, version, cx)).into()
+        cx.new(|cx| DoctorPanel::new(ctx, model, version, cx))
+            .into()
     }
 
-    fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
-        let Ok(panel) = view.clone().downcast::<DoctorPanel>() else { return false };
+    fn context_changed(
+        &self,
+        view: &AnyView,
+        ctx: &PanelCtx,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Ok(panel) = view.clone().downcast::<DoctorPanel>() else {
+            return false;
+        };
         panel.update(cx, |p, cx| p.retarget(ctx.clone(), cx));
         true
     }
@@ -87,7 +103,12 @@ pub struct DoctorPanel {
 }
 
 impl DoctorPanel {
-    pub fn new(ctx: PanelCtx, model: Entity<DoctorModel>, version: SharedString, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        ctx: PanelCtx,
+        model: Entity<DoctorModel>,
+        version: SharedString,
+        cx: &mut Context<Self>,
+    ) -> Self {
         model.update(cx, |m, _| m.attach_view());
         // The "Copiado" confirmation lasts until the next sample.
         let observe = cx.observe(&model, |this, _, cx| {
@@ -96,7 +117,14 @@ impl DoctorPanel {
         });
         let for_release = model.clone();
         let release = cx.on_release(move |_, cx| for_release.update(cx, |m, cx| m.detach_view(cx)));
-        Self { ctx, model, version, copied: false, _observe: observe, _release: release }
+        Self {
+            ctx,
+            model,
+            version,
+            copied: false,
+            _observe: observe,
+            _release: release,
+        }
     }
 
     pub fn retarget(&mut self, ctx: PanelCtx, cx: &mut Context<Self>) {
@@ -121,7 +149,9 @@ fn sparkline(theme: &Theme, values: Vec<f32>, max: f32, color: Rgba) -> impl Int
     canvas(
         |_, _, _| (),
         move |bounds: Bounds<gpui::Pixels>, (), window, _| {
-            let col_w = (f32::from(bounds.size.width) / HISTORY as f32).floor().max(2.0);
+            let col_w = (f32::from(bounds.size.width) / HISTORY as f32)
+                .floor()
+                .max(2.0);
             let cell = (col_w - 1.0).max(1.0);
             let rows = (f32::from(bounds.size.height) / cell).floor().max(1.0) as usize;
             let left = bounds.origin.x + bounds.size.width - px(col_w * HISTORY as f32);
@@ -131,15 +161,23 @@ fn sparkline(theme: &Theme, values: Vec<f32>, max: f32, color: Rgba) -> impl Int
                 // Baseline pixel for slots without data, so the strip never looks empty.
                 let slot = (i + values.len()).checked_sub(HISTORY);
                 let Some(v) = slot.and_then(|s| values.get(s)) else {
-                    window.paint_quad(fill(Bounds::new(point(x, bottom - px(cell)), size(px(cell), px(cell))), track));
+                    window.paint_quad(fill(
+                        Bounds::new(point(x, bottom - px(cell)), size(px(cell), px(cell))),
+                        track,
+                    ));
                     continue;
                 };
-                let n = ((v / max.max(f32::EPSILON)).clamp(0.0, 1.0) * rows as f32).ceil().max(1.0) as usize;
+                let n = ((v / max.max(f32::EPSILON)).clamp(0.0, 1.0) * rows as f32)
+                    .ceil()
+                    .max(1.0) as usize;
                 for r in 0..n {
                     let solid = r + 1 == n || r == 0;
                     if solid || (i + r) % 2 == 0 {
                         let y = bottom - px(cell * (r + 1) as f32);
-                        window.paint_quad(fill(Bounds::new(point(x, y), size(px(cell), px(cell))), color));
+                        window.paint_quad(fill(
+                            Bounds::new(point(x, y), size(px(cell), px(cell))),
+                            color,
+                        ));
                     }
                 }
             }
@@ -159,7 +197,12 @@ fn tile(theme: &Theme, label: &'static str) -> gpui::Div {
         .gap(px(4.0))
         .rounded(px(Radius::SM))
         .bg(c.surface_2)
-        .child(div().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(label))
+        .child(
+            div()
+                .text_size(px(theme.typography.ui_size_xs))
+                .text_color(c.muted)
+                .child(label),
+        )
 }
 
 fn big(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
@@ -171,7 +214,10 @@ fn big(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
 }
 
 fn sub(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
-    div().text_size(px(theme.typography.ui_size_sm)).text_color(theme.colors.muted).child(text.into())
+    div()
+        .text_size(px(theme.typography.ui_size_sm))
+        .text_color(theme.colors.muted)
+        .child(text.into())
 }
 
 fn children_list(theme: &Theme, children: &[ChildProc]) -> impl IntoElement + use<> {
@@ -185,19 +231,37 @@ fn children_list(theme: &Theme, children: &[ChildProc]) -> impl IntoElement + us
                 .gap(px(8.0))
                 .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
-                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(ch.name.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(ch.name.clone()),
+                )
                 .child(format_bytes(ch.working_set)),
         );
     }
     if children.len() > 4 {
-        col = col.child(div().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(format!("… y {} más", children.len() - 4)));
+        col = col.child(
+            div()
+                .text_size(px(theme.typography.ui_size_xs))
+                .text_color(c.muted)
+                .child(format!("… y {} más", children.len() - 4)),
+        );
     }
     col
 }
 
 fn tiles(theme: &Theme, h: &Health) -> Vec<AnyElement> {
     let c = theme.colors;
-    let ram_max = h.ram_history.iter().copied().fold(32.0 * 1024.0 * 1024.0, f32::max) * 1.25;
+    let ram_max = h
+        .ram_history
+        .iter()
+        .copied()
+        .fold(32.0 * 1024.0 * 1024.0, f32::max)
+        * 1.25;
     let cpu_max = h.cpu_history.iter().copied().fold(5.0, f32::max);
     let dash = || "—".to_string();
     let mut out: Vec<AnyElement> = Vec::new();
@@ -205,7 +269,10 @@ fn tiles(theme: &Theme, h: &Health) -> Vec<AnyElement> {
     out.push(
         tile(theme, "Memoria")
             .child(big(theme, format_bytes(h.working_set)))
-            .child(sub(theme, format!("privada {}", format_bytes(h.private_bytes))))
+            .child(sub(
+                theme,
+                format!("privada {}", format_bytes(h.private_bytes)),
+            ))
             .child(sparkline(theme, h.ram_history.clone(), ram_max, c.accent))
             .into_any_element(),
     );
@@ -218,7 +285,10 @@ fn tiles(theme: &Theme, h: &Health) -> Vec<AnyElement> {
     );
     out.push(
         tile(theme, "Procesos hijos")
-            .child(big(theme, format!("{} · {}", h.children.len(), format_bytes(h.children_ram()))))
+            .child(big(
+                theme,
+                format!("{} · {}", h.children.len(), format_bytes(h.children_ram())),
+            ))
             .child(children_list(theme, &h.children))
             .into_any_element(),
     );
@@ -235,19 +305,24 @@ fn tiles(theme: &Theme, h: &Health) -> Vec<AnyElement> {
     );
     let (sessions, sessions_sub) = match (h.stats.shells, h.stats.agents) {
         (None, None) => (dash(), String::new()),
-        (s, a) => (
-            format!("{} shells", s.unwrap_or(0)),
-            {
-                let agents = match a.unwrap_or(0) { 1 => "1 agente".to_string(), n => format!("{n} agentes") };
-                match h.stats.tree_tracked {
-                    0 => agents,
-                    // No Job Object (Store `pwsh`): the processes are followed by walking the tree.
-                    n => format!("{agents} · {n} con seguimiento por árbol"),
-                }
-            },
-        ),
+        (s, a) => (format!("{} shells", s.unwrap_or(0)), {
+            let agents = match a.unwrap_or(0) {
+                1 => "1 agente".to_string(),
+                n => format!("{n} agentes"),
+            };
+            match h.stats.tree_tracked {
+                0 => agents,
+                // No Job Object (Store `pwsh`): the processes are followed by walking the tree.
+                n => format!("{agents} · {n} con seguimiento por árbol"),
+            }
+        }),
     };
-    out.push(tile(theme, "Sesiones").child(big(theme, sessions)).child(sub(theme, sessions_sub)).into_any_element());
+    out.push(
+        tile(theme, "Sesiones")
+            .child(big(theme, sessions))
+            .child(sub(theme, sessions_sub))
+            .into_any_element(),
+    );
     let mut data = tile(theme, "Datos");
     for d in &h.dbs {
         data = data.child(
@@ -257,14 +332,23 @@ fn tiles(theme: &Theme, h: &Health) -> Vec<AnyElement> {
                 .justify_between()
                 .text_size(px(theme.typography.ui_size_md))
                 .child(d.label.clone())
-                .child(div().text_color(c.muted).child(d.bytes.map_or_else(|| "no existe".to_string(), format_bytes))),
+                .child(
+                    div().text_color(c.muted).child(
+                        d.bytes
+                            .map_or_else(|| "no existe".to_string(), format_bytes),
+                    ),
+                ),
         );
     }
     if h.dbs.is_empty() {
         data = data.child(sub(theme, "sin bases de datos configuradas"));
     }
     out.push(data.into_any_element());
-    let grammars = if h.stats.grammars.is_empty() { "ninguna".to_string() } else { h.stats.grammars.join(", ") };
+    let grammars = if h.stats.grammars.is_empty() {
+        "ninguna".to_string()
+    } else {
+        h.stats.grammars.join(", ")
+    };
     out.push(
         tile(theme, "Gramáticas cargadas")
             .child(big(theme, h.stats.grammars.len().to_string()))
@@ -292,17 +376,25 @@ impl Render for DoctorPanel {
         let view = cx.entity();
         let copied = self.copied;
 
-        let copy = Button::action("doctor-copy", &theme, if copied { "Copiado" } else { "Copiar diagnóstico" })
-            .no_icon()
-            .tooltip("Copia un resumen en markdown para pegarlo en un issue")
-            .on_click(move |_, _, cx| {
-                let md = model.read(cx).markdown(&version);
-                cx.write_to_clipboard(ClipboardItem::new_string(md));
-                view.update(cx, |p, cx| {
-                    p.copied = true;
-                    cx.notify();
-                });
+        let copy = Button::action(
+            "doctor-copy",
+            &theme,
+            if copied {
+                "Copiado"
+            } else {
+                "Copiar diagnóstico"
+            },
+        )
+        .no_icon()
+        .tooltip("Copia un resumen en markdown para pegarlo en un issue")
+        .on_click(move |_, _, cx| {
+            let md = model.read(cx).markdown(&version);
+            cx.write_to_clipboard(ClipboardItem::new_string(md));
+            view.update(cx, |p, cx| {
+                p.copied = true;
+                cx.notify();
             });
+        });
 
         let all = tiles(&theme, &health);
         let body = if compact {
@@ -317,8 +409,24 @@ impl Render for DoctorPanel {
                 .flex()
                 .flex_row()
                 .gap(px(8.0))
-                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(8.0)).children(l))
-                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(8.0)).children(r))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .children(l),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .children(r),
+                )
         };
 
         div()
@@ -331,6 +439,14 @@ impl Render for DoctorPanel {
             .font_family(theme.typography.ui_family)
             .text_color(c.text)
             .child(div().flex().flex_row().child(copy))
-            .child(div().id("doctor-scroll").flex_1().min_h_0().overflow_y_scroll().pb(px(pad)).child(body))
+            .child(
+                div()
+                    .id("doctor-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .pb(px(pad))
+                    .child(body),
+            )
     }
 }

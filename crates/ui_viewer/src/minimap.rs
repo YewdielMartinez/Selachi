@@ -21,7 +21,13 @@ pub struct BarSpec {
 
 impl Default for BarSpec {
     fn default() -> Self {
-        Self { bar_h: 2.0, gap: 1.0, max_w: 56.0, full_len: 100, min_w: 2.0 }
+        Self {
+            bar_h: 2.0,
+            gap: 1.0,
+            max_w: 56.0,
+            full_len: 100,
+            min_w: 2.0,
+        }
     }
 }
 
@@ -33,7 +39,11 @@ impl BarSpec {
 
     /// How many bars fit in a strip `height` px tall.
     pub fn buckets_for_height(&self, height: f32) -> usize {
-        if height <= 0.0 { 0 } else { (height / self.pitch()).floor() as usize }
+        if height <= 0.0 {
+            0
+        } else {
+            (height / self.pitch()).floor() as usize
+        }
     }
 
     /// Width in px of the bar for a bucket whose longest line is `len` bytes. Empty lines draw
@@ -76,7 +86,11 @@ pub fn bars(buckets: &[u16], changed: &[bool], spec: &BarSpec) -> Vec<Bar> {
             if w == 0.0 && is_changed {
                 w = spec.min_w.max(2.0);
             }
-            (w > 0.0).then_some(Bar { y: i as f32 * spec.pitch(), w, changed: is_changed })
+            (w > 0.0).then_some(Bar {
+                y: i as f32 * spec.pitch(),
+                w,
+                changed: is_changed,
+            })
         })
         .collect()
 }
@@ -92,7 +106,11 @@ pub fn bucket_of(row: usize, n_rows: usize, buckets: usize) -> usize {
 }
 
 /// Which buckets contain at least one of `changed_rows`.
-pub fn changed_flags(changed_rows: impl IntoIterator<Item = usize>, n_rows: usize, buckets: usize) -> Vec<bool> {
+pub fn changed_flags(
+    changed_rows: impl IntoIterator<Item = usize>,
+    n_rows: usize,
+    buckets: usize,
+) -> Vec<bool> {
     let out_len = n_rows.min(buckets);
     let mut flags = vec![false; out_len];
     for row in changed_rows {
@@ -181,9 +199,30 @@ mod tests {
         let s = BarSpec::default();
         let out = bars(&[0, 50, 0, 100], &[false, false, true, true], &s);
         assert_eq!(out.len(), 3);
-        assert_eq!(out[0], Bar { y: 3.0, w: 28.0, changed: false });
-        assert_eq!(out[1], Bar { y: 6.0, w: 2.0, changed: true });
-        assert_eq!(out[2], Bar { y: 9.0, w: 56.0, changed: true });
+        assert_eq!(
+            out[0],
+            Bar {
+                y: 3.0,
+                w: 28.0,
+                changed: false
+            }
+        );
+        assert_eq!(
+            out[1],
+            Bar {
+                y: 6.0,
+                w: 2.0,
+                changed: true
+            }
+        );
+        assert_eq!(
+            out[2],
+            Bar {
+                y: 9.0,
+                w: 56.0,
+                changed: true
+            }
+        );
     }
 
     #[test]

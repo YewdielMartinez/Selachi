@@ -289,7 +289,11 @@ impl GitModel {
         self.diff = None;
         self.diff_task = None;
         self.checkpoint_view = None;
-        self.load = if self.target_dir().is_some() { Load::Idle } else { Load::NoRoot };
+        self.load = if self.target_dir().is_some() {
+            Load::Idle
+        } else {
+            Load::NoRoot
+        };
         if self.visible {
             self.activate(cx);
         }
@@ -348,7 +352,13 @@ impl GitModel {
         self.refresh_task = None;
         self.refresh.reset();
         self.diff_task = None;
-        if matches!(self.diff, Some(DiffSlot { state: DiffState::Loading, .. })) {
+        if matches!(
+            self.diff,
+            Some(DiffSlot {
+                state: DiffState::Loading,
+                ..
+            })
+        ) {
             self.diff = None;
         }
     }
@@ -374,13 +384,21 @@ impl GitModel {
         cx.notify();
         let epoch = self.epoch;
         cx.spawn(async move |this, cx| {
-            let found = cx.background_executor().spawn(async move { Repo::discover(&dir) }).await;
+            let found = cx
+                .background_executor()
+                .spawn(async move { Repo::discover(&dir) })
+                .await;
             let _ = this.update(cx, |m, cx| m.discovered(epoch, found, cx));
         })
         .detach();
     }
 
-    fn discovered(&mut self, epoch: u64, found: git_svc::Result<Option<Repo>>, cx: &mut Context<Self>) {
+    fn discovered(
+        &mut self,
+        epoch: u64,
+        found: git_svc::Result<Option<Repo>>,
+        cx: &mut Context<Self>,
+    ) {
         if epoch != self.epoch {
             return;
         }
@@ -402,7 +420,9 @@ impl GitModel {
     // ----- watcher -----------------------------------------------------------------------
 
     fn start_watch(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         if self.watch.is_some() || self.watch_pending || !self.visible {
             return;
         }
@@ -410,7 +430,10 @@ impl GitModel {
         let epoch = self.epoch;
         cx.spawn(async move |this, cx| {
             // Setting the OS watches walks the top-level directories: keep it off the UI thread.
-            let started = cx.background_executor().spawn(async move { repo.watch(WATCH_DEBOUNCE) }).await;
+            let started = cx
+                .background_executor()
+                .spawn(async move { repo.watch(WATCH_DEBOUNCE) })
+                .await;
             let Ok(Some(mut rx)) = this.update(cx, |m, _| {
                 m.watch_pending = false;
                 if epoch != m.epoch || !m.visible {
@@ -454,7 +477,9 @@ impl GitModel {
     }
 
     fn spawn_refresh(&mut self, full: bool, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         let prev = self.data.clone();
         let epoch = self.epoch;
         self.stats.reads += 1;
@@ -525,7 +550,13 @@ impl GitModel {
             && !data.checkpoints.iter().any(|c| c.id == view.id)
         {
             self.checkpoint_view = None;
-            if matches!(self.diff, Some(DiffSlot { target: DiffTarget::Checkpoint { .. }, .. })) {
+            if matches!(
+                self.diff,
+                Some(DiffSlot {
+                    target: DiffTarget::Checkpoint { .. },
+                    ..
+                })
+            ) {
                 self.diff = None;
             }
         }
@@ -541,7 +572,9 @@ impl GitModel {
             cx.notify();
             return;
         }
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         if let Err(e) = op.validate() {
             self.quiet_error = Some(e);
             cx.notify();
@@ -556,7 +589,10 @@ impl GitModel {
             Step::Preflight { op, epoch } => {
                 let model_epoch = self.epoch;
                 cx.spawn(async move |this, cx| {
-                    let review = cx.background_executor().spawn(async move { data::preflight(&repo, &op) }).await;
+                    let review = cx
+                        .background_executor()
+                        .spawn(async move { data::preflight(&repo, &op) })
+                        .await;
                     let _ = this.update(cx, |m, cx| {
                         if model_epoch == m.epoch {
                             m.gate.preflight_ready(epoch, review);
@@ -573,15 +609,27 @@ impl GitModel {
     /// "Confirmar": releases the operation the card shows. Does nothing when no card is showing
     /// or the review is blocked.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
-        let Some(op) = self.gate.confirm() else { return };
+        let Some(op) = self.gate.confirm() else {
+            return;
+        };
         if self.exec_mode == ExecMode::Terminal && !op.argv_steps().is_empty() {
             for argv in op.argv_steps() {
                 self.emit_terminal(argv, cx);
             }
-            let line = op.argv_steps().iter().map(|a| a.join(" ")).collect::<Vec<_>>().join(" && ");
+            let line = op
+                .argv_steps()
+                .iter()
+                .map(|a| a.join(" "))
+                .collect::<Vec<_>>()
+                .join(" && ");
             self.gate.finished(
                 op.clone(),
-                Outcome { ok: true, summary: "Enviado a la terminal".into(), detail: line, retry: None },
+                Outcome {
+                    ok: true,
+                    summary: "Enviado a la terminal".into(),
+                    detail: line,
+                    retry: None,
+                },
             );
             cx.emit(OpFinished { op, ok: true });
             self.refresh(true, cx);
@@ -607,12 +655,17 @@ impl GitModel {
         if self.exec_busy {
             return;
         }
-        let (Some(op), Some(repo)) = (self.queue.pop_front(), self.repo.clone()) else { return };
+        let (Some(op), Some(repo)) = (self.queue.pop_front(), self.repo.clone()) else {
+            return;
+        };
         self.exec_busy = true;
         let epoch = self.epoch;
         cx.spawn(async move |this, cx| {
             let for_run = op.clone();
-            let outcome = cx.background_executor().spawn(async move { data::execute(&repo, &for_run) }).await;
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { data::execute(&repo, &for_run) })
+                .await;
             let _ = this.update(cx, |m, cx| m.finished(epoch, op, outcome, cx));
         })
         .detach();
@@ -640,14 +693,21 @@ impl GitModel {
     }
 
     fn emit_terminal(&mut self, argv: Vec<String>, cx: &mut Context<Self>) {
-        let Some(root) = self.root().map(Path::to_path_buf) else { return };
+        let Some(root) = self.root().map(Path::to_path_buf) else {
+            return;
+        };
         cx.emit(GitPanelEvent::RunInTerminal { argv, cwd: root });
     }
 
     /// "Reintentar en la terminal" of a failed network operation.
     pub fn retry_in_terminal(&mut self, cx: &mut Context<Self>) {
         let argv = match &self.gate {
-            Gate::Done { outcome: Outcome { retry: Some(argv), .. }, .. } => argv.clone(),
+            Gate::Done {
+                outcome: Outcome {
+                    retry: Some(argv), ..
+                },
+                ..
+            } => argv.clone(),
             _ => return,
         };
         self.emit_terminal(argv, cx);
@@ -677,22 +737,32 @@ impl GitModel {
     }
 
     fn load_diff(&mut self, target: DiffTarget, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         // Reloading the same file keeps showing the old preview instead of flashing "Cargando".
         let keep = match &self.diff {
             Some(DiffSlot { target: t, state }) if *t == target => Some(state.clone()),
             _ => None,
         };
-        self.diff = Some(DiffSlot { target: target.clone(), state: keep.unwrap_or(DiffState::Loading) });
+        self.diff = Some(DiffSlot {
+            target: target.clone(),
+            state: keep.unwrap_or(DiffState::Loading),
+        });
         let epoch = self.epoch;
         let wanted = target.clone();
         self.diff_task = Some(cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { data::load_diff(&repo, &target) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { data::load_diff(&repo, &target) })
+                .await;
             let _ = this.update(cx, |m, cx| {
                 if epoch != m.epoch {
                     return;
                 }
-                let Some(slot) = m.diff.as_mut().filter(|s| s.target == wanted) else { return };
+                let Some(slot) = m.diff.as_mut().filter(|s| s.target == wanted) else {
+                    return;
+                };
                 let state = match result {
                     Ok(p) => DiffState::Ready(Arc::new(p)),
                     Err(e) => DiffState::Failed(e),
@@ -707,7 +777,13 @@ impl GitModel {
 
     /// "Agente": sends the open diff to an agent.
     pub fn ask_agent(&mut self, cx: &mut Context<Self>) {
-        let Some(DiffSlot { target, state: DiffState::Ready(preview) }) = self.diff.clone() else { return };
+        let Some(DiffSlot {
+            target,
+            state: DiffState::Ready(preview),
+        }) = self.diff.clone()
+        else {
+            return;
+        };
         let context = match &target {
             DiffTarget::Working { section, .. } => section.title().to_lowercase(),
             DiffTarget::Checkpoint { id, .. } => {
@@ -719,20 +795,27 @@ impl GitModel {
                 format!("cambios desde el checkpoint «{label}»")
             }
         };
-        cx.emit(GitPanelEvent::AskAgent { context_markdown: agent_markdown(&context, &preview) });
+        cx.emit(GitPanelEvent::AskAgent {
+            context_markdown: agent_markdown(&context, &preview),
+        });
     }
 
     /// "Abrir": the file of the open diff, at its first change.
     pub fn open_file(&mut self, path: &Path, line: Option<usize>, cx: &mut Context<Self>) {
         if let Some(root) = self.root() {
-            cx.emit(GitPanelEvent::OpenFile { path: root.join(path), line });
+            cx.emit(GitPanelEvent::OpenFile {
+                path: root.join(path),
+                line,
+            });
         }
     }
 
     /// "Ampliar": the full diff in the host's viewer.
     pub fn open_diff(&mut self, path: &Path, cx: &mut Context<Self>) {
         if let Some(root) = self.root() {
-            cx.emit(GitPanelEvent::OpenDiff { path: root.join(path) });
+            cx.emit(GitPanelEvent::OpenDiff {
+                path: root.join(path),
+            });
         }
     }
 
@@ -742,14 +825,25 @@ impl GitModel {
     pub fn toggle_checkpoint_view(&mut self, id: String, cx: &mut Context<Self>) {
         if self.checkpoint_view.as_ref().is_some_and(|v| v.id == id) {
             self.checkpoint_view = None;
-            if matches!(self.diff, Some(DiffSlot { target: DiffTarget::Checkpoint { .. }, .. })) {
+            if matches!(
+                self.diff,
+                Some(DiffSlot {
+                    target: DiffTarget::Checkpoint { .. },
+                    ..
+                })
+            ) {
                 self.diff = None;
             }
             cx.notify();
             return;
         }
-        let Some(repo) = self.repo.clone() else { return };
-        self.checkpoint_view = Some(CheckpointView { id: id.clone(), state: CheckpointFiles::Loading });
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+        self.checkpoint_view = Some(CheckpointView {
+            id: id.clone(),
+            state: CheckpointFiles::Loading,
+        });
         let epoch = self.epoch;
         let wanted = id.clone();
         cx.spawn(async move |this, cx| {
@@ -779,10 +873,15 @@ impl GitModel {
     /// Fills the `dirty` flag of every worktree (one `git status` each). Call it when the
     /// switcher opens.
     pub fn refresh_worktrees(&mut self, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         let epoch = self.epoch;
         cx.spawn(async move |this, cx| {
-            let list = cx.background_executor().spawn(async move { data::load_worktrees_dirty(&repo) }).await;
+            let list = cx
+                .background_executor()
+                .spawn(async move { data::load_worktrees_dirty(&repo) })
+                .await;
             let _ = this.update(cx, |m, cx| {
                 if epoch != m.epoch {
                     return;
@@ -801,7 +900,9 @@ impl GitModel {
 
     /// "Abrir en editor": spawns the editor on the worktree, detached and without a console.
     pub fn open_in_editor(&mut self, path: &Path, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else { return };
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
         let argv = match repo.open_in_editor(path, &self.editor) {
             Ok(a) => a,
             Err(e) => {
@@ -811,7 +912,10 @@ impl GitModel {
             }
         };
         cx.spawn(async move |this, cx| {
-            let res = cx.background_executor().spawn(async move { spawn_detached(&argv) }).await;
+            let res = cx
+                .background_executor()
+                .spawn(async move { spawn_detached(&argv) })
+                .await;
             if let Err(e) = res {
                 let _ = this.update(cx, |m, cx| {
                     m.quiet_error = Some(e);
@@ -835,5 +939,7 @@ fn spawn_detached(argv: &[String]) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    cmd.spawn().map(drop).map_err(|e| format!("No se pudo abrir el editor ({exe}): {e}"))
+    cmd.spawn()
+        .map(drop)
+        .map_err(|e| format!("No se pudo abrir el editor ({exe}): {e}"))
 }

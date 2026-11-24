@@ -14,15 +14,16 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _, Pixels, Point, Render,
-    ScrollHandle, ScrollStrategy, SharedString, Styled as _, Subscription, Task, Window, actions, canvas, div, fill, img,
-    point, prelude::*, px, size,
+    AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
+    ParentElement as _, Pixels, Point, Render, ScrollHandle, ScrollStrategy, SharedString,
+    Styled as _, Subscription, Task, Window, actions, canvas, div, fill, img, point, prelude::*,
+    px, size,
 };
 use theme::{Radius, Theme};
 use ui_kit::{
-    GhostButton, Icon, Pill, Segment, SegmentedControl, Spinner, TextField, TextFieldEvent, UniformListScrollHandle,
-    VirtualList, icon,
+    GhostButton, Icon, Pill, Segment, SegmentedControl, Spinner, TextField, TextFieldEvent,
+    UniformListScrollHandle, VirtualList, icon,
 };
 use viewer_svc::{Document, FileKind, GitBase, Hunk, Limits, MdBlock};
 
@@ -37,13 +38,23 @@ use crate::minimap_view::{MinimapShared, MinimapSource, STRIP_W, minimap as mini
 use crate::rows::{self, DATA_ROW_H, ROW_H};
 use crate::spans::{LineSpans, MAX_LINE_BYTES, prepare_line};
 use crate::state::{
-    Body, FindState, PluginHint, default_body, has_minimap, new_cancel, parse_goto, plugin_hint, reading_cap,
-    rendered_label, search_document, source_body, supports_diff,
+    Body, FindState, PluginHint, default_body, has_minimap, new_cancel, parse_goto, plugin_hint,
+    reading_cap, rendered_label, search_document, source_body, supports_diff,
 };
 
 actions!(
     ui_viewer,
-    [OpenFind, OpenGoto, CloseBars, FindNext, FindPrev, PageDown, PageUp, ScrollTop, ScrollBottom]
+    [
+        OpenFind,
+        OpenGoto,
+        CloseBars,
+        FindNext,
+        FindPrev,
+        PageDown,
+        PageUp,
+        ScrollTop,
+        ScrollBottom
+    ]
 );
 
 /// Key context of the viewer (its bindings live in [`bind_keys`]).
@@ -212,28 +223,42 @@ impl FileViewer {
     /// Starts opening `path`; the view shows a spinner until the document is ready.
     pub fn new(path: PathBuf, cfg: ViewerConfig, theme: Theme, cx: &mut Context<Self>) -> Self {
         // The bars draw their own box (`bar`): the fields are bare.
-        let find_field = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Buscar en el archivo"));
-        let goto_field = cx.new(|cx| TextField::new(theme, cx).bare().placeholder("Ir a la linea (42 o 42:7)"));
+        let find_field = cx.new(|cx| {
+            TextField::new(theme, cx)
+                .bare()
+                .placeholder("Buscar en el archivo")
+        });
+        let goto_field = cx.new(|cx| {
+            TextField::new(theme, cx)
+                .bare()
+                .placeholder("Ir a la linea (42 o 42:7)")
+        });
         let subs = vec![
-            cx.subscribe(&find_field, |this, field, ev: &TextFieldEvent, cx| match ev {
-                TextFieldEvent::Changed => {
-                    let q = field.read(cx).text().to_owned();
-                    this.run_find(&q, cx);
-                }
-                // Enter = next match, Shift+Enter = previous.
-                TextFieldEvent::Submit => this.step_find(false, cx),
-                TextFieldEvent::SubmitReverse => this.step_find(true, cx),
-                TextFieldEvent::Cancel => this.close_bars(cx),
-                TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
-            }),
-            cx.subscribe(&goto_field, |this, field, ev: &TextFieldEvent, cx| match ev {
-                TextFieldEvent::Submit | TextFieldEvent::SubmitReverse => {
-                    let text = field.read(cx).text().to_owned();
-                    this.goto_text(&text, cx);
-                }
-                TextFieldEvent::Cancel => this.close_bars(cx),
-                TextFieldEvent::Changed | TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
-            }),
+            cx.subscribe(
+                &find_field,
+                |this, field, ev: &TextFieldEvent, cx| match ev {
+                    TextFieldEvent::Changed => {
+                        let q = field.read(cx).text().to_owned();
+                        this.run_find(&q, cx);
+                    }
+                    // Enter = next match, Shift+Enter = previous.
+                    TextFieldEvent::Submit => this.step_find(false, cx),
+                    TextFieldEvent::SubmitReverse => this.step_find(true, cx),
+                    TextFieldEvent::Cancel => this.close_bars(cx),
+                    TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
+                },
+            ),
+            cx.subscribe(
+                &goto_field,
+                |this, field, ev: &TextFieldEvent, cx| match ev {
+                    TextFieldEvent::Submit | TextFieldEvent::SubmitReverse => {
+                        let text = field.read(cx).text().to_owned();
+                        this.goto_text(&text, cx);
+                    }
+                    TextFieldEvent::Cancel => this.close_bars(cx),
+                    TextFieldEvent::Changed | TextFieldEvent::Blur | TextFieldEvent::Nav(_) => {}
+                },
+            ),
         ];
         let root = cfg.project_root.clone().or_else(|| find_repo_root(&path));
         let mut v = Self {
@@ -321,7 +346,9 @@ impl FileViewer {
 
     /// Time from `new` until the first rows of the file were built for painting.
     pub fn first_screen_time(&self) -> Option<Duration> {
-        self.first_rows_at.get().map(|t| t.duration_since(self.opened_at))
+        self.first_rows_at
+            .get()
+            .map(|t| t.duration_since(self.opened_at))
     }
 
     /// The plugin banner, when the source view should show one.
@@ -333,7 +360,13 @@ impl FileViewer {
         let kind = self.kind?;
         let lang_ok = kind.lang().is_some_and(viewer_svc::Lang::has_grammar);
         let ext = self.path.extension().and_then(|e| e.to_str());
-        plugin_hint(kind, ext, doc.grammar_id().as_deref(), doc.highlight_warning().as_deref(), lang_ok)
+        plugin_hint(
+            kind,
+            ext,
+            doc.grammar_id().as_deref(),
+            doc.highlight_warning().as_deref(),
+            lang_ok,
+        )
     }
 
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
@@ -356,7 +389,8 @@ impl FileViewer {
         self.data = DataState::Idle;
         self.md = MdState::default();
         self.find.set_query("");
-        self.find_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.find_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     // ---- loading -----------------------------------------------------------------------------
@@ -372,12 +406,18 @@ impl FileViewer {
                 .spawn(async move { Document::open(&path, limits).map_err(|e| e.to_string()) })
                 .await;
             let elapsed = t0.elapsed();
-            this.update(cx, |this, cx| this.finish_load(result, elapsed, cx)).ok();
+            this.update(cx, |this, cx| this.finish_load(result, elapsed, cx))
+                .ok();
         }));
         cx.notify();
     }
 
-    fn finish_load(&mut self, result: Result<Document, String>, elapsed: Duration, cx: &mut Context<Self>) {
+    fn finish_load(
+        &mut self,
+        result: Result<Document, String>,
+        elapsed: Duration,
+        cx: &mut Context<Self>,
+    ) {
         self.load_time = Some(elapsed);
         match result {
             Err(e) => self.load = Load::Failed(e),
@@ -385,16 +425,23 @@ impl FileViewer {
                 let kind = doc.kind();
                 self.size = doc.len();
                 self.image_dims = matches!(kind, FileKind::Image { .. })
-                    .then(|| image_dimensions(&doc.raw_bytes()[..doc.raw_bytes().len().min(64 * 1024)]))
+                    .then(|| {
+                        image_dimensions(&doc.raw_bytes()[..doc.raw_bytes().len().min(64 * 1024)])
+                    })
                     .flatten();
                 self.kind = Some(kind);
                 self.doc = Some(doc);
                 self.load = Load::Ready;
-                self.body = if self.cfg.open_in_diff && supports_diff(kind) { Body::Diff } else { default_body(kind) };
+                self.body = if self.cfg.open_in_diff && supports_diff(kind) {
+                    Body::Diff
+                } else {
+                    default_body(kind)
+                };
                 self.ensure_body(cx);
                 self.start_poll(cx);
                 if let Some(line) = self.cfg.line {
-                    self.scroll.scroll_to_item(line.saturating_sub(1), ScrollStrategy::Center);
+                    self.scroll
+                        .scroll_to_item(line.saturating_sub(1), ScrollStrategy::Center);
                 }
             }
         }
@@ -408,8 +455,11 @@ impl FileViewer {
             let mut tick = 0u32;
             loop {
                 let wait = if tick < 25 { 30 } else { 120 };
-                cx.background_executor().timer(Duration::from_millis(wait)).await;
-                let done = doc.is_indexed() && (doc.grammar_id().is_none() || doc.highlight_ready());
+                cx.background_executor()
+                    .timer(Duration::from_millis(wait))
+                    .await;
+                let done =
+                    doc.is_indexed() && (doc.grammar_id().is_none() || doc.highlight_ready());
                 if this.update(cx, |_, cx| cx.notify()).is_err() || done || tick > 400 {
                     break;
                 }
@@ -447,15 +497,25 @@ impl FileViewer {
         if !supports_diff(kind) {
             return;
         }
-        let next = if self.body == Body::Diff { default_body(kind) } else { Body::Diff };
+        let next = if self.body == Body::Diff {
+            default_body(kind)
+        } else {
+            Body::Diff
+        };
         self.set_body(next, cx);
     }
 
     /// Rendered <-> source (markdown, JSON/TOML/YAML, SVG).
     pub fn toggle_source(&mut self, cx: &mut Context<Self>) {
         let Some(kind) = self.kind else { return };
-        let Some(source) = source_body(kind) else { return };
-        let next = if self.body == source { default_body(kind) } else { source };
+        let Some(source) = source_body(kind) else {
+            return;
+        };
+        let next = if self.body == source {
+            default_body(kind)
+        } else {
+            source
+        };
         self.set_body(next, cx);
     }
 
@@ -483,7 +543,8 @@ impl FileViewer {
 
     fn start_diff(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
-            self.diff = DiffState::Failed("Este archivo no esta dentro de un repositorio git".into());
+            self.diff =
+                DiffState::Failed("Este archivo no esta dentro de un repositorio git".into());
             return;
         };
         self.diff = DiffState::Loading;
@@ -491,7 +552,9 @@ impl FileViewer {
         self.diff_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { viewer_svc::diff_against_git(&root, &path, base).map_err(|e| e.to_string()) })
+                .spawn(async move {
+                    viewer_svc::diff_against_git(&root, &path, base).map_err(|e| e.to_string())
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.diff = match result {
@@ -526,7 +589,10 @@ impl FileViewer {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.md = MdState { blocks: Some(Rc::new(blocks)), highlights };
+                this.md = MdState {
+                    blocks: Some(Rc::new(blocks)),
+                    highlights,
+                };
                 cx.notify();
             })
             .ok();
@@ -534,7 +600,9 @@ impl FileViewer {
     }
 
     fn start_data(&mut self, cx: &mut Context<Self>) {
-        let (Some(doc), Body::Tree(format)) = (self.doc.clone(), self.body) else { return };
+        let (Some(doc), Body::Tree(format)) = (self.doc.clone(), self.body) else {
+            return;
+        };
         self.data = DataState::Loading;
         self.data_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
@@ -588,7 +656,10 @@ impl FileViewer {
     }
 
     fn goto_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        let total = self.doc.as_ref().map_or(0, |d| d.line_count().max(d.estimated_line_count()));
+        let total = self
+            .doc
+            .as_ref()
+            .map_or(0, |d| d.line_count().max(d.estimated_line_count()));
         if let Some(target) = parse_goto(text, total) {
             self.goto_line(target.line, cx);
             self.goto_open = false;
@@ -649,7 +720,10 @@ impl FileViewer {
         let (q, cancel, from) = (query.to_owned(), self.find_cancel.clone(), self.top_line());
         self.find_task = Some(cx.spawn(async move |this, cx| {
             let q2 = q.clone();
-            let (hits, capped) = cx.background_executor().spawn(async move { search_document(&doc, &q2, &cancel) }).await;
+            let (hits, capped) = cx
+                .background_executor()
+                .spawn(async move { search_document(&doc, &q2, &cancel) })
+                .await;
             this.update(cx, |this, cx| {
                 if this.find.query == q {
                     this.find.set_matches(hits, capped, from);
@@ -664,7 +738,11 @@ impl FileViewer {
     }
 
     fn step_find(&mut self, reverse: bool, cx: &mut Context<Self>) {
-        let line = if reverse { self.find.prev_match() } else { self.find.next_match() };
+        let line = if reverse {
+            self.find.prev_match()
+        } else {
+            self.find.next_match()
+        };
         if let Some(line) = line {
             self.scroll.scroll_to_item(line, ScrollStrategy::Center);
         }
@@ -673,7 +751,9 @@ impl FileViewer {
 
     fn scroll_by_pages(&mut self, pages: f32, cx: &mut Context<Self>) {
         let st = self.scroll.0.borrow();
-        let Some(item) = st.last_item_size else { return };
+        let Some(item) = st.last_item_size else {
+            return;
+        };
         let (viewport, contents) = (f32::from(item.item.height), f32::from(item.contents.height));
         let y = f32::from(st.base_handle.offset().y);
         let target = (y - pages * viewport * 0.9).clamp(-(contents - viewport).max(0.0), 0.0);
@@ -684,9 +764,12 @@ impl FileViewer {
 
     fn scroll_to_edge(&mut self, bottom: bool, cx: &mut Context<Self>) {
         let st = self.scroll.0.borrow();
-        let Some(item) = st.last_item_size else { return };
+        let Some(item) = st.last_item_size else {
+            return;
+        };
         let max = (f32::from(item.contents.height) - f32::from(item.item.height)).max(0.0);
-        st.base_handle.set_offset(point(px(0.0), px(if bottom { -max } else { 0.0 })));
+        st.base_handle
+            .set_offset(point(px(0.0), px(if bottom { -max } else { 0.0 })));
         drop(st);
         cx.notify();
     }
@@ -696,7 +779,11 @@ impl FileViewer {
     fn minimap_total(&self) -> usize {
         match (self.body, &self.diff, &self.doc) {
             (Body::Diff, DiffState::Ready(d), _) => {
-                if self.diff_split { d.split.len() } else { d.unified.len() }
+                if self.diff_split {
+                    d.split.len()
+                } else {
+                    d.unified.len()
+                }
             }
             (Body::Code, _, Some(doc)) => doc.line_count().max(doc.estimated_line_count()),
             _ => 0,
@@ -712,9 +799,12 @@ impl FileViewer {
         let y = f32::from(position.y - bounds.origin.y);
         let row = row_at(y, f32::from(bounds.size.height), total);
         let st = self.scroll.0.borrow();
-        let Some(item) = st.last_item_size else { return };
+        let Some(item) = st.last_item_size else {
+            return;
+        };
         let (viewport, contents) = (f32::from(item.item.height), f32::from(item.contents.height));
-        let target = (row as f32 * ROW_H - viewport / 2.0).clamp(0.0, (contents - viewport).max(0.0));
+        let target =
+            (row as f32 * ROW_H - viewport / 2.0).clamp(0.0, (contents - viewport).max(0.0));
         st.base_handle.set_offset(point(px(0.0), px(-target)));
         drop(st);
         cx.notify();
@@ -723,7 +813,9 @@ impl FileViewer {
     // ---- row building (called from the virtual lists while painting) -------------------------
 
     fn code_rows(&self, range: std::ops::Range<usize>) -> Vec<AnyElement> {
-        let Some(doc) = self.doc.as_ref() else { return Vec::new() };
+        let Some(doc) = self.doc.as_ref() else {
+            return Vec::new();
+        };
         if self.first_rows_at.get().is_none() {
             self.first_rows_at.set(Some(Instant::now()));
         }
@@ -741,7 +833,15 @@ impl FileViewer {
                 let empty = Vec::new();
                 let raw = spans.get(i).unwrap_or(&empty);
                 let p = prepare_line(line, raw, MAX_LINE_BYTES);
-                rows::code_row(&self.theme, ix + 1, digits, &p.text, &p.spans, query, current == Some(ix))
+                rows::code_row(
+                    &self.theme,
+                    ix + 1,
+                    digits,
+                    &p.text,
+                    &p.spans,
+                    query,
+                    current == Some(ix),
+                )
             })
             .collect()
     }
@@ -781,7 +881,14 @@ impl FileViewer {
         let shown = display_path(self.root.as_deref(), &self.path);
         let crumbs = breadcrumb(&shown);
         let last = crumbs.len().saturating_sub(1);
-        let mut crumb_row = div().flex_1().min_w_0().flex().flex_row().items_center().gap(px(4.0)).overflow_hidden();
+        let mut crumb_row = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .overflow_hidden();
         // On narrow panes only the last two segments fit.
         let skip = if compact { last.saturating_sub(1) } else { 0 };
         for (i, seg) in crumbs.iter().enumerate().skip(skip) {
@@ -792,13 +899,22 @@ impl FileViewer {
                 div()
                     .flex_none()
                     .text_size(px(ty.ui_size_lg))
-                    .font_weight(if i == last { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
+                    .font_weight(if i == last {
+                        gpui::FontWeight::MEDIUM
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
                     .text_color(if i == last { c.text } else { c.muted })
                     .child(SharedString::from(seg.clone())),
             );
         }
 
-        let mut chips = div().flex().flex_row().flex_wrap().items_center().gap(px(6.0));
+        let mut chips = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.0));
         chips = chips.child(self.chip(self.language_label()));
         if self.kind.is_some() {
             chips = chips.child(self.chip(format_bytes(self.size)));
@@ -809,7 +925,11 @@ impl FileViewer {
         if let (Some(doc), Some(k)) = (&self.doc, self.kind) {
             if k.is_textual() && self.body != Body::Diff {
                 let n = doc.line_count().max(doc.estimated_line_count());
-                let label = if doc.is_indexed() { format!("{n} lineas") } else { format!("~{n} lineas") };
+                let label = if doc.is_indexed() {
+                    format!("{n} lineas")
+                } else {
+                    format!("~{n} lineas")
+                };
                 chips = chips.child(self.chip(label));
             }
             if doc.encoding() != viewer_svc::Encoding::Utf8 && k.is_textual() {
@@ -820,28 +940,44 @@ impl FileViewer {
             chips = chips.child(self.chip(format!("vs {}", self.base_label())));
             if let DiffState::Ready(d) = &self.diff {
                 chips = chips
-                    .child(self.chip(format!("+{}", d.added)).text_color(theme.colors.success))
-                    .child(self.chip(format!("-{}", d.removed)).text_color(theme.colors.error));
+                    .child(
+                        self.chip(format!("+{}", d.added))
+                            .text_color(theme.colors.success),
+                    )
+                    .child(
+                        self.chip(format!("-{}", d.removed))
+                            .text_color(theme.colors.error),
+                    );
             }
         }
 
-        let mut actions = div().flex().flex_row().flex_wrap().items_center().gap(px(6.0)).justify_end();
+        let mut actions = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.0))
+            .justify_end();
         if let Some(k) = self.kind {
             if source_body(k).is_some() {
                 let on_source = self.body == source_body(k).unwrap_or(Body::Code);
                 let t = this.clone();
                 actions = actions.child(
-                    SegmentedControl::new("viewer-source", &theme, [Segment::new(rendered_label(k)), Segment::new("Fuente")])
-                        .selected(usize::from(on_source))
-                        .on_change(move |ix, _, cx| {
-                            let want_source = ix == 1;
-                            t.update(cx, |v, cx| {
-                                let is_source = v.body == source_body(k).unwrap_or(Body::Code);
-                                if want_source != is_source {
-                                    v.toggle_source(cx);
-                                }
-                            });
-                        }),
+                    SegmentedControl::new(
+                        "viewer-source",
+                        &theme,
+                        [Segment::new(rendered_label(k)), Segment::new("Fuente")],
+                    )
+                    .selected(usize::from(on_source))
+                    .on_change(move |ix, _, cx| {
+                        let want_source = ix == 1;
+                        t.update(cx, |v, cx| {
+                            let is_source = v.body == source_body(k).unwrap_or(Body::Code);
+                            if want_source != is_source {
+                                v.toggle_source(cx);
+                            }
+                        });
+                    }),
                 );
             }
             if self.body == Body::Diff {
@@ -878,12 +1014,19 @@ impl FileViewer {
             }
         }
         let t = this.clone();
-        actions = actions.child(GhostButton::new("viewer-editor", &theme, "Abrir en editor").on_click(move |_, _, cx| {
-            t.update(cx, |v, cx| {
-                let line = (v.body == Body::Code).then(|| v.top_line() + 1);
-                cx.emit(ViewerEvent::OpenInEditor { path: v.path.clone(), line });
-            });
-        }));
+        actions = actions.child(
+            GhostButton::new("viewer-editor", &theme, "Abrir en editor").on_click(
+                move |_, _, cx| {
+                    t.update(cx, |v, cx| {
+                        let line = (v.body == Body::Code).then(|| v.top_line() + 1);
+                        cx.emit(ViewerEvent::OpenInEditor {
+                            path: v.path.clone(),
+                            line,
+                        });
+                    });
+                },
+            ),
+        );
 
         div()
             .flex_none()
@@ -894,7 +1037,14 @@ impl FileViewer {
             .flex_col()
             .gap(px(8.0))
             .bg(c.surface_1)
-            .child(div().flex().flex_row().items_center().gap(px(8.0)).child(crumb_row))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(crumb_row),
+            )
             .child(
                 div()
                     .flex()
@@ -930,14 +1080,34 @@ impl FileViewer {
                 .bg(c.surface_1)
                 .text_size(px(theme.typography.ui_size_sm))
                 .text_color(if hint.failed { c.error } else { c.muted })
-                .child(icon(Icon::Alert, 14.0, if hint.failed { c.error } else { c.outline }))
-                .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(SharedString::from(hint.message)))
+                .child(icon(
+                    Icon::Alert,
+                    14.0,
+                    if hint.failed { c.error } else { c.outline },
+                ))
                 .child(
-                    GhostButton::new("viewer-install-grammar", &theme, if hint.failed { "Reinstalar" } else { "Instalar" })
-                        .on_click(move |_, _, cx| {
-                            let id = id.clone();
-                            t.update(cx, |_, cx| cx.emit(ViewerEvent::InstallGrammar { id }));
-                        }),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(SharedString::from(hint.message)),
+                )
+                .child(
+                    GhostButton::new(
+                        "viewer-install-grammar",
+                        &theme,
+                        if hint.failed {
+                            "Reinstalar"
+                        } else {
+                            "Instalar"
+                        },
+                    )
+                    .on_click(move |_, _, cx| {
+                        let id = id.clone();
+                        t.update(cx, |_, cx| cx.emit(ViewerEvent::InstallGrammar { id }));
+                    }),
                 )
                 .into_any_element(),
         )
@@ -970,23 +1140,44 @@ impl FileViewer {
             .bg(c.surface_2)
             .border_1()
             .border_color(c.outline_soft)
-            .child(icon(if find { Icon::Search } else { Icon::ChevronRight }, 14.0, c.muted))
+            .child(icon(
+                if find {
+                    Icon::Search
+                } else {
+                    Icon::ChevronRight
+                },
+                14.0,
+                c.muted,
+            ))
             .child(field);
         if find {
             let (t1, t2, t3) = (this.clone(), this.clone(), this.clone());
             row = row
-                .child(div().flex_none().text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(SharedString::from(status)))
-                .child(GhostButton::new("find-prev", &theme, "Ant.").on_click(move |_, _, cx| {
-                    t1.update(cx, |v, cx| v.step_find(true, cx));
-                }))
-                .child(GhostButton::new("find-next", &theme, "Sig.").on_click(move |_, _, cx| {
-                    t2.update(cx, |v, cx| v.step_find(false, cx));
-                }))
-                .child(ui_kit::IconButton::new("find-close", &theme, Icon::Close).size(28.0).icon_size(12.0).on_click(
-                    move |_, _, cx| {
-                        t3.update(cx, |v, cx| v.close_bars(cx));
-                    },
-                ));
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(theme.typography.ui_size_sm))
+                        .text_color(c.muted)
+                        .child(SharedString::from(status)),
+                )
+                .child(
+                    GhostButton::new("find-prev", &theme, "Ant.").on_click(move |_, _, cx| {
+                        t1.update(cx, |v, cx| v.step_find(true, cx));
+                    }),
+                )
+                .child(
+                    GhostButton::new("find-next", &theme, "Sig.").on_click(move |_, _, cx| {
+                        t2.update(cx, |v, cx| v.step_find(false, cx));
+                    }),
+                )
+                .child(
+                    ui_kit::IconButton::new("find-close", &theme, Icon::Close)
+                        .size(28.0)
+                        .icon_size(12.0)
+                        .on_click(move |_, _, cx| {
+                            t3.update(cx, |v, cx| v.close_bars(cx));
+                        }),
+                );
         }
         Some(row.into_any_element())
     }
@@ -1026,17 +1217,21 @@ impl FileViewer {
     // ---- bodies ------------------------------------------------------------------------------
 
     fn code_body(&self, this: &Entity<Self>) -> AnyElement {
-        let Some(doc) = &self.doc else { return div().into_any_element() };
+        let Some(doc) = &self.doc else {
+            return div().into_any_element();
+        };
         let total = doc.line_count().max(doc.estimated_line_count());
         if total == 0 || doc.is_empty() {
             return self.message_view(Icon::Files, "Archivo vacio");
         }
         let t = this.clone();
-        VirtualList::new("viewer-code", total, ROW_H, move |range, _, cx| t.read(cx).code_rows(range))
-            .track_scroll(self.scroll.clone())
-            .size_full()
-            .py(px(6.0))
-            .into_any_element()
+        VirtualList::new("viewer-code", total, ROW_H, move |range, _, cx| {
+            t.read(cx).code_rows(range)
+        })
+        .track_scroll(self.scroll.clone())
+        .size_full()
+        .py(px(6.0))
+        .into_any_element()
     }
 
     fn diff_body(&self) -> AnyElement {
@@ -1046,20 +1241,33 @@ impl FileViewer {
             DiffState::Failed(e) => self.message_view(Icon::Alert, e.clone()),
             DiffState::Ready(d) => {
                 if d.hunks == 0 {
-                    return self.message_view(Icon::Check, format!("Sin cambios respecto a {}", self.base_label()));
+                    return self.message_view(
+                        Icon::Check,
+                        format!("Sin cambios respecto a {}", self.base_label()),
+                    );
                 }
                 let digits = d.digits;
                 if self.diff_split {
                     let rows = d.split.clone();
-                    VirtualList::new("viewer-diff-split", rows.len(), ROW_H, move |range, _, _| {
-                        range
-                            .filter_map(|i| rows.get(i))
-                            .map(|r| match r {
-                                SplitRow::Hunk(h) => rows::hunk_row(&theme, h),
-                                SplitRow::Pair { left, right } => rows::split_row(&theme, left.as_ref(), right.as_ref(), digits),
-                            })
-                            .collect()
-                    })
+                    VirtualList::new(
+                        "viewer-diff-split",
+                        rows.len(),
+                        ROW_H,
+                        move |range, _, _| {
+                            range
+                                .filter_map(|i| rows.get(i))
+                                .map(|r| match r {
+                                    SplitRow::Hunk(h) => rows::hunk_row(&theme, h),
+                                    SplitRow::Pair { left, right } => rows::split_row(
+                                        &theme,
+                                        left.as_ref(),
+                                        right.as_ref(),
+                                        digits,
+                                    ),
+                                })
+                                .collect()
+                        },
+                    )
                     .track_scroll(self.scroll.clone())
                     .size_full()
                     .into_any_element()
@@ -1084,7 +1292,9 @@ impl FileViewer {
 
     fn markdown_body(&self) -> AnyElement {
         let theme = self.theme;
-        let Some(blocks) = self.md.blocks.clone() else { return self.loading_view() };
+        let Some(blocks) = self.md.blocks.clone() else {
+            return self.loading_view();
+        };
         let base_dir = self.path.parent().map(Path::to_path_buf);
         let render = MdRender::new(theme, base_dir, &self.md.highlights);
         let children = md_view::render_blocks(&blocks, &render);
@@ -1115,7 +1325,14 @@ impl FileViewer {
                 let source = source_body(self.kind.unwrap_or(FileKind::Binary)).is_some();
                 self.message_view(
                     Icon::Alert,
-                    format!("No se pudo leer como arbol: {e}{}", if source { " (usa Fuente para ver el texto)" } else { "" }),
+                    format!(
+                        "No se pudo leer como arbol: {e}{}",
+                        if source {
+                            " (usa Fuente para ver el texto)"
+                        } else {
+                            ""
+                        }
+                    ),
                 )
             }
             DataState::Ready(t) => {
@@ -1123,7 +1340,9 @@ impl FileViewer {
                 let this = this.clone();
                 VirtualList::new("viewer-data", n, DATA_ROW_H, move |range, _, cx| {
                     let me = this.read(cx);
-                    let DataState::Ready(t) = &me.data else { return Vec::new() };
+                    let DataState::Ready(t) = &me.data else {
+                        return Vec::new();
+                    };
                     range
                         .filter_map(|i| t.rows().get(i).map(|r| (i, r.clone())))
                         .map(|(_, row)| {
@@ -1131,7 +1350,10 @@ impl FileViewer {
                             // A row is its path in the document ("0.2.1"), plus the "more" marker.
                             let path_key = format!(
                                 "{}{}",
-                                path.iter().map(usize::to_string).collect::<Vec<_>>().join("."),
+                                path.iter()
+                                    .map(usize::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join("."),
                                 if row.more.is_some() { "+" } else { "" }
                             );
                             let more = row.more.is_some();
@@ -1168,7 +1390,9 @@ impl FileViewer {
         let c = theme.colors;
         let checker = canvas(
             |_, _, _| (),
-            move |bounds, (), window, _| paint_checker(bounds, window, c.surface_1, c.surface_3, 10.0),
+            move |bounds, (), window, _| {
+                paint_checker(bounds, window, c.surface_1, c.surface_3, 10.0)
+            },
         )
         .absolute()
         .size_full();
@@ -1180,10 +1404,17 @@ impl FileViewer {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(img(self.path.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain))
+                .child(
+                    img(self.path.clone())
+                        .max_w_full()
+                        .max_h_full()
+                        .object_fit(ObjectFit::Contain),
+                )
                 .into_any_element()
         } else {
-            let mut image = img(self.path.clone()).object_fit(ObjectFit::None).flex_none();
+            let mut image = img(self.path.clone())
+                .object_fit(ObjectFit::None)
+                .flex_none();
             if let Some((w, h)) = self.image_dims {
                 image = image.w(px(w as f32)).h(px(h as f32));
             }
@@ -1195,11 +1426,19 @@ impl FileViewer {
                 .child(div().p(px(20.0)).child(image))
                 .into_any_element()
         };
-        div().relative().size_full().overflow_hidden().child(checker).child(content).into_any_element()
+        div()
+            .relative()
+            .size_full()
+            .overflow_hidden()
+            .child(checker)
+            .child(content)
+            .into_any_element()
     }
 
     fn hex_body(&self) -> AnyElement {
-        let Some(doc) = self.doc.clone() else { return div().into_any_element() };
+        let Some(doc) = self.doc.clone() else {
+            return div().into_any_element();
+        };
         let len = usize::try_from(doc.len()).unwrap_or(usize::MAX);
         let total_rows = len.div_ceil(viewer_svc::HEX_ROW);
         let n = total_rows.min(MAX_HEX_ROWS);
@@ -1209,7 +1448,10 @@ impl FileViewer {
         let theme = self.theme;
         let note = match self.kind {
             Some(FileKind::TooLarge) => {
-                format!("Archivo demasiado grande ({}): solo vista hex", format_bytes(self.size))
+                format!(
+                    "Archivo demasiado grande ({}): solo vista hex",
+                    format_bytes(self.size)
+                )
             }
             _ => format!("Archivo binario ({}): vista hex", format_bytes(self.size)),
         };
@@ -1236,7 +1478,10 @@ impl FileViewer {
                 VirtualList::new("viewer-hex", n, ROW_H, move |range, _, _| {
                     let start = range.start * viewer_svc::HEX_ROW;
                     let count = range.len() * viewer_svc::HEX_ROW;
-                    doc.hex_preview(start as u64, count).iter().map(|l| rows::hex_row(&theme, l)).collect()
+                    doc.hex_preview(start as u64, count)
+                        .iter()
+                        .map(|l| rows::hex_row(&theme, l))
+                        .collect()
                 })
                 .track_scroll(self.scroll.clone())
                 .flex_1()
@@ -1249,8 +1494,15 @@ impl FileViewer {
         match (self.body, &self.diff, &self.doc) {
             (Body::Code, _, Some(doc)) => Some(MinimapSource::Doc(doc.clone())),
             (Body::Diff, DiffState::Ready(d), _) if d.hunks > 0 => {
-                let m = if self.diff_split { &d.split_mini } else { &d.unified_mini };
-                Some(MinimapSource::Rows { lens: m.lens.clone(), changed: m.changed.clone() })
+                let m = if self.diff_split {
+                    &d.split_mini
+                } else {
+                    &d.unified_mini
+                };
+                Some(MinimapSource::Rows {
+                    lens: m.lens.clone(),
+                    changed: m.changed.clone(),
+                })
             }
             _ => None,
         }
@@ -1285,8 +1537,14 @@ fn build_diff(hunks: &[Hunk]) -> DiffData {
         hunks: hunks.len(),
         unified: Rc::new(unified),
         split: Rc::new(split),
-        unified_mini: MiniRows { lens: Rc::new(ulens), changed: Rc::new(uchanged) },
-        split_mini: MiniRows { lens: Rc::new(slens), changed: Rc::new(schanged) },
+        unified_mini: MiniRows {
+            lens: Rc::new(ulens),
+            changed: Rc::new(uchanged),
+        },
+        split_mini: MiniRows {
+            lens: Rc::new(slens),
+            changed: Rc::new(schanged),
+        },
     }
 }
 
@@ -1301,7 +1559,13 @@ pub fn checker_dark_cells(w: f32, h: f32, cell: f32) -> usize {
 }
 
 /// The dither checkerboard behind images: one fill for the light tone, one quad per dark cell.
-fn paint_checker(bounds: Bounds<Pixels>, window: &mut Window, light: theme::Rgba, dark: theme::Rgba, cell: f32) {
+fn paint_checker(
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+    light: theme::Rgba,
+    dark: theme::Rgba,
+    cell: f32,
+) {
     window.paint_quad(fill(bounds, light));
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let (cols, rows) = ((w / cell).ceil() as usize, (h / cell).ceil() as usize);
@@ -1324,7 +1588,10 @@ impl Render for FileViewer {
         let c = theme.colors;
         let this = cx.entity();
         // The width of this pane's zone (a sidebar or a right panel make it narrower than the window).
-        let zone_w = self.measured.width().unwrap_or_else(|| f32::from(window.viewport_size().width));
+        let zone_w = self
+            .measured
+            .width()
+            .unwrap_or_else(|| f32::from(window.viewport_size().width));
 
         let body: AnyElement = match &self.load {
             Load::Loading => self.loading_view(),
@@ -1340,11 +1607,14 @@ impl Render for FileViewer {
                         .into_any_element(),
                     None => inner,
                 };
-                let mini = has_minimap(self.body).then(|| self.minimap_source()).flatten();
+                let mini = has_minimap(self.body)
+                    .then(|| self.minimap_source())
+                    .flatten();
                 match mini {
                     Some(source) => {
                         let scroll = self.scroll.clone();
-                        let strip = minimap_el(theme, source, scroll, ROW_H, &self.mini, self.mini_gen);
+                        let strip =
+                            minimap_el(theme, source, scroll, ROW_H, &self.mini, self.mini_gen);
                         div()
                             .size_full()
                             .flex()
@@ -1365,18 +1635,24 @@ impl Render for FileViewer {
                                             this.minimap_pointer(e.position, cx);
                                         }),
                                     )
-                                    .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                                        if this.mini_drag && e.dragging() {
-                                            this.minimap_pointer(e.position, cx);
-                                        }
-                                    }))
+                                    .on_mouse_move(cx.listener(
+                                        |this, e: &MouseMoveEvent, _, cx| {
+                                            if this.mini_drag && e.dragging() {
+                                                this.minimap_pointer(e.position, cx);
+                                            }
+                                        },
+                                    ))
                                     .on_mouse_up(
                                         MouseButton::Left,
-                                        cx.listener(|this, _: &MouseUpEvent, _, _| this.mini_drag = false),
+                                        cx.listener(|this, _: &MouseUpEvent, _, _| {
+                                            this.mini_drag = false
+                                        }),
                                     )
                                     .on_mouse_up_out(
                                         MouseButton::Left,
-                                        cx.listener(|this, _: &MouseUpEvent, _, _| this.mini_drag = false),
+                                        cx.listener(|this, _: &MouseUpEvent, _, _| {
+                                            this.mini_drag = false
+                                        }),
                                     )
                                     .child(strip),
                             )
@@ -1437,7 +1713,15 @@ mod tests {
 
     fn numbered(dir: &Path, name: &str, n: usize) -> PathBuf {
         let p = dir.join(name);
-        let body: String = (1..=n).map(|i| if i % 100 == 0 { format!("needle {i}\n") } else { format!("line {i}\n") }).collect();
+        let body: String = (1..=n)
+            .map(|i| {
+                if i % 100 == 0 {
+                    format!("needle {i}\n")
+                } else {
+                    format!("line {i}\n")
+                }
+            })
+            .collect();
         fs::write(&p, body).unwrap();
         p
     }
@@ -1472,11 +1756,23 @@ mod tests {
             assert_eq!(doc.line_count(), 1_000);
         });
         v.update(cx, |v, cx| v.goto_text("250", cx));
-        let target = v.read_with(cx, |v, _| v.scroll.0.borrow().deferred_scroll_to_item.map(|d| d.item_index));
+        let target = v.read_with(cx, |v, _| {
+            v.scroll
+                .0
+                .borrow()
+                .deferred_scroll_to_item
+                .map(|d| d.item_index)
+        });
         assert_eq!(target, Some(249));
         // past the end clamps to the last line
         v.update(cx, |v, cx| v.goto_text("99999", cx));
-        let target = v.read_with(cx, |v, _| v.scroll.0.borrow().deferred_scroll_to_item.map(|d| d.item_index));
+        let target = v.read_with(cx, |v, _| {
+            v.scroll
+                .0
+                .borrow()
+                .deferred_scroll_to_item
+                .map(|d| d.item_index)
+        });
         assert_eq!(target, Some(999));
     }
 
@@ -1493,13 +1789,23 @@ mod tests {
             assert_eq!(v.find_state().status(), "1 / 10");
         });
         v.update(cx, |v, cx| v.step_find(false, cx));
-        assert_eq!(v.read_with(cx, |v, _| v.find_state().current_line()), Some(199));
+        assert_eq!(
+            v.read_with(cx, |v, _| v.find_state().current_line()),
+            Some(199)
+        );
         v.update(cx, |v, cx| v.step_find(true, cx));
         v.update(cx, |v, cx| v.step_find(true, cx));
-        assert_eq!(v.read_with(cx, |v, _| v.find_state().current_line()), Some(999), "wraps backwards");
+        assert_eq!(
+            v.read_with(cx, |v, _| v.find_state().current_line()),
+            Some(999),
+            "wraps backwards"
+        );
         v.update(cx, |v, cx| v.run_find("zzz-not-there", cx));
         cx.executor().run_until_parked();
-        assert_eq!(v.read_with(cx, |v, _| v.find_state().status()), "sin resultados");
+        assert_eq!(
+            v.read_with(cx, |v, _| v.find_state().status()),
+            "sin resultados"
+        );
     }
 
     /// A viewer in a (test) window, focused, with the viewer's and the kit's key bindings.
@@ -1525,11 +1831,15 @@ mod tests {
         let (v, vcx) = window_viewer(cx, &path);
 
         press(vcx, "ctrl-f");
-        assert!(v.read_with(vcx, |v, _| v.find_open), "Ctrl+F opens the find bar");
+        assert!(
+            v.read_with(vcx, |v, _| v.find_open),
+            "Ctrl+F opens the find bar"
+        );
         type_text(vcx, "needle");
         vcx.run_until_parked();
         assert_eq!(v.read_with(vcx, |v, _| v.find_state().status()), "1 / 10");
-        let line = |vcx: &gpui::VisualTestContext| v.read_with(vcx, |v, _| v.find_state().current_line());
+        let line =
+            |vcx: &gpui::VisualTestContext| v.read_with(vcx, |v, _| v.find_state().current_line());
         assert_eq!(line(vcx), Some(99));
 
         press(vcx, "enter");
@@ -1555,11 +1865,17 @@ mod tests {
         assert!(v.read_with(vcx, |v, _| v.goto_open));
         type_text(vcx, "250");
         press(vcx, "enter");
-        assert!(!v.read_with(vcx, |v, _| v.goto_open), "the bar closes after jumping");
+        assert!(
+            !v.read_with(vcx, |v, _| v.goto_open),
+            "the bar closes after jumping"
+        );
         vcx.run_until_parked();
         // The window drew a frame: line 250 (index 249) is centred, so the top line is a bit above it.
         let top = v.read_with(vcx, |v, _| v.top_line());
-        assert!((150..249).contains(&top), "scrolled to line 250, top line is {top}");
+        assert!(
+            (150..249).contains(&top),
+            "scrolled to line 250, top line is {top}"
+        );
     }
 
     #[gpui::test]
@@ -1571,7 +1887,9 @@ mod tests {
         fs::write(&json, r#"{"a":{"b":[1,2,3]}}"#).unwrap();
         let bin = dir.path().join("a.bin");
         fs::write(&bin, [0u8, 1, 2, 3, 0, 255, 254, 0]).unwrap();
-        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        let mut png = vec![
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+        ];
         png.extend(8u32.to_be_bytes());
         png.extend(4u32.to_be_bytes());
         png.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
@@ -1610,7 +1928,11 @@ mod tests {
 
     #[gpui::test]
     async fn missing_file_reports_an_error(cx: &mut TestAppContext) {
-        let v = open(cx, Path::new("C:/definitely/not/here.rs"), ViewerConfig::default());
+        let v = open(
+            cx,
+            Path::new("C:/definitely/not/here.rs"),
+            ViewerConfig::default(),
+        );
         v.read_with(cx, |v, _| assert!(v.load_error().is_some()));
     }
 
@@ -1642,7 +1964,14 @@ mod tests {
         std::process::Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .output()
             .is_ok_and(|o| o.status.success())
@@ -1653,15 +1982,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a.txt");
         fs::write(&file, "one\ntwo\nthree\n").unwrap();
-        if !(git(dir.path(), &["init", "-q"]) && git(dir.path(), &["add", "."]) && git(dir.path(), &["commit", "-q", "-m", "init"])) {
+        if !(git(dir.path(), &["init", "-q"])
+            && git(dir.path(), &["add", "."])
+            && git(dir.path(), &["commit", "-q", "-m", "init"]))
+        {
             return; // no git on this machine
         }
         fs::write(&file, "one\nTWO\nthree\nfour\n").unwrap();
-        let cfg = ViewerConfig { project_root: Some(dir.path().to_path_buf()), open_in_diff: true, ..ViewerConfig::default() };
+        let cfg = ViewerConfig {
+            project_root: Some(dir.path().to_path_buf()),
+            open_in_diff: true,
+            ..ViewerConfig::default()
+        };
         let v = open(cx, &file, cfg);
         // git runs on the background executor: give it real time.
         for _ in 0..50 {
-            if v.read_with(cx, |v, _| matches!(v.diff, DiffState::Ready(_) | DiffState::Failed(_))) {
+            if v.read_with(cx, |v, _| {
+                matches!(v.diff, DiffState::Ready(_) | DiffState::Failed(_))
+            }) {
                 break;
             }
             cx.executor().allow_parking();
@@ -1670,7 +2008,9 @@ mod tests {
         }
         v.read_with(cx, |v, _| {
             assert_eq!(v.body(), Body::Diff);
-            let DiffState::Ready(d) = &v.diff else { panic!("diff not ready") };
+            let DiffState::Ready(d) = &v.diff else {
+                panic!("diff not ready")
+            };
             assert_eq!((d.added, d.removed), (2, 1));
             assert!(!d.unified.is_empty() && !d.split.is_empty());
         });
@@ -1696,7 +2036,9 @@ mod tests {
     async fn tab_wraps_the_viewer_and_closes_it(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let path = numbered(dir.path(), "main.rs", 20);
-        let handle = cx.update(|cx| crate::tab::open_tab(path.clone(), ViewerConfig::default(), Theme::dark(), cx));
+        let handle = cx.update(|cx| {
+            crate::tab::open_tab(path.clone(), ViewerConfig::default(), Theme::dark(), cx)
+        });
         cx.executor().run_until_parked();
         let info = cx.update(|cx| handle.info(cx));
         assert_eq!(info.title.as_ref(), "main.rs");
@@ -1705,6 +2047,9 @@ mod tests {
         let viewer = tab.read_with(cx, |t, _| t.viewer().clone());
         assert!(viewer.read_with(cx, |v, _| v.document().is_some()));
         cx.update(|cx| handle.close(cx));
-        assert!(viewer.read_with(cx, |v, _| v.document().is_none()), "closing the tab drops the document");
+        assert!(
+            viewer.read_with(cx, |v, _| v.document().is_none()),
+            "closing the tab drops the document"
+        );
     }
 }

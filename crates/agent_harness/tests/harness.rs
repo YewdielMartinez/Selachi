@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use agent_harness::registry::RunRecord;
 use agent_harness::{
-    slots, ApprovalBroker, CancelOutcome, Confirmation, DelegationConfig, Permission, PipeBroker, RefusalCode, Risk,
-    RunRequest, RunResult, RunStatus,
+    slots, ApprovalBroker, CancelOutcome, Confirmation, DelegationConfig, Permission, PipeBroker,
+    RefusalCode, Risk, RunRequest, RunResult, RunStatus,
 };
 use agents_driver::{AgentEvent, AgentKind, PermissionMode};
 use chat_core::{ApprovalDecision, ChatStore, ThreadId, ThreadSpec};
@@ -26,7 +26,12 @@ fn editing_agent() -> Setup {
     setup(|cfg, _, _| {
         std::fs::write(cfg.cwd.join("a.txt"), "alpha\nbeta\n").unwrap();
         std::fs::write(cfg.cwd.join("b.txt"), "new file\n").unwrap();
-        vec![working(), text("I added beta to a.txt and created b.txt"), usage(100, 50, 10, 1000), done()]
+        vec![
+            working(),
+            text("I added beta to a.txt and created b.txt"),
+            usage(100, 50, 10, 1000),
+            done(),
+        ]
     })
 }
 
@@ -41,7 +46,10 @@ fn no_threads_created(s: &Setup) {
     let chat = s.data_dir().join("chat.db");
     if chat.exists() {
         let store = ChatStore::open_at(chat).unwrap();
-        assert!(store.delegated_threads().unwrap().is_empty(), "a refused run must not create a thread");
+        assert!(
+            store.delegated_threads().unwrap().is_empty(),
+            "a refused run must not create a thread"
+        );
     }
 }
 
@@ -57,7 +65,9 @@ fn worktree_run_end_to_end() {
     // the delegating chat thread
     let parent = {
         let store = ChatStore::open_at(s.data_dir().join("chat.db")).unwrap();
-        let t = store.create_thread(ThreadSpec::new(&repo, AgentKind::ClaudeCode)).unwrap();
+        let t = store
+            .create_thread(ThreadSpec::new(&repo, AgentKind::ClaudeCode))
+            .unwrap();
         store.flush().unwrap();
         t
     };
@@ -74,7 +84,16 @@ fn worktree_run_end_to_end() {
     // --- the documented JSON shape
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
     let v: serde_json::Value = serde_json::from_str(&r.to_json()).unwrap();
-    for k in ["run_id", "status", "summary", "files_changed", "diff_stat", "usage", "cost", "worktree_path"] {
+    for k in [
+        "run_id",
+        "status",
+        "summary",
+        "files_changed",
+        "diff_stat",
+        "usage",
+        "cost",
+        "worktree_path",
+    ] {
         assert!(v.get(k).is_some(), "missing {k} in {v}");
     }
     assert_eq!(v["status"], "done");
@@ -83,17 +102,38 @@ fn worktree_run_end_to_end() {
     let mut files = r.files_changed.clone();
     files.sort();
     assert_eq!(files, vec!["a.txt", "b.txt"]);
-    assert_eq!((r.diff_stat.files, r.diff_stat.insertions, r.diff_stat.deletions), (2, 2, 0));
+    assert_eq!(
+        (
+            r.diff_stat.files,
+            r.diff_stat.insertions,
+            r.diff_stat.deletions
+        ),
+        (2, 2, 0)
+    );
     assert!(r.diff_stat.text.contains("2 files changed"));
-    assert_eq!((r.usage.input, r.usage.output, r.usage.cache_create, r.usage.cache_read), (100, 50, 10, 1000));
+    assert_eq!(
+        (
+            r.usage.input,
+            r.usage.output,
+            r.usage.cache_create,
+            r.usage.cache_read
+        ),
+        (100, 50, 10, 1000)
+    );
     assert_eq!((r.usage.total, r.usage.billable), (1160, 160));
     assert!(v["cost"]["usd"].is_number() && v["cost"]["source"].is_string());
 
     // --- isolation: the project is untouched, the work is in a sibling worktree
     let wt = std::path::PathBuf::from(r.worktree_path.clone().unwrap());
     assert!(wt.is_dir() && wt != repo);
-    assert_eq!(std::fs::read_to_string(wt.join("b.txt")).unwrap(), "new file\n");
-    assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "alpha\n");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("b.txt")).unwrap(),
+        "new file\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "alpha\n"
+    );
     assert!(!repo.join("b.txt").exists());
     assert!(git(&repo, &["status", "--porcelain"]).trim().is_empty());
 
@@ -103,9 +143,15 @@ fn worktree_run_end_to_end() {
         assert_eq!(rec.spawns.len(), 1);
         let (kind, cfg, job) = &rec.spawns[0];
         assert_eq!(*kind, AgentKind::Codex);
-        assert!(agent_harness::policy::Permission::from_driver(cfg.permission_mode) == Permission::AcceptEdits);
+        assert!(
+            agent_harness::policy::Permission::from_driver(cfg.permission_mode)
+                == Permission::AcceptEdits
+        );
         assert!(same_dir(&cfg.cwd, &wt));
-        assert!(job.is_some_and(|j| j != 0), "agent must be created inside the Job Object");
+        assert!(
+            job.is_some_and(|j| j != 0),
+            "agent must be created inside the Job Object"
+        );
         assert_eq!(rec.sent, vec!["review and fix a.txt".to_string()]);
         assert_eq!(rec.shutdowns, 1, "the agent is stopped when the run ends");
     }
@@ -118,42 +164,84 @@ fn worktree_run_end_to_end() {
     assert_eq!(kids[0].id.0.to_string(), run_id);
     let link = store.thread_link(kids[0].id).unwrap().unwrap();
     assert_eq!(link.parent_thread_id, Some(parent.id));
-    assert_eq!((link.parent_tab.as_deref(), link.depth, link.delegated_by.as_deref()), (Some("tab-9"), 1, Some("cli")));
+    assert_eq!(
+        (
+            link.parent_tab.as_deref(),
+            link.depth,
+            link.delegated_by.as_deref()
+        ),
+        (Some("tab-9"), 1, Some("cli"))
+    );
     assert_eq!(kids[0].permission, PermissionMode::AcceptEdits);
     assert!(same_dir(kids[0].worktree_path.as_ref().unwrap(), &wt));
     assert_eq!(kids[0].agent, AgentKind::Codex);
     let rt = store.open(kids[0].id).unwrap();
-    assert_eq!(rt.with_state(|st| st.messages.len()), 2, "prompt + answer are in the thread");
+    assert_eq!(
+        rt.with_state(|st| st.messages.len()),
+        2,
+        "prompt + answer are in the thread"
+    );
 
     // --- status / result / diff replay from the registry
     let st = h.status(&run_id).unwrap();
-    assert_eq!((st.status, st.agent.as_str(), st.depth), (RunStatus::Done, "codex", 1));
+    assert_eq!(
+        (st.status, st.agent.as_str(), st.depth),
+        (RunStatus::Done, "codex", 1)
+    );
     assert_eq!(h.result(&run_id).unwrap(), r);
     let diff = h.diff(&run_id).unwrap();
     assert!(diff.contains("+beta") && diff.contains("b.txt"), "{diff}");
 
     // --- apply: plan first (read-only), then a confirmed apply, never twice
     let plan = h.apply_plan(&run_id).unwrap();
-    assert!(git(&repo, &["status", "--porcelain"]).trim().is_empty(), "planning must not touch the project");
+    assert!(
+        git(&repo, &["status", "--porcelain"]).trim().is_empty(),
+        "planning must not touch the project"
+    );
     assert_eq!(plan.risk, Risk::Normal);
-    assert!(plan.can_apply && plan.applies_cleanly && plan.requires_confirmation && !plan.already_applied);
-    let mut changes: Vec<_> = plan.files.iter().map(|f| (f.path.as_str(), f.change)).collect();
+    assert!(
+        plan.can_apply
+            && plan.applies_cleanly
+            && plan.requires_confirmation
+            && !plan.already_applied
+    );
+    let mut changes: Vec<_> = plan
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.change))
+        .collect();
     changes.sort();
     assert_eq!(changes, vec![("a.txt", "modified"), ("b.txt", "added")]);
     assert!(plan.to_text().contains("b.txt"));
 
     let report = h.apply(&run_id, Confirmation::Flag).unwrap();
     assert_eq!(report.files.len(), 2);
-    assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "alpha\nbeta\n");
-    assert_eq!(std::fs::read_to_string(repo.join("b.txt")).unwrap(), "new file\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "alpha\nbeta\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("b.txt")).unwrap(),
+        "new file\n"
+    );
     assert!(h.status(&run_id).unwrap().applied);
-    assert!(h.apply(&run_id, Confirmation::Flag).unwrap_err().contains("already applied"));
+    assert!(h
+        .apply(&run_id, Confirmation::Flag)
+        .unwrap_err()
+        .contains("already applied"));
     assert!(h.apply_plan(&run_id).unwrap().already_applied);
 }
 
 #[test]
 fn read_only_run_in_place_changes_nothing_and_has_no_worktree() {
-    let s = setup(|_, _, _| vec![working(), text("looks fine to me"), usage(5, 5, 0, 0), done()]);
+    let s = setup(|_, _, _| {
+        vec![
+            working(),
+            text("looks fine to me"),
+            usage(5, 5, 0, 0),
+            done(),
+        ]
+    });
     let repo = init_repo(s.dir.path(), "proj");
     let h = s.harness(caller(Permission::ReadOnly), cfg());
     let r = h.run(RunRequest::new("claude", "is this ok?", &repo));
@@ -183,22 +271,43 @@ fn a_run_in_place_reports_what_the_agent_changed_not_what_was_already_dirty() {
     let mut req = RunRequest::new("codex", "add b", &repo);
     req.permission = Permission::AcceptEdits;
     let r = h.run(req);
-    assert_eq!(r.files_changed, vec!["b.txt"], "the checkpoint was taken after the parent's own edits: {r:?}");
+    assert_eq!(
+        r.files_changed,
+        vec!["b.txt"],
+        "the checkpoint was taken after the parent's own edits: {r:?}"
+    );
 }
 
 #[test]
 fn secrets_are_redacted_going_in_and_coming_out() {
     let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-    let s = setup(move |_, _, _| vec![working(), text(&format!("the token is {secret}, keep it safe")), done()]);
+    let s = setup(move |_, _, _| {
+        vec![
+            working(),
+            text(&format!("the token is {secret}, keep it safe")),
+            done(),
+        ]
+    });
     let repo = init_repo(s.dir.path(), "proj");
     let h = s.harness(caller(Permission::ReadOnly), cfg());
-    let r = h.run(RunRequest::new("codex", format!("use {secret} to call the api"), &repo));
+    let r = h.run(RunRequest::new(
+        "codex",
+        format!("use {secret} to call the api"),
+        &repo,
+    ));
     assert_eq!(r.status, RunStatus::Done);
     let sent = s.factory.sent();
-    assert!(!sent[0].contains(secret), "the agent must never see the secret: {sent:?}");
+    assert!(
+        !sent[0].contains(secret),
+        "the agent must never see the secret: {sent:?}"
+    );
     assert!(!r.summary.contains(secret), "{}", r.summary);
     assert!(!r.to_json().contains(secret) && !r.to_text().contains(secret));
-    assert!(r.notes.iter().any(|n| n.contains("hidden")), "{:?}", r.notes);
+    assert!(
+        r.notes.iter().any(|n| n.contains("hidden")),
+        "{:?}",
+        r.notes
+    );
     let rec = h.registry().load(r.run_id.as_deref().unwrap()).unwrap();
     assert!(!rec.prompt.contains(secret));
 }
@@ -206,12 +315,18 @@ fn secrets_are_redacted_going_in_and_coming_out() {
 #[test]
 fn an_agent_that_cannot_start_is_an_error_result_not_a_hang() {
     let s = editing_agent();
-    s.factory.fail_spawn.store(true, std::sync::atomic::Ordering::SeqCst);
+    s.factory
+        .fail_spawn
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     let repo = init_repo(s.dir.path(), "proj");
     let h = s.harness(caller(Permission::ReadOnly), cfg());
     let r = h.run(RunRequest::new("codex", "x", &repo));
     assert_eq!(r.status, RunStatus::Error, "{r:?}");
-    assert!(r.reason.as_deref().unwrap().contains("ejecutable"), "{:?}", r.reason);
+    assert!(
+        r.reason.as_deref().unwrap().contains("ejecutable"),
+        "{:?}",
+        r.reason
+    );
     assert!(r.run_id.is_some(), "it did start a thread, so it has an id");
 }
 
@@ -264,15 +379,37 @@ fn depth_is_limited() {
         c
     };
     // default max_depth 1 (PLAN §20): a top-level session may delegate, the child may not
-    assert_eq!(s.harness(at(0), cfg()).run(RunRequest::new("codex", "x", &repo)).status, RunStatus::Done);
-    refused(&s.harness(at(1), cfg()).run(RunRequest::new("codex", "x", &repo)), RefusalCode::DepthExceeded);
+    assert_eq!(
+        s.harness(at(0), cfg())
+            .run(RunRequest::new("codex", "x", &repo))
+            .status,
+        RunStatus::Done
+    );
+    refused(
+        &s.harness(at(1), cfg())
+            .run(RunRequest::new("codex", "x", &repo)),
+        RefusalCode::DepthExceeded,
+    );
     // raising max_depth to 2 lets a child delegate once more, and stops at depth 2
-    let two = DelegationConfig { max_depth: 2, ..cfg() };
-    let r = s.harness(at(1), two.clone()).run(RunRequest::new("codex", "x", &repo));
+    let two = DelegationConfig {
+        max_depth: 2,
+        ..cfg()
+    };
+    let r = s
+        .harness(at(1), two.clone())
+        .run(RunRequest::new("codex", "x", &repo));
     assert_eq!(r.status, RunStatus::Done);
-    let rec = s.harness(at(1), two.clone()).registry().load(r.run_id.as_deref().unwrap()).unwrap();
+    let rec = s
+        .harness(at(1), two.clone())
+        .registry()
+        .load(r.run_id.as_deref().unwrap())
+        .unwrap();
     assert_eq!(rec.depth, 2);
-    refused(&s.harness(at(2), two).run(RunRequest::new("codex", "x", &repo)), RefusalCode::DepthExceeded);
+    refused(
+        &s.harness(at(2), two)
+            .run(RunRequest::new("codex", "x", &repo)),
+        RefusalCode::DepthExceeded,
+    );
     assert_eq!(s.factory.spawns(), 2);
 }
 
@@ -280,13 +417,32 @@ fn depth_is_limited() {
 fn disabled_and_allowed_agents() {
     let s = editing_agent();
     let repo = init_repo(s.dir.path(), "proj");
-    let off = DelegationConfig { enabled: false, ..cfg() };
-    refused(&s.harness(caller(Permission::ReadOnly), off).run(RunRequest::new("codex", "x", &repo)), RefusalCode::Disabled);
-    let only_claude = DelegationConfig { allowed_agents: vec!["claude".into()], ..cfg() };
+    let off = DelegationConfig {
+        enabled: false,
+        ..cfg()
+    };
+    refused(
+        &s.harness(caller(Permission::ReadOnly), off)
+            .run(RunRequest::new("codex", "x", &repo)),
+        RefusalCode::Disabled,
+    );
+    let only_claude = DelegationConfig {
+        allowed_agents: vec!["claude".into()],
+        ..cfg()
+    };
     let h = s.harness(caller(Permission::ReadOnly), only_claude);
-    refused(&h.run(RunRequest::new("codex", "x", &repo)), RefusalCode::AgentNotAllowed);
-    assert_eq!(h.run(RunRequest::new("claude", "x", &repo)).status, RunStatus::Done);
-    refused(&h.run(RunRequest::new("gpt-9", "x", &repo)), RefusalCode::AgentNotAllowed);
+    refused(
+        &h.run(RunRequest::new("codex", "x", &repo)),
+        RefusalCode::AgentNotAllowed,
+    );
+    assert_eq!(
+        h.run(RunRequest::new("claude", "x", &repo)).status,
+        RunStatus::Done
+    );
+    refused(
+        &h.run(RunRequest::new("gpt-9", "x", &repo)),
+        RefusalCode::AgentNotAllowed,
+    );
 }
 
 #[test]
@@ -294,10 +450,19 @@ fn bad_requests() {
     let s = editing_agent();
     let repo = init_repo(s.dir.path(), "proj");
     let h = s.harness(caller(Permission::ReadOnly), cfg());
-    refused(&h.run(RunRequest::new("codex", "   ", &repo)), RefusalCode::BadRequest);
-    refused(&h.run(RunRequest::new("codex", "x", s.dir.path().join("nope"))), RefusalCode::BadRequest);
+    refused(
+        &h.run(RunRequest::new("codex", "   ", &repo)),
+        RefusalCode::BadRequest,
+    );
+    refused(
+        &h.run(RunRequest::new("codex", "x", s.dir.path().join("nope"))),
+        RefusalCode::BadRequest,
+    );
     let h2 = s.harness(caller(Permission::ReadOnly), cfg());
-    refused(&h2.run(RunRequest::new("not-an-agent", "x", &repo)), RefusalCode::UnknownAgent);
+    refused(
+        &h2.run(RunRequest::new("not-an-agent", "x", &repo)),
+        RefusalCode::UnknownAgent,
+    );
     // --worktree outside a repository
     let plain = s.dir.path().join("plain");
     std::fs::create_dir_all(&plain).unwrap();
@@ -313,7 +478,9 @@ fn at_most_three_runs_at_once() {
     let s = editing_agent();
     let repo = init_repo(s.dir.path(), "proj");
     let h = s.harness(caller(Permission::ReadOnly), cfg());
-    let held: Vec<_> = (0..3).map(|_| slots::acquire(&s.data_dir(), 3).unwrap().unwrap()).collect();
+    let held: Vec<_> = (0..3)
+        .map(|_| slots::acquire(&s.data_dir(), 3).unwrap().unwrap())
+        .collect();
     let r = h.run(RunRequest::new("codex", "x", &repo));
     refused(&r, RefusalCode::Concurrency);
     assert!(r.reason.unwrap().contains("3 delegated runs"));
@@ -321,14 +488,23 @@ fn at_most_three_runs_at_once() {
     no_threads_created(&s);
     // one finishes -> the next run gets the slot, and gives it back
     drop(held);
-    assert_eq!(h.run(RunRequest::new("codex", "x", &repo)).status, RunStatus::Done);
+    assert_eq!(
+        h.run(RunRequest::new("codex", "x", &repo)).status,
+        RunStatus::Done
+    );
     assert_eq!(slots::in_use(&s.data_dir(), 3), 0);
 
     // the limit is configurable
-    let one = DelegationConfig { max_concurrent: 1, ..cfg() };
+    let one = DelegationConfig {
+        max_concurrent: 1,
+        ..cfg()
+    };
     let h = s.harness(caller(Permission::ReadOnly), one);
     let _held = slots::acquire(&s.data_dir(), 1).unwrap().unwrap();
-    refused(&h.run(RunRequest::new("codex", "x", &repo)), RefusalCode::Concurrency);
+    refused(
+        &h.run(RunRequest::new("codex", "x", &repo)),
+        RefusalCode::Concurrency,
+    );
 }
 
 fn seeded(id: &str, started_ms: i64, billable: u64) -> RunRecord {
@@ -362,20 +538,36 @@ fn seeded(id: &str, started_ms: i64, billable: u64) -> RunRecord {
 fn daily_token_budget() {
     let s = editing_agent();
     let repo = init_repo(s.dir.path(), "proj");
-    let budget = DelegationConfig { daily_token_budget: 1000, ..cfg() };
+    let budget = DelegationConfig {
+        daily_token_budget: 1000,
+        ..cfg()
+    };
     let h = s.harness(caller(Permission::ReadOnly), budget);
     let now = chat_core::now_ms();
     // yesterday's usage does not count
-    h.registry().save(&seeded("901", now - 3 * 86_400_000, 5_000_000)).unwrap();
-    assert_eq!(h.run(RunRequest::new("codex", "x", &repo)).status, RunStatus::Done);
+    h.registry()
+        .save(&seeded("901", now - 3 * 86_400_000, 5_000_000))
+        .unwrap();
+    assert_eq!(
+        h.run(RunRequest::new("codex", "x", &repo)).status,
+        RunStatus::Done
+    );
     // today's does
     h.registry().save(&seeded("902", now, 1_000)).unwrap();
     let r = h.run(RunRequest::new("codex", "x", &repo));
     refused(&r, RefusalCode::DailyBudget);
     assert!(r.reason.unwrap().contains("daily"));
     // 0 = unlimited
-    let unlimited = DelegationConfig { daily_token_budget: 0, ..cfg() };
-    assert_eq!(s.harness(caller(Permission::ReadOnly), unlimited).run(RunRequest::new("codex", "x", &repo)).status, RunStatus::Done);
+    let unlimited = DelegationConfig {
+        daily_token_budget: 0,
+        ..cfg()
+    };
+    assert_eq!(
+        s.harness(caller(Permission::ReadOnly), unlimited)
+            .run(RunRequest::new("codex", "x", &repo))
+            .status,
+        RunStatus::Done
+    );
 }
 
 fn limit(agent: &str, window: &str, pct: f64) -> agent_harness::LimitRow {
@@ -393,21 +585,59 @@ fn limit(agent: &str, window: &str, pct: f64) -> agent_harness::LimitRow {
 fn weekly_usage_over_the_threshold_blocks_that_agent_only() {
     let s = editing_agent();
     let repo = init_repo(s.dir.path(), "proj");
-    let limits = vec![limit("codex", "seven_day", 95.0), limit("claude", "seven_day", 10.0), limit("opencode", "five_hour", 99.0)];
-    let h = s.harness_full(caller(Permission::ReadOnly), cfg(), Arc::new(agent_harness::DenyAll), limits.clone());
+    let limits = vec![
+        limit("codex", "seven_day", 95.0),
+        limit("claude", "seven_day", 10.0),
+        limit("opencode", "five_hour", 99.0),
+    ];
+    let h = s.harness_full(
+        caller(Permission::ReadOnly),
+        cfg(),
+        Arc::new(agent_harness::DenyAll),
+        limits.clone(),
+    );
     let r = h.run(RunRequest::new("codex", "x", &repo));
     refused(&r, RefusalCode::WeeklyUsage);
     let reason = r.reason.unwrap();
     assert!(reason.contains("95") && reason.contains("90"), "{reason}");
-    assert_eq!(h.run(RunRequest::new("claude", "x", &repo)).status, RunStatus::Done);
-    assert_eq!(h.run(RunRequest::new("opencode", "x", &repo)).status, RunStatus::Done, "only the weekly window counts");
+    assert_eq!(
+        h.run(RunRequest::new("claude", "x", &repo)).status,
+        RunStatus::Done
+    );
+    assert_eq!(
+        h.run(RunRequest::new("opencode", "x", &repo)).status,
+        RunStatus::Done,
+        "only the weekly window counts"
+    );
     // a higher threshold lets codex through; 0 disables the rule
-    let lenient = DelegationConfig { weekly_usage_threshold_percent: 97.0, ..cfg() };
-    let h = s.harness_full(caller(Permission::ReadOnly), lenient, Arc::new(agent_harness::DenyAll), limits.clone());
-    assert_eq!(h.run(RunRequest::new("codex", "x", &repo)).status, RunStatus::Done);
-    let off = DelegationConfig { weekly_usage_threshold_percent: 0.0, ..cfg() };
-    let h = s.harness_full(caller(Permission::ReadOnly), off, Arc::new(agent_harness::DenyAll), limits);
-    assert_eq!(h.run(RunRequest::new("codex", "x", &repo)).status, RunStatus::Done);
+    let lenient = DelegationConfig {
+        weekly_usage_threshold_percent: 97.0,
+        ..cfg()
+    };
+    let h = s.harness_full(
+        caller(Permission::ReadOnly),
+        lenient,
+        Arc::new(agent_harness::DenyAll),
+        limits.clone(),
+    );
+    assert_eq!(
+        h.run(RunRequest::new("codex", "x", &repo)).status,
+        RunStatus::Done
+    );
+    let off = DelegationConfig {
+        weekly_usage_threshold_percent: 0.0,
+        ..cfg()
+    };
+    let h = s.harness_full(
+        caller(Permission::ReadOnly),
+        off,
+        Arc::new(agent_harness::DenyAll),
+        limits,
+    );
+    assert_eq!(
+        h.run(RunRequest::new("codex", "x", &repo)).status,
+        RunStatus::Done
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +660,10 @@ fn timeout_interrupts_the_agent_and_frees_the_slot() {
     assert_eq!(s.factory.rec.lock().shutdowns, 1);
     assert_eq!(slots::in_use(&s.data_dir(), 3), 0);
     assert_eq!(RunStatus::TimedOut.exit_code(), 4);
-    assert_eq!(h.status(r.run_id.as_deref().unwrap()).unwrap().status, RunStatus::TimedOut);
+    assert_eq!(
+        h.status(r.run_id.as_deref().unwrap()).unwrap().status,
+        RunStatus::TimedOut
+    );
 }
 
 #[test]
@@ -438,7 +671,13 @@ fn the_default_timeout_comes_from_the_config() {
     let s = setup(|_, _, _| vec![working()]);
     let repo = init_repo(s.dir.path(), "proj");
     assert_eq!(cfg().timeout_secs, 15 * 60, "default timeout is 15 minutes");
-    let h = s.harness(caller(Permission::ReadOnly), DelegationConfig { timeout_secs: 1, ..cfg() });
+    let h = s.harness(
+        caller(Permission::ReadOnly),
+        DelegationConfig {
+            timeout_secs: 1,
+            ..cfg()
+        },
+    );
     let r = h.run(RunRequest::new("codex", "x", &repo));
     assert_eq!(r.status, RunStatus::TimedOut);
 }
@@ -452,7 +691,12 @@ fn cancel_from_another_thread_stops_the_run() {
         let h = h.clone();
         std::thread::spawn(move || h.run(RunRequest::new("codex", "long task", &repo)))
     };
-    wait_until("the run is registered", || h.registry().list().iter().any(|r| r.status == RunStatus::Running));
+    wait_until("the run is registered", || {
+        h.registry()
+            .list()
+            .iter()
+            .any(|r| r.status == RunStatus::Running)
+    });
     let id = h.registry().list()[0].run_id.clone();
     assert_eq!(h.status(&id).unwrap().status, RunStatus::Running);
     assert!(h.result(&id).unwrap_err().contains("still running"));
@@ -460,7 +704,12 @@ fn cancel_from_another_thread_stops_the_run() {
     let r = runner.join().unwrap();
     assert_eq!(r.status, RunStatus::Cancelled, "{r:?}");
     assert_eq!(RunStatus::Cancelled.exit_code(), 5);
-    assert_eq!(h.cancel(&id).unwrap(), CancelOutcome::AlreadyFinished { status: RunStatus::Cancelled });
+    assert_eq!(
+        h.cancel(&id).unwrap(),
+        CancelOutcome::AlreadyFinished {
+            status: RunStatus::Cancelled
+        }
+    );
     assert_eq!(slots::in_use(&s.data_dir(), 3), 0);
 }
 
@@ -476,8 +725,17 @@ fn a_dead_runner_is_reported_as_an_error_not_running_forever() {
     h.registry().save(&rec).unwrap();
     let st = h.status("777").unwrap();
     assert_eq!(st.status, RunStatus::Error);
-    assert!(h.result("777").unwrap().reason.unwrap().contains("ended without reporting"));
-    assert_eq!(h.registry().load("777").unwrap().status, RunStatus::Error, "reconciled on disk");
+    assert!(h
+        .result("777")
+        .unwrap()
+        .reason
+        .unwrap()
+        .contains("ended without reporting"));
+    assert_eq!(
+        h.registry().load("777").unwrap().status,
+        RunStatus::Error,
+        "reconciled on disk"
+    );
 }
 
 #[test]
@@ -517,7 +775,12 @@ fn asking_agent() -> Setup {
     s
 }
 
-fn asking_run(s: &Setup, broker: Arc<dyn ApprovalBroker>, cfg: DelegationConfig, parent: Option<i64>) -> RunResult {
+fn asking_run(
+    s: &Setup,
+    broker: Arc<dyn ApprovalBroker>,
+    cfg: DelegationConfig,
+    parent: Option<i64>,
+) -> RunResult {
     let repo = init_repo(s.dir.path(), "proj");
     let mut c = caller(Permission::Ask);
     c.parent_thread = parent;
@@ -525,7 +788,9 @@ fn asking_run(s: &Setup, broker: Arc<dyn ApprovalBroker>, cfg: DelegationConfig,
         // the delegating chat thread must exist in chat.db
         std::fs::create_dir_all(s.data_dir()).unwrap();
         let store = ChatStore::open_at(s.data_dir().join("chat.db")).unwrap();
-        let t = store.create_thread(ThreadSpec::new(&repo, AgentKind::ClaudeCode)).unwrap();
+        let t = store
+            .create_thread(ThreadSpec::new(&repo, AgentKind::ClaudeCode))
+            .unwrap();
         assert_eq!(Some(t.id.0), parent, "the first thread of a fresh database");
         store.flush().unwrap();
     }
@@ -540,18 +805,34 @@ fn without_a_selachi_window_child_approvals_are_denied_with_a_reason() {
     let s = asking_agent();
     let r = asking_run(&s, Arc::new(agent_harness::DenyAll), cfg(), None);
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Deny)]);
-    let note = r.notes.iter().find(|n| n.contains("approval denied")).expect("a note says why");
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Deny)]
+    );
+    let note = r
+        .notes
+        .iter()
+        .find(|n| n.contains("approval denied"))
+        .expect("a note says why");
     assert!(note.contains("no Selachi window"), "{note}");
 }
 
 #[test]
 fn approvals_with_a_pipe_nobody_serves_are_denied_too() {
     let s = asking_agent();
-    let broker = Arc::new(PipeBroker::new(r"\\.\pipe\selachi-approvals-test-nobody-home"));
+    let broker = Arc::new(PipeBroker::new(
+        r"\\.\pipe\selachi-approvals-test-nobody-home",
+    ));
     let r = asking_run(&s, broker, cfg(), None);
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Deny)]);
-    assert!(r.notes.iter().any(|n| n.contains("no Selachi window")), "{:?}", r.notes);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Deny)]
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("no Selachi window")),
+        "{:?}",
+        r.notes
+    );
 }
 
 #[test]
@@ -561,18 +842,28 @@ fn approvals_are_forwarded_to_selachi_over_the_pipe() {
     let r = asking_run(&s, Arc::new(PipeBroker::new(&server.path)), cfg(), Some(1));
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
     assert_eq!(r.summary, "done after approval");
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Allow)]);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Allow)]
+    );
 
     let reqs = server.approval_requests();
     assert_eq!(reqs.len(), 1);
     let q = &reqs[0];
     assert_eq!(q.v, agent_harness::PROTOCOL_VERSION);
-    assert_eq!((q.request_id.as_str(), q.tool.as_str(), q.agent.as_str()), ("req_1", "Bash", "codex"));
+    assert_eq!(
+        (q.request_id.as_str(), q.tool.as_str(), q.agent.as_str()),
+        ("req_1", "Bash", "codex")
+    );
     assert_eq!(Some(q.run_id.clone()), r.run_id);
     assert_eq!(q.thread_id.to_string(), q.run_id);
     assert_eq!(q.parent_thread_id, Some(1));
     assert_eq!((q.permission.as_str(), q.depth), ("ask", 1));
-    assert!(!q.detail.contains("ghp_"), "the detail shown in Selachi is redacted: {}", q.detail);
+    assert!(
+        !q.detail.contains("ghp_"),
+        "the detail shown in Selachi is redacted: {}",
+        q.detail
+    );
     assert!(q.detail.contains("deploy with"));
 }
 
@@ -581,49 +872,86 @@ fn the_user_can_deny_or_always_allow() {
     let s = asking_agent();
     let server = MockServer::answering(agent_harness::Decision::Deny);
     let r = asking_run(&s, Arc::new(PipeBroker::new(&server.path)), cfg(), None);
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Deny)]);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Deny)]
+    );
     assert_eq!(r.summary, "ok, I will not do that");
 
     let s = asking_agent();
     let server = MockServer::answering(agent_harness::Decision::Always);
     asking_run(&s, Arc::new(PipeBroker::new(&server.path)), cfg(), None);
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Always)]);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Always)]
+    );
 }
 
 #[test]
 fn a_server_error_a_silent_server_and_a_slow_user_all_mean_deny() {
     // error reply
     let s = asking_agent();
-    let server = MockServer::start(|_| Some(agent_harness::ServerMessage::Error { v: 1, reason: "queue is full".into() }));
+    let server = MockServer::start(|_| {
+        Some(agent_harness::ServerMessage::Error {
+            v: 1,
+            reason: "queue is full".into(),
+        })
+    });
     let r = asking_run(&s, Arc::new(PipeBroker::new(&server.path)), cfg(), None);
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Deny)]);
-    assert!(r.notes.iter().any(|n| n.contains("queue is full")), "{:?}", r.notes);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Deny)]
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("queue is full")),
+        "{:?}",
+        r.notes
+    );
 
     // closes without answering
     let s = asking_agent();
     let server = MockServer::start(|_| None);
     let r = asking_run(&s, Arc::new(PipeBroker::new(&server.path)), cfg(), None);
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Deny)]);
-    assert!(r.notes.iter().any(|n| n.contains("without answering")), "{:?}", r.notes);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Deny)]
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("without answering")),
+        "{:?}",
+        r.notes
+    );
 
     // the user takes too long
     let s = asking_agent();
     let server = MockServer::start(|m| {
         std::thread::sleep(Duration::from_secs(4));
         match m {
-            agent_harness::ClientMessage::ApprovalRequest(q) => Some(agent_harness::ServerMessage::ApprovalResponse {
-                v: 1,
-                request_id: q.request_id.clone(),
-                decision: agent_harness::Decision::Allow,
-                reason: None,
-            }),
+            agent_harness::ClientMessage::ApprovalRequest(q) => {
+                Some(agent_harness::ServerMessage::ApprovalResponse {
+                    v: 1,
+                    request_id: q.request_id.clone(),
+                    decision: agent_harness::Decision::Allow,
+                    reason: None,
+                })
+            }
             _ => None,
         }
     });
-    let patient = DelegationConfig { approval_timeout_secs: 1, ..cfg() };
+    let patient = DelegationConfig {
+        approval_timeout_secs: 1,
+        ..cfg()
+    };
     let r = asking_run(&s, Arc::new(PipeBroker::new(&server.path)), patient, None);
-    assert_eq!(s.factory.rec.lock().approvals, vec![("req_1".to_string(), ApprovalDecision::Deny)]);
-    assert!(r.notes.iter().any(|n| n.contains("did not answer")), "{:?}", r.notes);
+    assert_eq!(
+        s.factory.rec.lock().approvals,
+        vec![("req_1".to_string(), ApprovalDecision::Deny)]
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("did not answer")),
+        "{:?}",
+        r.notes
+    );
 }
 
 #[test]
@@ -631,20 +959,31 @@ fn ipc_ping_and_mismatched_answers() {
     let server = MockServer::answering(agent_harness::Decision::Allow);
     let broker = PipeBroker::new(&server.path);
     assert!(broker.ping());
-    assert!(matches!(server.seen.lock()[0], agent_harness::ClientMessage::Ping { v: 1 }));
+    assert!(matches!(
+        server.seen.lock()[0],
+        agent_harness::ClientMessage::Ping { v: 1 }
+    ));
 
     // a server that answers a different request id must not grant anything
     let wrong = MockServer::start(|m| match m {
-        agent_harness::ClientMessage::ApprovalRequest(_) => Some(agent_harness::ServerMessage::ApprovalResponse {
-            v: 1,
-            request_id: "someone-else".into(),
-            decision: agent_harness::Decision::Allow,
-            reason: None,
+        agent_harness::ClientMessage::ApprovalRequest(_) => {
+            Some(agent_harness::ServerMessage::ApprovalResponse {
+                v: 1,
+                request_id: "someone-else".into(),
+                decision: agent_harness::Decision::Allow,
+                reason: None,
+            })
+        }
+        agent_harness::ClientMessage::Ping { v } => Some(agent_harness::ServerMessage::Pong {
+            v: *v,
+            accepts_approvals: false,
         }),
-        agent_harness::ClientMessage::Ping { v } => Some(agent_harness::ServerMessage::Pong { v: *v, accepts_approvals: false }),
     });
     let broker = PipeBroker::new(&wrong.path);
-    assert!(!broker.ping(), "a server that does not accept approvals is not a usable queue");
+    assert!(
+        !broker.ping(),
+        "a server that does not accept approvals is not a usable queue"
+    );
     let req = agent_harness::ApprovalRequest {
         v: 1,
         request_id: "mine".into(),
@@ -684,7 +1023,11 @@ fn full_risk_apply_refuses_the_yes_flag_but_accepts_an_interactive_confirmation(
 
     let plan = h.apply_plan(&id).unwrap();
     assert_eq!(plan.risk, Risk::Full);
-    assert!(plan.risk_reasons[0].contains("workflow"), "{:?}", plan.risk_reasons);
+    assert!(
+        plan.risk_reasons[0].contains("workflow"),
+        "{:?}",
+        plan.risk_reasons
+    );
     assert!(plan.to_text().contains("RISK (full)"));
     let e = h.apply(&id, Confirmation::Flag).unwrap_err();
     assert!(e.contains("--yes is not allowed"), "{e}");
@@ -712,7 +1055,10 @@ fn apply_dry_run_plan_reports_conflicts_and_overlaps_without_touching_anything()
     assert!(plan.to_text().contains("BLOCKED"));
     let e = h.apply(&id, Confirmation::Interactive).unwrap_err();
     assert!(e.contains("does not apply cleanly"), "{e}");
-    assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "alpha\nparent edit\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "alpha\nparent edit\n"
+    );
     assert!(!repo.join("b.txt").exists());
 }
 
@@ -743,11 +1089,17 @@ fn delegation_settings_are_read_from_config_toml() {
     let mut req = RunRequest::new("claude", "x", &repo);
     req.permission = Permission::Ask;
     refused(&h.run(req), RefusalCode::PermissionExceedsConfig);
-    refused(&h.run(RunRequest::new("codex", "x", &repo)), RefusalCode::AgentNotAllowed);
+    refused(
+        &h.run(RunRequest::new("codex", "x", &repo)),
+        RefusalCode::AgentNotAllowed,
+    );
 
     // a broken file falls back to the defaults and says so
     std::fs::write(s.data_dir().join("config.toml"), "[delegation\nbroken").unwrap();
-    let h = agent_harness::Harness::builder().data_dir(s.data_dir()).build().unwrap();
+    let h = agent_harness::Harness::builder()
+        .data_dir(s.data_dir())
+        .build()
+        .unwrap();
     assert_eq!(h.config(), &DelegationConfig::default());
     assert!(h.config_warning().is_some());
 }
@@ -761,15 +1113,30 @@ fn a_stale_parent_thread_id_does_not_sink_the_run() {
     let h = s.harness(c, cfg());
     let r = h.run(RunRequest::new("codex", "x", &repo));
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
-    assert!(r.notes.iter().any(|n| n.contains("424242")), "{:?}", r.notes);
-    let link = h.store().unwrap().thread_link(ThreadId(r.thread_id.unwrap())).unwrap().unwrap();
+    assert!(
+        r.notes.iter().any(|n| n.contains("424242")),
+        "{:?}",
+        r.notes
+    );
+    let link = h
+        .store()
+        .unwrap()
+        .thread_link(ThreadId(r.thread_id.unwrap()))
+        .unwrap()
+        .unwrap();
     assert_eq!((link.parent_thread_id, link.depth), (None, 1));
 }
 
 #[test]
 fn the_exported_child_environment_matches_the_documented_variables() {
     // the names are a contract with the agents that read them
-    assert_eq!(agent_harness::policy::ENV_PARENT_PERMISSION, "SELACHI_PARENT_PERMISSION");
-    assert_eq!(agent_harness::policy::ENV_DELEGATION_DEPTH, "SELACHI_DELEGATION_DEPTH");
+    assert_eq!(
+        agent_harness::policy::ENV_PARENT_PERMISSION,
+        "SELACHI_PARENT_PERMISSION"
+    );
+    assert_eq!(
+        agent_harness::policy::ENV_DELEGATION_DEPTH,
+        "SELACHI_DELEGATION_DEPTH"
+    );
     let _ = ThreadId(1);
 }

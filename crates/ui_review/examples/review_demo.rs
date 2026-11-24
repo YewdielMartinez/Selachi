@@ -19,13 +19,15 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use gpui::{
-    AnyWindowHandle, App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, size,
+    AnyWindowHandle, App, Application, Bounds, Context, Entity, IntoElement, Render, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 use panel_api::TabModel;
 use theme::{Mode, Theme};
 use ui_kit::{Card, CardTone, Icon, Logo, Pill};
-use ui_review::{DiffRow, NoteId, NoteState, ReviewEvent, ReviewSource, ReviewTab, ReviewView, Side};
+use ui_review::{
+    DiffRow, NoteId, NoteState, ReviewEvent, ReviewSource, ReviewTab, ReviewView, Side,
+};
 
 struct Host {
     theme: Theme,
@@ -38,7 +40,12 @@ impl Render for Host {
         let t = self.theme;
         let c = t.colors;
         let content = self.tab.read(cx).view().clone();
-        let subtitle = self.tab.read(cx).subtitle(cx).map(|s| s.to_string()).unwrap_or_default();
+        let subtitle = self
+            .tab
+            .read(cx)
+            .subtitle(cx)
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let titlebar = div()
             .h(px(40.0))
             .flex_none()
@@ -49,8 +56,18 @@ impl Render for Host {
             .gap(px(8.0))
             .child(Logo::new(t.mode).size(22.0))
             .child(Pill::new("t0", &t).icon(Icon::Terminal).label("claude"))
-            .child(Pill::new("t1", &t).icon(Icon::GitBranch).label("Revisión").active(true))
-            .child(div().text_size(px(t.typography.ui_size_sm)).text_color(c.muted).child(subtitle));
+            .child(
+                Pill::new("t1", &t)
+                    .icon(Icon::GitBranch)
+                    .label("Revisión")
+                    .active(true),
+            )
+            .child(
+                div()
+                    .text_size(px(t.typography.ui_size_sm))
+                    .text_color(c.muted)
+                    .child(subtitle),
+            );
         let status = div()
             .h(px(28.0))
             .flex_none()
@@ -68,23 +85,41 @@ impl Render for Host {
             .flex()
             .flex_col()
             .child(titlebar)
-            .child(div().flex_1().min_h_0().px(px(8.0)).child(Card::new(&t).tone(CardTone::Base, &t).size_full().overflow_hidden().child(content)))
+            .child(
+                div().flex_1().min_h_0().px(px(8.0)).child(
+                    Card::new(&t)
+                        .tone(CardTone::Base, &t)
+                        .size_full()
+                        .overflow_hidden()
+                        .child(content),
+                ),
+            )
             .child(status)
     }
 }
 
 fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 fn git(dir: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
-    cmd.args(["-c", "user.name=Ana Ríos", "-c", "user.email=ana@example.com", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args([
+        "-c",
+        "user.name=Ana Ríos",
+        "-c",
+        "user.email=ana@example.com",
+        "-c",
+        "commit.gpgsign=false",
+    ])
+    .args(args)
+    .current_dir(dir)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -221,7 +256,9 @@ fn find_line(view: &ReviewView, path: &str, needle: &str, removed: bool) -> Opti
     file.rows.iter().find_map(|r| match r {
         DiffRow::Line(l) if l.text.contains(needle) => {
             if removed {
-                l.old_line.filter(|_| l.new_line.is_none()).map(|n| (Side::Old, n))
+                l.old_line
+                    .filter(|_| l.new_line.is_none())
+                    .map(|n| (Side::Old, n))
             } else {
                 l.new_line.map(|n| (Side::New, n))
             }
@@ -232,16 +269,53 @@ fn find_line(view: &ReviewView, path: &str, needle: &str, removed: bool) -> Opti
 
 fn seed(view: &Entity<ReviewView>, cx: &mut App) {
     let picks: [(&str, &str, bool, usize, &str, NoteState); 5] = [
-        ("src/session.rs", "DEFAULT_TTL_SECS: u64", false, 0, "Mejor leer esto de la configuración que dejarlo fijo.", NoteState::Draft),
-        ("src/session.rs", "age >= self.ttl", false, 0, "El borde cambió de `>` a `>=`: ¿está cubierto por un test?", NoteState::Draft),
-        ("src/session.rs", "let text = std::fs::read_to_string(path).unwrap();", true, 0, "Bien que se quite el `unwrap()`, pero conserva el contexto del error.", NoteState::Sent),
-        ("src/session.rs", "let user = parts.next()", false, 2, "Estas dos líneas se repiten: extráelas a una función `field(&mut parts)`.", NoteState::Sent),
-        ("src/session.rs", "Duration::from_secs(DEFAULT_TTL_SECS) }", false, 0, "Usa `Duration::from_secs` solo en un sitio.", NoteState::Resolved),
+        (
+            "src/session.rs",
+            "DEFAULT_TTL_SECS: u64",
+            false,
+            0,
+            "Mejor leer esto de la configuración que dejarlo fijo.",
+            NoteState::Draft,
+        ),
+        (
+            "src/session.rs",
+            "age >= self.ttl",
+            false,
+            0,
+            "El borde cambió de `>` a `>=`: ¿está cubierto por un test?",
+            NoteState::Draft,
+        ),
+        (
+            "src/session.rs",
+            "let text = std::fs::read_to_string(path).unwrap();",
+            true,
+            0,
+            "Bien que se quite el `unwrap()`, pero conserva el contexto del error.",
+            NoteState::Sent,
+        ),
+        (
+            "src/session.rs",
+            "let user = parts.next()",
+            false,
+            2,
+            "Estas dos líneas se repiten: extráelas a una función `field(&mut parts)`.",
+            NoteState::Sent,
+        ),
+        (
+            "src/session.rs",
+            "Duration::from_secs(DEFAULT_TTL_SECS) }",
+            false,
+            0,
+            "Usa `Duration::from_secs` solo en un sitio.",
+            NoteState::Resolved,
+        ),
     ];
     for (path, needle, removed, extra, text, state) in picks {
         let at = find_line(view.read(cx), path, needle, removed);
         if let Some((side, line)) = at {
-            let id: Option<NoteId> = view.update(cx, |v, cx| v.add_note(path, side, line, line + extra, text, cx));
+            let id: Option<NoteId> = view.update(cx, |v, cx| {
+                v.add_note(path, side, line, line + extra, text, cx)
+            });
             if let Some(id) = id {
                 match state {
                     NoteState::Sent => view.update(cx, |v, cx| v.mark_sent(&[id], cx)),
@@ -254,22 +328,36 @@ fn seed(view: &Entity<ReviewView>, cx: &mut App) {
     // One note on another file.
     let cfg = find_line(view.read(cx), "config.json", "api_key", false);
     if let Some((side, line)) = cfg {
-        view.update(cx, |v, cx| v.add_note("config.json", side, line, line, "No subas la clave al repositorio.", cx));
+        view.update(cx, |v, cx| {
+            v.add_note(
+                "config.json",
+                side,
+                line,
+                line,
+                "No subas la clave al repositorio.",
+                cx,
+            )
+        });
     }
 }
-
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |n: &str| args.iter().any(|a| a == n);
-    let mode = if flag("light") { Mode::Light } else { Mode::Dark };
+    let mode = if flag("light") {
+        Mode::Light
+    } else {
+        Mode::Dark
+    };
     let (w, h) = arg_value(&args, "--size")
         .and_then(|s| s.split_once('x'))
         .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
         .unwrap_or((1280.0f32, 820.0f32));
     let demo = arg_value(&args, "--repo").is_none();
     let root = arg_value(&args, "--repo").map_or_else(make_demo_repo, PathBuf::from);
-    let want_file = arg_value(&args, "--file").unwrap_or("src/session.rs").to_owned();
+    let want_file = arg_value(&args, "--file")
+        .unwrap_or("src/session.rs")
+        .to_owned();
     let editor = flag("--editor");
     let bare = flag("--bare");
     eprintln!("review_demo: {}", root.display());

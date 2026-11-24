@@ -2,9 +2,7 @@
 //! view paints (limit freshness, forecast line, cost label, chart buckets). Nothing here touches
 //! gpui, so all of it is unit-tested.
 
-use agents_svc::{
-    Agent, AgentUsage, BranchUsage, Forecast, RateLimitSnapshot, ReportedCost,
-};
+use agents_svc::{Agent, AgentUsage, BranchUsage, Forecast, RateLimitSnapshot, ReportedCost};
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Weekday};
 
 use crate::fmt::{compact_tokens, days_back, format_duration, format_when};
@@ -22,7 +20,12 @@ pub const ESTIMATED: &str = "estimado";
 pub const LIMIT_AGENTS: [Agent; 2] = [Agent::Claude, Agent::Codex];
 
 /// Display order of agents everywhere (cards, chart stack, legend).
-pub const AGENT_ORDER: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::OpenCode, Agent::Antigravity];
+pub const AGENT_ORDER: [Agent; 4] = [
+    Agent::Claude,
+    Agent::Codex,
+    Agent::OpenCode,
+    Agent::Antigravity,
+];
 
 pub fn agent_name(agent: Agent) -> &'static str {
     match agent {
@@ -60,8 +63,12 @@ pub enum UsageRange {
 }
 
 impl UsageRange {
-    pub const ALL: [UsageRange; 4] =
-        [UsageRange::Session, UsageRange::Today, UsageRange::Week, UsageRange::Last7Days];
+    pub const ALL: [UsageRange; 4] = [
+        UsageRange::Session,
+        UsageRange::Today,
+        UsageRange::Week,
+        UsageRange::Last7Days,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -216,8 +223,11 @@ pub fn aggregate_agents(rows: &[AgentUsage], reported: &[ReportedCost]) -> Vec<A
             }
             let sum = |f: fn(&AgentUsage) -> u64| mine.iter().map(|r| f(r)).sum::<u64>();
             let priced: Vec<f64> = mine.iter().filter_map(|r| r.est_cost_usd).collect();
-            let reported_events: u64 =
-                reported.iter().filter(|r| r.agent == agent).map(|r| r.events).sum();
+            let reported_events: u64 = reported
+                .iter()
+                .filter(|r| r.agent == agent)
+                .map(|r| r.events)
+                .sum();
             let source = reported
                 .iter()
                 .find(|r| r.agent == agent)
@@ -238,7 +248,11 @@ pub fn aggregate_agents(rows: &[AgentUsage], reported: &[ReportedCost]) -> Vec<A
                 cache_read: sum(|r| r.cache_read),
                 events,
                 cost: CostInfo {
-                    usd: if priced.is_empty() { None } else { Some(priced.iter().sum()) },
+                    usd: if priced.is_empty() {
+                        None
+                    } else {
+                        Some(priced.iter().sum())
+                    },
                     complete: priced.len() == mine.len(),
                     kind,
                 },
@@ -364,7 +378,9 @@ pub fn limit_state(
         .iter()
         .filter(|l| l.agent == agent && l.window == window.key())
         .max_by_key(|l| l.ts_ms);
-    let Some(s) = latest else { return LimitState::Missing };
+    let Some(s) = latest else {
+        return LimitState::Missing;
+    };
     let age_ms = (now_ms - s.ts_ms).max(0);
     let valid = match s.resets_at_ms {
         Some(r) => r > now_ms,
@@ -425,7 +441,10 @@ pub struct ForecastLine {
 pub fn forecast_line<Tz: TimeZone>(f: &Forecast, now: &DateTime<Tz>) -> ForecastLine {
     let window = LimitWindow::from_key(&f.window).map_or("ventana", LimitWindow::label);
     let text = if f.reaches_limit_before_reset {
-        format!("Al ritmo actual llegas al 100 % {}", format_when(now, f.eta_at_ms))
+        format!(
+            "Al ritmo actual llegas al 100 % {}",
+            format_when(now, f.eta_at_ms)
+        )
     } else {
         format!("Al ritmo actual no llegas al límite de {window} antes de que reinicie")
     };
@@ -433,7 +452,10 @@ pub fn forecast_line<Tz: TimeZone>(f: &Forecast, now: &DateTime<Tz>) -> Forecast
         agent: f.agent,
         window,
         text,
-        rate: format!("ritmo {} tokens/h", compact_tokens(f.recent_billable_tokens_per_hour.round() as u64)),
+        rate: format!(
+            "ritmo {} tokens/h",
+            compact_tokens(f.recent_billable_tokens_per_hour.round() as u64)
+        ),
         label: ESTIMATED,
         reaches_limit: f.reaches_limit_before_reset,
     }
@@ -449,7 +471,11 @@ pub fn forecast_lines<Tz: TimeZone>(
     let mut sorted: Vec<&Forecast> = forecasts.iter().collect();
     // Limit-hitting forecasts first, then by ETA.
     sorted.sort_by_key(|f| (!f.reaches_limit_before_reset, f.eta_at_ms));
-    sorted.into_iter().take(max).map(|f| forecast_line(f, now)).collect()
+    sorted
+        .into_iter()
+        .take(max)
+        .map(|f| forecast_line(f, now))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -465,7 +491,9 @@ pub fn chart_day_bounds<Tz: TimeZone>(now: &DateTime<Tz>) -> Vec<(NaiveDate, i64
         .map(|back| {
             let date = days_back(now, back);
             // Resolve "today" on that date at noon (always exists, even on DST days).
-            let noon = date.and_hms_opt(12, 0, 0).and_then(|t| tz.from_local_datetime(&t).earliest());
+            let noon = date
+                .and_hms_opt(12, 0, 0)
+                .and_then(|t| tz.from_local_datetime(&t).earliest());
             let b = noon
                 .map(|n| agents_svc::Range::Today.resolve(&n, Weekday::Mon))
                 .unwrap_or_default();
@@ -504,7 +532,11 @@ pub fn stack_cells(values: &[u64], max_total: u64, rows: usize) -> Vec<usize> {
         used += exact.floor() as usize;
         rem.push((i, exact - exact.floor()));
     }
-    rem.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    rem.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
     for (i, _) in rem.iter().cycle().take(spare - used) {
         out[*i] += 1;
     }
@@ -521,7 +553,10 @@ pub fn day_tooltip(day: &DayUsage, today: NaiveDate) -> String {
     if day.total() == 0 {
         return format!("{head}\nsin actividad");
     }
-    let mut lines = vec![head, format!("{} tokens facturables", compact_tokens(day.total()))];
+    let mut lines = vec![
+        head,
+        format!("{} tokens facturables", compact_tokens(day.total())),
+    ];
     for (agent, n) in AGENT_ORDER.iter().zip(day.per_agent) {
         if n > 0 {
             lines.push(format!("{} {}", agent_name(*agent), compact_tokens(n)));

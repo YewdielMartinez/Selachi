@@ -18,12 +18,20 @@ pub const MIN_RATIO: f32 = 0.15;
 
 /// Clamps a gutter ratio so no pane vanishes.
 pub fn clamp_ratio(r: f32) -> f32 {
-    if r.is_finite() { r.clamp(MIN_RATIO, 1.0 - MIN_RATIO) } else { 0.5 }
+    if r.is_finite() {
+        r.clamp(MIN_RATIO, 1.0 - MIN_RATIO)
+    } else {
+        0.5
+    }
 }
 
 /// Ratio of the pointer inside `[origin, origin + size]`.
 pub fn ratio_at(pointer: f32, origin: f32, size: f32) -> f32 {
-    if size <= 0.0 { 0.5 } else { clamp_ratio((pointer - origin) / size) }
+    if size <= 0.0 {
+        0.5
+    } else {
+        clamp_ratio((pointer - origin) / size)
+    }
 }
 
 /// Which tab each pane hosts, and which pane has the focus. `T` is the tab id.
@@ -35,7 +43,10 @@ pub struct PaneSet<T> {
 
 impl<T: Copy + PartialEq> PaneSet<T> {
     pub fn new(count: usize) -> Self {
-        Self { panes: vec![None; count.max(1)], focused: 0 }
+        Self {
+            panes: vec![None; count.max(1)],
+            focused: 0,
+        }
     }
 
     /// A pane set restored from a saved session (`focused` is clamped).
@@ -60,11 +71,11 @@ impl<T: Copy + PartialEq> PaneSet<T> {
                 let f = self.focused.min(visible - 1);
                 self.focused = f;
                 self.panes.swap(i, f);
-            },
+            }
             None => {
                 self.focused = self.focused.min(visible - 1);
                 self.panes[self.focused] = Some(tab);
-            },
+            }
         }
     }
 
@@ -128,7 +139,7 @@ impl<T: Copy + PartialEq> PaneSet<T> {
             Some(i) => {
                 self.panes[i] = Some(tab);
                 self.focused = i;
-            },
+            }
             None => self.panes[self.focused] = Some(tab),
         }
     }

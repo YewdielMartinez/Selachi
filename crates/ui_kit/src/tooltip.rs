@@ -1,8 +1,6 @@
 //! Hover hint: the only floating surface besides popovers (`surface_3`, 1 px `outline_soft`).
 
-use gpui::{
-    AnyView, App, Context, IntoElement, Render, SharedString, Window, div, prelude::*, px,
-};
+use gpui::{AnyView, App, Context, IntoElement, Render, SharedString, Window, div, prelude::*, px};
 use theme::Theme;
 
 /// A small hint bubble. Multi-line text is supported (`\n`), which is how the usage pill lists
@@ -26,12 +24,22 @@ impl Tooltip {
     ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
         let text: SharedString = text.into();
         let theme = *theme;
-        move |_window, cx| cx.new(|_| Tooltip { text: text.clone(), theme }).into()
+        move |_window, cx| {
+            cx.new(|_| Tooltip {
+                text: text.clone(),
+                theme,
+            })
+            .into()
+        }
     }
 
     /// The bubble as a plain element, for galleries and docs (not hover-driven).
     pub fn bubble(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
-        Tooltip { text: text.into(), theme: *theme }.element()
+        Tooltip {
+            text: text.into(),
+            theme: *theme,
+        }
+        .element()
     }
 
     fn element(&self) -> impl IntoElement + use<> {

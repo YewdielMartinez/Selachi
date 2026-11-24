@@ -39,12 +39,20 @@ pub fn display_path(root: Option<&Path>, path: &Path) -> String {
 
 /// Breadcrumb segments of a display path (`crates/ui_viewer/src/lib.rs` -> 4 segments).
 pub fn breadcrumb(display: &str) -> Vec<String> {
-    display.split('/').filter(|s| !s.is_empty()).map(str::to_owned).collect()
+    display
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Walks up from `start` looking for a `.git` entry; the directory that holds it.
 pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
-    let mut cur = if start.is_dir() { Some(start) } else { start.parent() };
+    let mut cur = if start.is_dir() {
+        Some(start)
+    } else {
+        start.parent()
+    };
     while let Some(dir) = cur {
         if dir.join(".git").exists() {
             return Some(dir.to_path_buf());
@@ -76,8 +84,14 @@ mod tests {
     #[test]
     fn display_and_breadcrumb() {
         let root = Path::new("C:/proj");
-        assert_eq!(display_path(Some(root), Path::new("C:/proj/src/a.rs")), "src/a.rs");
-        assert_eq!(display_path(Some(root), Path::new("D:/x/a.rs")), "D:/x/a.rs");
+        assert_eq!(
+            display_path(Some(root), Path::new("C:/proj/src/a.rs")),
+            "src/a.rs"
+        );
+        assert_eq!(
+            display_path(Some(root), Path::new("D:/x/a.rs")),
+            "D:/x/a.rs"
+        );
         assert_eq!(display_path(None, Path::new("a.rs")), "a.rs");
         assert_eq!(breadcrumb("src/a/b.rs"), ["src", "a", "b.rs"]);
     }

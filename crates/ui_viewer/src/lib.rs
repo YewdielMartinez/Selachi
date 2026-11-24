@@ -56,8 +56,8 @@ pub use image_info::image_dimensions;
 pub use minimap::{BarSpec, bars, changed_flags, row_at, viewport_rect};
 pub use spans::{PreparedLine, find_ranges, overlay, prepare_line};
 pub use state::{
-    Body, FindState, Goto, PluginHint, default_body, parse_goto, plugin_hint, reading_cap, search_document, source_body,
-    supports_diff,
+    Body, FindState, Goto, PluginHint, default_body, parse_goto, plugin_hint, reading_cap,
+    search_document, source_body, supports_diff,
 };
 pub use syntax::color_for;
 pub use tab::{ViewerTab, open_tab};

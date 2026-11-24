@@ -30,7 +30,8 @@ use agents_driver::{AgentEvent, AgentKind, AgentStatus, PermissionMode, TaskStat
 use chat_core::{ChatStore, ThreadId, ThreadSpec, ThreadStatus};
 use fake::{FactoryHandle, FakeFactory, Step};
 use gpui::{
-    App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
 };
 use panel_api::{TabHandle, WidthClass};
 use serde_json::json;
@@ -43,7 +44,12 @@ const TEXT_1: &str = "Voy a revisar el lexer: el problema está en cómo `skip_c
 const TEXT_2: &str = "Listo. Los comentarios anidados ya se cierran donde toca y los **14 tests** pasan. Añadí dos casos nuevos en `lexer.rs`:\n\n- `/* a /* b */ c */` se consume entero\n- un comentario sin cerrar da el error `UnterminatedComment`\n";
 
 fn plan(done: usize, in_progress: bool) -> AgentEvent {
-    let items = ["Leer el lexer actual", "Contar la profundidad de /* */", "Añadir tests de comentarios anidados", "Ejecutar cargo test"];
+    let items = [
+        "Leer el lexer actual",
+        "Contar la profundidad de /* */",
+        "Añadir tests de comentarios anidados",
+        "Ejecutar cargo test",
+    ];
     AgentEvent::Plan {
         tasks: items
             .iter()
@@ -63,16 +69,36 @@ fn plan(done: usize, in_progress: bool) -> AgentEvent {
 }
 
 fn call(id: &str, kind: ToolKind, title: &str, input: serde_json::Value) -> AgentEvent {
-    AgentEvent::ToolCall { id: id.into(), kind, title: title.into(), input_json: input }
+    AgentEvent::ToolCall {
+        id: id.into(),
+        kind,
+        title: title.into(),
+        input_json: input,
+    }
 }
 
 fn result(id: &str, ok: bool, summary: &str) -> AgentEvent {
-    AgentEvent::ToolResult { id: id.into(), ok, summary: summary.into() }
+    AgentEvent::ToolResult {
+        id: id.into(),
+        ok,
+        summary: summary.into(),
+    }
 }
 
 fn deltas(text: &str, chunk: usize, delay: u64) -> Vec<Step> {
     let chars: Vec<char> = text.chars().collect();
-    chars.chunks(chunk).map(|c| Step::after(delay, AgentEvent::Text { text: c.iter().collect(), delta: true })).collect()
+    chars
+        .chunks(chunk)
+        .map(|c| {
+            Step::after(
+                delay,
+                AgentEvent::Text {
+                    text: c.iter().collect(),
+                    delta: true,
+                },
+            )
+        })
+        .collect()
 }
 
 /// The full scripted session. `pace` scales every pause (0 = instant); `stop_at_approval` leaves
@@ -107,7 +133,14 @@ fn session(pace: u64, stop_at_approval: bool) -> Vec<Step> {
     ]);
     if stop_at_approval {
         s.extend([
-            Step::after(d(300), AgentEvent::ApprovalRequest { id: "req-1".into(), tool: "Bash".into(), detail: "cargo clippy -p parser -- -D warnings".into() }),
+            Step::after(
+                d(300),
+                AgentEvent::ApprovalRequest {
+                    id: "req-1".into(),
+                    tool: "Bash".into(),
+                    detail: "cargo clippy -p parser -- -D warnings".into(),
+                },
+            ),
             Step::after(d(50), AgentEvent::Status(AgentStatus::WaitingForInput)),
         ]);
         return s;
@@ -119,13 +152,23 @@ fn session(pace: u64, stop_at_approval: bool) -> Vec<Step> {
 /// The tail of the session: plan 4/4, closing text, usage, Done.
 fn finish(pace: u64) -> Vec<Step> {
     let d = |ms: u64| ms * pace;
-    let mut s = vec![Step::after(d(200), AgentEvent::Status(AgentStatus::Working)), Step::after(d(200), plan(3, true))];
+    let mut s = vec![
+        Step::after(d(200), AgentEvent::Status(AgentStatus::Working)),
+        Step::after(d(200), plan(3, true)),
+    ];
     s.extend(deltas(TEXT_2, 16, d(22)));
     s.extend([
         Step::after(d(200), plan(4, false)),
         Step::after(
             d(100),
-            AgentEvent::Usage { input: 58_000, output: 2_100, cache_create: 0, cache_read: 20_000, cost_usd: Some(0.12), context_window: Some(1_000_000) },
+            AgentEvent::Usage {
+                input: 58_000,
+                output: 2_100,
+                cache_create: 0,
+                cache_read: 20_000,
+                cost_usd: Some(0.12),
+                context_window: Some(1_000_000),
+            },
         ),
         Step::after(d(100), AgentEvent::Status(AgentStatus::Done)),
     ]);
@@ -133,24 +176,40 @@ fn finish(pace: u64) -> Vec<Step> {
 }
 
 /// What the fake agent answers, by the prompt it receives.
-fn script(pace: u64, stop_at_approval: bool) -> impl Fn(usize, &str) -> Vec<Step> + Send + Sync + 'static {
+fn script(
+    pace: u64,
+    stop_at_approval: bool,
+) -> impl Fn(usize, &str) -> Vec<Step> + Send + Sync + 'static {
     move |_, prompt| {
         if prompt.starts_with("[working]") {
             vec![
-                Step::now(AgentEvent::SessionStarted { session_id: "w".into(), model: Some(MODEL.into()) }),
+                Step::now(AgentEvent::SessionStarted {
+                    session_id: "w".into(),
+                    model: Some(MODEL.into()),
+                }),
                 Step::now(AgentEvent::Status(AgentStatus::Working)),
-                Step::now(AgentEvent::Text { text: "Estoy migrando las pestañas…".into(), delta: true }),
+                Step::now(AgentEvent::Text {
+                    text: "Estoy migrando las pestañas…".into(),
+                    delta: true,
+                }),
             ]
         } else if prompt.starts_with("[waiting]") {
             vec![
                 Step::now(AgentEvent::Status(AgentStatus::Working)),
-                Step::now(AgentEvent::ApprovalRequest { id: "w1".into(), tool: "Bash".into(), detail: "git push origin main".into() }),
+                Step::now(AgentEvent::ApprovalRequest {
+                    id: "w1".into(),
+                    tool: "Bash".into(),
+                    detail: "git push origin main".into(),
+                }),
                 Step::now(AgentEvent::Status(AgentStatus::WaitingForInput)),
             ]
         } else if prompt.starts_with("[quick]") {
             vec![
                 Step::now(AgentEvent::Status(AgentStatus::Working)),
-                Step::now(AgentEvent::Text { text: "Hecho.".into(), delta: false }),
+                Step::now(AgentEvent::Text {
+                    text: "Hecho.".into(),
+                    delta: false,
+                }),
                 Step::now(AgentEvent::Status(AgentStatus::Done)),
             ]
         } else if prompt.starts_with("Refactoriza") {
@@ -158,7 +217,14 @@ fn script(pace: u64, stop_at_approval: bool) -> impl Fn(usize, &str) -> Vec<Step
         } else {
             vec![
                 Step::now(AgentEvent::Status(AgentStatus::Working)),
-                Step::after(pace * 400, AgentEvent::Text { text: "Entendido. Esto es una respuesta de la demo (sin modelo real).".into(), delta: false }),
+                Step::after(
+                    pace * 400,
+                    AgentEvent::Text {
+                        text: "Entendido. Esto es una respuesta de la demo (sin modelo real)."
+                            .into(),
+                        delta: false,
+                    },
+                ),
                 Step::now(AgentEvent::Status(AgentStatus::Done)),
             ]
         }
@@ -175,16 +241,79 @@ struct Seed {
 }
 
 fn seeds() -> Vec<Seed> {
-    let s = |title, project, agent: AgentKind, model, kind, age_min| Seed { title, project, agent, model, kind, age_min };
+    let s = |title, project, agent: AgentKind, model, kind, age_min| Seed {
+        title,
+        project,
+        agent,
+        model,
+        kind,
+        age_min,
+    };
     vec![
-        s("Migrar pestañas a la sidebar", "selachi", AgentKind::ClaudeCode, Some("claude-opus-5-5"), "[working]", 0),
-        s("Revisar el workflow de release", "selachi", AgentKind::Codex, Some("gpt-5-codex"), "[waiting]", 0),
-        s("Corregir el scroll del visor", "melon-mind", AgentKind::ClaudeCode, Some("claude-sonnet-5"), "[quick]", 49),
-        s("Añadir pruebas a tasks_svc", "selachi", AgentKind::ClaudeCode, Some("claude-opus-5-5"), "[quick]", 120),
-        s("Explicar el módulo de OSC 133", "selachi", AgentKind::OpenCode, None, "[quick]", 300),
-        s("Dockerizar el sitio", "stepbro-website", AgentKind::ClaudeCode, Some("claude-sonnet-5"), "[quick]", 60 * 26),
-        s("Bump de dependencias", "stepbro-website", AgentKind::Codex, Some("gpt-5-codex"), "[quick]", 60 * 50),
-        s("Migración de la base de datos", "melon-mind", AgentKind::ClaudeCode, Some("claude-haiku-4-5"), "[quick]", 60 * 24 * 3),
+        s(
+            "Migrar pestañas a la sidebar",
+            "selachi",
+            AgentKind::ClaudeCode,
+            Some("claude-opus-5-5"),
+            "[working]",
+            0,
+        ),
+        s(
+            "Revisar el workflow de release",
+            "selachi",
+            AgentKind::Codex,
+            Some("gpt-5-codex"),
+            "[waiting]",
+            0,
+        ),
+        s(
+            "Corregir el scroll del visor",
+            "melon-mind",
+            AgentKind::ClaudeCode,
+            Some("claude-sonnet-5"),
+            "[quick]",
+            49,
+        ),
+        s(
+            "Añadir pruebas a tasks_svc",
+            "selachi",
+            AgentKind::ClaudeCode,
+            Some("claude-opus-5-5"),
+            "[quick]",
+            120,
+        ),
+        s(
+            "Explicar el módulo de OSC 133",
+            "selachi",
+            AgentKind::OpenCode,
+            None,
+            "[quick]",
+            300,
+        ),
+        s(
+            "Dockerizar el sitio",
+            "stepbro-website",
+            AgentKind::ClaudeCode,
+            Some("claude-sonnet-5"),
+            "[quick]",
+            60 * 26,
+        ),
+        s(
+            "Bump de dependencias",
+            "stepbro-website",
+            AgentKind::Codex,
+            Some("gpt-5-codex"),
+            "[quick]",
+            60 * 50,
+        ),
+        s(
+            "Migración de la base de datos",
+            "melon-mind",
+            AgentKind::ClaudeCode,
+            Some("claude-haiku-4-5"),
+            "[quick]",
+            60 * 24 * 3,
+        ),
     ]
 }
 
@@ -198,7 +327,10 @@ fn make_project(root: &Path, name: &str) -> PathBuf {
 }
 
 fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 struct Host {
@@ -225,7 +357,9 @@ impl Render for Host {
             .gap(px(8.0))
             .child(Logo::new(t.mode).size(22.0))
             .child({
-                let mut p = Pill::new("tab", &t).active(true).label(info.title.to_string());
+                let mut p = Pill::new("tab", &t)
+                    .active(true)
+                    .label(info.title.to_string());
                 p = match &info.icon {
                     panel_api::TabIcon::Agent(name) => p.agent(ui_kit::AgentMark::from_name(name)),
                     panel_api::TabIcon::Kind(i) => p.icon(*i),
@@ -233,8 +367,23 @@ impl Render for Host {
                 p
             })
             .child(Pill::new("tab2", &t).icon(Icon::Terminal).label("terminal"));
-        let sidebar = self.list.clone().map(|l| div().w(px(300.0)).h_full().flex_none().rounded(px(16.0)).bg(c.surface_1).overflow_hidden().child(l));
-        let main = Card::new(&t).tone(CardTone::Base, &t).flex_1().min_w_0().h_full().overflow_hidden().child(self.tab.content(cx));
+        let sidebar = self.list.clone().map(|l| {
+            div()
+                .w(px(300.0))
+                .h_full()
+                .flex_none()
+                .rounded(px(16.0))
+                .bg(c.surface_1)
+                .overflow_hidden()
+                .child(l)
+        });
+        let main = Card::new(&t)
+            .tone(CardTone::Base, &t)
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .child(self.tab.content(cx));
         let status = div()
             .h(px(28.0))
             .flex_none()
@@ -252,7 +401,18 @@ impl Render for Host {
             .flex()
             .flex_col()
             .child(titlebar)
-            .child(div().flex_1().min_h_0().px(px(8.0)).pb(px(4.0)).flex().flex_row().gap(px(8.0)).children(sidebar).child(main))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px(px(8.0))
+                    .pb(px(4.0))
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.0))
+                    .children(sidebar)
+                    .child(main),
+            )
             .child(status)
     }
 }
@@ -260,7 +420,11 @@ impl Render for Host {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |n: &str| args.iter().any(|a| a == n);
-    let mode = if flag("light") { Mode::Light } else { Mode::Dark };
+    let mode = if flag("light") {
+        Mode::Light
+    } else {
+        Mode::Dark
+    };
     let scene = arg_value(&args, "--scene").unwrap_or("thread").to_owned();
     let (w, h) = arg_value(&args, "--size")
         .and_then(|s| s.split_once('x'))
@@ -272,7 +436,10 @@ fn main() {
 
     let tmp = std::env::temp_dir().join(format!("selachi-chat-demo-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
-    let projects: Vec<PathBuf> = ["selachi", "melon-mind", "stepbro-website"].iter().map(|n| make_project(&tmp, n)).collect();
+    let projects: Vec<PathBuf> = ["selachi", "melon-mind", "stepbro-website"]
+        .iter()
+        .map(|n| make_project(&tmp, n))
+        .collect();
 
     let pace = if scene == "streaming" { 1 } else { 0 };
     let stop_at_approval = scene == "approval";
@@ -298,8 +465,15 @@ fn main() {
         let rec = store.create_thread(spec).expect("create thread");
         let rt = store.open(rec.id).expect("open thread");
         if scene != "streaming" {
-            let _ = rt.send("Refactoriza el parser para que soporte comentarios anidados y añade tests", Vec::new());
-            let want_status = if stop_at_approval { ThreadStatus::WaitingForInput } else { ThreadStatus::Done };
+            let _ = rt.send(
+                "Refactoriza el parser para que soporte comentarios anidados y añade tests",
+                Vec::new(),
+            );
+            let want_status = if stop_at_approval {
+                ThreadStatus::WaitingForInput
+            } else {
+                ThreadStatus::Done
+            };
             rt.wait_for(Duration::from_secs(20), |s| s.status == want_status);
         }
         main_id = Some(rec.id);
@@ -309,7 +483,14 @@ fn main() {
     if scene == "list" {
         let mut to_close = Vec::new();
         for seed in seeds() {
-            let mut spec = ThreadSpec::new(projects.iter().find(|p| p.ends_with(seed.project)).cloned().unwrap_or_else(|| main_project.clone()), seed.agent.clone());
+            let mut spec = ThreadSpec::new(
+                projects
+                    .iter()
+                    .find(|p| p.ends_with(seed.project))
+                    .cloned()
+                    .unwrap_or_else(|| main_project.clone()),
+                seed.agent.clone(),
+            );
             spec.model = seed.model.map(str::to_string);
             spec.title = Some(seed.title.to_string());
             let rec = store.create_thread(spec).expect("create seed thread");
@@ -335,7 +516,10 @@ fn main() {
         if let Ok(conn) = rusqlite::Connection::open(&db) {
             let now = chat_core::now_ms();
             for (id, age) in &to_close {
-                let _ = conn.execute("UPDATE threads SET updated = ?1 WHERE id = ?2", rusqlite::params![now - age * 60_000, id.0]);
+                let _ = conn.execute(
+                    "UPDATE threads SET updated = ?1 WHERE id = ?2",
+                    rusqlite::params![now - age * 60_000, id.0],
+                );
             }
         }
     }

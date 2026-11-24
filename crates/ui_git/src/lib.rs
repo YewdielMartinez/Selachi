@@ -45,11 +45,14 @@ pub use data::{DiffTarget, GitData, HISTORY_LEN};
 pub use diffview::{DiffPreview, DiffRow, FileDiff, PreviewLine, parse_unified};
 pub use gate::{Gate, Outcome, Review, ReviewLine, translate_warning};
 pub use model::{
-    CheckpointFiles, CheckpointView, DiffSlot, DiffState, ExecMode, GitModel, GitPanelEvent, Load, OpFinished, Stats,
-    WATCH_DEBOUNCE,
+    CheckpointFiles, CheckpointView, DiffSlot, DiffState, ExecMode, GitModel, GitPanelEvent, Load,
+    OpFinished, Stats, WATCH_DEBOUNCE,
 };
 pub use sections::{FileRow, Section, build_sections};
-pub use view::{GitPanel, GitPanelProvider, Layout, PANEL_ID, Tab, WIDE_FROM_PX, init, layout_for, path_budget, thumbnail};
+pub use view::{
+    GitPanel, GitPanelProvider, Layout, PANEL_ID, Tab, WIDE_FROM_PX, init, layout_for, path_budget,
+    thumbnail,
+};
 
 #[cfg(test)]
 mod tests;

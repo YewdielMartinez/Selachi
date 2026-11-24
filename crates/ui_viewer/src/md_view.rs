@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui::{
-    AnyElement, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _,
-    SharedString, StrikethroughStyle, Styled as _, StyledText, div, img, prelude::*, px, relative,
+    AnyElement, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement,
+    ParentElement as _, SharedString, StrikethroughStyle, Styled as _, StyledText, div, img,
+    prelude::*, px, relative,
 };
 use theme::{Radius, Theme};
 use ui_kit::{Icon, icon};
@@ -29,8 +30,18 @@ pub struct MdRender<'a> {
 }
 
 impl<'a> MdRender<'a> {
-    pub fn new(theme: Theme, base_dir: Option<PathBuf>, highlights: &'a HashMap<usize, Vec<LineSpans>>) -> Self {
-        Self { theme, base_dir, highlights, next_id: Cell::new(0), next_code: Cell::new(0) }
+    pub fn new(
+        theme: Theme,
+        base_dir: Option<PathBuf>,
+        highlights: &'a HashMap<usize, Vec<LineSpans>>,
+    ) -> Self {
+        Self {
+            theme,
+            base_dir,
+            highlights,
+            next_id: Cell::new(0),
+            next_code: Cell::new(0),
+        }
     }
 
     fn id(&self) -> usize {
@@ -46,7 +57,9 @@ pub fn code_blocks(blocks: &[MdBlock]) -> Vec<(usize, String, String)> {
     fn walk(blocks: &[MdBlock], out: &mut Vec<(usize, String, String)>) {
         for b in blocks {
             match b {
-                MdBlock::CodeBlock { lang, text } => out.push((out.len(), lang.clone().unwrap_or_default(), text.clone())),
+                MdBlock::CodeBlock { lang, text } => {
+                    out.push((out.len(), lang.clone().unwrap_or_default(), text.clone()))
+                }
                 MdBlock::List { items, .. } => items.iter().for_each(|i| walk(&i.blocks, out)),
                 MdBlock::Quote(inner) => walk(inner, out),
                 _ => {}
@@ -62,7 +75,10 @@ pub fn render_blocks(blocks: &[MdBlock], r: &MdRender<'_>) -> Vec<AnyElement> {
     blocks.iter().map(|b| render_block(b, r)).collect()
 }
 
-fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+fn inline_styles(
+    flat: &FlatInline,
+    theme: &Theme,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     let c = theme.colors;
     flat.runs
         .iter()
@@ -75,7 +91,10 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(std::ops::Range<usize
                 h.font_style = Some(FontStyle::Italic);
             }
             if s.strike {
-                h.strikethrough = Some(StrikethroughStyle { thickness: px(1.0), color: Some(c.muted.into()) });
+                h.strikethrough = Some(StrikethroughStyle {
+                    thickness: px(1.0),
+                    color: Some(c.muted.into()),
+                });
             }
             if s.code {
                 h.background_color = Some(c.surface_3.into());
@@ -83,7 +102,11 @@ fn inline_styles(flat: &FlatInline, theme: &Theme) -> Vec<(std::ops::Range<usize
             }
             if s.link {
                 h.color = Some(c.accent.into());
-                h.underline = Some(gpui::UnderlineStyle { thickness: px(1.0), color: Some(c.accent.into()), wavy: false });
+                h.underline = Some(gpui::UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(c.accent.into()),
+                    wavy: false,
+                });
             }
             (range.clone(), h)
         })
@@ -126,7 +149,11 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .mt(px(if *level <= 2 { 22.0 } else { 14.0 }))
             .mb(px(6.0))
             .text_size(px(heading_size(*level)))
-            .font_weight(if *level <= 3 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+            .font_weight(if *level <= 3 {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::MEDIUM
+            })
             .line_height(relative(1.3))
             .text_color(c.text)
             .child(inline_el(inlines, r))
@@ -139,13 +166,23 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .child(inline_el(inlines, r))
             .into_any_element(),
         MdBlock::CodeBlock { lang, text } => code_block(lang.as_deref(), text, r),
-        MdBlock::List { ordered, start, items } => {
+        MdBlock::List {
+            ordered,
+            start,
+            items,
+        } => {
             let rows: Vec<AnyElement> = items
                 .iter()
                 .enumerate()
                 .map(|(i, item)| list_item(*ordered, *start + i as u64, item, r))
                 .collect();
-            div().my(px(5.0)).flex().flex_col().gap(px(4.0)).children(rows).into_any_element()
+            div()
+                .my(px(5.0))
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .children(rows)
+                .into_any_element()
         }
         MdBlock::Quote(inner) => div()
             .my(px(8.0))
@@ -163,7 +200,11 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .flex()
             .flex_row()
             .gap(px(6.0))
-            .children((0..3).map(|i| div().size(px(4.0)).bg(if i == 1 { c.outline } else { c.surface_4 })))
+            .children((0..3).map(|i| {
+                div()
+                    .size(px(4.0))
+                    .bg(if i == 1 { c.outline } else { c.surface_4 })
+            }))
             .into_any_element(),
         MdBlock::Table(t) => table(t, r),
         MdBlock::Image { src, alt } => image_block(src, alt, r),
@@ -275,7 +316,14 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
         .gap(px(8.0))
         .pl(px(6.0))
         .child(marker)
-        .child(div().flex_1().min_w_0().flex().flex_col().children(render_blocks(&item.blocks, r)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .children(render_blocks(&item.blocks, r)),
+        )
         .into_any_element()
 }
 
@@ -299,13 +347,18 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
         d.child(inline_el(inlines, r)).into_any_element()
     };
     let align = |i: usize| t.aligns.get(i).copied().unwrap_or(MdAlign::None);
-    let header = div()
-        .flex()
-        .flex_row()
-        .bg(c.surface_2)
-        .children(t.header.iter().enumerate().map(|(i, h)| cell(h, align(i), true)));
+    let header = div().flex().flex_row().bg(c.surface_2).children(
+        t.header
+            .iter()
+            .enumerate()
+            .map(|(i, h)| cell(h, align(i), true)),
+    );
     let rows = t.rows.iter().map(|row| {
-        div().flex().flex_row().children(row.iter().enumerate().map(|(i, h)| cell(h, align(i), false)))
+        div().flex().flex_row().children(
+            row.iter()
+                .enumerate()
+                .map(|(i, h)| cell(h, align(i), false)),
+        )
     });
     div()
         .my(px(8.0))
@@ -325,13 +378,22 @@ fn image_block(src: &str, alt: &str, r: &MdRender<'_>) -> AnyElement {
         None
     } else {
         let p = PathBuf::from(src);
-        let resolved = if p.is_absolute() { Some(p) } else { r.base_dir.as_ref().map(|d| d.join(&p)) };
+        let resolved = if p.is_absolute() {
+            Some(p)
+        } else {
+            r.base_dir.as_ref().map(|d| d.join(&p))
+        };
         resolved.filter(|p| p.is_file())
     };
     match local {
         Some(path) => div()
             .my(px(8.0))
-            .child(img(path).max_w_full().max_h(px(420.0)).rounded(px(Radius::CONTROL)))
+            .child(
+                img(path)
+                    .max_w_full()
+                    .max_h(px(420.0))
+                    .rounded(px(Radius::CONTROL)),
+            )
             .into_any_element(),
         None => div()
             .my(px(6.0))

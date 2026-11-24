@@ -99,12 +99,16 @@ impl UsageInfo {
 
     /// The 5-hour snapshot, unless its window has already reset.
     pub fn fresh_five_hour(&self) -> Option<&Official> {
-        self.five_hour.as_ref().filter(|o| o.resets_at_ms > now_ms())
+        self.five_hour
+            .as_ref()
+            .filter(|o| o.resets_at_ms > now_ms())
     }
 }
 
 pub fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// `12_400_000` -> `12.4M`, `842_000` -> `842K`, `999` -> `999`.
@@ -117,7 +121,11 @@ pub fn compact_tokens(n: u64) -> String {
         _ => (f / 1e9, "B"),
     };
     // One decimal below 100, none above (`842K`, `12.4M`).
-    if v >= 100.0 { format!("{v:.0}{suffix}") } else { format!("{v:.1}{suffix}").replace(".0", "") }
+    if v >= 100.0 {
+        format!("{v:.0}{suffix}")
+    } else {
+        format!("{v:.1}{suffix}").replace(".0", "")
+    }
 }
 
 /// Hover text of the usage pill: the billable breakdown, the cache reads that are *not* counted,
@@ -134,13 +142,19 @@ pub fn usage_tooltip(info: &UsageInfo, now: i64) -> String {
             compact_tokens(w.output),
             compact_tokens(w.cache_create)
         ),
-        format!("Lecturas de caché {} (no cuentan)", compact_tokens(w.cache_read)),
+        format!(
+            "Lecturas de caché {} (no cuentan)",
+            compact_tokens(w.cache_read)
+        ),
     ];
     lines.push(match info.fresh_official() {
         Some(o) => {
             let mins = ((now - o.observed_ms).max(0) / 60_000).max(0);
-            format!("oficial · {:.0} % del límite semanal · hace {mins} min", o.percent)
-        },
+            format!(
+                "oficial · {:.0} % del límite semanal · hace {mins} min",
+                o.percent
+            )
+        }
         None => "estimado · suma de los registros locales".to_string(),
     });
     lines.join("\n")
@@ -151,7 +165,9 @@ pub(crate) fn db_path() -> Option<PathBuf> {
 }
 
 fn open(db: &Option<PathBuf>, cfg: &IngestConfig) -> anyhow::Result<Ingestor> {
-    let path = db.clone().ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))?;
+    let path = db
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -194,8 +210,13 @@ fn scan_job(
             Ok(i) => i,
             Err(e) => {
                 log::warn!("usage database unavailable: {e:#}");
-                return ScanOutcome { ingestor: None, info: Some(None), data_changed: false, failed: true };
-            },
+                return ScanOutcome {
+                    ingestor: None,
+                    info: Some(None),
+                    data_changed: false,
+                    failed: true,
+                };
+            }
         },
     };
     let mut data_changed = false;
@@ -205,7 +226,7 @@ fn scan_job(
         Work::Full => {
             data_changed = true;
             Some(ing.scan())
-        },
+        }
         Work::Paths(paths) => Some(ing.scan_paths(paths)),
     };
     match report {
@@ -213,17 +234,26 @@ fn scan_job(
             for e in &r.errors {
                 log::debug!("usage scan: {e}");
             }
-            data_changed |= r.events_inserted + r.events_updated + r.touches_inserted + r.rate_snapshots_inserted > 0;
-        },
+            data_changed |= r.events_inserted
+                + r.events_updated
+                + r.touches_inserted
+                + r.rate_snapshots_inserted
+                > 0;
+        }
         Some(Err(e)) => {
             log::warn!("usage scan failed: {e:#}");
             failed = true;
-        },
-        None => {},
+        }
+        None => {}
     }
     let recompute = data_changed || resummarize || failed || *work == Work::Summary;
     let info = recompute.then(|| summarize(&ing));
-    ScanOutcome { ingestor: Some(ing), info, data_changed, failed }
+    ScanOutcome {
+        ingestor: Some(ing),
+        info,
+        data_changed,
+        failed,
+    }
 }
 
 fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
@@ -247,17 +277,22 @@ fn summarize(ing: &Ingestor) -> Option<UsageInfo> {
             .find(|s| s.agent == Agent::Claude && s.window == window)
             .and_then(|s| {
                 let resets_at_ms = s.resets_at_ms.filter(|&r| r > now)?;
-                (s.used_percent.is_finite() && (0.0..=100.0).contains(&s.used_percent)).then_some(Official {
-                    percent: s.used_percent,
-                    resets_at_ms,
-                    observed_ms: s.ts_ms,
-                })
+                (s.used_percent.is_finite() && (0.0..=100.0).contains(&s.used_percent)).then_some(
+                    Official {
+                        percent: s.used_percent,
+                        resets_at_ms,
+                        observed_ms: s.ts_ms,
+                    },
+                )
             })
     };
     let official = official_for("seven_day");
     let five_hour = official_for("five_hour");
-    (week.total() > 0 || official.is_some() || five_hour.is_some())
-        .then_some(UsageInfo { week, official, five_hour })
+    (week.total() > 0 || official.is_some() || five_hour.is_some()).then_some(UsageInfo {
+        week,
+        official,
+        five_hour,
+    })
 }
 
 pub struct UsageMonitor {
@@ -294,7 +329,9 @@ impl UsageMonitor {
             pinned_active,
             last_scan: None,
             last_summary: Instant::now(),
-            model: cx.try_global::<crate::services::Services>().map(|s| s.usage.clone()),
+            model: cx
+                .try_global::<crate::services::Services>()
+                .map(|s| s.usage.clone()),
             tick: None,
         };
         // Init job: install the watchers and read the numbers already in the database. No log
@@ -352,7 +389,8 @@ impl UsageMonitor {
     fn on_tick(&mut self, cx: &mut Context<Self>) {
         if self.watcher.as_ref().is_some_and(|w| w.has_changes()) {
             self.check(TICK_GAP, cx);
-        } else if self.active && !self.in_flight && self.last_summary.elapsed() >= RESUMMARIZE_AFTER {
+        } else if self.active && !self.in_flight && self.last_summary.elapsed() >= RESUMMARIZE_AFTER
+        {
             self.start(Work::Summary, true, cx);
         }
     }
@@ -362,7 +400,9 @@ impl UsageMonitor {
         if !self.active || self.in_flight {
             return;
         }
-        let Some(watcher) = self.watcher.clone() else { return };
+        let Some(watcher) = self.watcher.clone() else {
+            return;
+        };
         if !watcher.has_changes() || self.last_scan.is_some_and(|t| t.elapsed() < min_gap) {
             return;
         }
@@ -410,7 +450,9 @@ impl UsageMonitor {
     fn apply(&mut self, out: ScanOutcome, ingest: bool, cx: &mut Context<Self>) {
         if ingest {
             self.last_scan = Some(Instant::now());
-            if out.failed && let Some(w) = &self.watcher {
+            if out.failed
+                && let Some(w) = &self.watcher
+            {
                 w.mark_all(); // retried on the next tick
             }
         }
@@ -423,7 +465,10 @@ impl UsageMonitor {
                 cx.notify(); // the only repaint request: the displayed numbers changed
             }
         }
-        if opened && out.data_changed && let Some(model) = &self.model {
+        if opened
+            && out.data_changed
+            && let Some(model) = &self.model
+        {
             model.update(cx, |u, cx| u.notify_scanned(cx));
         }
     }
@@ -446,22 +491,43 @@ mod tests {
         let log = dir.join("claude").join("p").join("s.jsonl");
         std::fs::create_dir_all(log.parent().unwrap()).unwrap();
         let line = r#"{"type":"assistant","timestamp":"2026-03-02T10:00:00.000Z","sessionId":"s","cwd":"C:/p","gitBranch":"main","requestId":"r1","uuid":"u1","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[]}}"#;
-        std::fs::write(&log, format!("{line}
-")).unwrap();
-        let cfg = IngestConfig { claude_projects: Some(dir.join("claude")), ..Default::default() };
+        std::fs::write(
+            &log,
+            format!(
+                "{line}
+"
+            ),
+        )
+        .unwrap();
+        let cfg = IngestConfig {
+            claude_projects: Some(dir.join("claude")),
+            ..Default::default()
+        };
         let db = Some(dir.join("t.db"));
 
         // Summary: touches no log, but computes the numbers.
         let out = scan_job(None, &db, &cfg, &Work::Summary, true);
         assert!(!out.data_changed && !out.failed && out.info.is_some());
         // Naming the file ingests it.
-        let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![log.clone()]), false);
+        let out = scan_job(
+            out.ingestor,
+            &db,
+            &cfg,
+            &Work::Paths(vec![log.clone()]),
+            false,
+        );
         assert!(out.data_changed && out.info.is_some());
         // Same file again, unchanged: nothing stored, numbers not recomputed.
         let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![log]), false);
         assert!(!out.data_changed && out.info.is_none());
         // An unrelated path is ignored.
-        let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![dir.join("claude").join("x.txt")]), false);
+        let out = scan_job(
+            out.ingestor,
+            &db,
+            &cfg,
+            &Work::Paths(vec![dir.join("claude").join("x.txt")]),
+            false,
+        );
         assert!(!out.data_changed && out.info.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -479,16 +545,48 @@ mod tests {
 
     #[test]
     fn expired_official_snapshot_is_not_fresh() {
-        let past = Official { percent: 40.0, resets_at_ms: now_ms() - 1, observed_ms: 0 };
-        let future = Official { percent: 40.0, resets_at_ms: now_ms() + 60_000, observed_ms: 0 };
-        let week = TokenBreakdown { input: 1, ..Default::default() };
-        assert!(UsageInfo { week, official: Some(past), five_hour: None }.fresh_official().is_none());
-        assert!(UsageInfo { week, official: Some(future), five_hour: None }.fresh_official().is_some());
+        let past = Official {
+            percent: 40.0,
+            resets_at_ms: now_ms() - 1,
+            observed_ms: 0,
+        };
+        let future = Official {
+            percent: 40.0,
+            resets_at_ms: now_ms() + 60_000,
+            observed_ms: 0,
+        };
+        let week = TokenBreakdown {
+            input: 1,
+            ..Default::default()
+        };
+        assert!(
+            UsageInfo {
+                week,
+                official: Some(past),
+                five_hour: None
+            }
+            .fresh_official()
+            .is_none()
+        );
+        assert!(
+            UsageInfo {
+                week,
+                official: Some(future),
+                five_hour: None
+            }
+            .fresh_official()
+            .is_some()
+        );
     }
 
     #[test]
     fn billable_excludes_cache_reads() {
-        let w = TokenBreakdown { input: 1_000_000, output: 2_000_000, cache_create: 9_400_000, cache_read: 84_000_000 };
+        let w = TokenBreakdown {
+            input: 1_000_000,
+            output: 2_000_000,
+            cache_create: 9_400_000,
+            cache_read: 84_000_000,
+        };
         assert_eq!(w.billable(), 12_400_000);
         assert_eq!(w.total(), 96_400_000);
         assert_eq!(compact_tokens(w.billable()), "12.4M");
@@ -496,15 +594,38 @@ mod tests {
 
     #[test]
     fn tooltip_lists_breakdown_and_labels_estimate() {
-        let week = TokenBreakdown { input: 1_000_000, output: 2_000_000, cache_create: 9_400_000, cache_read: 84_000_000 };
-        let est = usage_tooltip(&UsageInfo { week, official: None, five_hour: None }, now_ms());
+        let week = TokenBreakdown {
+            input: 1_000_000,
+            output: 2_000_000,
+            cache_create: 9_400_000,
+            cache_read: 84_000_000,
+        };
+        let est = usage_tooltip(
+            &UsageInfo {
+                week,
+                official: None,
+                five_hour: None,
+            },
+            now_ms(),
+        );
         assert!(est.contains("Facturables 12.4M"));
         assert!(est.contains("Lecturas de caché 84M (no cuentan)"));
         assert!(est.contains("estimado"));
         assert!(!est.contains("oficial"));
 
-        let official = Official { percent: 42.0, resets_at_ms: now_ms() + 60_000, observed_ms: now_ms() - 120_000 };
-        let off = usage_tooltip(&UsageInfo { week, official: Some(official), five_hour: None }, now_ms());
+        let official = Official {
+            percent: 42.0,
+            resets_at_ms: now_ms() + 60_000,
+            observed_ms: now_ms() - 120_000,
+        };
+        let off = usage_tooltip(
+            &UsageInfo {
+                week,
+                official: Some(official),
+                five_hour: None,
+            },
+            now_ms(),
+        );
         assert!(off.contains("oficial · 42 % del límite semanal · hace 2 min"));
         assert!(!off.contains("estimado"));
     }

@@ -41,10 +41,18 @@ pub fn since_process_start() -> Option<std::time::Duration> {
 
     // SAFETY: all out-pointers are valid FILETIMEs; the pseudo-handle needs no closing.
     let created_ms = unsafe {
-        let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
         let (mut created, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
-        if GetProcessTimes(GetCurrentProcess(), &mut created, &mut exit, &mut kernel, &mut user)
-            == 0
+        if GetProcessTimes(
+            GetCurrentProcess(),
+            &mut created,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        ) == 0
         {
             return None;
         }
@@ -56,7 +64,9 @@ pub fn since_process_start() -> Option<std::time::Duration> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_millis() as u64;
-    Some(std::time::Duration::from_millis(now_ms.saturating_sub(created_ms)))
+    Some(std::time::Duration::from_millis(
+        now_ms.saturating_sub(created_ms),
+    ))
 }
 
 /// Non-Windows fallback: unsupported.

@@ -16,7 +16,11 @@ use crate::form::FormSpec;
 pub enum PaletteEvent {
     /// Type `line` + Enter in a terminal. `new_tab` = open a fresh tab at `cwd` first; otherwise
     /// the active tab (after a `cd` when `cwd` differs).
-    RunCommand { line: String, cwd: Option<PathBuf>, new_tab: bool },
+    RunCommand {
+        line: String,
+        cwd: Option<PathBuf>,
+        new_tab: bool,
+    },
     /// Paste `text` at the prompt of the active tab **without** pressing Enter.
     InsertText(String),
     /// Open a folder: in a new tab, or `cd` in the active one.
@@ -64,11 +68,19 @@ pub struct ItemAction {
 
 impl ItemAction {
     pub fn emit(label: &'static str, event: PaletteEvent) -> Self {
-        Self { label, kind: ActionKind::Emit(event), effect: None }
+        Self {
+            label,
+            kind: ActionKind::Emit(event),
+            effect: None,
+        }
     }
 
     pub fn form(label: &'static str, spec: FormSpec) -> Self {
-        Self { label, kind: ActionKind::Form(Arc::new(spec)), effect: None }
+        Self {
+            label,
+            kind: ActionKind::Form(Arc::new(spec)),
+            effect: None,
+        }
     }
 
     pub fn with_effect(mut self, effect: Effect) -> Self {
@@ -96,7 +108,11 @@ pub struct PaletteItem {
 }
 
 impl PaletteItem {
-    pub fn new(key: impl Into<String>, title: impl Into<SharedString>, primary: ItemAction) -> Self {
+    pub fn new(
+        key: impl Into<String>,
+        title: impl Into<SharedString>,
+        primary: ItemAction,
+    ) -> Self {
         Self {
             key: key.into(),
             title: title.into(),

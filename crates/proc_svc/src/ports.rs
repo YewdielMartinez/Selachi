@@ -124,7 +124,14 @@ fn tcp4() -> Vec<PortInfo> {
     let buf = fetch(|p, sz| {
         // SAFETY: `p` points to a buffer of `*sz` bytes.
         unsafe {
-            GetExtendedTcpTable(Some(p), sz, false, u32::from(AF_INET.0), TCP_TABLE_OWNER_PID_LISTENER, 0)
+            GetExtendedTcpTable(
+                Some(p),
+                sz,
+                false,
+                u32::from(AF_INET.0),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
         }
     });
     let Some(buf) = buf else { return Vec::new() };
@@ -144,7 +151,14 @@ fn tcp6() -> Vec<PortInfo> {
     let buf = fetch(|p, sz| {
         // SAFETY: `p` points to a buffer of `*sz` bytes.
         unsafe {
-            GetExtendedTcpTable(Some(p), sz, false, u32::from(AF_INET6.0), TCP_TABLE_OWNER_PID_LISTENER, 0)
+            GetExtendedTcpTable(
+                Some(p),
+                sz,
+                false,
+                u32::from(AF_INET6.0),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
         }
     });
     let Some(buf) = buf else { return Vec::new() };
@@ -163,7 +177,16 @@ fn tcp6() -> Vec<PortInfo> {
 fn udp4() -> Vec<PortInfo> {
     let buf = fetch(|p, sz| {
         // SAFETY: `p` points to a buffer of `*sz` bytes.
-        unsafe { GetExtendedUdpTable(Some(p), sz, false, u32::from(AF_INET.0), UDP_TABLE_OWNER_PID, 0) }
+        unsafe {
+            GetExtendedUdpTable(
+                Some(p),
+                sz,
+                false,
+                u32::from(AF_INET.0),
+                UDP_TABLE_OWNER_PID,
+                0,
+            )
+        }
     });
     let Some(buf) = buf else { return Vec::new() };
     let rows = table_rows!(buf, MIB_UDPTABLE_OWNER_PID, MIB_UDPROW_OWNER_PID);
@@ -181,7 +204,16 @@ fn udp4() -> Vec<PortInfo> {
 fn udp6() -> Vec<PortInfo> {
     let buf = fetch(|p, sz| {
         // SAFETY: `p` points to a buffer of `*sz` bytes.
-        unsafe { GetExtendedUdpTable(Some(p), sz, false, u32::from(AF_INET6.0), UDP_TABLE_OWNER_PID, 0) }
+        unsafe {
+            GetExtendedUdpTable(
+                Some(p),
+                sz,
+                false,
+                u32::from(AF_INET6.0),
+                UDP_TABLE_OWNER_PID,
+                0,
+            )
+        }
     });
     let Some(buf) = buf else { return Vec::new() };
     let rows = table_rows!(buf, MIB_UDP6TABLE_OWNER_PID, MIB_UDP6ROW_OWNER_PID);
@@ -215,7 +247,13 @@ mod tests {
                 && p.local_addr == IpAddr::V4(Ipv4Addr::LOCALHOST)),
             "own listener on {port} not found"
         );
-        assert_eq!(ports_by_pid(&ports)[&me].iter().filter(|p| p.port == port).count(), 1);
+        assert_eq!(
+            ports_by_pid(&ports)[&me]
+                .iter()
+                .filter(|p| p.port == port)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -225,10 +263,14 @@ mod tests {
         let uport = u.local_addr().expect("addr").port();
         let me = std::process::id();
         let ports = listening_ports();
-        assert!(ports.iter().any(|p| p.pid == me && p.proto == Proto::Udp && p.port == uport));
+        assert!(ports
+            .iter()
+            .any(|p| p.pid == me && p.proto == Proto::Udp && p.port == uport));
         if let Ok(l6) = l6 {
             let p6 = l6.local_addr().expect("addr").port();
-            assert!(ports.iter().any(|p| p.pid == me && p.port == p6 && p.local_addr.is_ipv6()));
+            assert!(ports
+                .iter()
+                .any(|p| p.pid == me && p.port == p6 && p.local_addr.is_ipv6()));
         }
     }
 }

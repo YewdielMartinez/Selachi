@@ -41,7 +41,12 @@ fn help_version_and_usage_errors() {
         c
     });
     assert_eq!(code, 0);
-    for needle in ["selachi-agent run", "SELACHI_PARENT_PERMISSION", "--worktree", "EXIT CODES"] {
+    for needle in [
+        "selachi-agent run",
+        "SELACHI_PARENT_PERMISSION",
+        "--worktree",
+        "EXIT CODES",
+    ] {
         assert!(out.contains(needle), "{needle} missing from help:\n{out}");
     }
     let (code, out, _) = run({
@@ -80,12 +85,19 @@ fn run_refusals_print_json_and_exit_3_without_starting_anything() {
         assert!(!v["reason"].as_str().unwrap().is_empty());
     };
     // no SELACHI_PARENT_PERMISSION: the calling session is read-only
-    check(&["codex", "x", "--permission", "accept-edits"], "permission_exceeds_parent");
-    check(&["codex", "x", "--permission", "ask"], "permission_exceeds_parent");
+    check(
+        &["codex", "x", "--permission", "accept-edits"],
+        "permission_exceeds_parent",
+    );
+    check(
+        &["codex", "x", "--permission", "ask"],
+        "permission_exceeds_parent",
+    );
     check(&["codex", "x", "--permission", "full"], "permission_full");
     // a depth-2 session cannot delegate any more
     let mut c = bin(dir.path());
-    c.env("SELACHI_DELEGATION_DEPTH", "2").args(["run", "codex", "x", "--json"]);
+    c.env("SELACHI_DELEGATION_DEPTH", "2")
+        .args(["run", "codex", "x", "--json"]);
     let (code, out, _) = run(c);
     assert_eq!(code, 3);
     assert!(out.contains("depth_exceeded"), "{out}");
@@ -94,7 +106,10 @@ fn run_refusals_print_json_and_exit_3_without_starting_anything() {
     c.args(["run", "codex", "x", "--permission", "ask"]);
     let (code, out, _) = run(c);
     assert_eq!(code, 3);
-    assert!(out.contains("refused") && out.contains("SELACHI_PARENT_PERMISSION"), "{out}");
+    assert!(
+        out.contains("refused") && out.contains("SELACHI_PARENT_PERMISSION"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -115,7 +130,10 @@ fn unknown_run_ids_are_reported() {
 
 /// A finished worktree run created in-process; returns (setup, repo, run id).
 fn finished_run(files: &[(&str, &str)]) -> (Setup, std::path::PathBuf, String) {
-    let files: Vec<(String, String)> = files.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+    let files: Vec<(String, String)> = files
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
     let s = setup(move |cfg, _, _| {
         for (path, body) in &files {
             let p = cfg.cwd.join(path);
@@ -148,7 +166,14 @@ fn status_result_and_diff_through_the_binary() {
     });
     assert_eq!(code, 0, "{out}");
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!((v["status"].as_str(), v["agent"].as_str(), v["applied"].as_bool()), (Some("done"), Some("codex"), Some(false)));
+    assert_eq!(
+        (
+            v["status"].as_str(),
+            v["agent"].as_str(),
+            v["applied"].as_bool()
+        ),
+        (Some("done"), Some("codex"), Some(false))
+    );
 
     let (code, out, _) = run({
         let mut c = bin(&data);
@@ -166,7 +191,10 @@ fn status_result_and_diff_through_the_binary() {
         c
     });
     assert_eq!(code, 0);
-    assert!(text_out.contains(&format!("run {id} · done")) && text_out.contains("a.txt"), "{text_out}");
+    assert!(
+        text_out.contains(&format!("run {id} · done")) && text_out.contains("a.txt"),
+        "{text_out}"
+    );
 
     let (code, out, _) = run({
         let mut c = bin(&data);
@@ -198,7 +226,10 @@ fn apply_dry_run_prints_the_plan_and_changes_nothing() {
     assert_eq!(v["requires_confirmation"], true);
     assert_eq!(v["risk"], "normal");
     assert_eq!(v["files"].as_array().unwrap().len(), 2);
-    assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "alpha\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "alpha\n"
+    );
     assert!(!repo.join("c.txt").exists());
 
     let (code, out, _) = run({
@@ -221,7 +252,10 @@ fn apply_needs_a_terminal_or_yes_and_never_applies_silently() {
     });
     assert_eq!(code, 1);
     assert!(err.contains("needs confirmation"), "{err}");
-    assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "alpha\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "alpha\n"
+    );
 
     // --yes is fine for a normal-risk plan
     let (code, out, err) = run({
@@ -230,7 +264,10 @@ fn apply_needs_a_terminal_or_yes_and_never_applies_silently() {
         c
     });
     assert_eq!(code, 0, "{out} {err}");
-    assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "alpha\nbeta\n");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "alpha\nbeta\n"
+    );
     let (_, _, err) = run({
         let mut c = bin(&s.data_dir());
         c.args(["apply", &id, "--yes"]);
@@ -256,7 +293,10 @@ fn apply_yes_is_refused_for_full_risk_changes() {
         c
     });
     assert_eq!(code, 1);
-    assert!(err.contains("--yes is not allowed for a full-risk apply"), "{err}");
+    assert!(
+        err.contains("--yes is not allowed for a full-risk apply"),
+        "{err}"
+    );
     assert!(!repo.join(".github").exists());
 }
 
@@ -265,9 +305,18 @@ fn apply_yes_is_refused_for_full_risk_changes() {
 #[test]
 #[ignore]
 fn smoke_list_json_on_this_machine() {
-    let o = Command::new(env!("CARGO_BIN_EXE_selachi-agent")).args(["list", "--json"]).stdin(Stdio::null()).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_selachi-agent"))
+        .args(["list", "--json"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
-    assert_eq!(o.status.code(), Some(0), "{out}\n{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{out}\n{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
     let v: Value = serde_json::from_str(&out).unwrap();
     let agents = v["agents"].as_array().unwrap();
     assert_eq!(agents.len(), 5, "claude, codex, opencode, gemini, agy");

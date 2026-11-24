@@ -11,8 +11,8 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
@@ -58,7 +58,9 @@ pub(crate) struct PtySender {
 
 impl PtySender {
     pub(crate) fn send(&self, msg: Msg) -> io::Result<()> {
-        self.tx.send(msg).map_err(|_| io::Error::new(ErrorKind::BrokenPipe, "pty loop is gone"))?;
+        self.tx
+            .send(msg)
+            .map_err(|_| io::Error::new(ErrorKind::BrokenPipe, "pty loop is gone"))?;
         self.poller.notify()
     }
 }
@@ -128,7 +130,10 @@ where
 {
     let poller: Arc<Poller> = Poller::new()?.into();
     let (tx, rx) = mpsc::channel();
-    let sender = PtySender { tx, poller: poller.clone() };
+    let sender = PtySender {
+        tx,
+        poller: poller.clone(),
+    };
     ready(&sender);
     std::thread::Builder::new()
         .name("selachi-pty".to_string())
@@ -155,7 +160,10 @@ impl WriteState {
     }
 
     fn goto_next(&mut self) {
-        self.current = self.list.pop_front().map(|source| Writing { source, written: 0 });
+        self.current = self
+            .list
+            .pop_front()
+            .map(|source| Writing { source, written: 0 });
     }
 
     fn needs_write(&self) -> bool {
@@ -188,8 +196,9 @@ fn run<P, H>(
     let mut events = Events::with_capacity(NonZeroUsize::MIN.saturating_add(1023));
 
     'event_loop: loop {
-        let timeout =
-            ingest.sync_timeout().map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let timeout = ingest
+            .sync_timeout()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()));
         events.clear();
         if let Err(err) = poller.wait(&mut events, timeout) {
             if err.kind() == ErrorKind::Interrupted {
@@ -206,11 +215,11 @@ fn run<P, H>(
                 Ok(Msg::Input(bytes)) => {
                     writes.list.push_back(bytes);
                     got_message = true;
-                },
+                }
                 Ok(Msg::Resize(size)) => {
                     pty.on_resize(size);
                     got_message = true;
-                },
+                }
                 Ok(Msg::Shutdown) | Err(TryRecvError::Disconnected) => break 'event_loop,
                 Err(TryRecvError::Empty) => break,
             }
@@ -235,7 +244,7 @@ fn run<P, H>(
                         hooks.send_event(Event::Wakeup);
                         break 'event_loop;
                     }
-                },
+                }
                 PTY_READ_WRITE_TOKEN => {
                     if event.is_interrupt() {
                         continue;
@@ -252,8 +261,8 @@ fn run<P, H>(
                         log::error!("error writing to the pty: {err}");
                         break 'event_loop;
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
 
@@ -299,7 +308,7 @@ where
                     if unprocessed == 0 {
                         break;
                     }
-                },
+                }
                 _ => return Err(err),
             },
         }
@@ -341,21 +350,21 @@ fn pty_write<P: EventedPty>(pty: &mut P, state: &mut WriteState) -> io::Result<(
                 Ok(0) => {
                     state.current = Some(current);
                     break 'write_many;
-                },
+                }
                 Ok(n) => {
                     current.written += n;
                     if current.written >= current.source.len() {
                         state.goto_next();
                         break;
                     }
-                },
+                }
                 Err(err) => {
                     state.current = Some(current);
                     match err.kind() {
                         ErrorKind::Interrupted | ErrorKind::WouldBlock => break 'write_many,
                         _ => return Err(err),
                     }
-                },
+                }
             }
         }
     }

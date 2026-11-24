@@ -13,8 +13,8 @@ use crate::db::{default_db_path, ChatDb, NewThread};
 use crate::error::{ChatError, Result};
 use crate::hooks::{DefaultDriverFactory, DriverFactory, ProcessHooks};
 use crate::model::{
-    now_ms, path_key, Archived, ThreadFilter, ThreadGroups, ThreadId, ThreadLink, ThreadRecord, ThreadSpec,
-    ThreadStatus,
+    now_ms, path_key, Archived, ThreadFilter, ThreadGroups, ThreadId, ThreadLink, ThreadRecord,
+    ThreadSpec, ThreadStatus,
 };
 use crate::runtime::{Shared, ThreadRuntime, ThreadUpdate};
 use crate::state::{Changed, CostPolicy};
@@ -74,7 +74,9 @@ impl ChatStoreBuilder {
             None => default_db_path()?,
         };
         let db = ChatDb::open_with(&path, !self.keep_busy)?;
-        let factory = self.factory.unwrap_or_else(|| Arc::new(DefaultDriverFactory));
+        let factory = self
+            .factory
+            .unwrap_or_else(|| Arc::new(DefaultDriverFactory));
         let pricing = Arc::new(self.pricing.unwrap_or_else(PricingTable::embedded));
         Ok(ChatStore {
             inner: Arc::new(StoreInner {
@@ -107,7 +109,9 @@ pub struct ChatStore {
 
 impl std::fmt::Debug for ChatStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatStore").field("db", &self.inner.shared.db).finish()
+        f.debug_struct("ChatStore")
+            .field("db", &self.inner.shared.db)
+            .finish()
     }
 }
 
@@ -184,7 +188,10 @@ impl ChatStore {
             thread_id: id,
             revision: 0,
             status,
-            changed: Changed { list: true, ..Changed::default() },
+            changed: Changed {
+                list: true,
+                ..Changed::default()
+            },
         });
     }
 
@@ -194,15 +201,27 @@ impl ChatStore {
     /// (`NotAGitRepo` if the project is not a repository) and the agent will run inside it.
     pub fn create_thread(&self, spec: ThreadSpec) -> Result<ThreadRecord> {
         if !spec.project_root.is_dir() {
-            return Err(ChatError::Invalid(format!("project folder not found: {}", spec.project_root.display())));
+            return Err(ChatError::Invalid(format!(
+                "project folder not found: {}",
+                spec.project_root.display()
+            )));
         }
-        let title = spec.title.as_deref().map(str::trim).unwrap_or("").to_string();
+        let title = spec
+            .title
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
         let worktree_path = if spec.use_worktree {
             Some(create_worktree(&spec.project_root, &title)?)
         } else {
             None
         };
-        let id = self.inner.shared.db.insert_thread(NewThread { spec, title, worktree_path })?;
+        let id = self.inner.shared.db.insert_thread(NewThread {
+            spec,
+            title,
+            worktree_path,
+        })?;
         let rec = self
             .inner
             .shared
@@ -271,7 +290,9 @@ impl ChatStore {
                 Archived::Exclude => !t.archived,
                 Archived::Only => t.archived,
                 Archived::Include => true,
-            }) && want_project.as_ref().is_none_or(|p| *p == path_key(&t.project_root))
+            }) && want_project
+                .as_ref()
+                .is_none_or(|p| *p == path_key(&t.project_root))
                 && filter.status.is_none_or(|s| s == t.status)
                 && filter.group.is_none_or(|g| g == t.group())
         });
@@ -323,7 +344,9 @@ impl ChatStore {
         if let Some(rt) = self.inner.runtimes.lock().get(&id) {
             rt.set_title(&title);
         }
-        let status = self.get_thread(id)?.map_or(ThreadStatus::Idle, |t| t.status);
+        let status = self
+            .get_thread(id)?
+            .map_or(ThreadStatus::Idle, |t| t.status);
         self.announce(id, status);
         Ok(())
     }
@@ -349,8 +372,15 @@ impl ChatStore {
             .get_thread(id)?
             .ok_or_else(|| ChatError::NotFound(format!("thread {id}")))?;
         let message_count = self.inner.shared.db.message_count(id)?;
-        let worktree = thread.worktree_path.as_ref().map(|wt| preview_worktree(&thread.project_root, wt));
-        Ok(DeletePreview { thread, message_count, worktree })
+        let worktree = thread
+            .worktree_path
+            .as_ref()
+            .map(|wt| preview_worktree(&thread.project_root, wt));
+        Ok(DeletePreview {
+            thread,
+            message_count,
+            worktree,
+        })
     }
 
     /// Delete a thread and its history (cascade). The agent is stopped first. The worktree is
@@ -364,7 +394,10 @@ impl ChatStore {
         if let Some(rt) = rt {
             rt.close();
         }
-        let mut report = DeleteReport { worktree_removed: false, branch_kept: None };
+        let mut report = DeleteReport {
+            worktree_removed: false,
+            branch_kept: None,
+        };
         if let (true, Some(wt)) = (opts.remove_worktree, thread.worktree_path.as_ref()) {
             let repo = git_svc::Repo::discover(&thread.project_root)?
                 .ok_or_else(|| ChatError::NotAGitRepo(thread.project_root.clone()))?;
@@ -463,14 +496,21 @@ pub fn worktree_name(title: &str) -> String {
 }
 
 fn create_worktree(project_root: &Path, title: &str) -> Result<PathBuf> {
-    let repo = git_svc::Repo::discover(project_root)?.ok_or_else(|| ChatError::NotAGitRepo(project_root.to_path_buf()))?;
+    let repo = git_svc::Repo::discover(project_root)?
+        .ok_or_else(|| ChatError::NotAGitRepo(project_root.to_path_buf()))?;
     let base = worktree_name(title);
     let mut last_err = None;
     for n in 1..=20 {
-        let name = if n == 1 { base.clone() } else { format!("{base}-{n}") };
+        let name = if n == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{n}")
+        };
         match repo.create_worktree(&git_svc::NewWorktree::new(&name)) {
             Ok(wt) => return Ok(wt.path),
-            Err(git_svc::Error::InvalidArgument(m)) if m.contains("already exists") || m.contains("already a worktree") => {
+            Err(git_svc::Error::InvalidArgument(m))
+                if m.contains("already exists") || m.contains("already a worktree") =>
+            {
                 last_err = Some(git_svc::Error::InvalidArgument(m));
             }
             Err(e) => return Err(e.into()),
@@ -494,13 +534,17 @@ fn preview_worktree(project_root: &Path, wt: &Path) -> WorktreePreview {
     let repo = match git_svc::Repo::discover(project_root) {
         Ok(Some(r)) => r,
         _ => {
-            p.warnings.push("no se pudo abrir el repositorio del proyecto".into());
+            p.warnings
+                .push("no se pudo abrir el repositorio del proyecto".into());
             p.requires_confirmation = p.exists;
             return p;
         }
     };
     if let Ok(list) = repo.worktrees() {
-        p.branch = list.into_iter().find(|w| path_key(&w.path) == path_key(wt)).and_then(|w| w.branch);
+        p.branch = list
+            .into_iter()
+            .find(|w| path_key(&w.path) == path_key(wt))
+            .and_then(|w| w.branch);
     }
     if p.exists {
         p.dirty = repo.worktree_is_dirty(wt).ok();

@@ -80,7 +80,10 @@ fn split_command_line(cmd: &str) -> Vec<String> {
 }
 
 fn last_component(token: &str) -> &str {
-    token.rsplit(['\\', '/']).find(|s| !s.is_empty()).unwrap_or(token)
+    token
+        .rsplit(['\\', '/'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(token)
 }
 
 fn strip_exe(name: &str) -> &str {
@@ -152,8 +155,14 @@ mod tests {
         assert_eq!(format_cpu(f32::NAN), "0%");
         assert_eq!(format_uptime(Duration::from_secs(45)), "45s");
         assert_eq!(format_uptime(Duration::from_secs(12 * 60 + 3)), "12m");
-        assert_eq!(format_uptime(Duration::from_secs(2 * 3_600 + 5 * 60)), "2h 05m");
-        assert_eq!(format_uptime(Duration::from_secs(3 * 86_400 + 4 * 3_600)), "3d 4h");
+        assert_eq!(
+            format_uptime(Duration::from_secs(2 * 3_600 + 5 * 60)),
+            "2h 05m"
+        );
+        assert_eq!(
+            format_uptime(Duration::from_secs(3 * 86_400 + 4 * 3_600)),
+            "3d 4h"
+        );
     }
 
     #[test]
@@ -167,7 +176,9 @@ mod tests {
         assert_eq!(
             shorten_command(
                 "node.exe",
-                Some(r#""C:\Program Files\nodejs\node.exe" C:\app\node_modules\vite\bin\vite.js --port 5173"#),
+                Some(
+                    r#""C:\Program Files\nodejs\node.exe" C:\app\node_modules\vite\bin\vite.js --port 5173"#
+                ),
                 60
             ),
             "node vite.js --port 5173"

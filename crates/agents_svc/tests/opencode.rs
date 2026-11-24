@@ -28,7 +28,9 @@ impl Oc {
         let data_dir = root.join("opencode");
         fs::create_dir_all(&data_dir).unwrap();
         let conn = Connection::open(data_dir.join("opencode.db")).unwrap();
-        let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0)).unwrap();
+        let _: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+            .unwrap();
         conn.execute_batch(OC_SCHEMA).unwrap();
         Oc { data_dir, conn }
     }
@@ -53,7 +55,17 @@ impl Oc {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn assistant(&self, id: &str, session: &str, ts: i64, updated: i64, model: &str, provider: &str, cost: f64, tok: [u64; 5]) {
+    fn assistant(
+        &self,
+        id: &str,
+        session: &str,
+        ts: i64,
+        updated: i64,
+        model: &str,
+        provider: &str,
+        cost: f64,
+        tok: [u64; 5],
+    ) {
         let data = json!({
             "role": "assistant",
             "time": {"created": ts, "completed": ts + 10},
@@ -84,7 +96,10 @@ impl Oc {
 fn ingestor(tmp: &Path, oc: &Path) -> Ingestor {
     let mut ing = Ingestor::open(
         &tmp.join("selachi.db"),
-        IngestConfig { opencode_data: Some(oc.to_path_buf()), ..Default::default() },
+        IngestConfig {
+            opencode_data: Some(oc.to_path_buf()),
+            ..Default::default()
+        },
     )
     .unwrap();
     // deterministic: nothing in the embedded table is agent-less, so OpenCode events are only
@@ -102,8 +117,26 @@ fn reads_assistant_messages_with_session_context_and_reported_cost() {
     oc.session("ses_a", "C:\\work\\proj", Some("feature/x"));
     oc.session("ses_b", "C:\\work\\proj", None);
     oc.user("msg_u1", "ses_a", T0);
-    oc.assistant("msg_1", "ses_a", T0 + 1, T0 + 20, "claude-sonnet-4-5", "anthropic", 0.5, [100, 200, 50, 1000, 20]);
-    oc.assistant("msg_2", "ses_b", T0 + 2, T0 + 21, "big-pickle", "opencode", 0.0, [10, 20, 0, 0, 0]);
+    oc.assistant(
+        "msg_1",
+        "ses_a",
+        T0 + 1,
+        T0 + 20,
+        "claude-sonnet-4-5",
+        "anthropic",
+        0.5,
+        [100, 200, 50, 1000, 20],
+    );
+    oc.assistant(
+        "msg_2",
+        "ses_b",
+        T0 + 2,
+        T0 + 21,
+        "big-pickle",
+        "opencode",
+        0.0,
+        [10, 20, 0, 0, 0],
+    );
 
     let mut ing = ingestor(tmp.path(), &oc.data_dir);
     let rep = ing.scan().unwrap();
@@ -116,17 +149,33 @@ fn reads_assistant_messages_with_session_context_and_reported_cost() {
     let sonnet = sum.iter().find(|u| u.model == "claude-sonnet-4-5").unwrap();
     assert_eq!(sonnet.agent, Agent::OpenCode);
     assert_eq!(
-        (sonnet.input, sonnet.output, sonnet.cache_read, sonnet.cache_create),
+        (
+            sonnet.input,
+            sonnet.output,
+            sonnet.cache_read,
+            sonnet.cache_create
+        ),
         (100, 250, 1000, 20),
         "reasoning folded into output"
     );
     assert_eq!(sonnet.est_cost_usd, Some(0.5), "reported cost preferred");
     let pickle = sum.iter().find(|u| u.model == "big-pickle").unwrap();
-    assert_eq!(pickle.est_cost_usd, None, "free/unknown model: never guessed");
+    assert_eq!(
+        pickle.est_cost_usd, None,
+        "free/unknown model: never guessed"
+    );
 
     let rc = ing.store().reported_costs(&Range::All).unwrap();
     assert_eq!(rc.len(), 1);
-    assert_eq!((rc[0].agent, rc[0].source.as_str(), rc[0].cost_usd, rc[0].events), (Agent::OpenCode, "opencode", 0.5, 1));
+    assert_eq!(
+        (
+            rc[0].agent,
+            rc[0].source.as_str(),
+            rc[0].cost_usd,
+            rc[0].events
+        ),
+        (Agent::OpenCode, "opencode", 0.5, 1)
+    );
 
     // extras landed in the new columns
     let (reasoning, provider, source): (i64, String, String) = ing
@@ -138,12 +187,18 @@ fn reads_assistant_messages_with_session_context_and_reported_cost() {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
-    assert_eq!((reasoning, provider.as_str(), source.as_str()), (50, "anthropic", "opencode"));
+    assert_eq!(
+        (reasoning, provider.as_str(), source.as_str()),
+        (50, "anthropic", "opencode")
+    );
 
     // per branch: the workspace branch where the session has one, NULL otherwise
     let br = ing.store().usage_by_branch("C:/work", &Range::All).unwrap();
     assert_eq!(br.len(), 2);
-    let feature = br.iter().find(|b| b.git_branch.as_deref() == Some("feature/x")).unwrap();
+    let feature = br
+        .iter()
+        .find(|b| b.git_branch.as_deref() == Some("feature/x"))
+        .unwrap();
     assert_eq!(feature.est_cost_usd, Some(0.5));
     assert!(feature.cost_complete);
     let none = br.iter().find(|b| b.git_branch.is_none()).unwrap();
@@ -153,7 +208,11 @@ fn reads_assistant_messages_with_session_context_and_reported_cost() {
     // burn rate counts OpenCode tokens (all rows are far in the past: window anchored there)
     let rate = ing
         .store()
-        .burn_rate_at(Some(Agent::OpenCode), Duration::from_secs(3600), T0 + 60_000)
+        .burn_rate_at(
+            Some(Agent::OpenCode),
+            Duration::from_secs(3600),
+            T0 + 60_000,
+        )
         .unwrap();
     assert_eq!(rate.tokens, 100 + 250 + 20 + 1000 + 10 + 20);
     assert_eq!(rate.billable_tokens, 100 + 250 + 20 + 10 + 20);
@@ -164,36 +223,78 @@ fn incremental_scans_skip_unchanged_and_replace_grown_messages() {
     let tmp = tempfile::tempdir().unwrap();
     let oc = Oc::new(tmp.path());
     oc.session("ses_a", "C:\\work\\proj", None);
-    oc.assistant("msg_1", "ses_a", T0, T0 + 5, "claude-sonnet-4-5", "anthropic", 0.1, [10, 10, 0, 0, 0]);
+    oc.assistant(
+        "msg_1",
+        "ses_a",
+        T0,
+        T0 + 5,
+        "claude-sonnet-4-5",
+        "anthropic",
+        0.1,
+        [10, 10, 0, 0, 0],
+    );
 
     let mut ing = ingestor(tmp.path(), &oc.data_dir);
     assert_eq!(ing.scan().unwrap().events_inserted, 1);
 
     // nothing changed: the database fingerprint short-circuits
     let r2 = ing.scan().unwrap();
-    assert_eq!((r2.files_unchanged, r2.events_inserted, r2.lines), (1, 0, 0), "{r2:?}");
+    assert_eq!(
+        (r2.files_unchanged, r2.events_inserted, r2.lines),
+        (1, 0, 0),
+        "{r2:?}"
+    );
 
     // OpenCode rewrites the same message in place as steps finish, and adds a new one
-    oc.assistant("msg_1", "ses_a", T0, T0 + 50, "claude-sonnet-4-5", "anthropic", 0.3, [30, 40, 0, 0, 0]);
-    oc.assistant("msg_2", "ses_a", T0 + 100, T0 + 120, "claude-sonnet-4-5", "anthropic", 0.2, [5, 5, 0, 0, 0]);
+    oc.assistant(
+        "msg_1",
+        "ses_a",
+        T0,
+        T0 + 50,
+        "claude-sonnet-4-5",
+        "anthropic",
+        0.3,
+        [30, 40, 0, 0, 0],
+    );
+    oc.assistant(
+        "msg_2",
+        "ses_a",
+        T0 + 100,
+        T0 + 120,
+        "claude-sonnet-4-5",
+        "anthropic",
+        0.2,
+        [5, 5, 0, 0, 0],
+    );
     let r3 = ing.scan().unwrap();
     assert_eq!((r3.events_inserted, r3.events_updated), (1, 1), "{r3:?}");
     let sum = ing.store().usage_summary(&Range::All).unwrap();
     assert_eq!(sum.len(), 1);
-    assert_eq!((sum[0].input, sum[0].output, sum[0].events), (35, 45, 2), "no double counting");
+    assert_eq!(
+        (sum[0].input, sum[0].output, sum[0].events),
+        (35, 45, 2),
+        "no double counting"
+    );
     assert!((sum[0].est_cost_usd.unwrap() - 0.5).abs() < 1e-9);
 
     // a fresh Ingestor on the same database keeps the cursor
     drop(ing);
     let mut again = ingestor(tmp.path(), &oc.data_dir);
     let r4 = again.scan().unwrap();
-    assert_eq!((r4.files_unchanged, r4.events_inserted, r4.events_updated), (1, 0, 0), "{r4:?}");
+    assert_eq!(
+        (r4.files_unchanged, r4.events_inserted, r4.events_updated),
+        (1, 0, 0),
+        "{r4:?}"
+    );
 
     // re-reading the boundary millisecond is a no-op, never a double count
     oc.user("msg_u", "ses_a", T0 + 200);
     let r5 = again.scan().unwrap();
     assert_eq!((r5.events_inserted, r5.events_updated), (0, 0), "{r5:?}");
-    assert_eq!(again.store().usage_summary(&Range::All).unwrap()[0].events, 2);
+    assert_eq!(
+        again.store().usage_summary(&Range::All).unwrap()[0].events,
+        2
+    );
 }
 
 #[test]
@@ -204,7 +305,16 @@ fn large_databases_are_read_in_chunks() {
     oc.conn.execute_batch("BEGIN").unwrap();
     for i in 0..4500 {
         // many rows share a millisecond to exercise the (time_updated, id) keyset
-        oc.assistant(&format!("msg_{i:05}"), "ses_a", T0 + i / 10, T0 + i / 10, "m", "p", 0.0, [1, 1, 0, 0, 0]);
+        oc.assistant(
+            &format!("msg_{i:05}"),
+            "ses_a",
+            T0 + i / 10,
+            T0 + i / 10,
+            "m",
+            "p",
+            0.0,
+            [1, 1, 0, 0, 0],
+        );
     }
     oc.conn.execute_batch("COMMIT").unwrap();
     let mut ing = ingestor(tmp.path(), &oc.data_dir);
@@ -219,7 +329,16 @@ fn legacy_json_storage_and_db_dedupe_by_message_id() {
     let tmp = tempfile::tempdir().unwrap();
     let oc = Oc::new(tmp.path());
     oc.session("ses_a", "C:\\work\\proj", None);
-    oc.assistant("msg_1", "ses_a", T0, T0 + 5, "claude-sonnet-4-5", "anthropic", 0.25, [10, 20, 0, 0, 0]);
+    oc.assistant(
+        "msg_1",
+        "ses_a",
+        T0,
+        T0 + 5,
+        "claude-sonnet-4-5",
+        "anthropic",
+        0.25,
+        [10, 20, 0, 0, 0],
+    );
 
     let msg_dir = oc.data_dir.join("storage").join("message").join("ses_a");
     fs::create_dir_all(&msg_dir).unwrap();
@@ -234,7 +353,11 @@ fn legacy_json_storage_and_db_dedupe_by_message_id() {
     };
     // the same message as in the database (the SQLite migration keeps the JSON), plus an old one
     fs::write(msg_dir.join("msg_1.json"), legacy("msg_1", T0, 20)).unwrap();
-    fs::write(msg_dir.join("msg_old.json"), legacy("msg_old", T0 - 1000, 5)).unwrap();
+    fs::write(
+        msg_dir.join("msg_old.json"),
+        legacy("msg_old", T0 - 1000, 5),
+    )
+    .unwrap();
     fs::write(msg_dir.join("garbage.json"), "{not json").unwrap();
 
     let mut ing = ingestor(tmp.path(), &oc.data_dir);
@@ -272,7 +395,10 @@ fn reads_a_database_another_process_is_writing_and_survives_bad_ones() {
     assert_eq!(rep.errors.len(), 1, "{:?}", rep.errors);
     assert!(rep.errors[0].contains("opencode-bad.db"));
     // the source database was not modified by reading
-    let n: i64 = oc.conn.query_row("SELECT COUNT(*) FROM message", [], |r| r.get(0)).unwrap();
+    let n: i64 = oc
+        .conn
+        .query_row("SELECT COUNT(*) FROM message", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 1);
 }
 
@@ -281,7 +407,16 @@ fn opencode_and_other_agents_coexist_in_one_summary() {
     let tmp = tempfile::tempdir().unwrap();
     let oc = Oc::new(tmp.path());
     oc.session("ses_a", "C:\\work\\proj", None);
-    oc.assistant("msg_1", "ses_a", T0, T0 + 5, "claude-opus-5-5", "anthropic", 0.0, [1_000_000, 0, 0, 0, 0]);
+    oc.assistant(
+        "msg_1",
+        "ses_a",
+        T0,
+        T0 + 5,
+        "claude-opus-5-5",
+        "anthropic",
+        0.0,
+        [1_000_000, 0, 0, 0, 0],
+    );
     let claude_dir = tmp.path().join("claude").join("p");
     fs::create_dir_all(&claude_dir).unwrap();
     fs::write(
@@ -321,6 +456,9 @@ fn smoke_real_opencode_home() {
     let tmp = tempfile::tempdir().unwrap();
     let mut ing = Ingestor::open(&tmp.path().join("smoke.db"), IngestConfig::from_home()).unwrap();
     let rep = ing.scan().unwrap();
-    eprintln!("opencode files {} inserted {} errors {:?}", rep.opencode_files, rep.events_inserted, rep.errors);
+    eprintln!(
+        "opencode files {} inserted {} errors {:?}",
+        rep.opencode_files, rep.events_inserted, rep.errors
+    );
     assert!(rep.errors.is_empty(), "{:?}", rep.errors);
 }

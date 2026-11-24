@@ -31,14 +31,24 @@ impl JobHooks {
 
     /// Pids currently inside the job of `thread` (empty when there is none).
     pub fn members(&self, thread: ThreadId) -> Vec<u32> {
-        self.jobs.lock().get(&thread).map(JobGroup::members).unwrap_or_default()
+        self.jobs
+            .lock()
+            .get(&thread)
+            .map(JobGroup::members)
+            .unwrap_or_default()
     }
 }
 
 impl ProcessHooks for JobHooks {
     fn open_owner(&self, thread_id: ThreadId, info: &OwnerInfo) -> Option<JobHandle> {
         let label = format!("delegation-{}-{}", info.agent, thread_id);
-        match JobGroup::with_options(label, JobOptions { kill_on_close: true, breakaway_ok: false }) {
+        match JobGroup::with_options(
+            label,
+            JobOptions {
+                kill_on_close: true,
+                breakaway_ok: false,
+            },
+        ) {
             Ok(job) => {
                 let handle = job.raw_handle() as usize;
                 self.jobs.lock().insert(thread_id, job);
@@ -46,7 +56,9 @@ impl ProcessHooks for JobHooks {
                 Some(handle)
             }
             Err(e) => {
-                log::warn!("agent_harness: cannot create the Job Object of thread {thread_id}: {e}");
+                log::warn!(
+                    "agent_harness: cannot create the Job Object of thread {thread_id}: {e}"
+                );
                 None
             }
         }
@@ -54,7 +66,9 @@ impl ProcessHooks for JobHooks {
 
     fn register_root(&self, thread_id: ThreadId, pid: u32) {
         let jobs = self.jobs.lock();
-        let Some(job) = jobs.get(&thread_id) else { return };
+        let Some(job) = jobs.get(&thread_id) else {
+            return;
+        };
         if job.contains(pid) {
             return;
         }
@@ -62,7 +76,9 @@ impl ProcessHooks for JobHooks {
             Ok(()) => {
                 self.assigned.fetch_add(1, Ordering::SeqCst);
             }
-            Err(e) => log::warn!("agent_harness: could not put pid {pid} into the job of thread {thread_id}: {e}"),
+            Err(e) => log::warn!(
+                "agent_harness: could not put pid {pid} into the job of thread {thread_id}: {e}"
+            ),
         }
     }
 

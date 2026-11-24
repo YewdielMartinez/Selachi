@@ -2,8 +2,8 @@
 //! JSON/TOML/YAML tree rows. Every row has a fixed height so `uniform_list` can virtualize.
 
 use gpui::{
-    AnyElement, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement as _, SharedString, Styled as _,
-    StyledText, div, prelude::*, px,
+    AnyElement, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement as _,
+    SharedString, Styled as _, StyledText, div, prelude::*, px,
 };
 use theme::Theme;
 use ui_kit::{Icon, icon};
@@ -39,7 +39,9 @@ fn number_cell(theme: &Theme, n: Option<usize>, digits: usize) -> AnyElement {
         .justify_end()
         .text_size(px(theme.typography.ui_size_sm))
         .text_color(theme.colors.outline)
-        .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
+        .child(SharedString::from(
+            n.map(|n| n.to_string()).unwrap_or_default(),
+        ))
         .into_any_element()
 }
 
@@ -67,7 +69,12 @@ pub fn code_row(
     current: bool,
 ) -> AnyElement {
     let c = theme.colors;
-    let found: Vec<_> = query.map(|q| find_ranges(text, q)).unwrap_or_default().into_iter().map(|r| (r, ())).collect();
+    let found: Vec<_> = query
+        .map(|q| find_ranges(text, q))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r, ()))
+        .collect();
     let match_bg = tint(theme.colors.warning, if current { 0.55 } else { 0.32 });
     let segments = overlay(spans, &found, text.len());
     let styles: Vec<_> = segments
@@ -98,7 +105,9 @@ pub fn code_row(
                 .min_w_0()
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .child(StyledText::new(SharedString::from(text.to_owned())).with_highlights(styles)),
+                .child(
+                    StyledText::new(SharedString::from(text.to_owned())).with_highlights(styles),
+                ),
         )
         .into_any_element()
 }
@@ -126,7 +135,15 @@ fn diff_text(theme: &Theme, line: &DiffLine) -> AnyElement {
     let styles: Vec<_> = if prepared.text == line.text {
         line.inline
             .iter()
-            .map(|r| (r.clone(), HighlightStyle { background_color: Some(strong), ..HighlightStyle::default() }))
+            .map(|r| {
+                (
+                    r.clone(),
+                    HighlightStyle {
+                        background_color: Some(strong),
+                        ..HighlightStyle::default()
+                    },
+                )
+            })
             .collect()
     } else {
         Vec::new()
@@ -171,7 +188,12 @@ fn sign(theme: &Theme, kind: LineKind) -> AnyElement {
         LineKind::Removed => ("-", theme.colors.error),
         LineKind::Context => (" ", theme.colors.outline),
     };
-    div().flex_none().w(px(14.0)).text_color(color).child(s).into_any_element()
+    div()
+        .flex_none()
+        .w(px(14.0))
+        .text_color(color)
+        .child(s)
+        .into_any_element()
 }
 
 pub fn unified_row(theme: &Theme, line: &DiffLine, digits: usize) -> AnyElement {
@@ -185,11 +207,21 @@ pub fn unified_row(theme: &Theme, line: &DiffLine, digits: usize) -> AnyElement 
 }
 
 fn half(theme: &Theme, line: Option<&DiffLine>, old_side: bool, digits: usize) -> AnyElement {
-    let base = div().flex_1().min_w_0().h(px(ROW_H)).flex().flex_row().items_center();
+    let base = div()
+        .flex_1()
+        .min_w_0()
+        .h(px(ROW_H))
+        .flex()
+        .flex_row()
+        .items_center();
     match line {
         Some(l) => base
             .when_some(line_bg(theme, l.kind), |d, bg| d.bg(bg))
-            .child(number_cell(theme, if old_side { l.old_line } else { l.new_line }, digits))
+            .child(number_cell(
+                theme,
+                if old_side { l.old_line } else { l.new_line },
+                digits,
+            ))
             .child(sign(theme, l.kind))
             .child(diff_text(theme, l))
             .into_any_element(),
@@ -197,7 +229,12 @@ fn half(theme: &Theme, line: Option<&DiffLine>, old_side: bool, digits: usize) -
     }
 }
 
-pub fn split_row(theme: &Theme, left: Option<&DiffLine>, right: Option<&DiffLine>, digits: usize) -> AnyElement {
+pub fn split_row(
+    theme: &Theme,
+    left: Option<&DiffLine>,
+    right: Option<&DiffLine>,
+    digits: usize,
+) -> AnyElement {
     row_base(theme)
         .child(half(theme, left, true, digits))
         .child(div().flex_none().w(px(2.0)).h_full().bg(theme.colors.bg))
@@ -222,9 +259,25 @@ pub fn hex_row(theme: &Theme, line: &HexLine) -> AnyElement {
         .px(px(16.0))
         .gap(px(16.0))
         .text_size(px(theme.typography.mono_size))
-        .child(div().flex_none().text_color(c.outline).child(SharedString::from(format!("{:08x}", line.offset))))
-        .child(div().flex_none().w(px(CH * 49.0)).whitespace_nowrap().child(SharedString::from(hex)))
-        .child(div().flex_none().text_color(c.muted).child(SharedString::from(line.ascii.clone())))
+        .child(
+            div()
+                .flex_none()
+                .text_color(c.outline)
+                .child(SharedString::from(format!("{:08x}", line.offset))),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(CH * 49.0))
+                .whitespace_nowrap()
+                .child(SharedString::from(hex)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_color(c.muted)
+                .child(SharedString::from(line.ascii.clone())),
+        )
         .into_any_element()
 }
 
@@ -247,7 +300,16 @@ pub fn data_row(theme: &Theme, row: &DataRow) -> gpui::Div {
     let c = theme.colors;
     let indent = 14.0 + row.depth as f32 * 16.0;
     let lead: AnyElement = if row.expandable {
-        icon(if row.expanded { Icon::ChevronDown } else { Icon::ChevronRight }, 12.0, c.muted).into_any_element()
+        icon(
+            if row.expanded {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
+            12.0,
+            c.muted,
+        )
+        .into_any_element()
     } else {
         div().w(px(12.0)).flex_none().into_any_element()
     };
@@ -264,9 +326,11 @@ pub fn data_row(theme: &Theme, row: &DataRow) -> gpui::Div {
         .text_size(px(theme.typography.mono_size))
         .text_color(c.text);
     if row.more.is_some() {
-        return base
-            .child(div().w(px(12.0)).flex_none())
-            .child(div().text_color(c.accent).child(SharedString::from(format!("... {}", row.preview))));
+        return base.child(div().w(px(12.0)).flex_none()).child(
+            div()
+                .text_color(c.accent)
+                .child(SharedString::from(format!("... {}", row.preview))),
+        );
     }
     let key_color = color_for(HighlightKind::Property, theme).unwrap_or(c.text);
     let is_container = matches!(row.kind, NodeKind::Object | NodeKind::Array);
@@ -274,7 +338,11 @@ pub fn data_row(theme: &Theme, row: &DataRow) -> gpui::Div {
         .child(
             div()
                 .flex_none()
-                .font_weight(if row.depth == 0 { FontWeight::MEDIUM } else { FontWeight::NORMAL })
+                .font_weight(if row.depth == 0 {
+                    FontWeight::MEDIUM
+                } else {
+                    FontWeight::NORMAL
+                })
                 .text_color(key_color)
                 .child(SharedString::from(row.key.clone())),
         )
@@ -287,7 +355,9 @@ pub fn data_row(theme: &Theme, row: &DataRow) -> gpui::Div {
                 .text_ellipsis()
                 .whitespace_nowrap()
                 .text_color(value_color(theme, row.kind).unwrap_or(c.text))
-                .when(is_container, |d| d.text_size(px(theme.typography.ui_size_sm)))
+                .when(is_container, |d| {
+                    d.text_size(px(theme.typography.ui_size_sm))
+                })
                 .child(SharedString::from(row.preview.clone())),
         )
 }

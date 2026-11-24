@@ -34,7 +34,8 @@ pub use data::{
     stack_cells,
 };
 pub use fmt::{
-    compact_tokens, day_label, events_label, format_age, format_cost, format_duration, format_when, full_tokens,
+    compact_tokens, day_label, events_label, format_age, format_cost, format_duration, format_when,
+    full_tokens,
 };
 pub use model::UsageModel;
 pub use source::{FORECAST_RECENT, StoreSource, UsageSource, load_from};

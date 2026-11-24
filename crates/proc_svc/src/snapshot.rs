@@ -12,14 +12,14 @@ use std::time::{Duration, SystemTime};
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS};
 use windows::Win32::Foundation::{FILETIME, UNICODE_STRING};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::ProcessStatus::{
     GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
 };
 use windows::Win32::System::Threading::{GetProcessTimes, PROCESS_QUERY_LIMITED_INFORMATION};
 
-use crate::error::{Result, win32};
+use crate::error::{win32, Result};
 use crate::sys::{self, OwnedHandle};
 
 /// `ProcessCommandLineInformation` (Windows 8.1+).
@@ -91,7 +91,10 @@ pub fn try_snapshot(opts: SnapshotOptions) -> Result<Vec<ProcInfo>> {
         .map_err(win32("CreateToolhelp32Snapshot"))?;
     let snap = OwnedHandle::new(snap);
 
-    let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
     let mut out = Vec::with_capacity(256);
     // SAFETY: `dwSize` is set; standard First/Next iteration.
     let mut more = unsafe { Process32FirstW(snap.raw(), &mut entry) }.is_ok();
@@ -109,7 +112,11 @@ pub fn try_snapshot(opts: SnapshotOptions) -> Result<Vec<ProcInfo>> {
 
 fn describe(entry: &PROCESSENTRY32W, opts: SnapshotOptions) -> ProcInfo {
     let pid = entry.th32ProcessID;
-    let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+    let len = entry
+        .szExeFile
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(entry.szExeFile.len());
     let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
 
     let mut info = ProcInfo {
@@ -144,8 +151,12 @@ fn describe(entry: &PROCESSENTRY32W, opts: SnapshotOptions) -> ProcInfo {
 }
 
 fn fill_times(h: &OwnedHandle, info: &mut ProcInfo) {
-    let (mut c, mut e, mut k, mut u) =
-        (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    let (mut c, mut e, mut k, mut u) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
     // SAFETY: valid out pointers.
     if unsafe { GetProcessTimes(h.raw(), &mut c, &mut e, &mut k, &mut u) }.is_ok() {
         info.start_time = sys::filetime_to_system_time(sys::filetime_u64(c));

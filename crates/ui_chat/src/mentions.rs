@@ -14,7 +14,12 @@ pub const MAX_DEPTH: usize = 12;
 /// The `@relative/path` mention of `path` when it lies inside `root` (compared case-insensitively
 /// with `/` and `\` alike, as Windows does). `None` for files elsewhere and for the root itself.
 pub fn mention_for(root: &Path, path: &Path) -> Option<String> {
-    let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_string();
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_string()
+    };
     let (r, f) = (norm(root), norm(path));
     let (rl, fl) = (r.to_lowercase(), f.to_lowercase());
     let rest = fl.strip_prefix(&rl)?.strip_prefix('/')?;
@@ -43,10 +48,15 @@ pub fn mention_at(text: &str, caret: usize) -> Option<MentionQuery> {
         return None;
     }
     let head = &text[..caret];
-    let start = head.rfind(char::is_whitespace).map_or(0, |i| i + head[i..].chars().next().map_or(1, char::len_utf8));
+    let start = head.rfind(char::is_whitespace).map_or(0, |i| {
+        i + head[i..].chars().next().map_or(1, char::len_utf8)
+    });
     let token = &head[start..];
     let query = token.strip_prefix('@')?;
-    Some(MentionQuery { range: start..caret, query: query.to_string() })
+    Some(MentionQuery {
+        range: start..caret,
+        query: query.to_string(),
+    })
 }
 
 /// All files under `root` (respecting `.gitignore`, skipping hidden entries), as paths relative to
@@ -111,11 +121,25 @@ pub fn filter_files(files: &[String], query: &str, limit: usize) -> Vec<String> 
         .iter()
         .filter_map(|f| {
             let depth = f.matches('/').count();
-            score(f, query).map(|s| (s, if query.is_empty() { depth * 1000 + f.len() } else { f.len() }, f))
+            score(f, query).map(|s| {
+                (
+                    s,
+                    if query.is_empty() {
+                        depth * 1000 + f.len()
+                    } else {
+                        f.len()
+                    },
+                    f,
+                )
+            })
         })
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
-    scored.into_iter().take(limit).map(|(_, _, f)| f.clone()).collect()
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, f)| f.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -124,35 +148,81 @@ mod tests {
 
     #[test]
     fn finds_the_mention_under_the_caret() {
-        assert_eq!(mention_at("@", 1), Some(MentionQuery { range: 0..1, query: String::new() }));
+        assert_eq!(
+            mention_at("@", 1),
+            Some(MentionQuery {
+                range: 0..1,
+                query: String::new()
+            })
+        );
         let t = "mira @src/ma";
-        assert_eq!(mention_at(t, t.len()), Some(MentionQuery { range: 5..12, query: "src/ma".into() }));
+        assert_eq!(
+            mention_at(t, t.len()),
+            Some(MentionQuery {
+                range: 5..12,
+                query: "src/ma".into()
+            })
+        );
         // not a word start
         assert_eq!(mention_at("a@b", 3), None);
         // a space ended the token
         assert_eq!(mention_at("@a b", 4), None);
         // caret in the middle of the token: the query stops at the caret
-        assert_eq!(mention_at("@abcdef", 3), Some(MentionQuery { range: 0..3, query: "ab".into() }));
+        assert_eq!(
+            mention_at("@abcdef", 3),
+            Some(MentionQuery {
+                range: 0..3,
+                query: "ab".into()
+            })
+        );
         // newlines also start a word
-        assert_eq!(mention_at("hola\n@x", 7), Some(MentionQuery { range: 5..7, query: "x".into() }));
+        assert_eq!(
+            mention_at("hola\n@x", 7),
+            Some(MentionQuery {
+                range: 5..7,
+                query: "x".into()
+            })
+        );
         assert_eq!(mention_at("sin arroba", 4), None);
         // multi-byte neighbours do not panic
-        assert_eq!(mention_at("ñ @é", 6), Some(MentionQuery { range: 3..6, query: "é".into() }));
+        assert_eq!(
+            mention_at("ñ @é", 6),
+            Some(MentionQuery {
+                range: 3..6,
+                query: "é".into()
+            })
+        );
     }
 
     #[test]
     fn ranks_names_before_paths() {
-        let files: Vec<String> =
-            ["src/lib.rs", "src/main.rs", "docs/main-notes.md", "README.md", "crates/app/src/main.rs"].map(String::from).to_vec();
+        let files: Vec<String> = [
+            "src/lib.rs",
+            "src/main.rs",
+            "docs/main-notes.md",
+            "README.md",
+            "crates/app/src/main.rs",
+        ]
+        .map(String::from)
+        .to_vec();
         let top = filter_files(&files, "main", 10);
         assert_eq!(top[0], "src/main.rs");
         assert!(top.contains(&"docs/main-notes.md".to_string()));
         assert!(!top.contains(&"README.md".to_string()));
-        assert_eq!(filter_files(&files, "readme", 3), vec!["README.md".to_string()]);
+        assert_eq!(
+            filter_files(&files, "readme", 3),
+            vec!["README.md".to_string()]
+        );
         // subsequence fallback
-        assert_eq!(filter_files(&files, "cap", 3), vec!["crates/app/src/main.rs".to_string()]);
+        assert_eq!(
+            filter_files(&files, "cap", 3),
+            vec!["crates/app/src/main.rs".to_string()]
+        );
         // empty query: shallow first
-        assert_eq!(filter_files(&files, "", 2), vec!["README.md".to_string(), "src/lib.rs".to_string()]);
+        assert_eq!(
+            filter_files(&files, "", 2),
+            vec!["README.md".to_string(), "src/lib.rs".to_string()]
+        );
         assert!(filter_files(&files, "zzz", 5).is_empty());
     }
 
@@ -176,11 +246,24 @@ mod tests {
     #[test]
     fn dropped_files_inside_the_project_become_mentions() {
         let root = Path::new(r"C:\dev\Selachi");
-        assert_eq!(mention_for(root, Path::new(r"C:\dev\Selachi\crates\app\main.rs")).as_deref(), Some("@crates/app/main.rs"));
-        assert_eq!(mention_for(root, Path::new(r"c:\DEV\selachi\README.md")).as_deref(), Some("@README.md"));
-        assert_eq!(mention_for(root, Path::new(r"C:\dev\Selachi-other\x.rs")), None, "a sibling with the same prefix is outside");
+        assert_eq!(
+            mention_for(root, Path::new(r"C:\dev\Selachi\crates\app\main.rs")).as_deref(),
+            Some("@crates/app/main.rs")
+        );
+        assert_eq!(
+            mention_for(root, Path::new(r"c:\DEV\selachi\README.md")).as_deref(),
+            Some("@README.md")
+        );
+        assert_eq!(
+            mention_for(root, Path::new(r"C:\dev\Selachi-other\x.rs")),
+            None,
+            "a sibling with the same prefix is outside"
+        );
         assert_eq!(mention_for(root, Path::new(r"D:\elsewhere\x.rs")), None);
         assert_eq!(mention_for(root, root), None);
-        assert_eq!(mention_for(Path::new("/home/u/p"), Path::new("/home/u/p/src/a b.rs")).as_deref(), Some("@src/a b.rs"));
+        assert_eq!(
+            mention_for(Path::new("/home/u/p"), Path::new("/home/u/p/src/a b.rs")).as_deref(),
+            Some("@src/a b.rs")
+        );
     }
 }

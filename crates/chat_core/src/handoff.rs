@@ -88,12 +88,19 @@ pub fn build_handoff(input: &HandoffInput<'_>) -> Option<String> {
     }
 
     out.push_str("\nPlan abierto:\n");
-    let open: Vec<_> = input.plan.map(|p| p.open_items().collect()).unwrap_or_default();
+    let open: Vec<_> = input
+        .plan
+        .map(|p| p.open_items().collect())
+        .unwrap_or_default();
     if open.is_empty() {
         out.push_str("- sin elementos abiertos\n");
     } else {
         for item in open {
-            let tag = if item.state == TaskState::InProgress { "en curso" } else { "pendiente" };
+            let tag = if item.state == TaskState::InProgress {
+                "en curso"
+            } else {
+                "pendiente"
+            };
             out.push_str(&format!("- [{tag}] {}\n", item.text));
         }
     }
@@ -143,9 +150,25 @@ mod tests {
     #[test]
     fn handoff_text_is_spanish_deterministic_and_complete() {
         let messages = vec![
-            msg(0, Role::User, vec![Block::Text { text: "Primero arregla el parser".into() }]),
-            msg(1, Role::Assistant, vec![edit("a", "src/parser.rs", ToolStatus::Ok)]),
-            msg(2, Role::User, vec![Block::Text { text: "Ahora añade tests\ny documenta".into() }]),
+            msg(
+                0,
+                Role::User,
+                vec![Block::Text {
+                    text: "Primero arregla el parser".into(),
+                }],
+            ),
+            msg(
+                1,
+                Role::Assistant,
+                vec![edit("a", "src/parser.rs", ToolStatus::Ok)],
+            ),
+            msg(
+                2,
+                Role::User,
+                vec![Block::Text {
+                    text: "Ahora añade tests\ny documenta".into(),
+                }],
+            ),
             msg(
                 3,
                 Role::Assistant,
@@ -158,9 +181,18 @@ mod tests {
         ];
         let plan = Plan {
             items: vec![
-                PlanItem { text: "Escribir tests".into(), state: TaskState::InProgress },
-                PlanItem { text: "Publicar".into(), state: TaskState::Pending },
-                PlanItem { text: "Parser".into(), state: TaskState::Done },
+                PlanItem {
+                    text: "Escribir tests".into(),
+                    state: TaskState::InProgress,
+                },
+                PlanItem {
+                    text: "Publicar".into(),
+                    state: TaskState::Pending,
+                },
+                PlanItem {
+                    text: "Parser".into(),
+                    state: TaskState::Done,
+                },
             ],
         };
         let input = HandoffInput {
@@ -185,7 +217,13 @@ mod tests {
 
     #[test]
     fn handoff_without_files_or_plan_and_without_user_messages() {
-        let messages = vec![msg(0, Role::User, vec![Block::Text { text: "hola".into() }])];
+        let messages = vec![msg(
+            0,
+            Role::User,
+            vec![Block::Text {
+                text: "hola".into(),
+            }],
+        )];
         let input = HandoffInput {
             from: &AgentKind::Codex,
             to: &AgentKind::OpenCode,
@@ -195,7 +233,10 @@ mod tests {
         };
         let t = build_handoff(&input).unwrap();
         assert!(t.contains("- ninguno todavía") && t.contains("- sin elementos abiertos"));
-        let none = HandoffInput { messages: &[], ..input };
+        let none = HandoffInput {
+            messages: &[],
+            ..input
+        };
         assert!(build_handoff(&none).is_none());
     }
 }

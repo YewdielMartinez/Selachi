@@ -22,7 +22,10 @@ use ui_onboarding::shells::{ShellInfo, ShellKind};
 use ui_onboarding::{OnboardingEvent, Services, Step, onboarding_with};
 
 fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 fn fake_services(slow: bool) -> Services {
@@ -43,7 +46,13 @@ fn fake_services(slow: bool) -> Services {
         vec![
             found(AgentKind::ClaudeCode, "2.1.330 (Claude Code)", Some(true)),
             found(AgentKind::OpenCode, "1.19.6", None),
-            found(AgentKind::Acp { command: "gemini".into() }, "0.70.0", Some(false)),
+            found(
+                AgentKind::Acp {
+                    command: "gemini".into(),
+                },
+                "0.70.0",
+                Some(false),
+            ),
         ]
     });
     s.detect_shells = Arc::new(move || {
@@ -56,11 +65,36 @@ fn fake_services(slow: bool) -> Services {
             detail: detail.into(),
         };
         vec![
-            sh(ShellKind::Pwsh, "PowerShell 7", "pwsh.exe", "C:\\Users\\you\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe"),
-            sh(ShellKind::WindowsPowerShell, "Windows PowerShell", "powershell.exe", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
-            sh(ShellKind::Cmd, "Símbolo del sistema", "cmd.exe", "C:\\Windows\\System32\\cmd.exe"),
-            sh(ShellKind::GitBash, "Git Bash", "bash.exe", "C:\\Program Files\\Git\\bin\\bash.exe"),
-            sh(ShellKind::Wsl, "WSL: Ubuntu", "wsl.exe", "Distribución Ubuntu"),
+            sh(
+                ShellKind::Pwsh,
+                "PowerShell 7",
+                "pwsh.exe",
+                "C:\\Users\\you\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe",
+            ),
+            sh(
+                ShellKind::WindowsPowerShell,
+                "Windows PowerShell",
+                "powershell.exe",
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            ),
+            sh(
+                ShellKind::Cmd,
+                "Símbolo del sistema",
+                "cmd.exe",
+                "C:\\Windows\\System32\\cmd.exe",
+            ),
+            sh(
+                ShellKind::GitBash,
+                "Git Bash",
+                "bash.exe",
+                "C:\\Program Files\\Git\\bin\\bash.exe",
+            ),
+            sh(
+                ShellKind::Wsl,
+                "WSL: Ubuntu",
+                "wsl.exe",
+                "Distribución Ubuntu",
+            ),
         ]
     });
     s
@@ -75,7 +109,10 @@ fn main() {
     } else {
         Mode::Dark
     };
-    let start = arg_value(&args, "--step").and_then(|s| s.parse().ok()).and_then(Step::from_number).unwrap_or(Step::Welcome);
+    let start = arg_value(&args, "--step")
+        .and_then(|s| s.parse().ok())
+        .and_then(Step::from_number)
+        .unwrap_or(Step::Welcome);
     let (w, h) = arg_value(&args, "--size")
         .and_then(|s| s.split_once('x'))
         .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
@@ -92,33 +129,46 @@ fn main() {
     unsafe { std::env::set_var(store::paths::DATA_DIR_ENV, &data) };
     eprintln!("data dir: {}", data.display());
 
-    Application::new().with_assets(ui_kit::Assets).run(move |cx: &mut App| {
-        if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
-            eprintln!("fonts: {e}");
-        }
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    Application::new()
+        .with_assets(ui_kit::Assets)
+        .run(move |cx: &mut App| {
+            if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
+                eprintln!("fonts: {e}");
             }
-        })
-        .detach();
-        let db = StateDb::open_default().ok();
-        let mut config = Config::load_or_default().config;
-        config.appearance.mode = match mode {
-            Mode::Dark => store::config::ThemeMode::Dark,
-            Mode::Light => store::config::ThemeMode::Light,
-            Mode::Oled => store::config::ThemeMode::Oled,
-        };
-        let services = if fake || slow { fake_services(slow) } else { Services::default() };
-        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-        let _ = cx.open_window(
-            WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
-            move |window, cx| {
-                let view = onboarding_with(config, db, Theme::for_mode(mode), services, start, cx);
-                view.read(cx).focus(window);
-                cx.subscribe(&view, |_, ev: &OnboardingEvent, cx| {
-                    match ev {
-                        OnboardingEvent::Finished { config, projects, favorites } => {
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let db = StateDb::open_default().ok();
+            let mut config = Config::load_or_default().config;
+            config.appearance.mode = match mode {
+                Mode::Dark => store::config::ThemeMode::Dark,
+                Mode::Light => store::config::ThemeMode::Light,
+                Mode::Oled => store::config::ThemeMode::Oled,
+            };
+            let services = if fake || slow {
+                fake_services(slow)
+            } else {
+                Services::default()
+            };
+            let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+            let _ = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    let view =
+                        onboarding_with(config, db, Theme::for_mode(mode), services, start, cx);
+                    view.read(cx).focus(window);
+                    cx.subscribe(&view, |_, ev: &OnboardingEvent, cx| match ev {
+                        OnboardingEvent::Finished {
+                            config,
+                            projects,
+                            favorites,
+                        } => {
                             eprintln!(
                                 "Finished: preset={:?} projects={} favorites={}",
                                 config.layout.preset,
@@ -132,12 +182,11 @@ fn main() {
                             cx.quit();
                         }
                         other => eprintln!("{other:?}"),
-                    }
-                })
-                .detach();
-                view
-            },
-        );
-        cx.activate(true);
-    });
+                    })
+                    .detach();
+                    view
+                },
+            );
+            cx.activate(true);
+        });
 }

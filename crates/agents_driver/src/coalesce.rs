@@ -45,8 +45,17 @@ impl Coalescer {
         Self::with_limits(tx, WINDOW, MAX_BYTES)
     }
 
-    pub fn with_limits(tx: UnboundedSender<AgentEvent>, window: Duration, max_bytes: usize) -> Self {
-        Self { tx, held: None, window, max_bytes }
+    pub fn with_limits(
+        tx: UnboundedSender<AgentEvent>,
+        window: Duration,
+        max_bytes: usize,
+    ) -> Self {
+        Self {
+            tx,
+            held: None,
+            window,
+            max_bytes,
+        }
     }
 
     /// Queue `ev`. Returns `false` once the receiver is gone.
@@ -61,9 +70,18 @@ impl Coalescer {
         }
         match &mut self.held {
             Some(h) => h.text.push_str(&text),
-            None => self.held = Some(Held { kind, text, since: Instant::now() }),
+            None => {
+                self.held = Some(Held {
+                    kind,
+                    text,
+                    since: Instant::now(),
+                })
+            }
         }
-        let full = self.held.as_ref().is_some_and(|h| h.text.len() >= self.max_bytes);
+        let full = self
+            .held
+            .as_ref()
+            .is_some_and(|h| h.text.len() >= self.max_bytes);
         if full || self.is_due() {
             return self.flush();
         }
@@ -76,8 +94,14 @@ impl Coalescer {
             None => true,
             Some(h) => {
                 let ev = match h.kind {
-                    Kind::Text => AgentEvent::Text { text: h.text, delta: true },
-                    Kind::Thinking => AgentEvent::Thinking { text: h.text, delta: true },
+                    Kind::Text => AgentEvent::Text {
+                        text: h.text,
+                        delta: true,
+                    },
+                    Kind::Thinking => AgentEvent::Thinking {
+                        text: h.text,
+                        delta: true,
+                    },
                 };
                 self.tx.unbounded_send(ev).is_ok()
             }
@@ -85,13 +109,17 @@ impl Coalescer {
     }
 
     fn is_due(&self) -> bool {
-        self.held.as_ref().is_some_and(|h| h.since.elapsed() >= self.window)
+        self.held
+            .as_ref()
+            .is_some_and(|h| h.since.elapsed() >= self.window)
     }
 
     /// How long the reader may block before the held delta must be flushed
     /// (`None`: nothing held, block indefinitely).
     pub fn timeout(&self) -> Option<Duration> {
-        self.held.as_ref().map(|h| self.window.saturating_sub(h.since.elapsed()))
+        self.held
+            .as_ref()
+            .map(|h| self.window.saturating_sub(h.since.elapsed()))
     }
 }
 
@@ -103,13 +131,15 @@ pub fn spawn_line_reader(
     src: impl Read + Send + 'static,
 ) -> std::io::Result<Receiver<String>> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new().name(name.into()).spawn(move || {
-        for line in BufReader::new(src).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                return; // pump gone
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            for line in BufReader::new(src).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    return; // pump gone
+                }
             }
-        }
-    })?;
+        })?;
     Ok(rx)
 }
 
@@ -153,7 +183,10 @@ mod tests {
     use std::sync::mpsc::channel;
 
     fn text(s: &str) -> AgentEvent {
-        AgentEvent::Text { text: s.into(), delta: true }
+        AgentEvent::Text {
+            text: s.into(),
+            delta: true,
+        }
     }
 
     fn drain(rx: &mut UnboundedReceiver<AgentEvent>) -> Vec<AgentEvent> {
@@ -179,7 +212,13 @@ mod tests {
         assert!(co.flush());
         let evs = drain(&mut rx);
         let expected: String = (0..100).map(|i| format!("{i},")).collect();
-        assert_eq!(evs, vec![AgentEvent::Text { text: expected, delta: true }]);
+        assert_eq!(
+            evs,
+            vec![AgentEvent::Text {
+                text: expected,
+                delta: true
+            }]
+        );
     }
 
     #[test]
@@ -188,16 +227,28 @@ mod tests {
         let mut co = Coalescer::with_limits(tx, slow(), MAX_BYTES);
         co.push(text("a"));
         co.push(text("b"));
-        co.push(AgentEvent::Thinking { text: "t".into(), delta: true }); // kind switch
-        co.push(AgentEvent::Text { text: "full".into(), delta: false }); // not a delta
+        co.push(AgentEvent::Thinking {
+            text: "t".into(),
+            delta: true,
+        }); // kind switch
+        co.push(AgentEvent::Text {
+            text: "full".into(),
+            delta: false,
+        }); // not a delta
         co.push(text("c"));
         co.flush();
         assert_eq!(
             drain(&mut rx),
             vec![
                 text("ab"),
-                AgentEvent::Thinking { text: "t".into(), delta: true },
-                AgentEvent::Text { text: "full".into(), delta: false },
+                AgentEvent::Thinking {
+                    text: "t".into(),
+                    delta: true
+                },
+                AgentEvent::Text {
+                    text: "full".into(),
+                    delta: false
+                },
                 text("c"),
             ]
         );
@@ -247,7 +298,11 @@ mod tests {
         assert!(t.join().unwrap());
         assert_eq!(
             drain(&mut rx),
-            vec![text("c"), AgentEvent::Status(AgentStatus::Working), text("d")]
+            vec![
+                text("c"),
+                AgentEvent::Status(AgentStatus::Working),
+                text("d")
+            ]
         );
     }
 

@@ -90,8 +90,14 @@ impl RenderOnce for Checkbox {
             .items_center()
             .justify_center()
             .rounded(px(Radius::CHIP))
-            .bg(if checked { c.accent_strong } else { c.surface_3 })
-            .when(checked, |d| d.child(icon(Icon::Check, 16.0, c.on_accent_strong)));
+            .bg(if checked {
+                c.accent_strong
+            } else {
+                c.surface_3
+            })
+            .when(checked, |d| {
+                d.child(icon(Icon::Check, 16.0, c.on_accent_strong))
+            });
         let mut el = div()
             .id(id.clone())
             .occlude()
@@ -105,7 +111,9 @@ impl RenderOnce for Checkbox {
             .text_size(px(ty.ui_size_md))
             .text_color(c.text)
             .when(self.disabled, |d| d.opacity(0.4))
-            .when(interactive, |d| d.cursor_pointer().hover(move |s| s.bg(hover)))
+            .when(interactive, |d| {
+                d.cursor_pointer().hover(move |s| s.bg(hover))
+            })
             .child(mark)
             .when_some(self.label, |d, l| d.child(div().min_w_0().child(l)));
         if let (true, Some(f)) = (interactive, self.on_change) {
@@ -207,7 +215,9 @@ impl RenderOnce for RadioGroup {
                     .justify_center()
                     .rounded_full()
                     .bg(if on { c.accent_strong } else { c.surface_3 })
-                    .when(on, |d| d.child(div().size(px(8.0)).rounded_full().bg(c.on_accent_strong)));
+                    .when(on, |d| {
+                        d.child(div().size(px(8.0)).rounded_full().bg(c.on_accent_strong))
+                    });
                 let el = div()
                     .id(row_id.clone())
                     .occlude()
@@ -221,7 +231,9 @@ impl RenderOnce for RadioGroup {
                     .text_size(px(ty.ui_size_md))
                     .text_color(c.text)
                     .when(self.disabled, |d| d.opacity(0.4))
-                    .when(interactive, |d| d.cursor_pointer().hover(move |s| s.bg(hover)))
+                    .when(interactive, |d| {
+                        d.cursor_pointer().hover(move |s| s.bg(hover))
+                    })
                     .child(dot)
                     .child(div().min_w_0().child(label))
                     .when(interactive, |d| {
@@ -236,7 +248,9 @@ impl RenderOnce for RadioGroup {
             .collect();
         div()
             .flex()
-            .when(self.horizontal, |d| d.flex_row().items_center().gap(px(16.0)))
+            .when(self.horizontal, |d| {
+                d.flex_row().items_center().gap(px(16.0))
+            })
             .when(!self.horizontal, |d| d.flex_col().gap(px(4.0)))
             .children(items)
     }

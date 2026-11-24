@@ -28,9 +28,13 @@ pub struct ShellInfo {
 
 /// Index of the shell Selachi picks on its own (`default_profile = ""`): pwsh > powershell > cmd.
 pub fn auto_index(shells: &[ShellInfo]) -> Option<usize> {
-    [ShellKind::Pwsh, ShellKind::WindowsPowerShell, ShellKind::Cmd]
-        .into_iter()
-        .find_map(|k| shells.iter().position(|s| s.kind == k))
+    [
+        ShellKind::Pwsh,
+        ShellKind::WindowsPowerShell,
+        ShellKind::Cmd,
+    ]
+    .into_iter()
+    .find_map(|k| shells.iter().position(|s| s.kind == k))
 }
 
 #[cfg(windows)]
@@ -38,27 +42,48 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// First `name` (with `.exe`) found in `path_var` (a `;`-separated PATH).
 pub fn find_in_path(name: &str, path_var: &std::ffi::OsStr) -> Option<PathBuf> {
-    let file = if name.to_lowercase().ends_with(".exe") { name.to_string() } else { format!("{name}.exe") };
-    std::env::split_paths(path_var).map(|d| d.join(&file)).find(|p| p.is_file())
+    let file = if name.to_lowercase().ends_with(".exe") {
+        name.to_string()
+    } else {
+        format!("{name}.exe")
+    };
+    std::env::split_paths(path_var)
+        .map(|d| d.join(&file))
+        .find(|p| p.is_file())
 }
 
 /// `bash.exe` of Git for Windows: next to `git.exe` (`<root>\cmd\git.exe` -> `<root>\bin\bash.exe`)
 /// or in the usual install folders.
 pub fn find_git_bash(path_var: &std::ffi::OsStr, program_files: &[PathBuf]) -> Option<PathBuf> {
-    let from_git = find_in_path("git", path_var)
-        .and_then(|git| git.parent().and_then(Path::parent).map(|root| root.join("bin").join("bash.exe")));
+    let from_git = find_in_path("git", path_var).and_then(|git| {
+        git.parent()
+            .and_then(Path::parent)
+            .map(|root| root.join("bin").join("bash.exe"))
+    });
     from_git
         .into_iter()
-        .chain(program_files.iter().map(|pf| pf.join("Git").join("bin").join("bash.exe")))
+        .chain(
+            program_files
+                .iter()
+                .map(|pf| pf.join("Git").join("bin").join("bash.exe")),
+        )
         .find(|p| p.is_file())
 }
 
 /// Decode `wsl -l -q` output: UTF-16LE (with or without BOM) on Windows, plain UTF-8 elsewhere.
 pub fn decode_wsl_output(bytes: &[u8]) -> String {
-    let looks_utf16 = bytes.len() >= 2 && (bytes[..2] == [0xFF, 0xFE] || bytes.iter().skip(1).step_by(2).take(8).all(|b| *b == 0));
+    let looks_utf16 = bytes.len() >= 2
+        && (bytes[..2] == [0xFF, 0xFE] || bytes.iter().skip(1).step_by(2).take(8).all(|b| *b == 0));
     if looks_utf16 {
-        let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
-        String::from_utf16_lossy(&units).trim_start_matches('\u{feff}').to_string()
+        let units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
+        String::from_utf16_lossy(&units)
+            .trim_start_matches('\u{feff}')
+            .to_string()
     } else {
         String::from_utf8_lossy(bytes).into_owned()
     }
@@ -88,9 +113,14 @@ fn no_window(cmd: &mut Command) -> &mut Command {
 /// Run `wsl.exe -l -q` (hidden window, `timeout` seconds) and list the distros.
 fn wsl_distros(timeout: Duration) -> Vec<String> {
     let mut cmd = Command::new("wsl.exe");
-    cmd.args(["-l", "-q"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.args(["-l", "-q"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     no_window(&mut cmd);
-    let Ok(child) = cmd.spawn() else { return Vec::new() };
+    let Ok(child) = cmd.spawn() else {
+        return Vec::new();
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     let pid = child.id();
     std::thread::spawn(move || {
@@ -102,7 +132,10 @@ fn wsl_distros(timeout: Duration) -> Vec<String> {
         Err(_) => {
             // Hung (WSL is waking up): do not wait for it.
             let mut kill = Command::new("taskkill");
-            kill.args(["/F", "/PID", &pid.to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            kill.args(["/F", "/PID", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
             no_window(&mut kill);
             let _ = kill.status();
             Vec::new()
@@ -125,29 +158,71 @@ pub fn detect_shells() -> Vec<ShellInfo> {
         });
     };
     if let Some(p) = find_in_path("pwsh", &path_var) {
-        push(ShellKind::Pwsh, "PowerShell 7", "pwsh.exe", &["-NoLogo"], p.display().to_string());
+        push(
+            ShellKind::Pwsh,
+            "PowerShell 7",
+            "pwsh.exe",
+            &["-NoLogo"],
+            p.display().to_string(),
+        );
     }
-    let system_root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from);
-    let ps = system_root.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+    let system_root =
+        std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from("C:\\Windows"), PathBuf::from);
+    let ps = system_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
     if ps.is_file() {
-        push(ShellKind::WindowsPowerShell, "Windows PowerShell", "powershell.exe", &["-NoLogo"], ps.display().to_string());
+        push(
+            ShellKind::WindowsPowerShell,
+            "Windows PowerShell",
+            "powershell.exe",
+            &["-NoLogo"],
+            ps.display().to_string(),
+        );
     }
     let cmd = system_root.join("System32").join("cmd.exe");
     if cmd.is_file() {
-        push(ShellKind::Cmd, "Símbolo del sistema", "cmd.exe", &[], cmd.display().to_string());
+        push(
+            ShellKind::Cmd,
+            "Símbolo del sistema",
+            "cmd.exe",
+            &[],
+            cmd.display().to_string(),
+        );
     }
-    let program_files: Vec<PathBuf> =
-        ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"].iter().filter_map(std::env::var_os).map(|p| {
+    let program_files: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(|p| {
             let p = PathBuf::from(p);
-            if p.ends_with("Local") { p.join("Programs") } else { p }
-        }).collect();
+            if p.ends_with("Local") {
+                p.join("Programs")
+            } else {
+                p
+            }
+        })
+        .collect();
     if let Some(bash) = find_git_bash(&path_var, &program_files) {
         let program = bash.display().to_string();
-        push(ShellKind::GitBash, "Git Bash", &program, &["--login", "-i"], program.clone());
+        push(
+            ShellKind::GitBash,
+            "Git Bash",
+            &program,
+            &["--login", "-i"],
+            program.clone(),
+        );
     }
     for distro in wsl_distros(Duration::from_secs(4)) {
         let label = format!("WSL: {distro}");
-        push(ShellKind::Wsl, &label, "wsl.exe", &["-d", &distro], format!("Distribución {distro}"));
+        push(
+            ShellKind::Wsl,
+            &label,
+            "wsl.exe",
+            &["-d", &distro],
+            format!("Distribución {distro}"),
+        );
     }
     out
 }
@@ -169,7 +244,10 @@ mod tests {
 
     #[test]
     fn parses_utf16_wsl_output() {
-        let raw = utf16("Ubuntu\r\ndocker-desktop\r\ndocker-desktop-data\r\nDebian\r\n", false);
+        let raw = utf16(
+            "Ubuntu\r\ndocker-desktop\r\ndocker-desktop-data\r\nDebian\r\n",
+            false,
+        );
         assert_eq!(parse_wsl_list(&raw), ["Ubuntu", "Debian"]);
         let with_bom = utf16("Ubuntu-24.04\r\n", true);
         assert_eq!(parse_wsl_list(&with_bom), ["Ubuntu-24.04"]);
@@ -186,8 +264,12 @@ mod tests {
     fn finds_programs_on_a_path() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pwsh.exe"), "").unwrap();
-        let path = std::env::join_paths([PathBuf::from("Z:\\nowhere"), dir.path().to_path_buf()]).unwrap();
-        assert_eq!(find_in_path("pwsh", &path), Some(dir.path().join("pwsh.exe")));
+        let path =
+            std::env::join_paths([PathBuf::from("Z:\\nowhere"), dir.path().to_path_buf()]).unwrap();
+        assert_eq!(
+            find_in_path("pwsh", &path),
+            Some(dir.path().join("pwsh.exe"))
+        );
         assert_eq!(find_in_path("cmdx", &path), None);
     }
 
@@ -199,14 +281,28 @@ mod tests {
         std::fs::write(root.path().join("cmd").join("git.exe"), "").unwrap();
         std::fs::write(root.path().join("bin").join("bash.exe"), "").unwrap();
         let path = std::env::join_paths([root.path().join("cmd")]).unwrap();
-        assert_eq!(find_git_bash(&path, &[]), Some(root.path().join("bin").join("bash.exe")));
+        assert_eq!(
+            find_git_bash(&path, &[]),
+            Some(root.path().join("bin").join("bash.exe"))
+        );
         assert_eq!(find_git_bash(std::ffi::OsStr::new(""), &[]), None);
     }
 
     #[test]
     fn auto_shell_follows_the_priority() {
-        let s = |kind| ShellInfo { kind, name: String::new(), program: String::new(), args: vec![], detail: String::new() };
-        let all = [s(ShellKind::Cmd), s(ShellKind::Wsl), s(ShellKind::WindowsPowerShell), s(ShellKind::Pwsh)];
+        let s = |kind| ShellInfo {
+            kind,
+            name: String::new(),
+            program: String::new(),
+            args: vec![],
+            detail: String::new(),
+        };
+        let all = [
+            s(ShellKind::Cmd),
+            s(ShellKind::Wsl),
+            s(ShellKind::WindowsPowerShell),
+            s(ShellKind::Pwsh),
+        ];
         assert_eq!(auto_index(&all), Some(3));
         assert_eq!(auto_index(&all[..3]), Some(2));
         assert_eq!(auto_index(&all[..2]), Some(0));

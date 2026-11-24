@@ -121,10 +121,16 @@ impl DriverFactory for DefaultDriverFactory {
             AgentKind::ClaudeCode => Box::new(ClaudeDriver::spawn_with(cfg, tx, &opts)?),
             AgentKind::Codex => Box::new(CodexDriver::spawn_with(cfg, tx, &opts)?),
             AgentKind::OpenCode => Box::new(AcpDriver::spawn_opencode_with(cfg, tx, &opts)?),
-            AgentKind::Acp { command } => Box::new(AcpDriver::spawn_command_line_with(command, cfg, tx, &opts)?),
+            AgentKind::Acp { command } => {
+                Box::new(AcpDriver::spawn_command_line_with(command, cfg, tx, &opts)?)
+            }
         };
         let pid = driver.pid();
-        Ok(SpawnedAgent { control: Box::new(Driver(driver)), events, pid })
+        Ok(SpawnedAgent {
+            control: Box::new(Driver(driver)),
+            events,
+            pid,
+        })
     }
 }
 
@@ -135,7 +141,9 @@ pub(crate) fn owner_agent_name(kind: &AgentKind) -> String {
         AgentKind::Codex => "codex".into(),
         AgentKind::OpenCode => "opencode".into(),
         AgentKind::Acp { command } => {
-            let l = crate::model::agent_label(&AgentKind::Acp { command: command.clone() });
+            let l = crate::model::agent_label(&AgentKind::Acp {
+                command: command.clone(),
+            });
             l.trim_end_matches(" (ACP)").to_string()
         }
     }
@@ -143,7 +151,9 @@ pub(crate) fn owner_agent_name(kind: &AgentKind) -> String {
 
 pub(crate) fn driver_err_text(e: &DriverError) -> String {
     match e {
-        DriverError::NotFound(what) => format!("No se encontró el ejecutable del agente ({what}). ¿Está instalado y en el PATH?"),
+        DriverError::NotFound(what) => format!(
+            "No se encontró el ejecutable del agente ({what}). ¿Está instalado y en el PATH?"
+        ),
         other => format!("No se pudo iniciar el agente: {other}"),
     }
 }
@@ -179,8 +189,10 @@ mod tests {
         }
         let mut d = Fake(Vec::new());
         assert_eq!(d.pid(), None);
-        d.approve_with("a", agents_driver::ApprovalDecision::Always).unwrap();
-        d.approve_with("b", agents_driver::ApprovalDecision::Deny).unwrap();
+        d.approve_with("a", agents_driver::ApprovalDecision::Always)
+            .unwrap();
+        d.approve_with("b", agents_driver::ApprovalDecision::Deny)
+            .unwrap();
         assert_eq!(d.0, vec![("a".to_string(), true), ("b".to_string(), false)]);
     }
 
@@ -190,12 +202,22 @@ mod tests {
     #[test]
     fn default_factory_reports_pid_and_joins_the_job() {
         let job = proc_svc::JobGroup::new("chat_core_factory_test").unwrap();
-        let kind = AgentKind::Acp { command: "cmd.exe /c ping -n 8 127.0.0.1".into() };
+        let kind = AgentKind::Acp {
+            command: "cmd.exe /c ping -n 8 127.0.0.1".into(),
+        };
         let mut a = DefaultDriverFactory
-            .spawn(&kind, &ThreadConfig::new("."), Some(job.raw_handle() as usize))
+            .spawn(
+                &kind,
+                &ThreadConfig::new("."),
+                Some(job.raw_handle() as usize),
+            )
             .unwrap();
         let pid = a.pid.expect("real pid");
-        assert!(job.contains(pid), "pid {pid} not in job {:?}", job.members());
+        assert!(
+            job.contains(pid),
+            "pid {pid} not in job {:?}",
+            job.members()
+        );
         a.control.shutdown();
     }
 }

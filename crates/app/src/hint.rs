@@ -4,9 +4,11 @@
 
 use std::path::PathBuf;
 
-use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::*, px,
+};
 use theme::{Radius, Theme};
-use ui_kit::{Button, IconButton, Icon};
+use ui_kit::{Button, Icon, IconButton};
 
 /// What the hint's button does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,7 +25,10 @@ pub struct Hint {
 
 impl Hint {
     pub fn text(text: impl Into<SharedString>) -> Self {
-        Self { text: text.into(), action: None }
+        Self {
+            text: text.into(),
+            action: None,
+        }
     }
 
     pub fn with_action(mut self, label: impl Into<SharedString>, action: HintAction) -> Self {
@@ -62,7 +67,8 @@ pub fn hint_card(
         .child(div().min_w_0().child(hint.text.clone()));
     if let Some((label, action)) = hint.action.clone() {
         card = card.child(
-            Button::tonal("hint-action", theme, label).on_click(move |_, window, cx| on_action(action.clone(), window, cx)),
+            Button::tonal("hint-action", theme, label)
+                .on_click(move |_, window, cx| on_action(action.clone(), window, cx)),
         );
     }
     card = card.child(

@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use git_svc::{Checkpoint, Commit, GitAction, NewWorktree, Repo, RepoStatus, RestoreMode, Worktree};
+use git_svc::{
+    Checkpoint, Commit, GitAction, NewWorktree, Repo, RepoStatus, RestoreMode, Worktree,
+};
 
 use crate::cmd::{GitOp, run_git};
 use crate::diffview::{DiffPreview, parse_unified, preview_of, preview_untracked};
@@ -69,8 +71,16 @@ pub fn load(repo: &Repo, prev: Option<&GitData>, full: bool) -> Result<GitData, 
     };
     let counts = if changed <= MAX_COUNTED_FILES {
         Counts {
-            staged: if status.staged.is_empty() { Default::default() } else { numstat(true) },
-            unstaged: if status.unstaged.is_empty() { Default::default() } else { numstat(false) },
+            staged: if status.staged.is_empty() {
+                Default::default()
+            } else {
+                numstat(true)
+            },
+            unstaged: if status.unstaged.is_empty() {
+                Default::default()
+            } else {
+                numstat(false)
+            },
         }
     } else {
         Counts::default()
@@ -84,7 +94,8 @@ pub fn load(repo: &Repo, prev: Option<&GitData>, full: bool) -> Result<GitData, 
         w.dirty = if same_path(&w.path, &repo.root) {
             Some(status.is_dirty() || !status.untracked.is_empty())
         } else {
-            prev.and_then(|p| p.worktree_at(&w.path)).and_then(|o| o.dirty)
+            prev.and_then(|p| p.worktree_at(&w.path))
+                .and_then(|o| o.dirty)
         };
     }
     let checkpoints = repo.checkpoints().unwrap_or_default();
@@ -136,11 +147,14 @@ pub fn load_diff(repo: &Repo, target: &DiffTarget) -> Result<DiffPreview, String
         }
     };
     match target {
-        DiffTarget::Working { section: Section::Untracked | Section::Conflicts, .. } => {
-            preview_untracked(&repo.root, rel)
-        }
+        DiffTarget::Working {
+            section: Section::Untracked | Section::Conflicts,
+            ..
+        } => preview_untracked(&repo.root, rel),
         DiffTarget::Working { section, .. } => {
-            let raw = repo.diff(Some(rel), *section == Section::Staged).map_err(err)?;
+            let raw = repo
+                .diff(Some(rel), *section == Section::Staged)
+                .map_err(err)?;
             Ok(from_text(raw))
         }
         DiffTarget::Checkpoint { id, .. } => {
@@ -160,10 +174,16 @@ pub fn preflight(repo: &Repo, op: &GitOp) -> Result<Review, String> {
     let status = repo.status().map_err(err)?;
     let (pf, plan) = match op {
         GitOp::Action(a) => (repo.preflight(a).map_err(err)?, None),
-        GitOp::CommitAndPush { message } => {
-            (repo.preflight(&GitAction::Commit { message: message.clone() }).map_err(err)?, None)
+        GitOp::CommitAndPush { message } => (
+            repo.preflight(&GitAction::Commit {
+                message: message.clone(),
+            })
+            .map_err(err)?,
+            None,
+        ),
+        GitOp::RemoveWorktree { path, .. } => {
+            (repo.preflight_remove_worktree(path).map_err(err)?, None)
         }
-        GitOp::RemoveWorktree { path, .. } => (repo.preflight_remove_worktree(path).map_err(err)?, None),
         GitOp::RestoreCheckpoint { id } => {
             let pf = repo.preflight_restore(id, &RestoreMode::All).map_err(err)?;
             let plan = repo.restore_plan(id, &RestoreMode::All).map_err(err)?;
@@ -178,12 +198,26 @@ pub fn preflight(repo: &Repo, op: &GitOp) -> Result<Review, String> {
 // Execution
 // ---------------------------------------------------------------------------------------------
 
-fn fail(summary: impl Into<String>, detail: impl Into<String>, retry: Option<Vec<String>>) -> Outcome {
-    Outcome { ok: false, summary: summary.into(), detail: detail.into(), retry }
+fn fail(
+    summary: impl Into<String>,
+    detail: impl Into<String>,
+    retry: Option<Vec<String>>,
+) -> Outcome {
+    Outcome {
+        ok: false,
+        summary: summary.into(),
+        detail: detail.into(),
+        retry,
+    }
 }
 
 fn done(summary: impl Into<String>) -> Outcome {
-    Outcome { ok: true, summary: summary.into(), detail: String::new(), retry: None }
+    Outcome {
+        ok: true,
+        summary: summary.into(),
+        detail: String::new(),
+        retry: None,
+    }
 }
 
 fn clip(s: &str, max: usize) -> String {
@@ -196,7 +230,11 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// Runs an `argv` (including the leading `git`) through [`run_git`].
-fn run_argv(repo: &Repo, argv: &[String], timeout: std::time::Duration) -> Result<crate::cmd::GitRun, String> {
+fn run_argv(
+    repo: &Repo,
+    argv: &[String],
+    timeout: std::time::Duration,
+) -> Result<crate::cmd::GitRun, String> {
     run_git(&repo.root, &argv[1..], timeout)
 }
 
@@ -208,7 +246,11 @@ fn run_action(repo: &Repo, action: &GitAction) -> Outcome {
         Err(e) => fail(format!("{}: {e}", op_title(action)), "", retry),
         Ok(out) if out.success() => {
             let line = first_line(&out.stdout);
-            let line = if line.is_empty() { first_line(&out.stderr) } else { line };
+            let line = if line.is_empty() {
+                first_line(&out.stderr)
+            } else {
+                line
+            };
             done(match action {
                 GitAction::Push => "Push completado".to_string(),
                 GitAction::Fetch => "Fetch completado".to_string(),
@@ -217,8 +259,16 @@ fn run_action(repo: &Repo, action: &GitAction) -> Outcome {
             })
         }
         Ok(out) => {
-            let msg = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
-            fail(format!("{} falló: {}", op_title(action), clip(first_line(msg), 140)), clip(msg, 700), retry)
+            let msg = if out.stderr.trim().is_empty() {
+                &out.stdout
+            } else {
+                &out.stderr
+            };
+            fail(
+                format!("{} falló: {}", op_title(action), clip(first_line(msg), 140)),
+                clip(msg, 700),
+                retry,
+            )
         }
     }
 }
@@ -242,16 +292,27 @@ pub fn execute(repo: &Repo, op: &GitOp) -> Outcome {
     match op {
         GitOp::Stage(_) | GitOp::Unstage { .. } | GitOp::StageAll | GitOp::UnstageAll { .. } => {
             let steps = op.argv_steps();
-            let Some(argv) = steps.first() else { return fail("operación vacía", "", None) };
+            let Some(argv) = steps.first() else {
+                return fail("operación vacía", "", None);
+            };
             match run_argv(repo, argv, LOCAL) {
                 Ok(r) if r.success() => done(op.title()),
-                Ok(r) => fail(format!("{} falló: {}", op.title(), clip(first_line(&r.stderr), 140)), clip(&r.stderr, 700), None),
+                Ok(r) => fail(
+                    format!("{} falló: {}", op.title(), clip(first_line(&r.stderr), 140)),
+                    clip(&r.stderr, 700),
+                    None,
+                ),
                 Err(e) => fail(e, "", None),
             }
         }
         GitOp::Action(a) => run_action(repo, a),
         GitOp::CommitAndPush { message } => {
-            let commit = run_action(repo, &GitAction::Commit { message: message.clone() });
+            let commit = run_action(
+                repo,
+                &GitAction::Commit {
+                    message: message.clone(),
+                },
+            );
             if !commit.ok {
                 return commit;
             }
@@ -259,7 +320,11 @@ pub fn execute(repo: &Repo, op: &GitOp) -> Outcome {
             if push.ok {
                 done("Commit y push completados")
             } else {
-                fail(format!("Commit creado, pero el push falló: {}", push.summary), push.detail, push.retry)
+                fail(
+                    format!("Commit creado, pero el push falló: {}", push.summary),
+                    push.detail,
+                    push.retry,
+                )
             }
         }
         GitOp::PublishBranch { branch } => {
@@ -274,21 +339,27 @@ pub fn execute(repo: &Repo, op: &GitOp) -> Outcome {
                 Err(e) => fail(e, "", Some(argv.clone())),
             }
         }
-        GitOp::CreateWorktree { name } => match repo.create_worktree(&NewWorktree::new(name.trim())) {
-            Ok(w) => Outcome {
-                ok: true,
-                summary: format!("Worktree «{}» creado", name.trim()),
-                detail: slashes(&w.path),
-                retry: None,
-            },
-            Err(e) => fail(format!("No se pudo crear el worktree: {e}"), "", None),
-        },
+        GitOp::CreateWorktree { name } => {
+            match repo.create_worktree(&NewWorktree::new(name.trim())) {
+                Ok(w) => Outcome {
+                    ok: true,
+                    summary: format!("Worktree «{}» creado", name.trim()),
+                    detail: slashes(&w.path),
+                    retry: None,
+                },
+                Err(e) => fail(format!("No se pudo crear el worktree: {e}"), "", None),
+            }
+        }
         GitOp::RemoveWorktree { path, force } => match repo.remove_worktree(path, *force) {
             Ok(()) => done("Worktree eliminado"),
             Err(e) => fail(format!("No se pudo eliminar el worktree: {e}"), "", None),
         },
         GitOp::CreateCheckpoint { label } => {
-            let label = if label.trim().is_empty() { "manual" } else { label.trim() };
+            let label = if label.trim().is_empty() {
+                "manual"
+            } else {
+                label.trim()
+            };
             match repo.create_checkpoint(label) {
                 Ok(c) => done(format!("Checkpoint «{}» creado", c.label)),
                 Err(e) => fail(format!("No se pudo crear el checkpoint: {e}"), "", None),
@@ -315,7 +386,10 @@ pub fn execute(repo: &Repo, op: &GitOp) -> Outcome {
 
 /// Unified result of a worktree list entry for the switcher: directory name and branch label.
 pub fn worktree_label(w: &Worktree) -> (String, String) {
-    let name = w.path.file_name().map_or_else(|| slashes(&w.path), |n| n.to_string_lossy().into_owned());
+    let name = w
+        .path
+        .file_name()
+        .map_or_else(|| slashes(&w.path), |n| n.to_string_lossy().into_owned());
     let branch = match (&w.branch, w.detached) {
         (Some(b), _) => b.clone(),
         (None, true) => "HEAD separado".to_string(),
@@ -332,12 +406,23 @@ pub(crate) mod testing {
     /// Runs git in `dir` (tests only).
     pub fn git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
-            .args(["-c", "user.name=Tester", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .current_dir(dir)
             .output()
             .expect("git runs");
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// A repo with one commit (`a.txt`, `src/lib.rs`).
@@ -359,7 +444,9 @@ mod tests {
     use super::*;
 
     fn repo(dir: &tempfile::TempDir) -> Repo {
-        Repo::discover(dir.path()).expect("discover").expect("a repo")
+        Repo::discover(dir.path())
+            .expect("discover")
+            .expect("a repo")
     }
 
     #[test]
@@ -395,7 +482,13 @@ mod tests {
         let o = execute(&r, &GitOp::Stage("a.txt".into()));
         assert!(o.ok, "{o:?}");
         assert_eq!(load(&r, None, false).unwrap().status.staged.len(), 1);
-        let o = execute(&r, &GitOp::Unstage { path: "a.txt".into(), unborn: false });
+        let o = execute(
+            &r,
+            &GitOp::Unstage {
+                path: "a.txt".into(),
+                unborn: false,
+            },
+        );
         assert!(o.ok, "{o:?}");
         let d = load(&r, None, false).unwrap();
         assert!(d.status.staged.is_empty() && d.status.unstaged.len() == 1);
@@ -413,7 +506,16 @@ mod tests {
         let r = repo(&dir);
         let d = load(&r, None, true).unwrap();
         assert!(d.unborn() && d.commits.is_empty());
-        assert!(execute(&r, &GitOp::Unstage { path: "f.txt".into(), unborn: true }).ok);
+        assert!(
+            execute(
+                &r,
+                &GitOp::Unstage {
+                    path: "f.txt".into(),
+                    unborn: true
+                }
+            )
+            .ok
+        );
         assert!(load(&r, None, false).unwrap().status.staged.is_empty());
     }
 
@@ -422,7 +524,9 @@ mod tests {
         let dir = temp_repo();
         std::fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
         let r = repo(&dir);
-        let op = GitOp::Action(GitAction::Commit { message: "feat: change".into() });
+        let op = GitOp::Action(GitAction::Commit {
+            message: "feat: change".into(),
+        });
         // Nothing staged: the review blocks the commit.
         let review = preflight(&r, &op).unwrap();
         assert!(review.blocked.is_some());
@@ -442,26 +546,47 @@ mod tests {
         let dir = temp_repo();
         let r = repo(&dir);
         std::fs::write(dir.path().join("a.txt"), "v1\n").unwrap();
-        assert!(execute(&r, &GitOp::CreateCheckpoint { label: "antes".into() }).ok);
+        assert!(
+            execute(
+                &r,
+                &GitOp::CreateCheckpoint {
+                    label: "antes".into()
+                }
+            )
+            .ok
+        );
         let cps = r.checkpoints().unwrap();
         assert_eq!(cps.len(), 1);
         let id = cps[0].id.clone();
         std::fs::write(dir.path().join("a.txt"), "v2\n").unwrap();
         std::fs::write(dir.path().join("extra.txt"), "new\n").unwrap();
 
-        let p = load_diff(&r, &DiffTarget::Checkpoint { id: id.clone(), path: "a.txt".into() }).unwrap();
+        let p = load_diff(
+            &r,
+            &DiffTarget::Checkpoint {
+                id: id.clone(),
+                path: "a.txt".into(),
+            },
+        )
+        .unwrap();
         assert_eq!((p.added, p.removed), (1, 1));
 
         let op = GitOp::RestoreCheckpoint { id };
         let review = preflight(&r, &op).unwrap();
         assert!(review.danger);
         let kinds: Vec<_> = review.lines.iter().map(|l| l.kind).collect();
-        assert!(kinds.contains(&crate::gate::LineKind::Overwrite), "{review:?}");
+        assert!(
+            kinds.contains(&crate::gate::LineKind::Overwrite),
+            "{review:?}"
+        );
         assert!(kinds.contains(&crate::gate::LineKind::Delete), "{review:?}");
         let o = execute(&r, &op);
         assert!(o.ok, "{o:?}");
         assert!(o.detail.contains("antes de restaurar"), "{o:?}");
-        assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "v1\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "v1\n"
+        );
         assert!(!dir.path().join("extra.txt").exists());
         // The automatic pre-restore checkpoint is listed (marked auto).
         let d = load(&r, None, false).unwrap();
@@ -478,16 +603,38 @@ mod tests {
         git(&main, &["add", "-A"]);
         git(&main, &["commit", "-q", "-m", "init"]);
         let r = Repo::discover(&main).unwrap().unwrap();
-        assert!(execute(&r, &GitOp::CreateWorktree { name: "con".into() }).detail.is_empty());
-        let o = execute(&r, &GitOp::CreateWorktree { name: "feat-x".into() });
+        assert!(
+            execute(&r, &GitOp::CreateWorktree { name: "con".into() })
+                .detail
+                .is_empty()
+        );
+        let o = execute(
+            &r,
+            &GitOp::CreateWorktree {
+                name: "feat-x".into(),
+            },
+        );
         assert!(o.ok, "{o:?}");
         let wts = load_worktrees_dirty(&r).unwrap();
         assert_eq!(wts.len(), 2);
         let wt = wts.iter().find(|w| !w.is_main).unwrap();
         assert_eq!(worktree_label(wt).0, "feat-x");
-        let review = preflight(&r, &GitOp::RemoveWorktree { path: wt.path.clone(), force: false }).unwrap();
+        let review = preflight(
+            &r,
+            &GitOp::RemoveWorktree {
+                path: wt.path.clone(),
+                force: false,
+            },
+        )
+        .unwrap();
         assert!(review.danger);
-        let o = execute(&r, &GitOp::RemoveWorktree { path: wt.path.clone(), force: false });
+        let o = execute(
+            &r,
+            &GitOp::RemoveWorktree {
+                path: wt.path.clone(),
+                force: false,
+            },
+        );
         assert!(o.ok, "{o:?}");
     }
 
@@ -497,14 +644,42 @@ mod tests {
         std::fs::write(dir.path().join("a.txt"), "one\nTWO\nthree\n").unwrap();
         std::fs::write(dir.path().join("fresh.rs"), "fn x() {}\nfn y() {}\n").unwrap();
         let r = repo(&dir);
-        let w = load_diff(&r, &DiffTarget::Working { section: Section::Changes, path: "a.txt".into() }).unwrap();
+        let w = load_diff(
+            &r,
+            &DiffTarget::Working {
+                section: Section::Changes,
+                path: "a.txt".into(),
+            },
+        )
+        .unwrap();
         assert_eq!((w.added, w.removed), (1, 1));
-        let u = load_diff(&r, &DiffTarget::Working { section: Section::Untracked, path: "fresh.rs".into() }).unwrap();
+        let u = load_diff(
+            &r,
+            &DiffTarget::Working {
+                section: Section::Untracked,
+                path: "fresh.rs".into(),
+            },
+        )
+        .unwrap();
         assert_eq!((u.added, u.removed), (2, 0));
         git(dir.path(), &["add", "a.txt"]);
-        let s = load_diff(&r, &DiffTarget::Working { section: Section::Staged, path: "a.txt".into() }).unwrap();
+        let s = load_diff(
+            &r,
+            &DiffTarget::Working {
+                section: Section::Staged,
+                path: "a.txt".into(),
+            },
+        )
+        .unwrap();
         assert_eq!((s.added, s.removed), (1, 1));
-        let none = load_diff(&r, &DiffTarget::Working { section: Section::Changes, path: "a.txt".into() }).unwrap();
+        let none = load_diff(
+            &r,
+            &DiffTarget::Working {
+                section: Section::Changes,
+                path: "a.txt".into(),
+            },
+        )
+        .unwrap();
         assert!(none.is_empty(), "everything is staged now");
     }
 }

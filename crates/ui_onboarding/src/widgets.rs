@@ -1,10 +1,7 @@
 //! Small building blocks of the wizard, made from `ui_kit` pieces and `theme` tokens only.
 
-use gpui::{
-    Div, ElementId, FontWeight, IntoElement, SharedString, Stateful, div, prelude::*, px,
-};
-use theme::{Theme, rgb};
-use ui_kit::{Icon, icon};
+use gpui::{Div, ElementId, FontWeight, IntoElement, SharedString, Stateful, div, prelude::*, px};
+use theme::{Radius, Theme};
 
 /// Widest content column (px).
 pub const COLUMN_WIDTH: f32 = 560.0;
@@ -13,19 +10,15 @@ pub const WIDE_COLUMN_WIDTH: f32 = 640.0;
 /// Window width under which the wizard becomes a bottom sheet (DESIGN.md, class XS).
 pub const XS_BELOW: f32 = 720.0;
 
-/// Green of "ok" marks: the terminal palette's green, so it follows the mode.
-pub fn ok_color(t: &Theme) -> theme::Rgba {
-    rgb(t.terminal.ansi[2])
-}
-
-/// Amber of "attention" text: the terminal palette's yellow.
-pub fn warn_color(t: &Theme) -> theme::Rgba {
-    rgb(t.terminal.ansi[3])
-}
-
 /// `title` big and `subtitle` muted, centered.
-pub fn title_block(t: &Theme, xs: bool, title: impl Into<SharedString>, subtitle: impl Into<SharedString>) -> Div {
+pub fn title_block(
+    t: &Theme,
+    xs: bool,
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+) -> Div {
     let c = t.colors;
+    let ty = t.typography;
     div()
         .w_full()
         .flex()
@@ -35,17 +28,34 @@ pub fn title_block(t: &Theme, xs: bool, title: impl Into<SharedString>, subtitle
         .px(px(8.0))
         .child(
             div()
-                .text_size(px(if xs { 24.0 } else { 30.0 }))
+                .text_size(px(if xs {
+                    t.typography.ui_size_xl
+                } else {
+                    t.typography.ui_size_display
+                }))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c.text)
                 .text_center()
                 .child(title.into()),
         )
-        .child(div().max_w(px(460.0)).text_size(px(14.0)).line_height(px(21.0)).text_color(c.muted).text_center().child(subtitle.into()))
+        .child(
+            div()
+                .max_w(px(460.0))
+                .text_size(px(ty.ui_size_body))
+                .line_height(px(21.0))
+                .text_color(c.muted)
+                .text_center()
+                .child(subtitle.into()),
+        )
 }
 
 /// A row of a list inside a `surface_1` card: rounded, hover `surface_2`, selected `surface_3`.
-pub fn row_shell(id: impl Into<ElementId>, t: &Theme, selected: bool, clickable: bool) -> Stateful<Div> {
+pub fn row_shell(
+    id: impl Into<ElementId>,
+    t: &Theme,
+    selected: bool,
+    clickable: bool,
+) -> Stateful<Div> {
     let c = t.colors;
     div()
         .id(id)
@@ -57,14 +67,24 @@ pub fn row_shell(id: impl Into<ElementId>, t: &Theme, selected: bool, clickable:
         .flex_row()
         .items_center()
         .gap(px(12.0))
-        .rounded(px(12.0))
+        .rounded(px(Radius::SM))
         .when(selected, |d| d.bg(c.surface_3))
         .when(!selected, |d| d.hover(move |s| s.bg(c.surface_2)))
-        .when(clickable, |d| d.cursor_pointer())
+        .when(clickable, |d| {
+            // A tab stop: Enter / Space run the click; `Tab` is moved by the view root.
+            d.cursor_pointer()
+                .tab_index(0)
+                .focus(move |s| s.bg(c.surface_4))
+        })
 }
 
 /// Title (13, `text`) over an optional subtitle (12, `muted`); truncates instead of wrapping.
-pub fn row_text(t: &Theme, title: impl Into<SharedString>, subtitle: Option<SharedString>, mono_subtitle: bool) -> Div {
+pub fn row_text(
+    t: &Theme,
+    title: impl Into<SharedString>,
+    subtitle: Option<SharedString>,
+    mono_subtitle: bool,
+) -> Div {
     let c = t.colors;
     let ty = t.typography;
     div()
@@ -114,23 +134,6 @@ pub fn setting_row(
     )
 }
 
-/// Checkbox: `accent_strong` when on (a strong selection), `surface_3` when off.
-pub fn checkbox(id: impl Into<ElementId>, t: &Theme, checked: bool) -> Stateful<Div> {
-    let c = t.colors;
-    div()
-        .id(id)
-        .occlude()
-        .size(px(18.0))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(6.0))
-        .cursor_pointer()
-        .bg(if checked { c.accent_strong } else { c.surface_4 })
-        .when(checked, |d| d.child(icon(Icon::Check, 12.0, c.on_accent_strong)))
-}
-
 /// Radio dot: a ring with a dot inside when selected.
 pub fn radio(t: &Theme, selected: bool) -> Div {
     let c = t.colors;
@@ -141,8 +144,14 @@ pub fn radio(t: &Theme, selected: bool) -> Div {
         .items_center()
         .justify_center()
         .rounded_full()
-        .bg(if selected { c.accent_strong } else { c.surface_4 })
-        .when(selected, |d| d.child(div().size(px(6.0)).rounded_full().bg(c.on_accent_strong)))
+        .bg(if selected {
+            c.accent_strong
+        } else {
+            c.surface_4
+        })
+        .when(selected, |d| {
+            d.child(div().size(px(6.0)).rounded_full().bg(c.on_accent_strong))
+        })
 }
 
 /// Star toggle of a project row.
@@ -154,15 +163,17 @@ pub fn star(id: impl Into<ElementId>, t: &Theme, on: bool) -> Stateful<Div> {
     div()
         .id(id)
         .occlude()
+        .tab_index(0)
+        .focus(move |s| s.bg(c.surface_3))
         .size(px(28.0))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .cursor_pointer()
-        .text_size(px(16.0))
-        .text_color(if on { warn_color(t) } else { c.muted })
+        .text_size(px(t.typography.ui_size_lg))
+        .text_color(if on { c.warning } else { c.muted })
         .hover(move |s| s.bg(c.surface_3))
         .child(if on { "★" } else { "☆" })
 }
@@ -170,25 +181,41 @@ pub fn star(id: impl Into<ElementId>, t: &Theme, on: bool) -> Stateful<Div> {
 /// Small tonal badge ("Rust", "git", "Recomendado").
 pub fn badge(t: &Theme, text: impl Into<SharedString>) -> Div {
     let c = t.colors;
+    let ty = t.typography;
     div()
         .h(px(20.0))
         .px(px(8.0))
         .flex_none()
         .flex()
         .items_center()
-        .rounded(px(8.0))
+        .rounded(px(Radius::CONTROL))
         .bg(c.surface_3)
-        .text_size(px(11.0))
+        .text_size(px(ty.ui_size_xs))
         .text_color(c.muted)
         .child(text.into())
 }
 
 /// A `surface_1` card that holds rows.
 pub fn group(t: &Theme) -> Div {
-    div().w_full().p(px(6.0)).flex().flex_col().gap(px(2.0)).rounded(px(16.0)).bg(t.colors.surface_1)
+    div()
+        .w_full()
+        .p(px(6.0))
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .rounded(px(Radius::MD))
+        .bg(t.colors.surface_1)
 }
 
 /// 11 px muted heading above a group.
 pub fn group_label(t: &Theme, text: impl Into<SharedString>) -> Div {
-    div().w_full().px(px(8.0)).pt(px(8.0)).text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(t.colors.muted).child(text.into())
+    let ty = t.typography;
+    div()
+        .w_full()
+        .px(px(8.0))
+        .pt(px(8.0))
+        .text_size(px(ty.ui_size_xs))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(t.colors.muted)
+        .child(text.into())
 }

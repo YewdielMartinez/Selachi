@@ -347,9 +347,13 @@ pub(crate) fn agent_from_db(s: &str) -> AgentKind {
         "codex" => AgentKind::Codex,
         "opencode" => AgentKind::OpenCode,
         other => match other.strip_prefix("acp:") {
-            Some(cmd) => AgentKind::Acp { command: cmd.to_string() },
+            Some(cmd) => AgentKind::Acp {
+                command: cmd.to_string(),
+            },
             // Unknown future kind: keep it usable as a generic ACP command.
-            None => AgentKind::Acp { command: other.to_string() },
+            None => AgentKind::Acp {
+                command: other.to_string(),
+            },
         },
     }
 }
@@ -412,20 +416,34 @@ mod tests {
             AgentKind::ClaudeCode,
             AgentKind::Codex,
             AgentKind::OpenCode,
-            AgentKind::Acp { command: "\"C:/x y/gemini.exe\" --acp".into() },
+            AgentKind::Acp {
+                command: "\"C:/x y/gemini.exe\" --acp".into(),
+            },
         ] {
             assert_eq!(agent_from_db(&agent_to_db(&k)), k);
         }
         assert_eq!(
-            agent_label(&AgentKind::Acp { command: "\"C:/x y/gemini.exe\" --acp".into() }),
+            agent_label(&AgentKind::Acp {
+                command: "\"C:/x y/gemini.exe\" --acp".into()
+            }),
             "gemini (ACP)"
         );
-        assert_eq!(agent_label(&AgentKind::Acp { command: "gemini --acp".into() }), "gemini (ACP)");
+        assert_eq!(
+            agent_label(&AgentKind::Acp {
+                command: "gemini --acp".into()
+            }),
+            "gemini (ACP)"
+        );
     }
 
     #[test]
     fn permission_roundtrip() {
-        for p in [PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Full, PermissionMode::ReadOnly] {
+        for p in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Full,
+            PermissionMode::ReadOnly,
+        ] {
             assert_eq!(permission_from_db(permission_to_db(p)), p);
         }
     }

@@ -13,10 +13,11 @@ use std::sync::Arc;
 
 use agents_driver::{AgentKind, DetectedAgent};
 use chat_core::{
-    ChatStore, DeleteOptions, DeletePreview, DeleteReport, ThreadFilter, ThreadId, ThreadRecord, ThreadUpdate, now_ms,
+    ChatStore, DeleteOptions, DeletePreview, DeleteReport, ThreadFilter, ThreadId, ThreadRecord,
+    ThreadUpdate, now_ms,
 };
-use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity};
 use futures::StreamExt as _;
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity};
 use panel_api::TabHandle;
 use theme::Theme;
 
@@ -32,9 +33,17 @@ pub enum ChatEvent {
     /// "Nuevo hilo": add `hub.new_thread_tab(project)` to the shell.
     NewThread { project: Option<PathBuf> },
     /// The chat-terminal bridge: show this command, with its real output, in a terminal tab.
-    OpenInTerminal { thread: ThreadId, command: String, cwd: PathBuf },
+    OpenInTerminal {
+        thread: ThreadId,
+        command: String,
+        cwd: PathBuf,
+    },
     /// An edit chip was clicked: open `path` (relative to `cwd` or absolute) with its diff.
-    OpenDiff { thread: ThreadId, path: String, cwd: PathBuf },
+    OpenDiff {
+        thread: ThreadId,
+        path: String,
+        cwd: PathBuf,
+    },
     /// "Restaurar…" on a checkpoint row. The host confirms and restores through `git_svc`.
     RestoreCheckpoint { thread: ThreadId, id: String },
     /// A thread was deleted: close its tab.
@@ -92,7 +101,10 @@ fn agent_key(kind: &AgentKind) -> String {
 }
 
 fn path_key(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
+    p.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
 }
 
 impl ChatHub {
@@ -180,7 +192,11 @@ impl ChatHub {
     pub fn projects(&self) -> Vec<PathBuf> {
         let mut out: Vec<PathBuf> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for p in self.projects.iter().chain(self.threads.iter().map(|t| &t.project_root)) {
+        for p in self
+            .projects
+            .iter()
+            .chain(self.threads.iter().map(|t| &t.project_root))
+        {
             if seen.insert(path_key(p)) {
                 out.push(p.clone());
             }
@@ -195,7 +211,9 @@ impl ChatHub {
 
     /// The project a new thread starts in (the active tab's project).
     pub fn default_project(&self) -> Option<&Path> {
-        self.default_project.as_deref().or_else(|| self.projects.first().map(PathBuf::as_path))
+        self.default_project
+            .as_deref()
+            .or_else(|| self.projects.first().map(PathBuf::as_path))
     }
 
     pub fn set_default_project(&mut self, project: Option<PathBuf>) {
@@ -225,7 +243,12 @@ impl ChatHub {
         }
     }
 
-    pub(crate) fn report_error(&mut self, what: &str, e: impl std::fmt::Display, cx: &mut Context<Self>) {
+    pub(crate) fn report_error(
+        &mut self,
+        what: &str,
+        e: impl std::fmt::Display,
+        cx: &mut Context<Self>,
+    ) {
         log::warn!("ui_chat: {what}: {e}");
         self.error = Some(format!("{what}: {e}"));
         cx.notify();
@@ -246,7 +269,11 @@ impl ChatHub {
     }
 
     /// A tab showing the "¿Qué construimos?" screen. It becomes a thread on the first message.
-    pub fn new_thread_tab(&mut self, project: Option<PathBuf>, cx: &mut Context<Self>) -> TabHandle {
+    pub fn new_thread_tab(
+        &mut self,
+        project: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> TabHandle {
         let hub = cx.entity();
         let project = project.or_else(|| self.default_project().map(Path::to_path_buf));
         let theme = self.theme;
@@ -265,7 +292,12 @@ impl ChatHub {
 
     /// Asks the agent for its models once per session (started without a prompt, see
     /// `agents_driver::probe_models`) and emits [`ModelsReady`]. Claude Code needs no probe.
-    pub fn ensure_models(&mut self, kind: &AgentKind, cwd: Option<PathBuf>, cx: &mut Context<Self>) {
+    pub fn ensure_models(
+        &mut self,
+        kind: &AgentKind,
+        cwd: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.probe_models || *kind == AgentKind::ClaudeCode {
             return;
         }
@@ -274,25 +306,32 @@ impl ChatHub {
             return;
         }
         self.models.insert(key.clone(), Vec::new());
-        let (kind, cwd) = (kind.clone(), cwd.or_else(|| std::env::current_dir().ok()).unwrap_or_default());
-        let task = cx.background_spawn(async move { agents_driver::probe_models(kind, cwd, std::time::Duration::from_secs(20)) });
-        cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(models) => {
-                    let _ = this.update(cx, |hub, cx| {
-                        hub.models.insert(key, models);
-                        cx.emit(ModelsReady);
-                    });
-                }
-                Err(e) => log::debug!("chat: could not list the models of {key}: {e}"),
+        let (kind, cwd) = (
+            kind.clone(),
+            cwd.or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default(),
+        );
+        let task = cx.background_spawn(async move {
+            agents_driver::probe_models(kind, cwd, std::time::Duration::from_secs(20))
+        });
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(models) => {
+                let _ = this.update(cx, |hub, cx| {
+                    hub.models.insert(key, models);
+                    cx.emit(ModelsReady);
+                });
             }
+            Err(e) => log::debug!("chat: could not list the models of {key}: {e}"),
         })
         .detach();
     }
 
     /// The open tab of `id`, if any (to focus it instead of opening a second one).
     pub fn tab_for(&self, id: ThreadId, _cx: &App) -> Option<TabHandle> {
-        self.tabs.get(&id).and_then(WeakEntity::upgrade).map(TabHandle::new)
+        self.tabs
+            .get(&id)
+            .and_then(WeakEntity::upgrade)
+            .map(TabHandle::new)
     }
 
     pub(crate) fn register_tab(&mut self, id: ThreadId, tab: WeakEntity<ChatTab>) {
@@ -372,7 +411,9 @@ impl ChatHub {
         let task = cx.background_spawn(async move { store.rename_thread(id, &title) });
         cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
-                let _ = this.update(cx, |hub, cx| hub.report_error("no se pudo renombrar", e, cx));
+                let _ = this.update(cx, |hub, cx| {
+                    hub.report_error("no se pudo renombrar", e, cx)
+                });
             }
         })
         .detach();
@@ -392,13 +433,22 @@ impl ChatHub {
     }
 
     /// What deleting `id` involves (message count, worktree state). Runs in the background.
-    pub fn delete_preview(&self, id: ThreadId, cx: &mut Context<Self>) -> Task<chat_core::Result<DeletePreview>> {
+    pub fn delete_preview(
+        &self,
+        id: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> Task<chat_core::Result<DeletePreview>> {
         let store = self.store.clone();
         cx.background_spawn(async move { store.delete_preview(id) })
     }
 
     /// Deletes a thread after the user confirmed (see [`crate::DeleteDialog`]).
-    pub fn delete_thread(&mut self, id: ThreadId, opts: DeleteOptions, cx: &mut Context<Self>) -> Task<chat_core::Result<DeleteReport>> {
+    pub fn delete_thread(
+        &mut self,
+        id: ThreadId,
+        opts: DeleteOptions,
+        cx: &mut Context<Self>,
+    ) -> Task<chat_core::Result<DeleteReport>> {
         let store = self.store.clone();
         let task = cx.background_spawn(async move { store.delete_thread(id, opts) });
         cx.spawn(async move |this, cx| {
@@ -429,7 +479,9 @@ impl ChatHub {
 
     fn merge_detected(&mut self, found: &[DetectedAgent], cx: &mut Context<Self>) {
         for a in &mut self.agents {
-            let hit = found.iter().find(|d| std::mem::discriminant(&d.kind) == std::mem::discriminant(&a.kind));
+            let hit = found
+                .iter()
+                .find(|d| std::mem::discriminant(&d.kind) == std::mem::discriminant(&a.kind));
             a.available = hit.is_some();
             a.version = hit.and_then(|d| d.version.clone());
         }
@@ -438,7 +490,11 @@ impl ChatHub {
 
     /// The agent option of `kind` (a plain one when the host never listed it).
     pub fn agent_option(&self, kind: &AgentKind) -> AgentOption {
-        self.agents.iter().find(|a| &a.kind == kind).cloned().unwrap_or_else(|| AgentOption::new(kind.clone()))
+        self.agents
+            .iter()
+            .find(|a| &a.kind == kind)
+            .cloned()
+            .unwrap_or_else(|| AgentOption::new(kind.clone()))
     }
 
     // ----- project files (the @ picker) ----------------------------------------------------

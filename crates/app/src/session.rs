@@ -44,11 +44,21 @@ pub struct SavedTab {
 
 impl SavedTab {
     pub fn terminal(cwd: Option<PathBuf>) -> Self {
-        Self { kind: TabKind::Terminal, cwd, title: None, thread: None }
+        Self {
+            kind: TabKind::Terminal,
+            cwd,
+            title: None,
+            thread: None,
+        }
     }
 
     pub fn chat(thread: i64, cwd: Option<PathBuf>) -> Self {
-        Self { kind: TabKind::Chat, cwd, title: None, thread: Some(thread) }
+        Self {
+            kind: TabKind::Chat,
+            cwd,
+            title: None,
+            thread: Some(thread),
+        }
     }
 }
 
@@ -82,7 +92,8 @@ impl SessionState {
             return None;
         }
         // A chat tab without a thread id cannot be reopened.
-        s.tabs.retain(|t| t.kind != TabKind::Chat || t.thread.is_some());
+        s.tabs
+            .retain(|t| t.kind != TabKind::Chat || t.thread.is_some());
         s.tabs.truncate(MAX_TABS);
         if s.tabs.is_empty() {
             return None;
@@ -125,7 +136,10 @@ mod tests {
             v: VERSION,
             tabs: vec![
                 SavedTab::terminal(Some(PathBuf::from("C:\\proj\\a"))),
-                SavedTab { title: Some("build".into()), ..SavedTab::terminal(None) },
+                SavedTab {
+                    title: Some("build".into()),
+                    ..SavedTab::terminal(None)
+                },
                 SavedTab::chat(7, Some(PathBuf::from("C:\\proj\\c"))),
             ],
             panes: vec![Some(1), Some(0)],
@@ -178,9 +192,16 @@ mod tests {
     #[test]
     fn chat_tabs_keep_their_thread_and_orphans_are_dropped() {
         let mut s = sample();
-        s.tabs.push(SavedTab { thread: None, ..SavedTab::chat(0, None) });
+        s.tabs.push(SavedTab {
+            thread: None,
+            ..SavedTab::chat(0, None)
+        });
         let back = SessionState::from_json(&s.to_json()).unwrap();
-        assert_eq!(back.tabs.len(), 3, "the chat tab without a thread is dropped");
+        assert_eq!(
+            back.tabs.len(),
+            3,
+            "the chat tab without a thread is dropped"
+        );
         assert_eq!(back.tabs[2].thread, Some(7));
         assert_eq!(back.tabs[2].kind, TabKind::Chat);
     }

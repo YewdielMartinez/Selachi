@@ -152,7 +152,9 @@ impl DoctorModel {
                 cx.background_executor().timer(interval).await;
                 let keep = this
                     .update(cx, |m, cx| {
-                        let stale = m.last_touch.is_some_and(|t| t.elapsed() > interval * 2 + Duration::from_millis(500));
+                        let stale = m.last_touch.is_some_and(|t| {
+                            t.elapsed() > interval * 2 + Duration::from_millis(500)
+                        });
                         if !m.visible || stale {
                             m.visible = false;
                             m.loop_running = false;
@@ -185,7 +187,10 @@ impl DoctorModel {
         let source = self.source.clone();
         let dbs = self.db_paths.clone();
         cx.spawn(async move |this, cx| {
-            let raw = cx.background_executor().spawn(async move { source.sample(&dbs) }).await;
+            let raw = cx
+                .background_executor()
+                .spawn(async move { source.sample(&dbs) })
+                .await;
             let _ = this.update(cx, |m, cx| m.apply(raw, cx));
         })
         .detach();
@@ -193,11 +198,15 @@ impl DoctorModel {
 
     fn apply(&mut self, raw: RawSample, cx: &mut Context<Self>) {
         self.in_flight = false;
-        let cpu = self.prev.and_then(|p| cpu_percent(p, (raw.at, raw.cpu_time), raw.cores));
+        let cpu = self
+            .prev
+            .and_then(|p| cpu_percent(p, (raw.at, raw.cpu_time), raw.cores));
         self.prev = Some((raw.at, raw.cpu_time));
         self.ram.push(raw.working_set as f32);
         self.cpu.push(cpu.unwrap_or(0.0));
-        let uptime = raw.started.and_then(|s| SystemTime::now().duration_since(s).ok());
+        let uptime = raw
+            .started
+            .and_then(|s| SystemTime::now().duration_since(s).ok());
         self.health = Arc::new(Health {
             pid: raw.pid,
             working_set: raw.working_set,
@@ -241,7 +250,10 @@ pub(crate) mod testing {
 
     impl FakeSource {
         pub fn new() -> Arc<Self> {
-            Arc::new(Self { calls: AtomicUsize::new(0), base: Instant::now() })
+            Arc::new(Self {
+                calls: AtomicUsize::new(0),
+                base: Instant::now(),
+            })
         }
 
         pub fn calls(&self) -> usize {
@@ -258,8 +270,18 @@ pub(crate) mod testing {
                 private_bytes: 30 * 1024 * 1024,
                 cpu_time: Duration::from_millis(n * 400),
                 threads: 12,
-                children: vec![ChildProc { pid: 9, name: "pwsh.exe".into(), working_set: 80 * 1024 * 1024 }],
-                dbs: dbs.iter().map(|(l, _)| DbSize { label: l.clone(), bytes: Some(1024) }).collect(),
+                children: vec![ChildProc {
+                    pid: 9,
+                    name: "pwsh.exe".into(),
+                    working_set: 80 * 1024 * 1024,
+                }],
+                dbs: dbs
+                    .iter()
+                    .map(|(l, _)| DbSize {
+                        label: l.clone(),
+                        bytes: Some(1024),
+                    })
+                    .collect(),
                 started: Some(SystemTime::now() - Duration::from_secs(90)),
                 cores: 4,
                 pid: 1,

@@ -96,7 +96,11 @@ impl IngestConfig {
         }
         if let Some(g) = &self.antigravity_data {
             // Shallow: the databases sit directly in `conversations/`.
-            v.extend(antigravity::conversation_dirs(g).into_iter().map(|d| (d, false)));
+            v.extend(
+                antigravity::conversation_dirs(g)
+                    .into_iter()
+                    .map(|d| (d, false)),
+            );
         }
         v
     }
@@ -107,23 +111,33 @@ impl IngestConfig {
         let name = path.file_name()?.to_str()?;
         if let Some(root) = &self.claude_projects {
             if path.starts_with(root) {
-                return path.extension().is_some_and(|e| e == "jsonl").then_some(SourceKind::Claude);
+                return path
+                    .extension()
+                    .is_some_and(|e| e == "jsonl")
+                    .then_some(SourceKind::Claude);
             }
         }
         if let Some(root) = &self.codex_sessions {
             if path.starts_with(root) {
-                let ok = name.starts_with("rollout-") && (name.ends_with(".jsonl.zst") || name.ends_with(".jsonl"));
+                let ok = name.starts_with("rollout-")
+                    && (name.ends_with(".jsonl.zst") || name.ends_with(".jsonl"));
                 return ok.then_some(SourceKind::Codex);
             }
         }
         if let Some(root) = &self.opencode_data {
             if path.starts_with(root) {
                 if path.starts_with(root.join("storage").join("message")) {
-                    return path.extension().is_some_and(|e| e == "json").then_some(SourceKind::OpenCodeJson);
+                    return path
+                        .extension()
+                        .is_some_and(|e| e == "json")
+                        .then_some(SourceKind::OpenCodeJson);
                 }
                 let db = name.starts_with("opencode")
-                    && (name.ends_with(".db") || name.ends_with(".db-wal") || name.ends_with(".db-shm"));
-                return (db && path.parent() == Some(root.as_path())).then_some(SourceKind::OpenCodeDb);
+                    && (name.ends_with(".db")
+                        || name.ends_with(".db-wal")
+                        || name.ends_with(".db-shm"));
+                return (db && path.parent() == Some(root.as_path()))
+                    .then_some(SourceKind::OpenCodeDb);
             }
         }
         if let Some(root) = &self.antigravity_data {
@@ -287,7 +301,9 @@ impl Ingestor {
         let mut oc_dbs: Vec<PathBuf> = vec![];
         let mut agy_dbs: Vec<PathBuf> = vec![];
         for p in paths {
-            let Some(kind) = self.cfg.classify(p) else { continue };
+            let Some(kind) = self.cfg.classify(p) else {
+                continue;
+            };
             match kind {
                 SourceKind::Claude | SourceKind::Codex => {
                     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -306,7 +322,11 @@ impl Ingestor {
                         Agent::Claude => rep.claude_files += 1,
                         _ => rep.codex_files += 1,
                     }
-                    let f = SourceFile { path: p.clone(), agent, kind };
+                    let f = SourceFile {
+                        path: p.clone(),
+                        agent,
+                        kind,
+                    };
                     if let Err(e) = self.scan_file(&f, &mut rep) {
                         if is_db_error(&e) {
                             return Err(e);
@@ -316,7 +336,10 @@ impl Ingestor {
                 }
                 SourceKind::OpenCodeDb => {
                     let s = p.to_string_lossy();
-                    let base = s.strip_suffix("-wal").or_else(|| s.strip_suffix("-shm")).unwrap_or(&s);
+                    let base = s
+                        .strip_suffix("-wal")
+                        .or_else(|| s.strip_suffix("-shm"))
+                        .unwrap_or(&s);
                     let db = PathBuf::from(base);
                     if db.is_file() && !oc_dbs.contains(&db) {
                         oc_dbs.push(db);
@@ -324,7 +347,10 @@ impl Ingestor {
                 }
                 SourceKind::AntigravityDb => {
                     let s = p.to_string_lossy();
-                    let base = s.strip_suffix("-wal").or_else(|| s.strip_suffix("-shm")).unwrap_or(&s);
+                    let base = s
+                        .strip_suffix("-wal")
+                        .or_else(|| s.strip_suffix("-shm"))
+                        .unwrap_or(&s);
                     let db = PathBuf::from(base);
                     if db.is_file() && !agy_dbs.contains(&db) {
                         agy_dbs.push(db);
@@ -384,8 +410,13 @@ impl Ingestor {
         Ok(())
     }
 
-    fn scan_antigravity_db(&mut self, db: &Path, rep: &mut ScanReport) -> std::result::Result<(), OcError> {
-        let (size, mtime_ms) = db_fingerprint(db).map_err(|e| OcError::Source(format!("stat: {e}")))?;
+    fn scan_antigravity_db(
+        &mut self,
+        db: &Path,
+        rep: &mut ScanReport,
+    ) -> std::result::Result<(), OcError> {
+        let (size, mtime_ms) =
+            db_fingerprint(db).map_err(|e| OcError::Source(format!("stat: {e}")))?;
         let key = db.to_string_lossy().to_string();
         let stored = self.store.get_offset(&key).map_err(OcError::Store)?;
         let mut cursor = stored
@@ -408,10 +439,17 @@ impl Ingestor {
         let read = antigravity::read_conversation(db, from, mtime_ms).map_err(OcError::Source)?;
         rep.bytes_read += read.bytes;
         rep.synthetic_skipped += read.skipped;
-        let tx = self.store.conn.unchecked_transaction().map_err(|e| OcError::Store(e.into()))?;
+        let tx = self
+            .store
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| OcError::Store(e.into()))?;
         for (e, x) in &read.events {
             rep.lines += 1;
-            let out = self.store.upsert_usage_replace(e, x).map_err(OcError::Store)?;
+            let out = self
+                .store
+                .upsert_usage_replace(e, x)
+                .map_err(OcError::Store)?;
             count_upsert(out, rep);
         }
         self.store
@@ -422,7 +460,12 @@ impl Ingestor {
                     size,
                     mtime_ms,
                     byte_offset: 0,
-                    ctx: Some(serde_json::to_string(&AgyCursor { next: read.next_idx }).unwrap_or_default()),
+                    ctx: Some(
+                        serde_json::to_string(&AgyCursor {
+                            next: read.next_idx,
+                        })
+                        .unwrap_or_default(),
+                    ),
                 },
                 now_ms(),
             )
@@ -457,7 +500,11 @@ impl Ingestor {
         Ok(())
     }
 
-    fn scan_opencode_json(&mut self, path: &Path, rep: &mut ScanReport) -> std::result::Result<(), OcError> {
+    fn scan_opencode_json(
+        &mut self,
+        path: &Path,
+        rep: &mut ScanReport,
+    ) -> std::result::Result<(), OcError> {
         let md = std::fs::metadata(path).map_err(|e| OcError::Source(format!("stat: {e}")))?;
         let (size, mtime_ms) = fingerprint(&md);
         let key = path.to_string_lossy().to_string();
@@ -468,28 +515,48 @@ impl Ingestor {
             }
         }
         rep.files_scanned += 1;
-        let text = std::fs::read_to_string(path).map_err(|e| OcError::Source(format!("read: {e}")))?;
+        let text =
+            std::fs::read_to_string(path).map_err(|e| OcError::Source(format!("read: {e}")))?;
         rep.bytes_read += text.len() as u64;
         rep.lines += 1;
-        let tx = self.store.conn.unchecked_transaction().map_err(|e| OcError::Store(e.into()))?;
+        let tx = self
+            .store
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| OcError::Store(e.into()))?;
         match serde_json::from_str::<serde_json::Value>(&text) {
             Err(_) => rep.malformed_lines += 1,
             Ok(v) => {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown");
                 let id = v.get("id").and_then(|i| i.as_str()).unwrap_or(stem);
                 let session = v
                     .get("sessionID")
                     .and_then(|i| i.as_str())
-                    .or_else(|| path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()))
+                    .or_else(|| {
+                        path.parent()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                    })
                     .unwrap_or("unknown");
-                self.store_opencode(opencode::parse_message(id, session, None, &v, None, None), rep)?;
+                self.store_opencode(
+                    opencode::parse_message(id, session, None, &v, None, None),
+                    rep,
+                )?;
             }
         }
         self.store
             .put_offset(
                 &key,
                 Agent::OpenCode,
-                &OffsetRow { size, mtime_ms, byte_offset: size, ctx: None },
+                &OffsetRow {
+                    size,
+                    mtime_ms,
+                    byte_offset: size,
+                    ctx: None,
+                },
                 now_ms(),
             )
             .map_err(OcError::Store)?;
@@ -503,15 +570,23 @@ impl Ingestor {
             Parsed::Empty => rep.synthetic_skipped += 1,
             Parsed::Usage(b) => {
                 let (e, x) = *b;
-                let out = self.store.upsert_usage_replace(&e, &x).map_err(OcError::Store)?;
+                let out = self
+                    .store
+                    .upsert_usage_replace(&e, &x)
+                    .map_err(OcError::Store)?;
                 count_upsert(out, rep);
             }
         }
         Ok(())
     }
 
-    fn scan_opencode_db(&mut self, db: &Path, rep: &mut ScanReport) -> std::result::Result<(), OcError> {
-        let (size, mtime_ms) = db_fingerprint(db).map_err(|e| OcError::Source(format!("stat: {e}")))?;
+    fn scan_opencode_db(
+        &mut self,
+        db: &Path,
+        rep: &mut ScanReport,
+    ) -> std::result::Result<(), OcError> {
+        let (size, mtime_ms) =
+            db_fingerprint(db).map_err(|e| OcError::Source(format!("stat: {e}")))?;
         let key = db.to_string_lossy().to_string();
         let stored = self.store.get_offset(&key).map_err(OcError::Store)?;
         let mut cursor = stored
@@ -530,12 +605,18 @@ impl Ingestor {
         }
         rep.files_scanned += 1;
         let reader = OcReader::open(db).map_err(OcError::Source)?;
-        let tx = self.store.conn.unchecked_transaction().map_err(|e| OcError::Store(e.into()))?;
+        let tx = self
+            .store
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| OcError::Store(e.into()))?;
         // First pass of a scan re-reads the boundary millisecond (idempotent upsert); later
         // chunks use a strict keyset so every row is read once.
         let mut strict = false;
         loop {
-            let rows = reader.next_chunk(&cursor, strict).map_err(OcError::Source)?;
+            let rows = reader
+                .next_chunk(&cursor, strict)
+                .map_err(OcError::Source)?;
             if rows.is_empty() {
                 break;
             }
@@ -558,7 +639,10 @@ impl Ingestor {
                 }
             }
             if let Some(last) = rows.last() {
-                cursor = OcCursor { t: last.time_updated, id: last.id.clone() };
+                cursor = OcCursor {
+                    t: last.time_updated,
+                    id: last.id.clone(),
+                };
             }
             strict = true;
             if rows.len() < OcReader::CHUNK {
@@ -566,7 +650,10 @@ impl Ingestor {
             }
         }
         // Next scan restarts at the boundary millisecond, whatever id the strict cursor stopped on.
-        let saved = OcCursor { t: cursor.t, id: String::new() };
+        let saved = OcCursor {
+            t: cursor.t,
+            id: String::new(),
+        };
         self.store
             .put_offset(
                 &key,
@@ -807,8 +894,12 @@ impl OcReader {
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
         let has = |t: &str| -> bool {
-            conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [t], |_| Ok(()))
-                .is_ok()
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                [t],
+                |_| Ok(()),
+            )
+            .is_ok()
         };
         if !has("message") {
             return Err("no `message` table (unsupported OpenCode schema)".into());
@@ -824,7 +915,11 @@ impl OcReader {
         } else {
             "FROM message m"
         };
-        let sel = if self.joined { "s.directory, w.branch" } else { "NULL, NULL" };
+        let sel = if self.joined {
+            "s.directory, w.branch"
+        } else {
+            "NULL, NULL"
+        };
         // Non-strict: `time_updated >= t` (id ignored); strict: keyset after (t, id).
         let sql = format!(
             "SELECT m.id, m.session_id, m.time_created, m.time_updated, m.data, {sel} {from} \
@@ -848,7 +943,8 @@ impl OcReader {
                 })
             })
             .map_err(|e| e.to_string())?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 }
 

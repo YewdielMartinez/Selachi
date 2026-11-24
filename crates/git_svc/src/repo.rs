@@ -33,7 +33,12 @@ impl Repo {
         };
         let raw = run_git(
             cwd,
-            &["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+            &[
+                "rev-parse",
+                "--show-toplevel",
+                "--absolute-git-dir",
+                "--git-common-dir",
+            ],
             LOCAL_TIMEOUT,
         )?;
         if !raw.success() {
@@ -64,7 +69,13 @@ impl Repo {
     pub fn status(&self) -> Result<RepoStatus> {
         let raw = run_git_ok(
             &self.root,
-            &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal"],
+            &[
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                "--untracked-files=normal",
+            ],
         )?;
         parse_status(&raw.stdout)
     }
@@ -82,8 +93,10 @@ impl Repo {
     /// Unified diff of one path (or the whole tree). `staged` selects index-vs-HEAD
     /// instead of worktree-vs-index.
     pub fn diff(&self, path: Option<&Path>, staged: bool) -> Result<String> {
-        let mut args: Vec<std::ffi::OsString> =
-            ["diff", "--no-color", "--no-ext-diff"].iter().map(Into::into).collect();
+        let mut args: Vec<std::ffi::OsString> = ["diff", "--no-color", "--no-ext-diff"]
+            .iter()
+            .map(Into::into)
+            .collect();
         if staged {
             args.push("--cached".into());
         }
@@ -134,14 +147,16 @@ impl Repo {
                     ));
                 }
                 if st.staged.is_empty() {
-                    pf.warnings.push(if st.unstaged.is_empty() && st.untracked.is_empty() {
-                        "nothing to commit".to_owned()
-                    } else {
-                        "nothing is staged (run add first)".to_owned()
-                    });
+                    pf.warnings
+                        .push(if st.unstaged.is_empty() && st.untracked.is_empty() {
+                            "nothing to commit".to_owned()
+                        } else {
+                            "nothing is staged (run add first)".to_owned()
+                        });
                 }
                 if st.detached {
-                    pf.warnings.push("HEAD is detached; the commit will not be on a branch".into());
+                    pf.warnings
+                        .push("HEAD is detached; the commit will not be on a branch".into());
                 }
                 pf.diff_stat = self.stat(&["diff", "--stat", "--no-color", "--cached"]);
             }
@@ -162,13 +177,15 @@ impl Repo {
                     if st.ahead == 0 {
                         pf.warnings.push("no local commits to push".into());
                     }
-                    pf.diff_stat = self.stat(&["diff", "--stat", "--no-color", "@{upstream}...HEAD"]);
+                    pf.diff_stat =
+                        self.stat(&["diff", "--stat", "--no-color", "@{upstream}...HEAD"]);
                 }
             }
             GitAction::Pull => {
                 pf.requires_confirmation = true;
                 if st.upstream.is_none() {
-                    pf.warnings.push("branch has no upstream to pull from".into());
+                    pf.warnings
+                        .push("branch has no upstream to pull from".into());
                 } else {
                     if dirty {
                         pf.warnings
@@ -180,7 +197,8 @@ impl Repo {
                             st.ahead, st.behind
                         ));
                     }
-                    pf.diff_stat = self.stat(&["diff", "--stat", "--no-color", "HEAD...@{upstream}"]);
+                    pf.diff_stat =
+                        self.stat(&["diff", "--stat", "--no-color", "HEAD...@{upstream}"]);
                 }
             }
             GitAction::Switch { .. } | GitAction::Checkout { .. } => {
@@ -193,15 +211,23 @@ impl Repo {
                     pf.diff_stat = self.diff_stat().ok().filter(|s| !s.trim().is_empty());
                 }
             }
-            GitAction::AddAll | GitAction::Status | GitAction::Fetch | GitAction::Log | GitAction::Diff => {}
+            GitAction::AddAll
+            | GitAction::Status
+            | GitAction::Fetch
+            | GitAction::Log
+            | GitAction::Diff => {}
         }
         Ok(pf)
     }
 
     fn has_head(&self) -> bool {
-        run_git(&self.root, &["rev-parse", "--verify", "-q", "HEAD"], LOCAL_TIMEOUT)
-            .map(|r| r.success())
-            .unwrap_or(false)
+        run_git(
+            &self.root,
+            &["rev-parse", "--verify", "-q", "HEAD"],
+            LOCAL_TIMEOUT,
+        )
+        .map(|r| r.success())
+        .unwrap_or(false)
     }
 
     /// Best-effort `--stat` output; `None` on failure or empty output.

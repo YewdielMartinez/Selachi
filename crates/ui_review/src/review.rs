@@ -10,9 +10,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle, Hsla,
-    MouseButton, MouseDownEvent, ScrollHandle, SharedString, StyledText, Subscription, Task, Window, div, prelude::*,
-    px,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    HighlightStyle, Hsla, MouseButton, MouseDownEvent, ScrollHandle, SharedString, StyledText,
+    Subscription, Task, Window, div, prelude::*, px,
 };
 use theme::{Radius, Theme};
 use ui_kit::{ActionButton, Button, GhostButton, Icon, IconButton, SectionLabel, Spinner, icon};
@@ -40,7 +40,10 @@ const COMPACT_BELOW_PX: f32 = 720.0;
 pub enum ReviewEvent {
     /// Deliver `markdown` to the agent (a terminal tab running it, or a chat thread), then call
     /// [`ReviewView::mark_sent`] / `ReviewTab::mark_sent` with the `notes` ids.
-    SendToAgent { markdown: String, notes: Vec<NoteRef> },
+    SendToAgent {
+        markdown: String,
+        notes: Vec<NoteRef>,
+    },
     /// Notes were added, edited, removed or changed state: persist `export_notes()` if you want to.
     NotesChanged { total: usize, drafts: usize },
 }
@@ -92,7 +95,9 @@ impl Focusable for ReviewView {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 fn state_colors(theme: &Theme, state: NoteState) -> (Hsla, Hsla) {
@@ -111,7 +116,13 @@ fn digits_of(file: &FileDiff) -> usize {
     let max = file
         .rows
         .iter()
-        .filter_map(|r| if let DiffRow::Line(l) = r { Some(l) } else { None })
+        .filter_map(|r| {
+            if let DiffRow::Line(l) = r {
+                Some(l)
+            } else {
+                None
+            }
+        })
         .flat_map(|l| [l.old_line, l.new_line])
         .flatten()
         .max()
@@ -125,7 +136,10 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 impl ReviewView {
     pub fn new(source: ReviewSource, theme: Theme, cx: &mut Context<Self>) -> Self {
-        let notes = ReviewStore::global(cx).get(&draft_key(&source)).cloned().unwrap_or_default();
+        let notes = ReviewStore::global(cx)
+            .get(&draft_key(&source))
+            .cloned()
+            .unwrap_or_default();
         let mut this = Self {
             source,
             theme,
@@ -198,7 +212,9 @@ impl ReviewView {
         }
         self.loading = true;
         let source = self.source.clone();
-        let bg = cx.background_executor().spawn(async move { load_source(&source) });
+        let bg = cx
+            .background_executor()
+            .spawn(async move { load_source(&source) });
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = bg.await;
             let _ = this.update(cx, |this, cx| this.finish_load(result, cx));
@@ -212,15 +228,22 @@ impl ReviewView {
         match result {
             Ok(files) => {
                 let keep = self.selected_path().map(str::to_owned);
-                let present: std::collections::BTreeSet<String> = files.iter().map(|f| f.path.clone()).collect();
+                let present: std::collections::BTreeSet<String> =
+                    files.iter().map(|f| f.path.clone()).collect();
                 for f in &files {
                     if self.notes.paths().contains(f.path.as_str()) {
-                        self.notes.reanchor_path(&f.path, &f.side_lines(Side::Old), &f.side_lines(Side::New));
+                        self.notes.reanchor_path(
+                            &f.path,
+                            &f.side_lines(Side::Old),
+                            &f.side_lines(Side::New),
+                        );
                     }
                 }
                 self.notes.mark_missing_stale(&present);
                 self.files = files;
-                self.selected = keep.and_then(|p| self.files.iter().position(|f| f.path == p)).unwrap_or(0);
+                self.selected = keep
+                    .and_then(|p| self.files.iter().position(|f| f.path == p))
+                    .unwrap_or(0);
                 self.shown_rows = ROW_PAGE;
                 self.load = Load::Ready;
                 self.persist(cx);
@@ -282,7 +305,11 @@ impl ReviewView {
         let added = self.notes.merge_json(json)?;
         if added > 0 {
             for f in &self.files {
-                self.notes.reanchor_path(&f.path, &f.side_lines(Side::Old), &f.side_lines(Side::New));
+                self.notes.reanchor_path(
+                    &f.path,
+                    &f.side_lines(Side::Old),
+                    &f.side_lines(Side::New),
+                );
             }
             self.notes_changed(cx);
         }
@@ -298,7 +325,10 @@ impl ReviewView {
         }
         let message = build_markdown(&self.source.phrase(), &drafts);
         let refs: Vec<NoteRef> = drafts.iter().map(|n| NoteRef::from(*n)).collect();
-        cx.emit(ReviewEvent::SendToAgent { markdown: message.markdown, notes: refs });
+        cx.emit(ReviewEvent::SendToAgent {
+            markdown: message.markdown,
+            notes: refs,
+        });
         true
     }
 
@@ -306,8 +336,17 @@ impl ReviewView {
 
     /// Opens the editor on `line` of `side` in the selected file (what a gutter click does).
     /// With `extend` (shift) and an editor already open on that side, the range grows instead.
-    pub fn begin_note(&mut self, side: Side, line: usize, extend: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.selected_path().map(str::to_owned) else { return };
+    pub fn begin_note(
+        &mut self,
+        side: Side,
+        line: usize,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.selected_path().map(str::to_owned) else {
+            return;
+        };
         if extend
             && let Some(ed) = &mut self.editor
             && ed.editing.is_none()
@@ -344,14 +383,28 @@ impl ReviewView {
                 .placeholder("Escribe tu nota para el agente...")
         });
         field.update(cx, |f, cx| f.set_text(text, cx));
-        let sub = cx.subscribe(&field, |this, _, ev: &ui_kit::TextFieldEvent, cx| match ev {
-            ui_kit::TextFieldEvent::Submit => this.save_editor(cx),
-            ui_kit::TextFieldEvent::Cancel => this.cancel_editor(cx),
-            ui_kit::TextFieldEvent::Changed => cx.notify(),
-            ui_kit::TextFieldEvent::SubmitReverse | ui_kit::TextFieldEvent::Blur | ui_kit::TextFieldEvent::Nav(_) => {}
-        });
+        let sub = cx.subscribe(
+            &field,
+            |this, _, ev: &ui_kit::TextFieldEvent, cx| match ev {
+                ui_kit::TextFieldEvent::Submit => this.save_editor(cx),
+                ui_kit::TextFieldEvent::Cancel => this.cancel_editor(cx),
+                ui_kit::TextFieldEvent::Changed => cx.notify(),
+                ui_kit::TextFieldEvent::SubmitReverse
+                | ui_kit::TextFieldEvent::Blur
+                | ui_kit::TextFieldEvent::Nav(_) => {}
+            },
+        );
         field.read(cx).focus(window);
-        self.editor = Some(Editor { path, side, anchor: start, start, end, editing, field, _sub: sub });
+        self.editor = Some(Editor {
+            path,
+            side,
+            anchor: start,
+            start,
+            end,
+            editing,
+            field,
+            _sub: sub,
+        });
         cx.notify();
     }
 
@@ -379,13 +432,35 @@ impl ReviewView {
     /// Adds a draft note on `start..=end` of `side` of `path` (what saving the editor does; also
     /// for hosts that create notes themselves). The excerpt comes from the loaded diff; `None`
     /// when `text` is empty.
-    pub fn add_note(&mut self, path: &str, side: Side, start: usize, end: usize, text: &str, cx: &mut Context<Self>) -> Option<NoteId> {
+    pub fn add_note(
+        &mut self,
+        path: &str,
+        side: Side,
+        start: usize,
+        end: usize,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<NoteId> {
         if text.trim().is_empty() {
             return None;
         }
-        let lines = self.files.iter().find(|f| f.path == path).map(|f| f.side_lines(side)).unwrap_or_default();
+        let lines = self
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .map(|f| f.side_lines(side))
+            .unwrap_or_default();
         let id = self.notes.next_id();
-        self.notes.push(Note::new(id, path, side, start, end, text, &lines, now_secs()));
+        self.notes.push(Note::new(
+            id,
+            path,
+            side,
+            start,
+            end,
+            text,
+            &lines,
+            now_secs(),
+        ));
         self.notes_changed(cx);
         Some(id)
     }
@@ -403,7 +478,9 @@ impl ReviewView {
 
     /// The text typed in the editor, if it is open.
     pub fn editor_text(&self, cx: &App) -> Option<String> {
-        self.editor.as_ref().map(|e| e.field.read(cx).text().to_string())
+        self.editor
+            .as_ref()
+            .map(|e| e.field.read(cx).text().to_string())
     }
 
     /// Sets the editor text (tests, scripted demos).
@@ -415,7 +492,8 @@ impl ReviewView {
 
     pub(crate) fn edit_note(&mut self, id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(n) = self.notes.get(id) else { return };
-        let (path, side, start, end, text) = (n.path.clone(), n.side, n.start, n.end, n.text.clone());
+        let (path, side, start, end, text) =
+            (n.path.clone(), n.side, n.start, n.end, n.text.clone());
         if let Some(i) = self.files.iter().position(|f| f.path == path) {
             self.select(i, cx);
         }
@@ -476,11 +554,19 @@ impl ReviewView {
         let c = theme.colors;
         let ty = theme.typography;
         let (total, drafts) = self.counts();
-        let (added, removed) = self.files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+        let (added, removed) = self
+            .files
+            .iter()
+            .fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
         let files_open = self.files_open.unwrap_or(!compact);
 
         let make_chips = || {
-            let mut chips = div().flex().flex_row().flex_wrap().items_center().gap(px(6.0));
+            let mut chips = div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.0));
             if !self.files.is_empty() {
                 chips = chips
                     .child(self.chip(plural(self.files.len(), "archivo", "archivos")))
@@ -508,7 +594,11 @@ impl ReviewView {
             .child(
                 IconButton::new("review-files-toggle", &theme, Icon::Files)
                     .active(files_open)
-                    .tooltip(if files_open { "Ocultar archivos" } else { "Mostrar archivos" })
+                    .tooltip(if files_open {
+                        "Ocultar archivos"
+                    } else {
+                        "Mostrar archivos"
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.files_open = Some(!files_open);
                         cx.notify();
@@ -534,8 +624,16 @@ impl ReviewView {
                     .when(!compact, |d| d.child(make_chips())),
             )
             .child({
-                let mut refresh = GhostButton::new("review-refresh", &theme, if self.loading { "Leyendo..." } else { "Actualizar" })
-                    .tooltip("Vuelve a leer los cambios; las notas siguen a sus líneas");
+                let mut refresh = GhostButton::new(
+                    "review-refresh",
+                    &theme,
+                    if self.loading {
+                        "Leyendo..."
+                    } else {
+                        "Actualizar"
+                    },
+                )
+                .tooltip("Vuelve a leer los cambios; las notas siguen a sus líneas");
                 if !self.loading {
                     refresh = refresh.on_click(cx.listener(|this, _, _, cx| this.refresh(cx)));
                 }
@@ -572,8 +670,14 @@ impl ReviewView {
             let selected = i == self.selected;
             let notes = self.notes.for_path(&f.path).len();
             let (mark_bg, mark_fg) = match f.status {
-                FileStatus::Added => (tint(&theme, Tone::Success, 0.20), ink(&theme, Tone::Success)),
-                FileStatus::Modified => (tint(&theme, Tone::Warning, 0.20), ink(&theme, Tone::Warning)),
+                FileStatus::Added => (
+                    tint(&theme, Tone::Success, 0.20),
+                    ink(&theme, Tone::Success),
+                ),
+                FileStatus::Modified => (
+                    tint(&theme, Tone::Warning, 0.20),
+                    ink(&theme, Tone::Warning),
+                ),
                 FileStatus::Deleted => (tint(&theme, Tone::Error, 0.20), ink(&theme, Tone::Error)),
             };
             let stats: AnyElement = match f.body {
@@ -584,11 +688,29 @@ impl ReviewView {
                     .gap(px(5.0))
                     .text_size(px(ty.ui_size_sm))
                     .font_family(ty.mono_family)
-                    .child(div().text_color(ink(&theme, Tone::Success)).child(SharedString::from(format!("+{}", f.added))))
-                    .child(div().text_color(ink(&theme, Tone::Error)).child(SharedString::from(format!("\u{2212}{}", f.removed))))
+                    .child(
+                        div()
+                            .text_color(ink(&theme, Tone::Success))
+                            .child(SharedString::from(format!("+{}", f.added))),
+                    )
+                    .child(
+                        div()
+                            .text_color(ink(&theme, Tone::Error))
+                            .child(SharedString::from(format!("\u{2212}{}", f.removed))),
+                    )
                     .into_any_element(),
-                FileBody::Binary => div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child("binario").into_any_element(),
-                FileBody::TooLarge => div().flex_none().text_size(px(ty.ui_size_sm)).text_color(c.muted).child("grande").into_any_element(),
+                FileBody::Binary => div()
+                    .flex_none()
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.muted)
+                    .child("binario")
+                    .into_any_element(),
+                FileBody::TooLarge => div()
+                    .flex_none()
+                    .text_size(px(ty.ui_size_sm))
+                    .text_color(c.muted)
+                    .child("grande")
+                    .into_any_element(),
             };
             list = list.child(
                 div()
@@ -679,8 +801,21 @@ impl ReviewView {
             .rounded(px(Radius::SM))
             .m(px(8.0))
             .mr(px(0.0))
-            .child(div().px(px(16.0)).pt(px(14.0)).pb(px(8.0)).child(SectionLabel::new(&theme, "Archivos")))
-            .child(div().id("review-files").flex_1().min_h_0().overflow_y_scroll().child(list))
+            .child(
+                div()
+                    .px(px(16.0))
+                    .pt(px(14.0))
+                    .pb(px(8.0))
+                    .child(SectionLabel::new(&theme, "Archivos")),
+            )
+            .child(
+                div()
+                    .id("review-files")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(list),
+            )
             .into_any_element()
     }
 
@@ -693,12 +828,21 @@ impl ReviewView {
             .flex()
             .justify_end()
             .text_size(px(ty.ui_size_sm))
-            .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
+            .child(SharedString::from(
+                n.map(|n| n.to_string()).unwrap_or_default(),
+            ))
             .into_any_element()
     }
 
     /// One diff line. The gutter (both numbers) is the click target for notes.
-    fn line_row(&self, line: &DiffLine, digits: usize, in_range: bool, noted: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn line_row(
+        &self,
+        line: &DiffLine,
+        digits: usize,
+        in_range: bool,
+        noted: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = self.theme;
         let c = theme.colors;
         let bg: Option<Hsla> = if in_range {
@@ -720,7 +864,19 @@ impl ReviewView {
             _ => tint(&theme, Tone::Error, 0.34),
         };
         let mut text = line.text.clone();
-        let mut marks: Vec<_> = line.inline.iter().map(|r| (r.clone(), HighlightStyle { background_color: Some(strong), ..HighlightStyle::default() })).collect();
+        let mut marks: Vec<_> = line
+            .inline
+            .iter()
+            .map(|r| {
+                (
+                    r.clone(),
+                    HighlightStyle {
+                        background_color: Some(strong),
+                        ..HighlightStyle::default()
+                    },
+                )
+            })
+            .collect();
         if text.contains('\t') {
             text = text.replace('\t', "    ");
             marks.clear();
@@ -735,7 +891,11 @@ impl ReviewView {
             marks.clear();
         }
         let anchor = anchor_of(line);
-        let gutter_bg: Option<Hsla> = if noted { Some(tint(&theme, Tone::Warning, 0.28)) } else { None };
+        let gutter_bg: Option<Hsla> = if noted {
+            Some(tint(&theme, Tone::Warning, 0.28))
+        } else {
+            None
+        };
         let hover = c.surface_4;
         let mut gutter = div()
             .id(SharedString::from(format!(
@@ -748,20 +908,31 @@ impl ReviewView {
             .flex()
             .flex_row()
             .items_center()
-            .text_color(if noted { ink(&theme, Tone::Warning) } else { c.outline.into() })
+            .text_color(if noted {
+                ink(&theme, Tone::Warning)
+            } else {
+                c.outline.into()
+            })
             .when_some(gutter_bg, |d, b| d.bg(b))
             // The 10 px note marker (a fixed slot, so numbers do not shift when a note appears).
-            .child(div().flex_none().w(px(16.0)).pl(px(4.0)).when(noted, |d| d.child(icon(Icon::Note, 10.0, ink(&theme, Tone::Warning)))))
+            .child(div().flex_none().w(px(16.0)).pl(px(4.0)).when(noted, |d| {
+                d.child(icon(Icon::Note, 10.0, ink(&theme, Tone::Warning)))
+            }))
             .child(self.number_cell(line.old_line, digits))
             .child(self.number_cell(line.new_line, digits));
         if let Some((side, n)) = anchor {
             gutter = gutter
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover))
-                .tooltip(ui_kit::Tooltip::text(&theme, "Clic: nota en esta línea · Mayús+clic: rango"))
+                .tooltip(ui_kit::Tooltip::text(
+                    &theme,
+                    "Clic: nota en esta línea · Mayús+clic: rango",
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, e: &MouseDownEvent, window, cx| this.begin_note(side, n, e.modifiers.shift, window, cx)),
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        this.begin_note(side, n, e.modifiers.shift, window, cx)
+                    }),
                 );
         }
         div()
@@ -776,7 +947,13 @@ impl ReviewView {
             .text_color(c.text)
             .when_some(bg, |d, b| d.bg(b))
             .child(gutter)
-            .child(div().flex_none().w(px(14.0)).text_color(sign_color).child(sign))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(14.0))
+                    .text_color(sign_color)
+                    .child(sign),
+            )
             .child(
                 div()
                     .flex_1()
@@ -812,22 +989,41 @@ impl ReviewView {
         let ty = theme.typography;
         let id = note.id;
         let (pill_bg, pill_fg) = state_colors(&theme, note.state);
-        let range = if note.start == note.end { format!("L{}", note.start) } else { format!("L{}\u{2013}{}", note.start, note.end) };
-        let side_tag = if note.side == Side::Old { " · versión anterior" } else { "" };
+        let range = if note.start == note.end {
+            format!("L{}", note.start)
+        } else {
+            format!("L{}\u{2013}{}", note.start, note.end)
+        };
+        let side_tag = if note.side == Side::Old {
+            " · versión anterior"
+        } else {
+            ""
+        };
         let ix = id.0 as usize;
-        let mut actions = div().flex_none().flex().flex_row().items_center().gap(px(2.0));
+        let mut actions = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(2.0));
         match note.state {
             NoteState::Draft => {}
             NoteState::Sent => {
                 actions = actions.child(
-                    GhostButton::new(format!("review-resolve-{ix}"), &theme, "Resolver")
-                        .on_click(cx.listener(move |this, _, _, cx| this.set_note_state(id, NoteState::Resolved, cx))),
+                    GhostButton::new(format!("review-resolve-{ix}"), &theme, "Resolver").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_note_state(id, NoteState::Resolved, cx)
+                        }),
+                    ),
                 );
             }
             NoteState::Resolved => {
                 actions = actions.child(
-                    GhostButton::new(format!("review-reopen-{ix}"), &theme, "Reabrir")
-                        .on_click(cx.listener(move |this, _, _, cx| this.set_note_state(id, NoteState::Draft, cx))),
+                    GhostButton::new(format!("review-reopen-{ix}"), &theme, "Reabrir").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_note_state(id, NoteState::Draft, cx)
+                        }),
+                    ),
                 );
             }
         }
@@ -836,7 +1032,9 @@ impl ReviewView {
                 IconButton::new(format!("review-edit-{ix}"), &theme, Icon::Edit)
                     .size(28.0)
                     .tooltip("Editar nota")
-                    .on_click(cx.listener(move |this, _, window, cx| this.edit_note(id, window, cx))),
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.edit_note(id, window, cx)),
+                    ),
             )
             .child(
                 IconButton::new(format!("review-del-{ix}"), &theme, Icon::Trash)
@@ -896,7 +1094,13 @@ impl ReviewView {
                     })
                     .child(actions),
             )
-            .child(div().text_size(px(ty.ui_size_md)).line_height(px(20.0)).text_color(c.text).child(SharedString::from(note.text.clone())))
+            .child(
+                div()
+                    .text_size(px(ty.ui_size_md))
+                    .line_height(px(20.0))
+                    .text_color(c.text)
+                    .child(SharedString::from(note.text.clone())),
+            )
             .into_any_element()
     }
 
@@ -904,8 +1108,16 @@ impl ReviewView {
         let theme = self.theme;
         let c = theme.colors;
         let ty = theme.typography;
-        let range = if ed.start == ed.end { format!("línea {}", ed.start) } else { format!("líneas {}\u{2013}{}", ed.start, ed.end) };
-        let title = if ed.editing.is_some() { format!("Editar nota · {range}") } else { format!("Nota en {range}") };
+        let range = if ed.start == ed.end {
+            format!("línea {}", ed.start)
+        } else {
+            format!("líneas {}\u{2013}{}", ed.start, ed.end)
+        };
+        let title = if ed.editing.is_some() {
+            format!("Editar nota · {range}")
+        } else {
+            format!("Nota en {range}")
+        };
         let focused = ed.field.read(cx).focus_handle(cx).is_focused(window);
         div()
             .w_full()
@@ -965,21 +1177,32 @@ impl ReviewView {
             return self.message(Icon::Files, "Selecciona un archivo");
         };
         match file.body {
-            FileBody::Binary => return self.message(Icon::Files, "Archivo binario: no hay diff de texto"),
-            FileBody::TooLarge => return self.message(Icon::Files, "Archivo demasiado grande para mostrar su diff"),
+            FileBody::Binary => {
+                return self.message(Icon::Files, "Archivo binario: no hay diff de texto");
+            }
+            FileBody::TooLarge => {
+                return self.message(Icon::Files, "Archivo demasiado grande para mostrar su diff");
+            }
             FileBody::Text => {}
         }
         let digits = digits_of(file);
         let file_notes = self.notes.for_path(&file.path);
 
         // Notes by the row they sit under; the rest are shown above the diff.
-        let mut under: std::collections::HashMap<usize, Vec<&Note>> = std::collections::HashMap::new();
+        let mut under: std::collections::HashMap<usize, Vec<&Note>> =
+            std::collections::HashMap::new();
         let mut loose: Vec<&Note> = Vec::new();
         let mut noted_rows: std::collections::HashSet<usize> = std::collections::HashSet::new();
         for n in &file_notes {
-            let end_row = if n.stale { None } else { file.row_of(n.side, n.end) };
+            let end_row = if n.stale {
+                None
+            } else {
+                file.row_of(n.side, n.end)
+            };
             match end_row {
-                Some(r) if r < self.shown_rows.min(file.rows.len()) => under.entry(r).or_default().push(n),
+                Some(r) if r < self.shown_rows.min(file.rows.len()) => {
+                    under.entry(r).or_default().push(n)
+                }
                 _ => loose.push(n),
             }
             if !n.stale {
@@ -990,11 +1213,22 @@ impl ReviewView {
                 }
             }
         }
-        let editor_under = self.editor.as_ref().filter(|e| e.path == file.path).and_then(|e| file.row_of(e.side, e.end));
+        let editor_under = self
+            .editor
+            .as_ref()
+            .filter(|e| e.path == file.path)
+            .and_then(|e| file.row_of(e.side, e.end));
 
         let mut rows = div().w_full().flex().flex_col().pb(px(24.0));
         if !loose.is_empty() {
-            let mut block = div().w_full().flex().flex_col().gap(px(8.0)).px(px(16.0)).pt(px(12.0)).pb(px(8.0));
+            let mut block = div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .px(px(16.0))
+                .pt(px(12.0))
+                .pb(px(8.0));
             block = block.child(SectionLabel::new(&theme, "Notas sin línea en el diff"));
             for n in &loose {
                 block = block.child(self.note_card(n, cx));
@@ -1008,9 +1242,17 @@ impl ReviewView {
                 DiffRow::Line(l) => {
                     let in_range = self.editor.as_ref().is_some_and(|e| {
                         e.path == file.path
-                            && anchor_of(l).is_some_and(|(side, n)| side == e.side && (e.start..=e.end).contains(&n))
+                            && anchor_of(l).is_some_and(|(side, n)| {
+                                side == e.side && (e.start..=e.end).contains(&n)
+                            })
                     });
-                    rows = rows.child(self.line_row(l, digits, in_range, noted_rows.contains(&ix), cx));
+                    rows = rows.child(self.line_row(
+                        l,
+                        digits,
+                        in_range,
+                        noted_rows.contains(&ix),
+                        cx,
+                    ));
                 }
             }
             if let Some(notes) = under.get(&ix) {
@@ -1028,11 +1270,18 @@ impl ReviewView {
             let more = (file.rows.len() - shown).min(ROW_PAGE);
             rows = rows.child(
                 div().w_full().p(px(16.0)).flex().justify_center().child(
-                    Button::tonal("review-more", &theme, format!("Mostrar {more} filas más ({} sin mostrar)", file.rows.len() - shown))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.shown_rows += ROW_PAGE;
-                            cx.notify();
-                        })),
+                    Button::tonal(
+                        "review-more",
+                        &theme,
+                        format!(
+                            "Mostrar {more} filas más ({} sin mostrar)",
+                            file.rows.len() - shown
+                        ),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.shown_rows += ROW_PAGE;
+                        cx.notify();
+                    })),
                 ),
             );
         }
@@ -1055,9 +1304,21 @@ impl ReviewView {
                     .gap(px(8.0))
                     .text_size(px(theme.typography.ui_size_md))
                     .text_color(c.muted)
-                    .child(ui_kit::file_icon(ui_kit::FileIcon::for_path(std::path::Path::new(&file.path)), 16.0, c.muted))
-                    .child(div().text_color(c.text).font_weight(FontWeight::MEDIUM).child(SharedString::from(file.path.clone())))
-                    .child(SharedString::from(format!("+{} \u{2212}{}", file.added, file.removed))),
+                    .child(ui_kit::file_icon(
+                        ui_kit::FileIcon::for_path(std::path::Path::new(&file.path)),
+                        16.0,
+                        c.muted,
+                    ))
+                    .child(
+                        div()
+                            .text_color(c.text)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(SharedString::from(file.path.clone())),
+                    )
+                    .child(SharedString::from(format!(
+                        "+{} \u{2212}{}",
+                        file.added, file.removed
+                    ))),
             )
             .child(rows)
             .into_any_element()
@@ -1100,14 +1361,17 @@ impl Render for ReviewView {
                 .child("Leyendo los cambios...")
                 .into_any_element(),
             Load::Failed(e) => self.message(Icon::Alert, e.clone()),
-            Load::Ready if self.files.is_empty() => self.message(Icon::Check, "No hay cambios que revisar"),
+            Load::Ready if self.files.is_empty() => {
+                self.message(Icon::Check, "No hay cambios que revisar")
+            }
             Load::Ready => {
                 let diff = self.diff_body(window, cx);
                 let mut row = div().size_full().flex().flex_row();
                 if files_open {
                     row = row.child(self.file_list(cx));
                 }
-                row.child(div().flex_1().min_w_0().h_full().child(diff)).into_any_element()
+                row.child(div().flex_1().min_w_0().h_full().child(diff))
+                    .into_any_element()
             }
         };
 

@@ -62,25 +62,39 @@ impl AgentResolver for SystemResolver {
         if let Some(cmd) = trimmed.strip_prefix("acp:") {
             let cmd = cmd.trim();
             if cmd.is_empty() {
-                return Err(Refusal::new(RefusalCode::BadRequest, "acp: needs a command line, e.g. acp:\"C:\\tools\\agent.exe\" --acp"));
+                return Err(Refusal::new(
+                    RefusalCode::BadRequest,
+                    "acp: needs a command line, e.g. acp:\"C:\\tools\\agent.exe\" --acp",
+                ));
             }
-            return Ok(AgentKind::Acp { command: cmd.to_string() });
+            return Ok(AgentKind::Acp {
+                command: cmd.to_string(),
+            });
         }
         let Some(canon) = canonical_name(trimmed) else {
             return Err(Refusal::new(
                 RefusalCode::UnknownAgent,
-                format!("unknown agent `{trimmed}`; use one of {} or acp:<command>", KNOWN_AGENTS.join(", ")),
+                format!(
+                    "unknown agent `{trimmed}`; use one of {} or acp:<command>",
+                    KNOWN_AGENTS.join(", ")
+                ),
             ));
         };
-        let found = agents_driver::detect().into_iter().find(|d| agent_name(&d.kind) == canon);
+        let found = agents_driver::detect()
+            .into_iter()
+            .find(|d| agent_name(&d.kind) == canon);
         let Some(found) = found else {
             return Err(Refusal::new(
                 RefusalCode::AgentNotInstalled,
-                format!("{canon} is not installed (not found on PATH or in its default install folder)"),
+                format!(
+                    "{canon} is not installed (not found on PATH or in its default install folder)"
+                ),
             ));
         };
         Ok(match (canon, found.kind) {
-            ("gemini", AgentKind::Acp { command }) => AgentKind::Acp { command: format!("{command} {GEMINI_ACP_FLAG}") },
+            ("gemini", AgentKind::Acp { command }) => AgentKind::Acp {
+                command: format!("{command} {GEMINI_ACP_FLAG}"),
+            },
             (_, kind) => kind,
         })
     }
@@ -154,11 +168,23 @@ pub fn list_agents(
             version: hit.and_then(|d| d.version.clone()),
             logged_in: hit.and_then(|d| d.logged_in),
             delegable: cfg.enabled
-                && (cfg.allowed_agents.is_empty() || cfg.allowed_agents.iter().any(|a| a.eq_ignore_ascii_case(name))),
+                && (cfg.allowed_agents.is_empty()
+                    || cfg
+                        .allowed_agents
+                        .iter()
+                        .any(|a| a.eq_ignore_ascii_case(name))),
             models: None,
-            model_aliases: if name == "claude" { CLAUDE_ALIASES.iter().map(|s| s.to_string()).collect() } else { Vec::new() },
+            model_aliases: if name == "claude" {
+                CLAUDE_ALIASES.iter().map(|s| s.to_string()).collect()
+            } else {
+                Vec::new()
+            },
             models_error: None,
-            limits: limits.iter().filter(|l| l.agent.eq_ignore_ascii_case(name)).cloned().collect(),
+            limits: limits
+                .iter()
+                .filter(|l| l.agent.eq_ignore_ascii_case(name))
+                .cloned()
+                .collect(),
         });
     }
     if with_models {
@@ -170,11 +196,18 @@ pub fn list_agents(
                 let kind = d.kind.clone();
                 let name = agent_name(&d.kind);
                 let cwd = cwd.clone();
-                (name, std::thread::spawn(move || agents_driver::probe_models(kind, cwd, Duration::from_secs(25))))
+                (
+                    name,
+                    std::thread::spawn(move || {
+                        agents_driver::probe_models(kind, cwd, Duration::from_secs(25))
+                    }),
+                )
             })
             .collect();
         for (name, handle) in probes {
-            let Some(row) = rows.iter_mut().find(|r| r.name == name) else { continue };
+            let Some(row) = rows.iter_mut().find(|r| r.name == name) else {
+                continue;
+            };
             match handle.join() {
                 Ok(Ok(models)) => row.models = Some(models),
                 Ok(Err(e)) => row.models_error = Some(e.to_string()),
@@ -182,8 +215,12 @@ pub fn list_agents(
             }
         }
     }
-    let used = crate::registry::Registry::new(data_dir).billable_tokens_between(crate::run::local_day_start_ms(now), i64::MAX);
-    let cap = cfg.max_permission.min(crate::policy::Permission::AcceptEdits).min(caller.permission);
+    let used = crate::registry::Registry::new(data_dir)
+        .billable_tokens_between(crate::run::local_day_start_ms(now), i64::MAX);
+    let cap = cfg
+        .max_permission
+        .min(crate::policy::Permission::AcceptEdits)
+        .min(caller.permission);
     AgentList {
         agents: rows,
         delegation: DelegationInfo {
@@ -222,20 +259,40 @@ impl AgentList {
                 "{:<9} {} · {login}{}",
                 a.name,
                 a.version.as_deref().unwrap_or("version unknown"),
-                if a.delegable { "" } else { " · delegation not allowed" }
+                if a.delegable {
+                    ""
+                } else {
+                    " · delegation not allowed"
+                }
             );
             if !a.model_aliases.is_empty() {
-                let _ = writeln!(s, "          models: {} (aliases)", a.model_aliases.join(", "));
+                let _ = writeln!(
+                    s,
+                    "          models: {} (aliases)",
+                    a.model_aliases.join(", ")
+                );
             }
             if let Some(models) = &a.models {
                 let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-                let _ = writeln!(s, "          models: {}", if ids.is_empty() { "(none reported)".into() } else { ids.join(", ") });
+                let _ = writeln!(
+                    s,
+                    "          models: {}",
+                    if ids.is_empty() {
+                        "(none reported)".into()
+                    } else {
+                        ids.join(", ")
+                    }
+                );
             }
             if let Some(e) = &a.models_error {
                 let _ = writeln!(s, "          models: unavailable ({e})");
             }
             for l in &a.limits {
-                let _ = writeln!(s, "          limit {}: {:.0} % ({})", l.window, l.used_percent, l.source);
+                let _ = writeln!(
+                    s,
+                    "          limit {}: {:.0} % ({})",
+                    l.window, l.used_percent, l.source
+                );
             }
         }
         let d = &self.delegation;
@@ -266,8 +323,18 @@ mod tests {
         assert_eq!(agent_name(&AgentKind::ClaudeCode), "claude");
         assert_eq!(agent_name(&AgentKind::Codex), "codex");
         assert_eq!(agent_name(&AgentKind::OpenCode), "opencode");
-        assert_eq!(agent_name(&AgentKind::Acp { command: "\"C:/x y/agy.exe\" acp".into() }), "agy");
-        assert_eq!(agent_name(&AgentKind::Acp { command: "\"C:/x y/gemini.cmd\" --acp".into() }), "gemini");
+        assert_eq!(
+            agent_name(&AgentKind::Acp {
+                command: "\"C:/x y/agy.exe\" acp".into()
+            }),
+            "agy"
+        );
+        assert_eq!(
+            agent_name(&AgentKind::Acp {
+                command: "\"C:/x y/gemini.cmd\" --acp".into()
+            }),
+            "gemini"
+        );
         assert_eq!(canonical_name("Claude-Code"), Some("claude"));
         assert_eq!(canonical_name("Antigravity"), Some("agy"));
         assert_eq!(canonical_name("gpt"), None);
@@ -278,10 +345,15 @@ mod tests {
         let e = SystemResolver.resolve("gpt").unwrap_err();
         assert_eq!(e.code, RefusalCode::UnknownAgent);
         assert!(e.reason.contains("codex"));
-        assert_eq!(SystemResolver.resolve("acp:  ").unwrap_err().code, RefusalCode::BadRequest);
+        assert_eq!(
+            SystemResolver.resolve("acp:  ").unwrap_err().code,
+            RefusalCode::BadRequest
+        );
         assert_eq!(
             SystemResolver.resolve("acp:my-agent --acp").unwrap(),
-            AgentKind::Acp { command: "my-agent --acp".into() }
+            AgentKind::Acp {
+                command: "my-agent --acp".into()
+            }
         );
     }
 }

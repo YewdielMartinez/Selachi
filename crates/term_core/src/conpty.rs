@@ -31,9 +31,9 @@ use std::os::windows::ffi::OsStrExt;
 #[cfg(test)]
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::FromRawHandle;
+use std::os::windows::process::ExitStatusExt;
 use std::path::Path;
 use std::process::ExitStatus;
-use std::os::windows::process::ExitStatusExt;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
@@ -46,9 +46,7 @@ use alacritty_terminal::tty::{ChildEvent, EventedPty, EventedReadWrite};
 use piper::{Reader, Writer, pipe};
 use polling::os::iocp::{CompletionPacket, PollerIocpExt};
 use polling::{Event, PollMode, Poller};
-use windows_sys::Win32::Foundation::{
-    CloseHandle, FALSE, HANDLE, INVALID_HANDLE_VALUE, S_OK,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE, INVALID_HANDLE_VALUE, S_OK};
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
@@ -97,7 +95,7 @@ impl ConptyApi {
             Some(api) => {
                 log::info!("using conpty.dll for the pseudoconsole");
                 api
-            },
+            }
             None => {
                 log::info!("using the Windows API for the pseudoconsole");
                 Self {
@@ -105,7 +103,7 @@ impl ConptyApi {
                     resize: ResizePseudoConsole,
                     close: ClosePseudoConsole,
                 }
-            },
+            }
         })
     }
 
@@ -131,7 +129,10 @@ impl ConptyApi {
 }
 
 fn coord(size: WindowSize) -> COORD {
-    COORD { X: size.num_cols as i16, Y: size.num_lines as i16 }
+    COORD {
+        X: size.num_cols as i16,
+        Y: size.num_lines as i16,
+    }
 }
 
 /// RAII pseudoconsole.
@@ -150,10 +151,12 @@ impl Drop for Conpty {
         // is also what ends the attached console clients. Do it off-thread; the reader thread
         // keeps draining until the host closes its end.
         let (handle, close) = (self.handle, self.api.close);
-        let spawned = thread::Builder::new().name("selachi-conpty-close".into()).spawn(move || {
-            // SAFETY: `handle` came from `CreatePseudoConsole` and is closed exactly once.
-            unsafe { close(handle) }
-        });
+        let spawned = thread::Builder::new()
+            .name("selachi-conpty-close".into())
+            .spawn(move || {
+                // SAFETY: `handle` came from `CreatePseudoConsole` and is closed exactly once.
+                unsafe { close(handle) }
+            });
         if let Err(e) = spawned {
             log::warn!("could not start the ConPTY close thread ({e}); closing inline");
             // SAFETY: as above.
@@ -222,7 +225,7 @@ pub(crate) fn spawn(spec: &SpawnSpec<'_>) -> io::Result<Pty> {
             close(conout_read);
             close(conout_write);
             return Err(e);
-        },
+        }
     };
 
     let mut hpc: HPCON = 0;
@@ -235,14 +238,20 @@ pub(crate) fn spawn(spec: &SpawnSpec<'_>) -> io::Result<Pty> {
     if hr != S_OK {
         close(conin_write);
         close(conout_read);
-        return Err(io::Error::other(format!("CreatePseudoConsole failed: HRESULT {hr:#010X}")));
+        return Err(io::Error::other(format!(
+            "CreatePseudoConsole failed: HRESULT {hr:#010X}"
+        )));
     }
 
     // From here on every early return drops these, which closes the pseudoconsole (off-thread)
     // while the reader thread drains the output.
     // SAFETY: both handles are valid, owned, and used by exactly one `File`.
-    let (conout_file, conin_file) =
-        unsafe { (File::from_raw_handle(conout_read), File::from_raw_handle(conin_write)) };
+    let (conout_file, conin_file) = unsafe {
+        (
+            File::from_raw_handle(conout_read),
+            File::from_raw_handle(conin_write),
+        )
+    };
     let conout = UnblockedReader::new(conout_file, PIPE_CAPACITY);
     let conin = UnblockedWriter::new(conin_file, PIPE_CAPACITY);
     let backend = Conpty { handle: hpc, api };
@@ -254,9 +263,16 @@ pub(crate) fn spawn(spec: &SpawnSpec<'_>) -> io::Result<Pty> {
             // SAFETY: valid process handle owned by us; the child dies with the pseudoconsole.
             unsafe { CloseHandle(info.hProcess) };
             return Err(e);
-        },
+        }
     };
-    Ok(Pty { backend, conout, conin, child, pid: info.dwProcessId, attachment })
+    Ok(Pty {
+        backend,
+        conout,
+        conin,
+        child,
+        pid: info.dwProcessId,
+        attachment,
+    })
 }
 
 fn create_pipe() -> io::Result<(HANDLE, HANDLE)> {
@@ -291,7 +307,9 @@ impl AttributeList {
         if size == 0 {
             return Err(io::Error::last_os_error());
         }
-        let mut list = Self { buf: vec![0usize; size.div_ceil(mem::size_of::<usize>())] };
+        let mut list = Self {
+            buf: vec![0usize; size.div_ceil(mem::size_of::<usize>())],
+        };
         // SAFETY: `buf` is at least `size` bytes and pointer aligned.
         if unsafe { InitializeProcThreadAttributeList(list.ptr(), count, 0, &raw mut size) } == 0 {
             return Err(io::Error::last_os_error());
@@ -318,7 +336,11 @@ impl AttributeList {
                 ptr::null(),
             )
         };
-        if ok == 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -357,7 +379,10 @@ fn start_process(
     let attachment = if assigned {
         JobAttachment::AssignedAfterSpawn
     } else {
-        log::warn!("AssignProcessToJobObject failed: {}; the shell runs outside the job", io::Error::last_os_error());
+        log::warn!(
+            "AssignProcessToJobObject failed: {}; the shell runs outside the job",
+            io::Error::last_os_error()
+        );
         JobAttachment::AssignFailed
     };
     // SAFETY: valid thread handle of the suspended process.
@@ -372,7 +397,13 @@ fn start_process(
     }
     // SAFETY: valid thread handle owned by us.
     unsafe { CloseHandle(info.hThread) };
-    Ok((PROCESS_INFORMATION { hThread: ptr::null_mut(), ..info }, attachment))
+    Ok((
+        PROCESS_INFORMATION {
+            hThread: ptr::null_mut(),
+            ..info
+        },
+        attachment,
+    ))
 }
 
 /// One `CreateProcessW` call. On success the thread handle is already closed (unless the
@@ -506,7 +537,10 @@ fn environment_block(custom: &[(String, String)]) -> Vec<u16> {
         if seen.insert(upper.clone()) {
             entries.push((upper, key, value));
         } else if warn {
-            log::warn!("omitting environment variable with duplicate name: {}", key.to_string_lossy());
+            log::warn!(
+                "omitting environment variable with duplicate name: {}",
+                key.to_string_lossy()
+            );
         }
     };
     for (key, value) in custom {
@@ -565,7 +599,12 @@ unsafe extern "system" fn child_exit_callback(ctx: *mut c_void, timed_out: u8) {
         Some(ExitStatus::from_raw(code))
     };
     let _ = shared.sender.send(ChildEvent::Exited(status));
-    if let Some(interest) = shared.interest.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+    if let Some(interest) = shared
+        .interest
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
         let _ = interest.poller.post(CompletionPacket::new(interest.event));
     }
 }
@@ -610,16 +649,32 @@ impl ChildWatcher {
             drop(unsafe { Arc::from_raw(ctx) });
             return Err(err);
         }
-        Ok(Self { wait, ctx, shared, events, process })
+        Ok(Self {
+            wait,
+            ctx,
+            shared,
+            events,
+            process,
+        })
     }
 
     fn register(&self, poller: &Arc<Poller>, event: Event) {
-        *self.shared.interest.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(Interest { poller: poller.clone(), event });
+        *self
+            .shared
+            .interest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Interest {
+            poller: poller.clone(),
+            event,
+        });
     }
 
     fn deregister(&self) {
-        *self.shared.interest.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self
+            .shared
+            .interest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
@@ -704,40 +759,56 @@ pub(crate) struct UnblockedReader {
 impl UnblockedReader {
     fn new(mut source: File, capacity: usize) -> Self {
         let (reader, mut writer) = pipe(capacity);
-        let interest =
-            Arc::new(Registration { interest: Mutex::new(None), end: PipeEnd::Reader });
-
-        let spawned = thread::Builder::new().name("selachi-conout".into()).spawn(move || {
-            let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
-            let mut context = Context::from_waker(&waker);
-            loop {
-                match writer.poll_fill(&mut context, &mut source) {
-                    // Either the consumer is gone or the host closed its end (EOF).
-                    Poll::Ready(Ok(0)) => break,
-                    Poll::Ready(Ok(_)) => {},
-                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::Interrupted => {},
-                    Poll::Ready(Err(e)) => {
-                        log::error!("error reading the pty output: {e}");
-                        break;
-                    },
-                    // The consumer has to make room first.
-                    Poll::Pending => thread::park(),
-                }
-            }
-            // Keep emptying the pipe until the host closes it: `ClosePseudoConsole` blocks
-            // while there is unread output. At EOF this returns immediately.
-            let mut sink = [0u8; 4096];
-            while matches!(source.read(&mut sink), Ok(n) if n > 0) {}
+        let interest = Arc::new(Registration {
+            interest: Mutex::new(None),
+            end: PipeEnd::Reader,
         });
+
+        let spawned = thread::Builder::new()
+            .name("selachi-conout".into())
+            .spawn(move || {
+                let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
+                let mut context = Context::from_waker(&waker);
+                loop {
+                    match writer.poll_fill(&mut context, &mut source) {
+                        // Either the consumer is gone or the host closed its end (EOF).
+                        Poll::Ready(Ok(0)) => break,
+                        Poll::Ready(Ok(_)) => {}
+                        Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::Interrupted => {}
+                        Poll::Ready(Err(e)) => {
+                            log::error!("error reading the pty output: {e}");
+                            break;
+                        }
+                        // The consumer has to make room first.
+                        Poll::Pending => thread::park(),
+                    }
+                }
+                // Keep emptying the pipe until the host closes it: `ClosePseudoConsole` blocks
+                // while there is unread output. At EOF this returns immediately.
+                let mut sink = [0u8; 4096];
+                while matches!(source.read(&mut sink), Ok(n) if n > 0) {}
+            });
         if let Err(e) = spawned {
             log::error!("could not start the pty reader thread: {e}");
         }
-        Self { interest, pipe: reader, first_register: true, _marker: PhantomData }
+        Self {
+            interest,
+            pipe: reader,
+            first_register: true,
+            _marker: PhantomData,
+        }
     }
 
     fn register(&mut self, poller: &Arc<Poller>, event: Event, mode: PollMode) {
-        *self.interest.interest.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(PollInterest { event, poller: poller.clone(), mode });
+        *self
+            .interest
+            .interest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(PollInterest {
+            event,
+            poller: poller.clone(),
+            mode,
+        });
         // Report data that is already waiting (and once at the very start).
         if (!self.pipe.is_empty() && event.readable) || self.first_register {
             self.first_register = false;
@@ -746,14 +817,21 @@ impl UnblockedReader {
     }
 
     fn deregister(&self) {
-        *self.interest.interest.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self
+            .interest
+            .interest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
 impl Read for UnblockedReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let waker = Waker::from(self.interest.clone());
-        match self.pipe.poll_drain_bytes(&mut Context::from_waker(&waker), buf) {
+        match self
+            .pipe
+            .poll_drain_bytes(&mut Context::from_waker(&waker), buf)
+        {
             Poll::Pending => Ok(0),
             Poll::Ready(n) => Ok(n),
         }
@@ -770,35 +848,50 @@ pub(crate) struct UnblockedWriter {
 impl UnblockedWriter {
     fn new(mut sink: File, capacity: usize) -> Self {
         let (mut reader, writer) = pipe(capacity);
-        let interest =
-            Arc::new(Registration { interest: Mutex::new(None), end: PipeEnd::Writer });
-
-        let spawned = thread::Builder::new().name("selachi-conin".into()).spawn(move || {
-            let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
-            let mut context = Context::from_waker(&waker);
-            loop {
-                match reader.poll_drain(&mut context, &mut sink) {
-                    // The producer is gone or the pipe is full.
-                    Poll::Ready(Ok(0)) => return,
-                    Poll::Ready(Ok(_)) => {},
-                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::Interrupted => {},
-                    Poll::Ready(Err(e)) => {
-                        log::error!("error writing to the pty: {e}");
-                        return;
-                    },
-                    Poll::Pending => thread::park(),
-                }
-            }
+        let interest = Arc::new(Registration {
+            interest: Mutex::new(None),
+            end: PipeEnd::Writer,
         });
+
+        let spawned = thread::Builder::new()
+            .name("selachi-conin".into())
+            .spawn(move || {
+                let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
+                let mut context = Context::from_waker(&waker);
+                loop {
+                    match reader.poll_drain(&mut context, &mut sink) {
+                        // The producer is gone or the pipe is full.
+                        Poll::Ready(Ok(0)) => return,
+                        Poll::Ready(Ok(_)) => {}
+                        Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::Interrupted => {}
+                        Poll::Ready(Err(e)) => {
+                            log::error!("error writing to the pty: {e}");
+                            return;
+                        }
+                        Poll::Pending => thread::park(),
+                    }
+                }
+            });
         if let Err(e) = spawned {
             log::error!("could not start the pty writer thread: {e}");
         }
-        Self { interest, pipe: writer, _marker: PhantomData }
+        Self {
+            interest,
+            pipe: writer,
+            _marker: PhantomData,
+        }
     }
 
     fn register(&self, poller: &Arc<Poller>, event: Event, mode: PollMode) {
-        *self.interest.interest.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(PollInterest { event, poller: poller.clone(), mode });
+        *self
+            .interest
+            .interest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(PollInterest {
+            event,
+            poller: poller.clone(),
+            mode,
+        });
         // There is room for data right away.
         if !self.pipe.is_full() && event.writable {
             let _ = poller.post(CompletionPacket::new(event));
@@ -806,14 +899,21 @@ impl UnblockedWriter {
     }
 
     fn deregister(&self) {
-        *self.interest.interest.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self
+            .interest
+            .interest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
 impl Write for UnblockedWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let waker = Waker::from(self.interest.clone());
-        match self.pipe.poll_fill_bytes(&mut Context::from_waker(&waker), buf) {
+        match self
+            .pipe
+            .poll_fill_bytes(&mut Context::from_waker(&waker), buf)
+        {
             Poll::Pending => Ok(0),
             Poll::Ready(n) => Ok(n),
         }
@@ -846,10 +946,18 @@ impl EventedReadWrite for Pty {
         self.reregister(poll, interest, mode)
     }
 
-    fn reregister(&mut self, poll: &Arc<Poller>, interest: Event, mode: PollMode) -> io::Result<()> {
-        self.conin.register(poll, with_key(interest, PTY_READ_WRITE_TOKEN), mode);
-        self.conout.register(poll, with_key(interest, PTY_READ_WRITE_TOKEN), mode);
-        self.child.register(poll, with_key(interest, PTY_CHILD_EVENT_TOKEN));
+    fn reregister(
+        &mut self,
+        poll: &Arc<Poller>,
+        interest: Event,
+        mode: PollMode,
+    ) -> io::Result<()> {
+        self.conin
+            .register(poll, with_key(interest, PTY_READ_WRITE_TOKEN), mode);
+        self.conout
+            .register(poll, with_key(interest, PTY_READ_WRITE_TOKEN), mode);
+        self.child
+            .register(poll, with_key(interest, PTY_CHILD_EVENT_TOKEN));
         Ok(())
     }
 
@@ -917,12 +1025,18 @@ mod tests {
 
     #[test]
     fn command_line_quotes_program_with_spaces() {
-        assert_eq!(command_line("pwsh.exe", &s(&["-NoLogo", "a b"])), "pwsh.exe -NoLogo \"a b\"");
+        assert_eq!(
+            command_line("pwsh.exe", &s(&["-NoLogo", "a b"])),
+            "pwsh.exe -NoLogo \"a b\""
+        );
         assert_eq!(
             command_line("C:\\Program Files\\PowerShell\\7\\pwsh.exe", &s(&["-x"])),
             "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -x"
         );
-        assert_eq!(command_line("\"C:\\a b\\x.exe\"", &[]), "\"C:\\a b\\x.exe\"");
+        assert_eq!(
+            command_line("\"C:\\a b\\x.exe\"", &[]),
+            "\"C:\\a b\\x.exe\""
+        );
     }
 
     #[test]
@@ -942,8 +1056,14 @@ mod tests {
         assert!(text.contains(&"Term=xterm".to_string()));
         assert!(!text.iter().any(|e| e.starts_with("TERM=")));
         assert!(text.contains(&"zeta=1".to_string()));
-        let names: Vec<String> =
-            text.iter().map(|e| e.split_at(e.find('=').map_or(0, |i| i.max(1))).0.to_uppercase()).collect();
+        let names: Vec<String> = text
+            .iter()
+            .map(|e| {
+                e.split_at(e.find('=').map_or(0, |i| i.max(1)))
+                    .0
+                    .to_uppercase()
+            })
+            .collect();
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted, "block must be sorted by upper-cased name");
@@ -956,7 +1076,12 @@ mod tests {
             cwd: None,
             env: &[],
             job,
-            size: WindowSize { num_lines: 24, num_cols: 80, cell_width: 8, cell_height: 16 },
+            size: WindowSize {
+                num_lines: 24,
+                num_cols: 80,
+                cell_width: 8,
+                cell_height: 16,
+            },
             force_job_fallback: force,
         }
     }
@@ -966,14 +1091,22 @@ mod tests {
     fn job_fallback_assigns_before_the_shell_runs() {
         let job = proc_svc::JobGroup::with_options(
             "conpty-fallback",
-            proc_svc::JobOptions { kill_on_close: true, ..Default::default() },
+            proc_svc::JobOptions {
+                kill_on_close: true,
+                ..Default::default()
+            },
         )
         .unwrap();
         let args = s(&["/k"]);
         let handle = job.raw_handle() as isize;
         let pty = spawn(&spec_for(Some(handle), true, &args)).unwrap();
         assert_eq!(pty.attachment(), JobAttachment::AssignedAfterSpawn);
-        assert!(job.contains(pty.pid()), "{:?} / {}", job.members(), pty.pid());
+        assert!(
+            job.contains(pty.pid()),
+            "{:?} / {}",
+            job.members(),
+            pty.pid()
+        );
         drop(pty);
         job.terminate_raw(1).unwrap();
     }
@@ -982,7 +1115,10 @@ mod tests {
     fn job_list_puts_the_shell_in_the_job_at_birth() {
         let job = proc_svc::JobGroup::with_options(
             "conpty-birth",
-            proc_svc::JobOptions { kill_on_close: true, ..Default::default() },
+            proc_svc::JobOptions {
+                kill_on_close: true,
+                ..Default::default()
+            },
         )
         .unwrap();
         let args = s(&["/k"]);

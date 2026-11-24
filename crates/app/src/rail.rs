@@ -31,10 +31,18 @@ pub struct RailItem {
 
 pub fn rail(theme: &Theme, items: Vec<RailItem>) -> impl IntoElement {
     let buttons = items.into_iter().map(|item| {
-        let RailItem { id, icon, title, active, on_click } = item;
+        let RailItem {
+            id,
+            icon,
+            title,
+            active,
+            on_click,
+        } = item;
         // Active is a pill; hover is a lighter one that keeps the muted icon, so a hovered
         // button can never be mistaken for the active one.
-        let mut b = IconButton::new(id, theme, icon).active(active).tooltip(title);
+        let mut b = IconButton::new(id, theme, icon)
+            .active(active)
+            .tooltip(title);
         if let Some(f) = on_click {
             b = b.on_click(move |_, window, cx| f(window, cx));
         }
@@ -61,5 +69,13 @@ pub fn rail(theme: &Theme, items: Vec<RailItem>) -> impl IntoElement {
                 // Light art on dark/OLED, dark art on light: the file changes, never a chip.
                 .child(Logo::new(theme.mode).size(40.0)),
         )
-        .child(div().mt(px(4.0)).flex().flex_col().items_center().gap(px(4.0)).children(buttons))
+        .child(
+            div()
+                .mt(px(4.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.0))
+                .children(buttons),
+        )
 }

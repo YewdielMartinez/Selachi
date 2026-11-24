@@ -35,30 +35,27 @@ use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use windows::Win32::Foundation::{
-    ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE,
-};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use windows::core::{HRESULT, PCWSTR};
+use windows::Win32::Foundation::{ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-};
-use windows::Win32::System::IO::{
-    CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED, PostQueuedCompletionStatus,
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectAssociateCompletionPortInformation,
+    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
     JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectAssociateCompletionPortInformation, JobObjectBasicProcessIdList,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject,
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::Threading::{
-    OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE, ResumeThread, THREAD_SUSPEND_RESUME,
+    OpenThread, ResumeThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
-use windows::core::{HRESULT, PCWSTR};
+use windows::Win32::System::IO::{
+    CreateIoCompletionPort, GetQueuedCompletionStatus, PostQueuedCompletionStatus, OVERLAPPED,
+};
 
-use crate::error::{Error, Result, win32};
+use crate::error::{win32, Error, Result};
 use crate::sys::{self, OwnedHandle};
 
 const CREATE_SUSPENDED: u32 = 0x0000_0004;
@@ -140,8 +137,8 @@ impl JobGroup {
     /// Creates a job with explicit [`JobOptions`].
     pub fn with_options(label: impl Into<String>, options: JobOptions) -> Result<Self> {
         // SAFETY: anonymous job, no security attributes.
-        let h = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
-            .map_err(win32("CreateJobObjectW"))?;
+        let h =
+            unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(win32("CreateJobObjectW"))?;
         let handle = OwnedHandle::new(h);
 
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
@@ -162,7 +159,12 @@ impl JobGroup {
         }
         .map_err(win32("SetInformationJobObject(ExtendedLimit)"))?;
 
-        Ok(Self { handle, label: label.into(), options, port: Mutex::new(None) })
+        Ok(Self {
+            handle,
+            label: label.into(),
+            options,
+            port: Mutex::new(None),
+        })
     }
 
     /// Diagnostic label given at creation.
@@ -214,7 +216,9 @@ impl JobGroup {
     pub fn spawn_command(&self, cmd: &mut Command, extra_creation_flags: u32) -> Result<Child> {
         cmd.creation_flags(CREATE_SUSPENDED | extra_creation_flags);
         let mut child = cmd.spawn()?;
-        let r = self.assign_child(&child).and_then(|()| resume_process(child.id()));
+        let r = self
+            .assign_child(&child)
+            .and_then(|()| resume_process(child.id()));
         if let Err(e) = r {
             let _ = child.kill();
             let _ = child.wait();
@@ -394,7 +398,10 @@ pub fn resume_process(pid: u32) -> Result<()> {
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }
         .map_err(win32("CreateToolhelp32Snapshot(thread)"))?;
     let snap = OwnedHandle::new(snap);
-    let mut entry = THREADENTRY32 { dwSize: size_of::<THREADENTRY32>() as u32, ..Default::default() };
+    let mut entry = THREADENTRY32 {
+        dwSize: size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
     let mut resumed = 0u32;
     // SAFETY: `entry.dwSize` is set; iteration uses the documented protocol.
     let mut more = unsafe { Thread32First(snap.raw(), &mut entry) }.is_ok();

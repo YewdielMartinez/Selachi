@@ -8,12 +8,12 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui::{
-    AnyElement, App, Bounds, Context, Corner, DispatchPhase, IntoElement, Modifiers, MouseDownEvent,
-    ParentElement, Pixels, RenderOnce, SharedString, Subscription, Window, anchored, canvas, deferred, div,
-    point, prelude::*, px,
-};
 use gpui::{Animation, AnimationExt};
+use gpui::{
+    AnyElement, App, Bounds, Context, Corner, DispatchPhase, IntoElement, Modifiers,
+    MouseDownEvent, ParentElement, Pixels, RenderOnce, SharedString, Subscription, Window,
+    anchored, canvas, deferred, div, point, prelude::*, px,
+};
 use theme::{
     Radius, Theme,
     motion::{POP, SHEET, duration::BASE},
@@ -199,7 +199,8 @@ impl RenderOnce for Popover {
             watch.update(cx, |w, _| *w.dismiss.borrow_mut() = self.on_dismiss.clone());
         }
         let place = self.placement;
-        let sheet = self.sheet_when_narrow && f32::from(window.viewport_size().width) < SHEET_BELOW_WIDTH;
+        let sheet =
+            self.sheet_when_narrow && f32::from(window.viewport_size().width) < SHEET_BELOW_WIDTH;
         let trigger_bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
         let track_trigger = trigger_bounds.clone();
 
@@ -210,7 +211,16 @@ impl RenderOnce for Popover {
         // would push the panel left by its own width.
         let marker = |content: Option<AnyElement>| {
             let content = content.map(|c| {
-                if place.end() { div().w(px(0.0)).h(px(0.0)).flex_none().child(c).into_any_element() } else { c }
+                if place.end() {
+                    div()
+                        .w(px(0.0))
+                        .h(px(0.0))
+                        .flex_none()
+                        .child(c)
+                        .into_any_element()
+                } else {
+                    c
+                }
             });
             div()
                 .w_full()
@@ -225,7 +235,13 @@ impl RenderOnce for Popover {
             let panel_bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
             let track_panel = panel_bounds.clone();
             let dismiss = self.on_dismiss.clone();
-            let dir = if sheet { 1.0 } else if place.below() { -1.0 } else { 1.0 };
+            let dir = if sheet {
+                1.0
+            } else if place.below() {
+                -1.0
+            } else {
+                1.0
+            };
             let travel = if sheet { 48.0 } else { TRAVEL };
             let mut body = div()
                 .relative()
@@ -268,7 +284,11 @@ impl RenderOnce for Popover {
             } else {
                 body.with_animation(
                     SharedString::from(format!("{}-pop", self.id)),
-                    Animation::new(BASE).with_easing(if sheet { clamped(SHEET) } else { clamped(POP) }),
+                    Animation::new(BASE).with_easing(if sheet {
+                        clamped(SHEET)
+                    } else {
+                        clamped(POP)
+                    }),
                     move |el, t| el.opacity(t).top(px(dir * travel * (1.0 - t))),
                 )
                 .into_any_element()
@@ -323,6 +343,10 @@ impl RenderOnce for Popover {
         // `self_start`: size to the trigger even inside a stretching column.
         let mut root = div().id(self.id).flex().flex_col().flex_none();
         root.style().align_self = Some(gpui::AlignSelf::FlexStart);
-        if place.below() { root.child(trigger).child(strip) } else { root.child(strip).child(trigger) }
+        if place.below() {
+            root.child(trigger).child(strip)
+        } else {
+            root.child(strip).child(trigger)
+        }
     }
 }

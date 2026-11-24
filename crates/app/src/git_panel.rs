@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use gpui::{
-    AnyView, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window, div, prelude::*, px,
+    AnyView, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled, Subscription, Window, div, prelude::*, px,
 };
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
 use theme::{Radius, Theme, rgb};
@@ -45,8 +45,16 @@ impl PanelProvider for ContextPanelProvider {
         cx.new(|cx| ContextPanel::new(ctx, cx)).into()
     }
 
-    fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
-        let Ok(panel) = view.clone().downcast::<ContextPanel>() else { return false };
+    fn context_changed(
+        &self,
+        view: &AnyView,
+        ctx: &PanelCtx,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Ok(panel) = view.clone().downcast::<ContextPanel>() else {
+            return false;
+        };
         panel.update(cx, |p, cx| p.retarget(ctx.clone(), cx));
         true
     }
@@ -63,7 +71,11 @@ impl ContextPanel {
         let git = cx.new(|_| GitMonitor::new());
         // The monitor notifies when its data changes: repaint with it.
         let sub = cx.observe(&git, |_, _, cx| cx.notify());
-        let mut panel = Self { ctx: ctx.clone(), git, _sub: sub };
+        let mut panel = Self {
+            ctx: ctx.clone(),
+            git,
+            _sub: sub,
+        };
         panel.retarget(ctx, cx);
         panel
     }
@@ -102,7 +114,11 @@ fn stat(theme: &Theme, label: &'static str, n: u32) -> impl IntoElement {
         .rounded(px(8.0))
         .bg(c.surface_2)
         .text_size(px(ty.ui_size_sm))
-        .child(div().text_color(if n > 0 { c.text } else { c.muted }).child(n.to_string()))
+        .child(
+            div()
+                .text_color(if n > 0 { c.text } else { c.muted })
+                .child(n.to_string()),
+        )
         .child(div().text_color(c.muted).child(label))
 }
 
@@ -185,7 +201,12 @@ impl ContextPanel {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .children(info.files.iter().enumerate().map(|(i, f)| file_row(&theme, i, f)))
+            .children(
+                info.files
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| file_row(&theme, i, f)),
+            )
             .children((total as usize > info.files.len()).then(|| {
                 div()
                     .px(px(6.0))
@@ -243,9 +264,14 @@ impl Render for ContextPanel {
                     .text_color(c.muted)
                     .child(msg)
                     .into_any_element()
-            },
+            }
         };
-        div().size_full().rounded(px(Radius::MD)).overflow_hidden().font_family(ty.ui_family).child(body)
+        div()
+            .size_full()
+            .rounded(px(Radius::MD))
+            .overflow_hidden()
+            .font_family(ty.ui_family)
+            .child(body)
     }
 }
 

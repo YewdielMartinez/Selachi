@@ -30,19 +30,53 @@ pub mod id {
 /// The actions of the palette's `>` scope. Panels are added by the shell from the registry.
 pub fn base_actions() -> Vec<ActionEntry> {
     vec![
-        ActionEntry::new(id::TAB_NEW, "Nueva pestaña").shortcut("Ctrl+N").icon(Icon::Plus).keywords("terminal chat crear abrir"),
-        ActionEntry::new(id::TAB_NEW_TERMINAL, "Nueva terminal").shortcut("Ctrl+Shift+N").icon(Icon::Terminal).keywords("pestaña shell crear abrir"),
-        ActionEntry::new(id::CHAT_NEW, "Nuevo chat con un agente").icon(Icon::Agents).keywords("hilo conversación claude codex opencode agente"),
-        ActionEntry::new(id::TAB_CLOSE, "Cerrar pestaña").shortcut("Ctrl+W").icon(Icon::Close).keywords("terminal"),
-        ActionEntry::new(id::TAB_NEXT, "Pestaña siguiente").shortcut("Ctrl+Tab").icon(Icon::ChevronRight),
-        ActionEntry::new(id::TAB_PREV, "Pestaña anterior").shortcut("Ctrl+Shift+Tab").icon(Icon::ChevronRight),
-        ActionEntry::new(id::LAYOUT_TOGGLE, "Panel de layout").shortcut("Ctrl+Shift+L").icon(Icon::Layout).keywords("diseño preset"),
-        ActionEntry::new(id::THEME_TOGGLE, "Cambiar tema").shortcut("Ctrl+Shift+T").icon(Icon::Settings).keywords("claro oscuro oled"),
-        ActionEntry::new(id::REVIEW_OPEN, "Revisar cambios").icon(Icon::Review).keywords("diff notas agente review"),
-        ActionEntry::new(id::ATTENTION_NEXT, "Siguiente en atención").shortcut("Ctrl+Shift+A").icon(Icon::Attention).keywords("cola espera aprobación"),
-        ActionEntry::new(id::SETTINGS_OPEN, "Ajustes").shortcut("Ctrl+,").icon(Icon::Settings).keywords("configuración opciones preferencias"),
-        ActionEntry::new(id::SIDEBAR_TOGGLE, "Plegar la barra lateral").shortcut("Ctrl+B").icon(Icon::Layout).keywords("sidebar iconos colapsar"),
-        ActionEntry::new(id::FULLSCREEN, "Pantalla completa").shortcut("F11").icon(Icon::Maximize),
+        ActionEntry::new(id::TAB_NEW, "Nueva pestaña")
+            .shortcut("Ctrl+N")
+            .icon(Icon::Plus)
+            .keywords("terminal chat crear abrir"),
+        ActionEntry::new(id::TAB_NEW_TERMINAL, "Nueva terminal")
+            .shortcut("Ctrl+Shift+N")
+            .icon(Icon::Terminal)
+            .keywords("pestaña shell crear abrir"),
+        ActionEntry::new(id::CHAT_NEW, "Nuevo chat con un agente")
+            .icon(Icon::Agents)
+            .keywords("hilo conversación claude codex opencode agente"),
+        ActionEntry::new(id::TAB_CLOSE, "Cerrar pestaña")
+            .shortcut("Ctrl+W")
+            .icon(Icon::Close)
+            .keywords("terminal"),
+        ActionEntry::new(id::TAB_NEXT, "Pestaña siguiente")
+            .shortcut("Ctrl+Tab")
+            .icon(Icon::ChevronRight),
+        ActionEntry::new(id::TAB_PREV, "Pestaña anterior")
+            .shortcut("Ctrl+Shift+Tab")
+            .icon(Icon::ChevronRight),
+        ActionEntry::new(id::LAYOUT_TOGGLE, "Panel de layout")
+            .shortcut("Ctrl+Shift+L")
+            .icon(Icon::Layout)
+            .keywords("diseño preset"),
+        ActionEntry::new(id::THEME_TOGGLE, "Cambiar tema")
+            .shortcut("Ctrl+Shift+T")
+            .icon(Icon::Settings)
+            .keywords("claro oscuro oled"),
+        ActionEntry::new(id::REVIEW_OPEN, "Revisar cambios")
+            .icon(Icon::Review)
+            .keywords("diff notas agente review"),
+        ActionEntry::new(id::ATTENTION_NEXT, "Siguiente en atención")
+            .shortcut("Ctrl+Shift+A")
+            .icon(Icon::Attention)
+            .keywords("cola espera aprobación"),
+        ActionEntry::new(id::SETTINGS_OPEN, "Ajustes")
+            .shortcut("Ctrl+,")
+            .icon(Icon::Settings)
+            .keywords("configuración opciones preferencias"),
+        ActionEntry::new(id::SIDEBAR_TOGGLE, "Plegar la barra lateral")
+            .shortcut("Ctrl+B")
+            .icon(Icon::Layout)
+            .keywords("sidebar iconos colapsar"),
+        ActionEntry::new(id::FULLSCREEN, "Pantalla completa")
+            .shortcut("F11")
+            .icon(Icon::Maximize),
     ]
 }
 
@@ -53,19 +87,27 @@ pub fn ps_quote(s: &str) -> String {
 
 /// `Set-Location -LiteralPath '<dir>'`, the line that changes directory in PowerShell.
 pub fn cd_line(dir: &Path) -> String {
-    format!("Set-Location -LiteralPath {}", ps_quote(&dir.to_string_lossy()))
+    format!(
+        "Set-Location -LiteralPath {}",
+        ps_quote(&dir.to_string_lossy())
+    )
 }
 
 /// `git -C <cwd> ...` when `cwd` is not where the terminal already is: runs the panel's command in
 /// its worktree without changing the shell's directory. Anything but `git` is left alone.
 pub fn with_dash_c(argv: &[String], cwd: &Path, terminal_cwd: Option<&Path>) -> Vec<String> {
-    let same = terminal_cwd.is_some_and(|t| crate::paths::is_within(t, cwd) && crate::paths::is_within(cwd, t));
+    let same = terminal_cwd
+        .is_some_and(|t| crate::paths::is_within(t, cwd) && crate::paths::is_within(cwd, t));
     match argv.split_first() {
         Some((git, rest)) if git == "git" && !same => {
-            let mut out = vec![git.clone(), "-C".to_string(), cwd.to_string_lossy().into_owned()];
+            let mut out = vec![
+                git.clone(),
+                "-C".to_string(),
+                cwd.to_string_lossy().into_owned(),
+            ];
             out.extend_from_slice(rest);
             out
-        },
+        }
         _ => argv.to_vec(),
     }
 }
@@ -74,7 +116,10 @@ pub fn with_dash_c(argv: &[String], cwd: &Path, terminal_cwd: Option<&Path>) -> 
 pub fn shell_line(argv: &[String]) -> String {
     argv.iter()
         .map(|a| {
-            if !a.is_empty() && a.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=@\\".contains(c)) {
+            if !a.is_empty()
+                && a.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_./:=@\\".contains(c))
+            {
                 a.clone()
             } else {
                 ps_quote(a)
@@ -91,7 +136,10 @@ mod tests {
     #[test]
     fn quoting() {
         assert_eq!(ps_quote("it's"), "'it''s'");
-        assert_eq!(cd_line(Path::new("C:\\a b\\o'k")), "Set-Location -LiteralPath 'C:\\a b\\o''k'");
+        assert_eq!(
+            cd_line(Path::new("C:\\a b\\o'k")),
+            "Set-Location -LiteralPath 'C:\\a b\\o''k'"
+        );
         let argv = ["git", "commit", "-m", "fix: a b"].map(str::to_string);
         assert_eq!(shell_line(&argv), "git commit -m 'fix: a b'");
         let argv = ["git", "switch", "feature/x"].map(str::to_string);

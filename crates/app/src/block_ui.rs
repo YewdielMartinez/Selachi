@@ -9,8 +9,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 use gpui::{
-    AnyElement, ClipboardItem, Context, IntoElement, ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, Pixels,
-    Point, SharedString, div, prelude::*, px,
+    AnyElement, ClipboardItem, Context, IntoElement, ModifiersChangedEvent, MouseDownEvent,
+    MouseMoveEvent, Pixels, Point, SharedString, div, prelude::*, px,
 };
 use term_core::{Block, BlockId, BlockState, Session};
 use ui_kit::{ActionButton, Icon, Pill};
@@ -70,15 +70,29 @@ impl Default for BlockUi {
 
 /// `1 secreto oculto`, `3 secretos ocultos`.
 pub fn secrets_hint(n: usize) -> String {
-    if n == 1 { "incluye 1 secreto oculto".to_string() } else { format!("incluye {n} secretos ocultos") }
+    if n == 1 {
+        "incluye 1 secreto oculto".to_string()
+    } else {
+        format!("incluye {n} secretos ocultos")
+    }
 }
 
 impl TerminalView {
     /// Re-reads the blocks of the session (called on block events only).
     pub(crate) fn refresh_blocks(&mut self) {
-        let blocks = self.session.as_ref().map(Session::blocks).unwrap_or_default();
-        self.block_ui.folded.retain(|id| blocks.iter().any(|b| b.id == *id));
-        if self.block_ui.hover.is_some_and(|id| !blocks.iter().any(|b| b.id == id)) {
+        let blocks = self
+            .session
+            .as_ref()
+            .map(Session::blocks)
+            .unwrap_or_default();
+        self.block_ui
+            .folded
+            .retain(|id| blocks.iter().any(|b| b.id == *id));
+        if self
+            .block_ui
+            .hover
+            .is_some_and(|id| !blocks.iter().any(|b| b.id == id))
+        {
             self.block_ui.hover = None;
         }
         self.block_ui.blocks = blocks;
@@ -90,14 +104,21 @@ impl TerminalView {
         let mut out = ui.rows.borrow_mut();
         out.clear();
         if !ui.blocks.is_empty() {
-            let row_block: Vec<Option<BlockId>> = (0..rows).map(|r| session.block_at_line(r)).collect();
+            let row_block: Vec<Option<BlockId>> =
+                (0..rows).map(|r| session.block_at_line(r)).collect();
             if row_block.iter().any(Option::is_some) {
                 let abs = block_layout::viewport_abs(&row_block, &ui.blocks);
-                *out = block_layout::layout_rows(&row_block, &abs, &ui.blocks, &ui.folded, at_bottom);
+                *out =
+                    block_layout::layout_rows(&row_block, &abs, &ui.blocks, &ui.folded, at_bottom);
                 return;
             }
         }
-        out.extend((0..rows).map(|r| VisRow { term_row: Some(r), block: None, abs: None, summary: None }));
+        out.extend((0..rows).map(|r| VisRow {
+            term_row: Some(r),
+            block: None,
+            abs: None,
+            summary: None,
+        }));
     }
 
     /// The painted row, column and gutter flag under the pointer.
@@ -109,12 +130,16 @@ impl TerminalView {
             return None;
         }
         let o = ui.origin.get();
-        let (x, y) = (f32::from(m.x) - f32::from(o.x), f32::from(m.y) - f32::from(o.y));
+        let (x, y) = (
+            f32::from(m.x) - f32::from(o.x),
+            f32::from(m.y) - f32::from(o.y),
+        );
         if y < 0.0 {
             return None;
         }
         let vis = (y / ch) as usize;
-        (vis < ui.rows.borrow().len()).then(|| (vis, if x < 0.0 { 0 } else { (x / cw) as usize }, x < 0.0))
+        (vis < ui.rows.borrow().len())
+            .then(|| (vis, if x < 0.0 { 0 } else { (x / cw) as usize }, x < 0.0))
     }
 
     /// Recomputes what the pointer is over; repaints only when it changed.
@@ -125,16 +150,30 @@ impl TerminalView {
             Some((vis, col, gutter)) => {
                 let ui = &self.block_ui;
                 let rows = ui.rows.borrow();
-                let hover = if ui.ctrl { None } else { block_layout::hover_target(&rows, &ui.blocks, vis, gutter) };
-                let link = (ui.ctrl && !gutter).then(|| rows.get(vis).and_then(|v| v.term_row)).flatten();
+                let hover = if ui.ctrl {
+                    None
+                } else {
+                    block_layout::hover_target(&rows, &ui.blocks, vis, gutter)
+                };
+                let link = (ui.ctrl && !gutter)
+                    .then(|| rows.get(vis).and_then(|v| v.term_row))
+                    .flatten();
                 drop(rows);
-                (hover, link.and_then(|r| self.link_at(r, col)).map(|h| (vis, h)))
-            },
+                (
+                    hover,
+                    link.and_then(|r| self.link_at(r, col)).map(|h| (vis, h)),
+                )
+            }
         };
         let mut changed = false;
         if self.block_ui.hover != hover {
             self.block_ui.hover = hover;
-            if self.block_ui.note.as_ref().is_some_and(|(id, _)| Some(*id) != hover) {
+            if self
+                .block_ui
+                .note
+                .as_ref()
+                .is_some_and(|(id, _)| Some(*id) != hover)
+            {
                 self.block_ui.note = None;
             }
             changed = true;
@@ -150,7 +189,10 @@ impl TerminalView {
 
     /// The existing path at column `col` of viewport row `term_row`.
     fn link_at(&mut self, term_row: usize, col: usize) -> Option<LinkHit> {
-        let cwd = self.cwd().map(std::path::Path::to_path_buf).or_else(|| std::env::current_dir().ok())?;
+        let cwd = self
+            .cwd()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())?;
         let state = self.paint_state.borrow();
         let cells = state.snap.lines.get(term_row)?;
         let hash = *state.snap.row_hash.get(term_row)?;
@@ -179,9 +221,13 @@ impl TerminalView {
     /// Is the last known pointer position close to the bar of the hovered block?
     fn pointer_near_bar(&self) -> bool {
         let ui = &self.block_ui;
-        let (Some(m), Some(id)) = (ui.mouse, ui.hover) else { return false };
+        let (Some(m), Some(id)) = (ui.mouse, ui.hover) else {
+            return false;
+        };
         let rows = ui.rows.borrow();
-        let Some(vis) = block_layout::anchor_row(&rows, &ui.blocks, id) else { return false };
+        let Some(vis) = block_layout::anchor_row(&rows, &ui.blocks, id) else {
+            return false;
+        };
         let (_, ch) = ui.cell.get();
         let o = ui.origin.get();
         let y = f32::from(m.y) - f32::from(o.y);
@@ -210,13 +256,23 @@ impl TerminalView {
         if e.modifiers.control {
             self.update_hover(cx);
             if let Some((_, hit)) = self.block_ui.link.clone() {
-                cx.emit(TerminalEvent::OpenPath { path: hit.path, line: hit.line, col: hit.col, is_dir: hit.is_dir });
+                cx.emit(TerminalEvent::OpenPath {
+                    path: hit.path,
+                    line: hit.line,
+                    col: hit.col,
+                    is_dir: hit.is_dir,
+                });
                 return true;
             }
             return false;
         }
         if let Some((vis, _, false)) = self.pointer_cell() {
-            let summary = self.block_ui.rows.borrow().get(vis).and_then(|v| v.summary.and(v.block));
+            let summary = self
+                .block_ui
+                .rows
+                .borrow()
+                .get(vis)
+                .and_then(|v| v.summary.and(v.block));
             if let Some(id) = summary {
                 self.toggle_fold(id, cx);
                 return true;
@@ -241,14 +297,22 @@ impl TerminalView {
 
     /// Copiar salida: redacted before it reaches the clipboard.
     pub(crate) fn copy_block(&mut self, id: BlockId, cx: &mut Context<Self>) {
-        let Some(text) = self.session.as_ref().and_then(|s| s.block_output_text(id, OUTPUT_CAP)) else {
+        let Some(text) = self
+            .session
+            .as_ref()
+            .and_then(|s| s.block_output_text(id, OUTPUT_CAP))
+        else {
             self.block_ui.note = Some((id, "No se pudo leer la salida".into()));
             cx.notify();
             return;
         };
         let (clean, hidden) = term_core::redact(&text);
         cx.write_to_clipboard(ClipboardItem::new_string(clean));
-        let note = if hidden > 0 { format!("Copiado · {}", secrets_hint(hidden)) } else { "Copiado".to_string() };
+        let note = if hidden > 0 {
+            format!("Copiado · {}", secrets_hint(hidden))
+        } else {
+            "Copiado".to_string()
+        };
         self.block_ui.note = Some((id, note.into()));
         cx.notify();
     }
@@ -262,7 +326,9 @@ impl TerminalView {
 
     /// Arreglar con agente: hands the block (and its output) to the host.
     pub(crate) fn fix_block(&mut self, id: BlockId, cx: &mut Context<Self>) {
-        let Some(block) = self.block(id).cloned() else { return };
+        let Some(block) = self.block(id).cloned() else {
+            return;
+        };
         let output = self
             .session
             .as_ref()
@@ -274,17 +340,23 @@ impl TerminalView {
     /// Ctrl+Up / Ctrl+Down: scroll to the previous / next block. `false` when there are no
     /// blocks (the keys then go to the shell).
     pub(crate) fn jump_block(&mut self, dir: i32, cx: &mut Context<Self>) -> bool {
-        let Some(session) = &self.session else { return false };
+        let Some(session) = &self.session else {
+            return false;
+        };
         if self.block_ui.blocks.is_empty() {
             return false;
         }
-        let target = if dir < 0 { session.prev_block(None) } else { session.next_block(None) };
+        let target = if dir < 0 {
+            session.prev_block(None)
+        } else {
+            session.next_block(None)
+        };
         match target {
             Some(id) => {
                 session.scroll_to_block(id);
-            },
+            }
             None if dir > 0 => session.scroll_to_bottom(),
-            None => {},
+            None => {}
         }
         cx.notify();
         true
@@ -335,7 +407,11 @@ impl TerminalView {
             let v = view.clone();
             bar = bar.child(
                 Pill::compact("block-fold", &theme)
-                    .icon(if folded { Icon::ChevronRight } else { Icon::ChevronDown })
+                    .icon(if folded {
+                        Icon::ChevronRight
+                    } else {
+                        Icon::ChevronDown
+                    })
                     .label(if folded { "Desplegar" } else { "Plegar" })
                     .tooltip("Oculta la salida en pantalla; el proceso no se toca")
                     .on_click(move |_, _, cx| v.update(cx, |t, cx| t.toggle_fold(id, cx))),

@@ -153,13 +153,23 @@ pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
     let values = |o: &Value| -> Vec<(String, Option<String>)> {
         o.get("options")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|m| s(m, "value").map(|v| (v.to_string(), s(m, "name").map(str::to_string)))).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| {
+                        s(m, "value").map(|v| (v.to_string(), s(m, "name").map(str::to_string)))
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let available: Vec<String> = result
         .pointer("/models/availableModels")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|m| s(m, "modelId").map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| s(m, "modelId").map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     if let (Some(model_opt), Some(thought)) = (option("model"), option("thought_level")) {
         let levels: Vec<String> = values(thought).into_iter().map(|(v, _)| v).collect();
@@ -176,9 +186,18 @@ pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
                 if efforts.is_empty() && available.is_empty() {
                     efforts = levels.clone();
                 }
-                efforts.sort_by_key(|e| EFFORT_LEVELS.iter().position(|l| l == e).unwrap_or(usize::MAX));
+                efforts.sort_by_key(|e| {
+                    EFFORT_LEVELS
+                        .iter()
+                        .position(|l| l == e)
+                        .unwrap_or(usize::MAX)
+                });
                 let default_effort = default.clone().filter(|d| efforts.contains(d));
-                ModelInfo { efforts, default_effort, ..plain(&id, name.as_deref()) }
+                ModelInfo {
+                    efforts,
+                    default_effort,
+                    ..plain(&id, name.as_deref())
+                }
             })
             .collect();
         if !v.is_empty() {
@@ -189,12 +208,26 @@ pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
         let names: Vec<Option<&str>> = result
             .pointer("/models/availableModels")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter(|m| s(m, "modelId").is_some()).map(|m| s(m, "name")).collect())
+            .map(|a| {
+                a.iter()
+                    .filter(|m| s(m, "modelId").is_some())
+                    .map(|m| s(m, "name"))
+                    .collect()
+            })
             .unwrap_or_default();
-        return available.iter().zip(names).map(|(id, n)| plain(id, n)).collect();
+        return available
+            .iter()
+            .zip(names)
+            .map(|(id, n)| plain(id, n))
+            .collect();
     }
     option("model")
-        .map(|o| values(o).into_iter().map(|(id, name)| plain(&id, name.as_deref())).collect())
+        .map(|o| {
+            values(o)
+                .into_iter()
+                .map(|(id, name)| plain(&id, name.as_deref()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -202,7 +235,11 @@ pub fn parse_models(result: &Value) -> Vec<ModelInfo> {
 fn option_values(o: &Value) -> Vec<String> {
     o.get("options")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|m| s(m, "value").map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| s(m, "value").map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -418,8 +455,10 @@ impl AcpSession {
         let mut step = Step::default();
         self.queue.clear();
         for (_, p) in self.permissions.drain() {
-            step.outgoing
-                .push(Self::reply(&p.rpc_id, json!({ "outcome": { "outcome": "cancelled" } })));
+            step.outgoing.push(Self::reply(
+                &p.rpc_id,
+                json!({ "outcome": { "outcome": "cancelled" } }),
+            ));
         }
         for (_, w) in self.writes.drain() {
             step.outgoing
@@ -427,8 +466,10 @@ impl AcpSession {
         }
         if self.busy {
             if let Some(sid) = &self.session_id {
-                step.outgoing
-                    .push(Self::notification("session/cancel", json!({ "sessionId": sid })));
+                step.outgoing.push(Self::notification(
+                    "session/cancel",
+                    json!({ "sessionId": sid }),
+                ));
             }
         }
         Ok(step)
@@ -452,7 +493,8 @@ impl AcpSession {
                     self.approved_paths.insert(path_key(path));
                 }
             }
-            step.outgoing.push(Self::reply(&p.rpc_id, json!({ "outcome": outcome })));
+            step.outgoing
+                .push(Self::reply(&p.rpc_id, json!({ "outcome": outcome })));
             step.events.push(AgentEvent::Status(AgentStatus::Working));
             return Ok(step);
         }
@@ -460,13 +502,18 @@ impl AcpSession {
             if allow {
                 match std::fs::write(&w.path, w.content.as_bytes()) {
                     Ok(()) => step.outgoing.push(Self::reply(&w.rpc_id, Value::Null)),
-                    Err(e) => step
-                        .outgoing
-                        .push(Self::reply_err(&w.rpc_id, ERR_INTERNAL, &format!("write failed: {e}"))),
+                    Err(e) => step.outgoing.push(Self::reply_err(
+                        &w.rpc_id,
+                        ERR_INTERNAL,
+                        &format!("write failed: {e}"),
+                    )),
                 }
             } else {
-                step.outgoing
-                    .push(Self::reply_err(&w.rpc_id, ERR_AUTH_REQUIRED, "write denied by the user"));
+                step.outgoing.push(Self::reply_err(
+                    &w.rpc_id,
+                    ERR_AUTH_REQUIRED,
+                    "write denied by the user",
+                ));
             }
             step.events.push(AgentEvent::Status(AgentStatus::Working));
             return Ok(step);
@@ -480,8 +527,12 @@ impl AcpSession {
     pub fn on_message(&mut self, v: &Value) -> Step {
         let mut step = Step::default();
         match (v.get("method").and_then(Value::as_str), v.get("id")) {
-            (Some(m), Some(id)) => self.on_agent_request(m, id, v.get("params").unwrap_or(&Value::Null), &mut step),
-            (Some(m), None) => self.on_notification(m, v.get("params").unwrap_or(&Value::Null), &mut step),
+            (Some(m), Some(id)) => {
+                self.on_agent_request(m, id, v.get("params").unwrap_or(&Value::Null), &mut step)
+            }
+            (Some(m), None) => {
+                self.on_notification(m, v.get("params").unwrap_or(&Value::Null), &mut step)
+            }
             (None, Some(id)) => self.on_response(id, v, &mut step),
             _ => {}
         }
@@ -518,7 +569,8 @@ impl AcpSession {
                 Req::Prompt => {
                     self.busy = false;
                     self.queue.clear();
-                    step.events.push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300))));
+                    step.events
+                        .push(AgentEvent::Status(AgentStatus::Error(truncate(&msg, 300))));
                 }
                 Req::OpenSession | Req::Initialize => {
                     self.replaying = false;
@@ -534,7 +586,8 @@ impl AcpSession {
                     } else {
                         truncate(&msg, 300)
                     };
-                    step.events.push(AgentEvent::Status(AgentStatus::Error(text)));
+                    step.events
+                        .push(AgentEvent::Status(AgentStatus::Error(text)));
                 }
             }
             return;
@@ -550,12 +603,21 @@ impl AcpSession {
 
     fn on_initialized(&mut self, result: &Value, step: &mut Step) {
         let caps = result.get("agentCapabilities").unwrap_or(&Value::Null);
-        self.can_load = caps.get("loadSession").and_then(Value::as_bool).unwrap_or(false);
-        self.can_resume = caps.pointer("/sessionCapabilities/resume").is_some_and(|r| !r.is_null());
+        self.can_load = caps
+            .get("loadSession")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        self.can_resume = caps
+            .pointer("/sessionCapabilities/resume")
+            .is_some_and(|r| !r.is_null());
         self.auth_methods = result
             .get("authMethods")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|m| s(m, "id").map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| s(m, "id").map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
         let cwd = self.cwd.to_string_lossy().into_owned();
         let base = json!({ "cwd": cwd, "mcpServers": [] });
@@ -573,7 +635,9 @@ impl AcpSession {
             }
             other => {
                 if other.is_some() {
-                    log::warn!("acp: agent can neither resume nor load sessions; starting a new one");
+                    log::warn!(
+                        "acp: agent can neither resume nor load sessions; starting a new one"
+                    );
                 }
                 ("session/new", base)
             }
@@ -623,7 +687,11 @@ impl AcpSession {
             self.modes = modes
                 .get("availableModes")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|m| s(m, "id").map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| s(m, "id").map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
             self.current_mode = s(modes, "currentModeId").map(str::to_string);
         }
@@ -658,7 +726,10 @@ impl AcpSession {
             .filter(|m| !m.efforts.is_empty())
             .map(|m| m.efforts.clone());
         if !models.is_empty() {
-            step.events.push(AgentEvent::Models { models, current: self.current_model.clone() });
+            step.events.push(AgentEvent::Models {
+                models,
+                current: self.current_model.clone(),
+            });
         }
         if let Some(want) = want_model {
             if self.has_model_option {
@@ -667,8 +738,10 @@ impl AcpSession {
                     json!({ "sessionId": sid, "configId": "model", "value": want }),
                 ));
             } else if self.has_models {
-                self.setup
-                    .push_back(("session/set_model", json!({ "sessionId": sid, "modelId": want })));
+                self.setup.push_back((
+                    "session/set_model",
+                    json!({ "sessionId": sid, "modelId": want }),
+                ));
             } else {
                 log::warn!("acp: agent offers no model selection; ignoring model {want}");
             }
@@ -703,8 +776,10 @@ impl AcpSession {
                         json!({ "sessionId": sid, "configId": "mode", "value": want }),
                     ));
                 } else {
-                    self.setup
-                        .push_back(("session/set_mode", json!({ "sessionId": sid, "modeId": want })));
+                    self.setup.push_back((
+                        "session/set_mode",
+                        json!({ "sessionId": sid, "modeId": want }),
+                    ));
                 }
             }
         }
@@ -737,7 +812,12 @@ impl AcpSession {
             None
         };
         if usage.is_some() || cost_delta.is_some() {
-            let n = |k: &str| usage.and_then(|u| u.get(k)).and_then(Value::as_u64).unwrap_or(0);
+            let n = |k: &str| {
+                usage
+                    .and_then(|u| u.get(k))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            };
             step.events.push(AgentEvent::Usage {
                 input: n("inputTokens"),
                 output: n("outputTokens") + n("thoughtTokens"),
@@ -748,9 +828,9 @@ impl AcpSession {
             });
         }
         match s(result, "stopReason") {
-            Some("refusal") => step
-                .events
-                .push(AgentEvent::Status(AgentStatus::Error("the agent refused to continue".into()))),
+            Some("refusal") => step.events.push(AgentEvent::Status(AgentStatus::Error(
+                "the agent refused to continue".into(),
+            ))),
             _ => {
                 if let Some(next) = self.queue.pop_front() {
                     self.dispatch(&next, step);
@@ -767,16 +847,24 @@ impl AcpSession {
         if method != "session/update" || self.replaying {
             return;
         }
-        let Some(u) = params.get("update") else { return };
+        let Some(u) = params.get("update") else {
+            return;
+        };
         match s(u, "sessionUpdate") {
             Some("agent_message_chunk") => {
                 if let Some(t) = chunk_text(u) {
-                    step.events.push(AgentEvent::Text { text: t, delta: true });
+                    step.events.push(AgentEvent::Text {
+                        text: t,
+                        delta: true,
+                    });
                 }
             }
             Some("agent_thought_chunk") => {
                 if let Some(t) = chunk_text(u) {
-                    step.events.push(AgentEvent::Thinking { text: t, delta: true });
+                    step.events.push(AgentEvent::Thinking {
+                        text: t,
+                        delta: true,
+                    });
                 }
             }
             Some("tool_call") => self.on_tool_call(u, step),
@@ -805,7 +893,10 @@ impl AcpSession {
                     self.context_size = Some(size);
                 }
                 let amount = u.pointer("/cost/amount").and_then(Value::as_f64);
-                let usd = u.pointer("/cost/currency").and_then(Value::as_str).is_none_or(|c| c == "USD");
+                let usd = u
+                    .pointer("/cost/currency")
+                    .and_then(Value::as_str)
+                    .is_none_or(|c| c == "USD");
                 if let (Some(a), true) = (amount, usd) {
                     if !self.cost_seen && self.resume.is_some() {
                         // Resumed session: the cumulative total includes earlier turns.
@@ -924,10 +1015,15 @@ impl AcpSession {
                     tool: title,
                     detail: permission_detail(tc),
                 });
-                step.events.push(AgentEvent::Status(AgentStatus::WaitingForInput));
+                step.events
+                    .push(AgentEvent::Status(AgentStatus::WaitingForInput));
                 self.permissions.insert(
                     key,
-                    PendingPermission { rpc_id: id.clone(), options, paths },
+                    PendingPermission {
+                        rpc_id: id.clone(),
+                        options,
+                        paths,
+                    },
                 );
             }
             decision => {
@@ -941,7 +1037,8 @@ impl AcpSession {
                         self.approved_paths.insert(path_key(p));
                     }
                 }
-                step.outgoing.push(Self::reply(id, json!({ "outcome": outcome })));
+                step.outgoing
+                    .push(Self::reply(id, json!({ "outcome": outcome })));
             }
         }
     }
@@ -962,7 +1059,11 @@ impl AcpSession {
         raw.into_iter()
             .map(|p| {
                 let pb = PathBuf::from(&p);
-                let abs = if pb.is_absolute() { pb } else { self.cwd.join(pb) };
+                let abs = if pb.is_absolute() {
+                    pb
+                } else {
+                    self.cwd.join(pb)
+                };
                 lexical_clean(&abs).to_string_lossy().into_owned()
             })
             .collect()
@@ -970,13 +1071,18 @@ impl AcpSession {
 
     /// Resolve `p` (must be absolute) to a path inside the cwd. `must_exist`: the file itself
     /// must exist (reads); otherwise only its parent directory must.
-    fn resolve_in_cwd(&self, p: &str, must_exist: bool) -> std::result::Result<PathBuf, (i64, String)> {
+    fn resolve_in_cwd(
+        &self,
+        p: &str,
+        must_exist: bool,
+    ) -> std::result::Result<PathBuf, (i64, String)> {
         let path = Path::new(p);
         if !path.is_absolute() {
             return Err((ERR_INVALID_PARAMS, "path must be absolute".into()));
         }
         let resolved = if must_exist {
-            std::fs::canonicalize(path).map_err(|e| (ERR_NOT_FOUND, format!("cannot open file: {e}")))?
+            std::fs::canonicalize(path)
+                .map_err(|e| (ERR_NOT_FOUND, format!("cannot open file: {e}")))?
         } else {
             let clean = lexical_clean(path);
             let (Some(parent), Some(name)) = (clean.parent(), clean.file_name()) else {
@@ -1001,10 +1107,14 @@ impl AcpSession {
             return Err((ERR_INVALID_PARAMS, "not a regular file".into()));
         }
         if md.len() > MAX_READ_BYTES {
-            return Err((ERR_INVALID_PARAMS, format!("file larger than {MAX_READ_BYTES} bytes")));
+            return Err((
+                ERR_INVALID_PARAMS,
+                format!("file larger than {MAX_READ_BYTES} bytes"),
+            ));
         }
         let bytes = std::fs::read(&path).map_err(|e| (ERR_INTERNAL, e.to_string()))?;
-        let text = String::from_utf8(bytes).map_err(|_| (ERR_INVALID_PARAMS, "file is not valid UTF-8".to_string()))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| (ERR_INVALID_PARAMS, "file is not valid UTF-8".to_string()))?;
         let line = params.get("line").and_then(Value::as_u64);
         let limit = params.get("limit").and_then(Value::as_u64);
         if line.is_none() && limit.is_none() {
@@ -1017,8 +1127,11 @@ impl AcpSession {
 
     fn on_write(&mut self, id: &Value, params: &Value, step: &mut Step) {
         let (Some(p), Some(content)) = (s(params, "path"), s(params, "content")) else {
-            step.outgoing
-                .push(Self::reply_err(id, ERR_INVALID_PARAMS, "missing path or content"));
+            step.outgoing.push(Self::reply_err(
+                id,
+                ERR_INVALID_PARAMS,
+                "missing path or content",
+            ));
             return;
         };
         let path = match self.resolve_in_cwd(p, false) {
@@ -1030,10 +1143,15 @@ impl AcpSession {
         };
         let pre_approved = self.mode == PermissionMode::Full
             || self.approved_paths.contains(&path_key(p))
-            || self.approved_paths.contains(&path_key(&path.to_string_lossy()));
+            || self
+                .approved_paths
+                .contains(&path_key(&path.to_string_lossy()));
         if self.mode == PermissionMode::ReadOnly {
-            step.outgoing
-                .push(Self::reply_err(id, ERR_AUTH_REQUIRED, "writes are disabled in read-only mode"));
+            step.outgoing.push(Self::reply_err(
+                id,
+                ERR_AUTH_REQUIRED,
+                "writes are disabled in read-only mode",
+            ));
             return;
         }
         if pre_approved {
@@ -1050,10 +1168,15 @@ impl AcpSession {
             tool: "write_text_file".into(),
             detail: truncate(&path.to_string_lossy(), 400),
         });
-        step.events.push(AgentEvent::Status(AgentStatus::WaitingForInput));
+        step.events
+            .push(AgentEvent::Status(AgentStatus::WaitingForInput));
         self.writes.insert(
             key,
-            PendingWrite { rpc_id: id.clone(), path, content: content.to_string() },
+            PendingWrite {
+                rpc_id: id.clone(),
+                path,
+                content: content.to_string(),
+            },
         );
     }
 }
@@ -1066,20 +1189,29 @@ fn pick_option(options: &[PermOption], allow: bool, always: bool) -> Option<Stri
     } else {
         ("reject_once", "reject_always", "reject")
     };
-    let order = if always { [forever, once] } else { [once, forever] };
+    let order = if always {
+        [forever, once]
+    } else {
+        [once, forever]
+    };
     for k in order {
         if let Some(o) = options.iter().find(|o| o.kind == k) {
             return Some(o.id.clone());
         }
     }
-    options.iter().find(|o| o.kind.starts_with(prefix)).map(|o| o.id.clone())
+    options
+        .iter()
+        .find(|o| o.kind.starts_with(prefix))
+        .map(|o| o.id.clone())
 }
 
 fn chunk_text(u: &Value) -> Option<String> {
     let c = u.get("content")?;
     match s(c, "type") {
         Some("text") => s(c, "text").map(str::to_string),
-        Some("resource_link") => s(c, "name").or_else(|| s(c, "uri")).map(|n| format!("[{n}]")),
+        Some("resource_link") => s(c, "name")
+            .or_else(|| s(c, "uri"))
+            .map(|n| format!("[{n}]")),
         _ => None,
     }
 }
@@ -1088,7 +1220,17 @@ fn chunk_text(u: &Value) -> Option<String> {
 fn permission_detail(tc: &Value) -> String {
     let title = s(tc, "title").unwrap_or("");
     if let Some(inp) = tc.get("rawInput").filter(|v| v.is_object()) {
-        for k in ["command", "cmd", "filepath", "filePath", "file_path", "path", "pattern", "url", "query"] {
+        for k in [
+            "command",
+            "cmd",
+            "filepath",
+            "filePath",
+            "file_path",
+            "path",
+            "pattern",
+            "url",
+            "query",
+        ] {
             if let Some(v) = s(inp, k) {
                 return truncate(&format!("{title}: {v}"), 400);
             }
@@ -1110,7 +1252,11 @@ fn tool_summary(u: &Value, ok: bool) -> String {
         for it in items {
             match s(it, "type") {
                 Some("content") => {
-                    if let Some(t) = it.get("content").and_then(|c| s(c, "text")).filter(|t| !t.trim().is_empty()) {
+                    if let Some(t) = it
+                        .get("content")
+                        .and_then(|c| s(c, "text"))
+                        .filter(|t| !t.trim().is_empty())
+                    {
                         return truncate(t.trim(), 300);
                     }
                 }
@@ -1161,13 +1307,21 @@ impl AcpCommand {
             .and_then(|s| s.to_str())
             .unwrap_or("acp")
             .to_string();
-        Self { program, args, env: Vec::new(), label }
+        Self {
+            program,
+            args,
+            env: Vec::new(),
+            label,
+        }
     }
 
     /// `opencode acp --cwd <cwd> [extra_args]`.
     pub fn opencode(cfg: &ThreadConfig) -> Result<Self> {
         let exe = opencode::resolve().ok_or_else(|| DriverError::NotFound("opencode".into()))?;
-        Ok(Self { label: "opencode".into(), ..Self::new(exe, opencode::acp_args(cfg)) })
+        Ok(Self {
+            label: "opencode".into(),
+            ..Self::new(exe, opencode::acp_args(cfg))
+        })
     }
 
     /// From a command line (`[AgentKind::Acp]`): program is looked up on PATH (the Antigravity
@@ -1186,7 +1340,10 @@ impl AcpCommand {
             .ok_or(DriverError::NotFound(prog))?;
         if agy {
             let label = "agy".to_string();
-            return Ok(Self { label, ..Self::new(exe, crate::antigravity::finalize_args(parts, cfg)) });
+            return Ok(Self {
+                label,
+                ..Self::new(exe, crate::antigravity::finalize_args(parts, cfg))
+            });
         }
         parts.extend(cfg.extra_args.iter().cloned());
         Ok(Self::new(exe, parts))
@@ -1207,7 +1364,8 @@ fn write_all(stdin: &Mutex<Option<ChildStdin>>, msgs: &[Value]) -> Result<()> {
     for m in msgs {
         let mut line = m.to_string();
         line.push('\n');
-        w.write_all(line.as_bytes()).map_err(|_| DriverError::Closed)?;
+        w.write_all(line.as_bytes())
+            .map_err(|_| DriverError::Closed)?;
     }
     w.flush().map_err(|_| DriverError::Closed)
 }
@@ -1231,7 +1389,11 @@ fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
 
 impl AcpDriver {
     /// Start `AgentKind::Acp { command }`.
-    pub fn spawn_command_line(command: &str, cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
+    pub fn spawn_command_line(
+        command: &str,
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+    ) -> Result<Self> {
         Self::spawn_command_line_with(command, cfg, tx, &SpawnOpts::default())
     }
 
@@ -1251,13 +1413,21 @@ impl AcpDriver {
     }
 
     /// [`spawn_opencode`](Self::spawn_opencode) with [`SpawnOpts`].
-    pub fn spawn_opencode_with(cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>, opts: &SpawnOpts) -> Result<Self> {
+    pub fn spawn_opencode_with(
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
         Self::spawn_with(&AcpCommand::opencode(cfg)?, cfg, tx, opts)
     }
 
     /// Start any ACP agent process and perform the handshake in the background; events
     /// (`SessionStarted`, ...) arrive on the receiver paired with `tx`.
-    pub fn spawn(cmd: &AcpCommand, cfg: &ThreadConfig, tx: UnboundedSender<AgentEvent>) -> Result<Self> {
+    pub fn spawn(
+        cmd: &AcpCommand,
+        cfg: &ThreadConfig,
+        tx: UnboundedSender<AgentEvent>,
+    ) -> Result<Self> {
         Self::spawn_with(cmd, cfg, tx, &SpawnOpts::default())
     }
 
@@ -1290,36 +1460,47 @@ impl AcpDriver {
         let label = cmd.label.clone();
         {
             let label = label.clone();
-            std::thread::Builder::new().name("acp-stderr".into()).spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(|l| l.ok()) {
-                    log::debug!("{label} stderr: {line}");
-                }
-            })?;
+            std::thread::Builder::new()
+                .name("acp-stderr".into())
+                .spawn(move || {
+                    for line in BufReader::new(stderr).lines().map_while(|l| l.ok()) {
+                        log::debug!("{label} stderr: {line}");
+                    }
+                })?;
         }
 
         {
-            let (session, stdin, child, tx) = (session.clone(), stdin.clone(), child.clone(), tx.clone());
+            let (session, stdin, child, tx) =
+                (session.clone(), stdin.clone(), child.clone(), tx.clone());
             let lines = coalesce::spawn_line_reader("acp-stdout-io", stdout)?;
-            std::thread::Builder::new().name("acp-stdout".into()).spawn(move || {
-                let mut co = Coalescer::new(tx.clone());
-                let alive = coalesce::pump(&lines, &mut co, |line| {
-                    let step = session.lock().on_line(line);
-                    if !step.outgoing.is_empty() {
-                        if let Err(e) = write_all(&stdin, &step.outgoing) {
-                            log::warn!("{label}: write failed: {e}");
+            std::thread::Builder::new()
+                .name("acp-stdout".into())
+                .spawn(move || {
+                    let mut co = Coalescer::new(tx.clone());
+                    let alive = coalesce::pump(&lines, &mut co, |line| {
+                        let step = session.lock().on_line(line);
+                        if !step.outgoing.is_empty() {
+                            if let Err(e) = write_all(&stdin, &step.outgoing) {
+                                log::warn!("{label}: write failed: {e}");
+                            }
                         }
+                        step.events
+                    });
+                    if !alive {
+                        return;
                     }
-                    step.events
-                });
-                if !alive {
-                    return;
-                }
-                let code = wait_exit(&child, Duration::from_secs(5));
-                let _ = tx.unbounded_send(AgentEvent::Exited { code });
-            })?;
+                    let code = wait_exit(&child, Duration::from_secs(5));
+                    let _ = tx.unbounded_send(AgentEvent::Exited { code });
+                })?;
         }
 
-        Ok(Self { session, stdin, child, tx, pid })
+        Ok(Self {
+            session,
+            stdin,
+            child,
+            tx,
+            pid,
+        })
     }
 
     fn apply(&self, step: Step) -> Result<()> {
@@ -1361,10 +1542,11 @@ impl AgentDriver for AcpDriver {
     }
 
     fn approve_with(&mut self, id: &str, decision: ApprovalDecision) -> Result<()> {
-        let step = self
-            .session
-            .lock()
-            .approve_with(id, decision.allows(), decision == ApprovalDecision::Always)?;
+        let step = self.session.lock().approve_with(
+            id,
+            decision.allows(),
+            decision == ApprovalDecision::Always,
+        )?;
         self.apply(step)
     }
 
@@ -1403,12 +1585,15 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> Vec<Value> {
-        std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR")))
-            .unwrap()
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect()
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
     }
 
     fn cfg() -> ThreadConfig {
@@ -1438,8 +1623,14 @@ mod tests {
 
     #[test]
     fn split_command_handles_quotes() {
-        assert_eq!(split_command(r#""C:\Program Files\x\g.exe" --acp  -v"#), vec![r"C:\Program Files\x\g.exe", "--acp", "-v"]);
-        assert_eq!(split_command("gemini --experimental-acp"), vec!["gemini", "--experimental-acp"]);
+        assert_eq!(
+            split_command(r#""C:\Program Files\x\g.exe" --acp  -v"#),
+            vec![r"C:\Program Files\x\g.exe", "--acp", "-v"]
+        );
+        assert_eq!(
+            split_command("gemini --experimental-acp"),
+            vec!["gemini", "--experimental-acp"]
+        );
         assert!(split_command("   ").is_empty());
     }
 
@@ -1463,7 +1654,13 @@ mod tests {
         assert_eq!(p["clientCapabilities"]["fs"]["writeTextFile"], true);
         assert_eq!(p["clientCapabilities"]["terminal"], false);
         let (_, ev) = ready(&cfg());
-        assert_eq!(ev, vec![AgentEvent::SessionStarted { session_id: "s1".into(), model: None }]);
+        assert_eq!(
+            ev,
+            vec![AgentEvent::SessionStarted {
+                session_id: "s1".into(),
+                model: None
+            }]
+        );
     }
 
     #[test]
@@ -1506,13 +1703,17 @@ mod tests {
         assert_eq!(opened.outgoing.len(), 1, "one setup request at a time");
         assert_eq!(opened.outgoing[0]["method"], "session/set_config_option");
         assert_eq!(opened.outgoing[0]["params"]["configId"], "model");
-        assert_eq!(opened.outgoing[0]["params"]["value"], "anthropic/claude-sonnet-5-5");
+        assert_eq!(
+            opened.outgoing[0]["params"]["value"],
+            "anthropic/claude-sonnet-5-5"
+        );
         let id = opened.outgoing[0]["id"].clone();
         let after_model = sess.on_message(&json!({"id":id,"result":{}}));
         assert_eq!(after_model.outgoing[0]["params"]["configId"], "mode");
         assert_eq!(after_model.outgoing[0]["params"]["value"], "plan");
         let id = after_model.outgoing[0]["id"].clone();
-        let after_mode = sess.on_message(&json!({"id":id,"error":{"code":-32602,"message":"nope"}}));
+        let after_mode =
+            sess.on_message(&json!({"id":id,"error":{"code":-32602,"message":"nope"}}));
         // a failing setup request does not block the thread: the queued prompt goes out
         assert_eq!(after_mode.outgoing[0]["method"], "session/prompt");
         assert_eq!(after_mode.outgoing[0]["params"]["prompt"][0]["text"], "hi");
@@ -1536,42 +1737,107 @@ mod tests {
         let sent = sess.user_message("go");
         assert_eq!(sent.events, vec![AgentEvent::Status(AgentStatus::Working)]);
         assert_eq!(sent.outgoing[0]["method"], "session/prompt");
-        let thought = update(&mut sess, json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hm"}}));
-        assert_eq!(thought.events, vec![AgentEvent::Thinking { text: "hm".into(), delta: true }]);
-        let msg = update(&mut sess, json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hel"}}));
-        assert_eq!(msg.events, vec![AgentEvent::Text { text: "Hel".into(), delta: true }]);
-        let user = update(&mut sess, json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"echo"}}));
+        let thought = update(
+            &mut sess,
+            json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hm"}}),
+        );
+        assert_eq!(
+            thought.events,
+            vec![AgentEvent::Thinking {
+                text: "hm".into(),
+                delta: true
+            }]
+        );
+        let msg = update(
+            &mut sess,
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hel"}}),
+        );
+        assert_eq!(
+            msg.events,
+            vec![AgentEvent::Text {
+                text: "Hel".into(),
+                delta: true
+            }]
+        );
+        let user = update(
+            &mut sess,
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"echo"}}),
+        );
         assert!(user.events.is_empty());
-        let plan = update(&mut sess, json!({"sessionUpdate":"plan","entries":[
+        let plan = update(
+            &mut sess,
+            json!({"sessionUpdate":"plan","entries":[
             {"content":"a","priority":"high","status":"completed"},
             {"content":"b","priority":"low","status":"in_progress"},
-            {"content":"c","priority":"low","status":"pending"}]}));
+            {"content":"c","priority":"low","status":"pending"}]}),
+        );
         assert_eq!(
             plan.events,
-            vec![AgentEvent::Plan { tasks: vec![
-                ("a".into(), TaskState::Done), ("b".into(), TaskState::InProgress), ("c".into(), TaskState::Pending)] }]
+            vec![AgentEvent::Plan {
+                tasks: vec![
+                    ("a".into(), TaskState::Done),
+                    ("b".into(), TaskState::InProgress),
+                    ("c".into(), TaskState::Pending)
+                ]
+            }]
         );
     }
 
     #[test]
     fn tool_call_lifecycle() {
         let (mut sess, _) = ready(&cfg());
-        let c = update(&mut sess, json!({"sessionUpdate":"tool_call","toolCallId":"t1","title":"bash","kind":"execute","status":"pending","rawInput":{"command":"ls"}}));
+        let c = update(
+            &mut sess,
+            json!({"sessionUpdate":"tool_call","toolCallId":"t1","title":"bash","kind":"execute","status":"pending","rawInput":{"command":"ls"}}),
+        );
         assert_eq!(
             c.events,
-            vec![AgentEvent::ToolCall { id: "t1".into(), kind: ToolKind::Command, title: "bash".into(), input_json: json!({"command":"ls"}) }]
+            vec![AgentEvent::ToolCall {
+                id: "t1".into(),
+                kind: ToolKind::Command,
+                title: "bash".into(),
+                input_json: json!({"command":"ls"})
+            }]
         );
-        let run = update(&mut sess, json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"in_progress"}));
+        let run = update(
+            &mut sess,
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"in_progress"}),
+        );
         assert!(run.events.is_empty());
-        let done = update(&mut sess, json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed",
-            "content":[{"type":"content","content":{"type":"text","text":"a.txt\nb.txt"}}]}));
-        assert_eq!(done.events, vec![AgentEvent::ToolResult { id: "t1".into(), ok: true, summary: "a.txt\nb.txt".into() }]);
-        let dup = update(&mut sess, json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}));
+        let done = update(
+            &mut sess,
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed",
+            "content":[{"type":"content","content":{"type":"text","text":"a.txt\nb.txt"}}]}),
+        );
+        assert_eq!(
+            done.events,
+            vec![AgentEvent::ToolResult {
+                id: "t1".into(),
+                ok: true,
+                summary: "a.txt\nb.txt".into()
+            }]
+        );
+        let dup = update(
+            &mut sess,
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}),
+        );
         assert!(dup.events.is_empty(), "result only once");
         // update without a prior announcement synthesizes the call, then fails it
-        let orphan = update(&mut sess, json!({"sessionUpdate":"tool_call_update","toolCallId":"t2","status":"failed","kind":"read","title":"read","rawOutput":{"error":"boom"}}));
-        assert!(matches!(&orphan.events[0], AgentEvent::ToolCall { id, kind: ToolKind::Read, .. } if id == "t2"));
-        assert_eq!(orphan.events[1], AgentEvent::ToolResult { id: "t2".into(), ok: false, summary: "boom".into() });
+        let orphan = update(
+            &mut sess,
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"t2","status":"failed","kind":"read","title":"read","rawOutput":{"error":"boom"}}),
+        );
+        assert!(
+            matches!(&orphan.events[0], AgentEvent::ToolCall { id, kind: ToolKind::Read, .. } if id == "t2")
+        );
+        assert_eq!(
+            orphan.events[1],
+            AgentEvent::ToolResult {
+                id: "t2".into(),
+                ok: false,
+                summary: "boom".into()
+            }
+        );
     }
 
     #[test]
@@ -1579,23 +1845,40 @@ mod tests {
         let (mut sess, _) = ready(&cfg());
         let sent = sess.user_message("go");
         let pid = sent.outgoing[0]["id"].clone();
-        update(&mut sess, json!({"sessionUpdate":"usage_update","used":100,"size":200000,"cost":{"amount":0.25,"currency":"USD"}}));
+        update(
+            &mut sess,
+            json!({"sessionUpdate":"usage_update","used":100,"size":200000,"cost":{"amount":0.25,"currency":"USD"}}),
+        );
         let done = sess.on_message(&json!({"id":pid,"result":{"stopReason":"end_turn","usage":{
             "totalTokens":50,"inputTokens":10,"outputTokens":20,"thoughtTokens":5,"cachedReadTokens":7,"cachedWriteTokens":3}}}));
         assert_eq!(
             done.events,
             vec![
-                AgentEvent::Usage { input: 10, output: 25, cache_create: 3, cache_read: 7, cost_usd: Some(0.25), context_window: Some(200000) },
+                AgentEvent::Usage {
+                    input: 10,
+                    output: 25,
+                    cache_create: 3,
+                    cache_read: 7,
+                    cost_usd: Some(0.25),
+                    context_window: Some(200000)
+                },
                 AgentEvent::Status(AgentStatus::Done),
             ]
         );
         // second turn: cumulative 0.40 -> increment 0.15
         let sent = sess.user_message("again");
         let pid = sent.outgoing[0]["id"].clone();
-        update(&mut sess, json!({"sessionUpdate":"usage_update","used":1,"size":200000,"cost":{"amount":0.40,"currency":"USD"}}));
+        update(
+            &mut sess,
+            json!({"sessionUpdate":"usage_update","used":1,"size":200000,"cost":{"amount":0.40,"currency":"USD"}}),
+        );
         let done = sess.on_message(&json!({"id":pid,"result":{"stopReason":"end_turn"}}));
         match &done.events[0] {
-            AgentEvent::Usage { cost_usd: Some(c), input: 0, .. } => assert!((c - 0.15).abs() < 1e-9),
+            AgentEvent::Usage {
+                cost_usd: Some(c),
+                input: 0,
+                ..
+            } => assert!((c - 0.15).abs() < 1e-9),
             other => panic!("{other:?}"),
         }
     }
@@ -1605,9 +1888,15 @@ mod tests {
         let (mut sess, _) = ready(&cfg());
         let sent = sess.user_message("go");
         let pid = sent.outgoing[0]["id"].clone();
-        update(&mut sess, json!({"sessionUpdate":"usage_update","used":1,"size":2,"cost":{"amount":9.0,"currency":"EUR"}}));
+        update(
+            &mut sess,
+            json!({"sessionUpdate":"usage_update","used":1,"size":2,"cost":{"amount":9.0,"currency":"EUR"}}),
+        );
         let done = sess.on_message(&json!({"id":pid,"result":{"stopReason":"refusal"}}));
-        assert!(matches!(&done.events[..], [AgentEvent::Status(AgentStatus::Error(_))]));
+        assert!(matches!(
+            &done.events[..],
+            [AgentEvent::Status(AgentStatus::Error(_))]
+        ));
     }
 
     #[test]
@@ -1619,7 +1908,10 @@ mod tests {
         assert!(second.outgoing.is_empty());
         let done = sess.on_message(&json!({"id":pid,"result":{"stopReason":"end_turn"}}));
         assert_eq!(done.outgoing[0]["params"]["prompt"][0]["text"], "two");
-        assert!(!done.events.contains(&AgentEvent::Status(AgentStatus::Done)), "still working on the queued message");
+        assert!(
+            !done.events.contains(&AgentEvent::Status(AgentStatus::Done)),
+            "still working on the queued message"
+        );
     }
 
     fn perm_request(id: i64, kind: &str) -> Value {
@@ -1637,22 +1929,34 @@ mod tests {
         let (mut sess, _) = ready(&cfg());
         let req = sess.on_message(&perm_request(7, "execute"));
         assert!(req.outgoing.is_empty());
-        let AgentEvent::ApprovalRequest { id, tool, detail } = &req.events[0] else { panic!("{:?}", req.events) };
+        let AgentEvent::ApprovalRequest { id, tool, detail } = &req.events[0] else {
+            panic!("{:?}", req.events)
+        };
         assert_eq!(tool, "bash");
         assert_eq!(detail, "bash: rm -rf x");
-        assert_eq!(req.events[1], AgentEvent::Status(AgentStatus::WaitingForInput));
+        assert_eq!(
+            req.events[1],
+            AgentEvent::Status(AgentStatus::WaitingForInput)
+        );
         let ans = sess.approve(id, true).unwrap();
         assert_eq!(ans.outgoing[0]["id"], 7);
-        assert_eq!(ans.outgoing[0]["result"]["outcome"], json!({"outcome":"selected","optionId":"once"}));
+        assert_eq!(
+            ans.outgoing[0]["result"]["outcome"],
+            json!({"outcome":"selected","optionId":"once"})
+        );
         assert!(sess.approve(id, true).is_err(), "answered once");
 
         let req = sess.on_message(&perm_request(8, "execute"));
-        let AgentEvent::ApprovalRequest { id, .. } = &req.events[0] else { panic!() };
+        let AgentEvent::ApprovalRequest { id, .. } = &req.events[0] else {
+            panic!()
+        };
         let ans = sess.approve(id, false).unwrap();
         assert_eq!(ans.outgoing[0]["result"]["outcome"]["optionId"], "reject");
 
         let req = sess.on_message(&perm_request(9, "execute"));
-        let AgentEvent::ApprovalRequest { id, .. } = &req.events[0] else { panic!() };
+        let AgentEvent::ApprovalRequest { id, .. } = &req.events[0] else {
+            panic!()
+        };
         let ans = sess.approve_with(id, true, true).unwrap();
         assert_eq!(ans.outgoing[0]["result"]["outcome"]["optionId"], "always");
     }
@@ -1663,9 +1967,14 @@ mod tests {
         let mut r = perm_request(3, "execute");
         r["params"]["options"] = json!([{"optionId":"o","kind":"allow_once"}]);
         let req = sess.on_message(&r);
-        let AgentEvent::ApprovalRequest { id, .. } = &req.events[0] else { panic!() };
+        let AgentEvent::ApprovalRequest { id, .. } = &req.events[0] else {
+            panic!()
+        };
         let ans = sess.approve(id, false).unwrap();
-        assert_eq!(ans.outgoing[0]["result"]["outcome"], json!({"outcome":"cancelled"}));
+        assert_eq!(
+            ans.outgoing[0]["result"]["outcome"],
+            json!({"outcome":"cancelled"})
+        );
     }
 
     #[test]
@@ -1686,9 +1995,15 @@ mod tests {
             match expect {
                 Some(opt) => {
                     assert!(req.events.is_empty(), "{mode:?}/{kind}");
-                    assert_eq!(req.outgoing[0]["result"]["outcome"]["optionId"], opt, "{mode:?}/{kind}");
+                    assert_eq!(
+                        req.outgoing[0]["result"]["outcome"]["optionId"], opt,
+                        "{mode:?}/{kind}"
+                    );
                 }
-                None => assert!(matches!(req.events[0], AgentEvent::ApprovalRequest { .. }), "{mode:?}/{kind}"),
+                None => assert!(
+                    matches!(req.events[0], AgentEvent::ApprovalRequest { .. }),
+                    "{mode:?}/{kind}"
+                ),
             }
         }
     }
@@ -1705,7 +2020,10 @@ mod tests {
             .iter()
             .any(|m| m.get("method").and_then(Value::as_str) == Some("session/cancel")));
         let cancelled = step.outgoing.iter().find(|m| m["id"] == 5).unwrap();
-        assert_eq!(cancelled["result"]["outcome"], json!({"outcome":"cancelled"}));
+        assert_eq!(
+            cancelled["result"]["outcome"],
+            json!({"outcome":"cancelled"})
+        );
         // the agent ends the prompt with `cancelled`; the dropped queue is not dispatched
         let done = sess.on_message(&json!({"id":2,"result":{"stopReason":"cancelled"}}));
         assert!(done.outgoing.is_empty());
@@ -1723,9 +2041,13 @@ mod tests {
         let mut sess = AcpSession::new(&cfg());
         sess.start();
         sess.on_message(&json!({"id":0,"result":{"authMethods":[{"id":"opencode-login"}]}}));
-        let r = sess.on_message(&json!({"id":1,"error":{"code":-32000,"message":"Authentication required"}}));
+        let r = sess.on_message(
+            &json!({"id":1,"error":{"code":-32000,"message":"Authentication required"}}),
+        );
         match &r.events[0] {
-            AgentEvent::Status(AgentStatus::Error(m)) => assert!(m.contains("opencode-login"), "{m}"),
+            AgentEvent::Status(AgentStatus::Error(m)) => {
+                assert!(m.contains("opencode-login"), "{m}")
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -1743,12 +2065,22 @@ mod tests {
         // load only: replayed history is swallowed until the response
         let mut sess = AcpSession::new(&c);
         sess.start();
-        let r = sess.on_message(&json!({"id":0,"result":{"agentCapabilities":{"loadSession":true}}}));
+        let r =
+            sess.on_message(&json!({"id":0,"result":{"agentCapabilities":{"loadSession":true}}}));
         assert_eq!(r.outgoing[0]["method"], "session/load");
-        let replay = update(&mut sess, json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old"}}));
+        let replay = update(
+            &mut sess,
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old"}}),
+        );
         assert!(replay.events.is_empty());
         let opened = sess.on_message(&json!({"id":1,"result":{}}));
-        assert_eq!(opened.events[0], AgentEvent::SessionStarted { session_id: "old".into(), model: None });
+        assert_eq!(
+            opened.events[0],
+            AgentEvent::SessionStarted {
+                session_id: "old".into(),
+                model: None
+            }
+        );
         // neither
         let mut sess = AcpSession::new(&c);
         sess.start();
@@ -1759,7 +2091,8 @@ mod tests {
     #[test]
     fn unknown_agent_requests_get_method_not_found() {
         let (mut sess, _) = ready(&cfg());
-        let r = sess.on_message(&json!({"jsonrpc":"2.0","id":"x1","method":"terminal/create","params":{}}));
+        let r = sess
+            .on_message(&json!({"jsonrpc":"2.0","id":"x1","method":"terminal/create","params":{}}));
         assert_eq!(r.outgoing[0]["id"], "x1");
         assert_eq!(r.outgoing[0]["error"]["code"], ERR_METHOD_NOT_FOUND);
     }
@@ -1781,19 +2114,32 @@ mod tests {
         std::fs::write(&outside, "secret").unwrap();
         let (mut sess, _) = ready(&ThreadConfig::new(&ws));
         let ask = |sess: &mut AcpSession, params: Value| {
-            sess.on_message(&json!({"jsonrpc":"2.0","id":99,"method":"fs/read_text_file","params":params})).outgoing.remove(0)
+            sess.on_message(
+                &json!({"jsonrpc":"2.0","id":99,"method":"fs/read_text_file","params":params}),
+            )
+            .outgoing
+            .remove(0)
         };
         let ok = ask(&mut sess, json!({"sessionId":"s1","path":ws.join("a.txt")}));
         assert_eq!(ok["result"]["content"], "l1\nl2\nl3\n");
-        let slice = ask(&mut sess, json!({"sessionId":"s1","path":ws.join("a.txt"),"line":2,"limit":1}));
+        let slice = ask(
+            &mut sess,
+            json!({"sessionId":"s1","path":ws.join("a.txt"),"line":2,"limit":1}),
+        );
         assert_eq!(slice["result"]["content"], "l2\n");
         let out = ask(&mut sess, json!({"sessionId":"s1","path":outside}));
         assert_eq!(out["error"]["code"], ERR_INVALID_PARAMS);
-        let dotdot = ask(&mut sess, json!({"sessionId":"s1","path":ws.join("sub").join("..").join("..").join("agents_driver_acp_read_outside.txt")}));
+        let dotdot = ask(
+            &mut sess,
+            json!({"sessionId":"s1","path":ws.join("sub").join("..").join("..").join("agents_driver_acp_read_outside.txt")}),
+        );
         assert!(dotdot.get("error").is_some(), "{dotdot}");
         let rel = ask(&mut sess, json!({"sessionId":"s1","path":"a.txt"}));
         assert_eq!(rel["error"]["code"], ERR_INVALID_PARAMS);
-        let missing = ask(&mut sess, json!({"sessionId":"s1","path":ws.join("nope.txt")}));
+        let missing = ask(
+            &mut sess,
+            json!({"sessionId":"s1","path":ws.join("nope.txt")}),
+        );
         assert_eq!(missing["error"]["code"], ERR_NOT_FOUND);
         let _ = std::fs::remove_dir_all(&ws);
         let _ = std::fs::remove_file(outside);
@@ -1803,14 +2149,14 @@ mod tests {
     fn fs_write_needs_approval_unless_pre_approved_or_full() {
         let ws = workspace("write");
         let target = ws.join("out.txt");
-        let write_req = |id: i64, path: &Path, content: &str| {
-            json!({"jsonrpc":"2.0","id":id,"method":"fs/write_text_file","params":{"sessionId":"s1","path":path,"content":content}})
-        };
+        let write_req = |id: i64, path: &Path, content: &str| json!({"jsonrpc":"2.0","id":id,"method":"fs/write_text_file","params":{"sessionId":"s1","path":path,"content":content}});
         // 1. surfaced as ApprovalRequest, written only after approve(true)
         let (mut sess, _) = ready(&ThreadConfig::new(&ws));
         let r = sess.on_message(&write_req(20, &target, "hello"));
         assert!(r.outgoing.is_empty());
-        let AgentEvent::ApprovalRequest { id, tool, .. } = &r.events[0] else { panic!("{:?}", r.events) };
+        let AgentEvent::ApprovalRequest { id, tool, .. } = &r.events[0] else {
+            panic!("{:?}", r.events)
+        };
         assert_eq!(tool, "write_text_file");
         assert!(!target.exists());
         let ans = sess.approve(id, true).unwrap();
@@ -1819,7 +2165,9 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
         // 2. denied
         let r = sess.on_message(&write_req(21, &ws.join("denied.txt"), "x"));
-        let AgentEvent::ApprovalRequest { id, .. } = &r.events[0] else { panic!() };
+        let AgentEvent::ApprovalRequest { id, .. } = &r.events[0] else {
+            panic!()
+        };
         let ans = sess.approve(id, false).unwrap();
         assert!(ans.outgoing[0].get("error").is_some());
         assert!(!ws.join("denied.txt").exists());
@@ -1833,12 +2181,17 @@ mod tests {
         let mut p = perm_request(30, "edit");
         p["params"]["toolCall"]["rawInput"] = json!({"filepath": ws.join("sub").join("e.txt")});
         let r = sess.on_message(&p);
-        let AgentEvent::ApprovalRequest { id, .. } = &r.events[0] else { panic!() };
+        let AgentEvent::ApprovalRequest { id, .. } = &r.events[0] else {
+            panic!()
+        };
         sess.approve(id, true).unwrap();
         let r = sess.on_message(&write_req(31, &ws.join("sub").join("e.txt"), "edited"));
         assert!(r.events.is_empty());
         assert!(r.outgoing[0].get("error").is_none());
-        assert_eq!(std::fs::read_to_string(ws.join("sub").join("e.txt")).unwrap(), "edited");
+        assert_eq!(
+            std::fs::read_to_string(ws.join("sub").join("e.txt")).unwrap(),
+            "edited"
+        );
         // 5. Full mode writes straight away; ReadOnly refuses
         let mut c = ThreadConfig::new(&ws);
         c.permission_mode = PermissionMode::Full;
@@ -1854,7 +2207,10 @@ mod tests {
 
     #[test]
     fn session_new_models_are_listed_and_effort_support_is_per_agent() {
-        let line = include_str!("../tests/fixtures/opencode_acp_handshake.jsonl").lines().nth(1).unwrap();
+        let line = include_str!("../tests/fixtures/opencode_acp_handshake.jsonl")
+            .lines()
+            .nth(1)
+            .unwrap();
         let v: Value = serde_json::from_str(line).unwrap();
         let models = parse_models(&v["result"]);
         assert_eq!(models.len(), 2);
@@ -1871,7 +2227,9 @@ mod tests {
         assert!(crate::supports_effort(&AgentKind::ClaudeCode));
         assert!(crate::supports_effort(&AgentKind::Codex));
         assert!(!crate::supports_effort(&AgentKind::OpenCode));
-        assert!(!crate::supports_effort(&AgentKind::Acp { command: "gemini --acp".into() }));
+        assert!(!crate::supports_effort(&AgentKind::Acp {
+            command: "gemini --acp".into()
+        }));
     }
 
     // -- Antigravity (agy) ----------------------------------------------------
@@ -1888,7 +2246,10 @@ mod tests {
         let events = std::mem::take(&mut step.events);
         let mut sent = Vec::new();
         while let Some(m) = step.outgoing.pop() {
-            sent.push((m["method"].as_str().unwrap().to_string(), m["params"].clone()));
+            sent.push((
+                m["method"].as_str().unwrap().to_string(),
+                m["params"].clone(),
+            ));
             step = sess.on_message(&json!({"jsonrpc":"2.0","id":m["id"],"result":{}}));
         }
         // the informational notifications that follow are ignored without a trace
@@ -1902,9 +2263,20 @@ mod tests {
     fn recorded_antigravity_handshake_lists_models_with_efforts() {
         let (sess, ev, sent) = agy_replay(&cfg());
         assert!(sent.is_empty(), "defaults need no setup request: {sent:?}");
-        assert_eq!(sess.session_id(), Some("00000000-0000-4000-8000-000000000001"));
+        assert_eq!(
+            sess.session_id(),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
         assert_eq!(sess.modes, vec!["default", "accept-edits", "auto", "plan"]);
-        assert_eq!(sess.auth_methods, vec!["oauth-personal", "oauth-business", "gemini-api-key", "agent-platform"]);
+        assert_eq!(
+            sess.auth_methods,
+            vec![
+                "oauth-personal",
+                "oauth-business",
+                "gemini-api-key",
+                "agent-platform"
+            ]
+        );
         assert!(sess.can_load && sess.can_resume);
         assert_eq!(sess.context_size, Some(1_048_576));
         assert_eq!(
@@ -1914,7 +2286,9 @@ mod tests {
                 model: Some("gemini-4-neon".into())
             }
         );
-        let AgentEvent::Models { models, current } = &ev[1] else { panic!("no Models: {ev:?}") };
+        let AgentEvent::Models { models, current } = &ev[1] else {
+            panic!("no Models: {ev:?}")
+        };
         assert_eq!(current.as_deref(), Some("gemini-4-neon"));
         assert_eq!(models.len(), 9);
         assert_eq!(models[0].id, "gemini-4-neon");
@@ -1922,11 +2296,21 @@ mod tests {
         assert_eq!(models[0].efforts, ["low", "medium", "high", "xhigh"]);
         assert_eq!(models[0].default_effort.as_deref(), Some("high"));
         let opus = models.iter().find(|m| m.id == "claude-opus-5-5").unwrap();
-        assert_eq!(opus.efforts, ["low", "medium", "high"], "only the variants the agent lists");
+        assert_eq!(
+            opus.efforts,
+            ["low", "medium", "high"],
+            "only the variants the agent lists"
+        );
         assert_eq!(opus.default_effort.as_deref(), Some("high"));
-        let oss = models.iter().find(|m| m.id == "gpt-oss-120b-medium").unwrap();
+        let oss = models
+            .iter()
+            .find(|m| m.id == "gpt-oss-120b-medium")
+            .unwrap();
         assert!(oss.efforts.is_empty());
-        let orch = models.iter().find(|m| m.id == "gemini-pro-orchestrator-neon").unwrap();
+        let orch = models
+            .iter()
+            .find(|m| m.id == "gemini-pro-orchestrator-neon")
+            .unwrap();
         assert!(orch.efforts.is_empty());
     }
 
@@ -1936,18 +2320,36 @@ mod tests {
         let mut c = cfg();
         c.model = Some("claude-opus-5-5-medium".into());
         let (_, _, sent) = agy_replay(&c);
-        let calls: Vec<_> = sent.iter().map(|(m, p)| (m.as_str(), p["configId"].as_str().unwrap(), p["value"].as_str().unwrap())).collect();
+        let calls: Vec<_> = sent
+            .iter()
+            .map(|(m, p)| {
+                (
+                    m.as_str(),
+                    p["configId"].as_str().unwrap(),
+                    p["value"].as_str().unwrap(),
+                )
+            })
+            .collect();
         assert_eq!(
             calls,
-            [("session/set_config_option", "model", "claude-opus-5-5"), ("session/set_config_option", "thought_level", "medium")]
+            [
+                ("session/set_config_option", "model", "claude-opus-5-5"),
+                ("session/set_config_option", "thought_level", "medium")
+            ]
         );
         // explicit effort wins over the suffix; `max` maps to the agent's top level
         c.effort = Some("max".into());
         let (_, _, sent) = agy_replay(&c);
-        assert_eq!(sent[1].1["value"], "high", "opus lists no `xhigh` variant, so `max` stops at `high`");
+        assert_eq!(
+            sent[1].1["value"], "high",
+            "opus lists no `xhigh` variant, so `max` stops at `high`"
+        );
         c.model = Some("gemini-4-argon".into());
         let (_, _, sent) = agy_replay(&c);
-        assert_eq!(sent[1].1["value"], "high", "argon lists low/medium/high only");
+        assert_eq!(
+            sent[1].1["value"], "high",
+            "argon lists low/medium/high only"
+        );
         c.model = Some("gemini-4-hydrogen".into());
         let (_, _, sent) = agy_replay(&c);
         assert_eq!(sent[1].1["value"], "xhigh", "hydrogen has an xhigh variant");
@@ -1964,9 +2366,25 @@ mod tests {
         let calls = |mode| {
             let mut c = cfg();
             c.permission_mode = mode;
-            agy_replay(&c).2.iter().map(|(m, p)| (m.clone(), p["configId"].as_str().unwrap_or("").to_string(), p["value"].as_str().unwrap_or("").to_string())).collect::<Vec<_>>()
+            agy_replay(&c)
+                .2
+                .iter()
+                .map(|(m, p)| {
+                    (
+                        m.clone(),
+                        p["configId"].as_str().unwrap_or("").to_string(),
+                        p["value"].as_str().unwrap_or("").to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
         };
-        let set = |v: &str| vec![("session/set_config_option".to_string(), "mode".to_string(), v.to_string())];
+        let set = |v: &str| {
+            vec![(
+                "session/set_config_option".to_string(),
+                "mode".to_string(),
+                v.to_string(),
+            )]
+        };
         assert_eq!(calls(PermissionMode::Ask), vec![]);
         assert_eq!(calls(PermissionMode::Full), vec![]);
         assert_eq!(calls(PermissionMode::AcceptEdits), set("accept-edits"));
@@ -1976,7 +2394,9 @@ mod tests {
     #[test]
     fn antigravity_effort_is_not_a_cli_flag() {
         // `agy acp` rejects --effort (verified), so the command line never carries it.
-        let Some(exe) = crate::antigravity::resolve() else { return };
+        let Some(exe) = crate::antigravity::resolve() else {
+            return;
+        };
         let mut c = cfg();
         c.effort = Some("high".into());
         let line = crate::antigravity::acp_command_line(&exe, None, &[]);

@@ -18,9 +18,9 @@
 use std::cell::{Cell, RefCell};
 
 use gpui::{
-    App, BorderStyle, Bounds, Corners, Div, Edges, ElementId, FocusHandle, InteractiveElement, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Rgba, SharedString, Stateful, Styled, Window, actions,
-    canvas, prelude::*, px, quad, transparent_black,
+    App, BorderStyle, Bounds, Corners, Div, Edges, ElementId, FocusHandle, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Rgba, SharedString, Stateful,
+    Styled, Window, actions, canvas, prelude::*, px, quad, transparent_black,
 };
 
 actions!(
@@ -82,7 +82,10 @@ pub fn ring_visible(focused: bool, modality: InputModality, forced: bool) -> boo
 pub(crate) fn install_modality_tracking(cx: &mut App) {
     cx.intercept_keystrokes(|ev, window, cx| {
         let k = &ev.keystroke;
-        if matches!(k.key.as_str(), "shift" | "control" | "alt" | "platform" | "function") {
+        if matches!(
+            k.key.as_str(),
+            "shift" | "control" | "alt" | "platform" | "function"
+        ) {
             return;
         }
         if set_input_modality(InputModality::Keyboard) {
@@ -102,24 +105,36 @@ pub(crate) fn install_modality_tracking(cx: &mut App) {
 }
 
 fn focus_key(id: &ElementId) -> ElementId {
-    ElementId::NamedChild(Box::new(id.clone()), SharedString::new_static("ui-kit-focus"))
+    ElementId::NamedChild(
+        Box::new(id.clone()),
+        SharedString::new_static("ui-kit-focus"),
+    )
 }
 
 /// The tab-stop handle of the component with element id `id`, kept across frames.
 pub(crate) fn handle(window: &mut Window, cx: &mut App, id: &ElementId) -> FocusHandle {
     crate::init(cx);
-    let state = window.use_keyed_state(focus_key(id), cx, |_, cx| cx.focus_handle().tab_index(0).tab_stop(true));
+    let state = window.use_keyed_state(focus_key(id), cx, |_, cx| {
+        cx.focus_handle().tab_index(0).tab_stop(true)
+    });
     state.read(cx).clone()
 }
 
 /// The ring, as the last child of a `relative` control: paints nothing unless
 /// [`ring_visible`], and while painted it also records mouse presses (pointer modality).
-pub(crate) fn ring_element(handle: FocusHandle, id: String, radius: f32, color: Rgba) -> impl IntoElement {
+pub(crate) fn ring_element(
+    handle: FocusHandle,
+    id: String,
+    radius: f32,
+    color: Rgba,
+) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds: Bounds<Pixels>, (), window, _| {
             window.on_mouse_event(|_: &MouseDownEvent, phase, window, _| {
-                if phase == gpui::DispatchPhase::Capture && set_input_modality(InputModality::Pointer) {
+                if phase == gpui::DispatchPhase::Capture
+                    && set_input_modality(InputModality::Pointer)
+                {
                     window.refresh();
                 }
             });
@@ -174,14 +189,19 @@ pub(crate) fn wire_with(
         .track_focus(&handle)
         .on_action(|_: &FocusNext, window, _| window.focus_next())
         .on_action(|_: &FocusPrev, window, _| window.focus_prev())
-        .when(!press_focuses, |d| d.on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default()))
+        .when(!press_focuses, |d| {
+            d.on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+        })
         .child(ring_element(handle, id.to_string(), radius, accent))
 }
 
 /// Binds `Tab` / `Shift+Tab` (called by [`init`](crate::init)).
 pub(crate) fn bind_keys(cx: &mut App) {
     use gpui::KeyBinding;
-    cx.bind_keys([KeyBinding::new("tab", FocusNext, None), KeyBinding::new("shift-tab", FocusPrev, None)]);
+    cx.bind_keys([
+        KeyBinding::new("tab", FocusNext, None),
+        KeyBinding::new("shift-tab", FocusPrev, None),
+    ]);
 }
 
 #[cfg(test)]
@@ -192,8 +212,14 @@ mod tests {
     fn the_ring_needs_keyboard_focus() {
         use InputModality::{Keyboard, Pointer};
         assert!(ring_visible(true, Keyboard, false));
-        assert!(!ring_visible(true, Pointer, false), "a mouse-focused control shows no ring");
-        assert!(!ring_visible(false, Keyboard, false), "an unfocused control shows no ring");
+        assert!(
+            !ring_visible(true, Pointer, false),
+            "a mouse-focused control shows no ring"
+        );
+        assert!(
+            !ring_visible(false, Keyboard, false),
+            "an unfocused control shows no ring"
+        );
         assert!(ring_visible(false, Pointer, true), "forced for screenshots");
     }
 

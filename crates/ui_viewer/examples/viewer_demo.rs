@@ -24,15 +24,15 @@ use std::process::Command;
 use std::time::Duration;
 
 use gpui::{
-    AnyView, App, AppContext as _, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, size,
+    AnyView, App, AppContext as _, Application, Bounds, Context, Entity, IntoElement, Render,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
 use theme::{Mode, Theme};
 use ui_kit::{Card, CardTone, Icon, Logo, Pill};
 use ui_viewer::{
-    AgentSession, AgentTouchesView, FileTreePanel, FileTreeProvider, FileViewer, GitMark, Touch, ViewerConfig,
-    ViewerEvent,
+    AgentSession, AgentTouchesView, FileTreePanel, FileTreeProvider, FileViewer, GitMark, Touch,
+    ViewerConfig, ViewerEvent,
 };
 
 struct Opts {
@@ -53,7 +53,10 @@ struct Opts {
 }
 
 fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
 }
 
 fn parse() -> Opts {
@@ -63,7 +66,9 @@ fn parse() -> Opts {
     let file = args
         .iter()
         .enumerate()
-        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !valued.contains(&args[*i - 1].as_str())))
+        .find(|(i, a)| {
+            !a.starts_with("--") && (*i == 0 || !valued.contains(&args[*i - 1].as_str()))
+        })
         .map(|(_, a)| PathBuf::from(a))
         .unwrap_or_else(|| PathBuf::from("crates/ui_viewer/examples/viewer_demo.rs"));
     let size = arg_value(&args, "--size")
@@ -72,8 +77,15 @@ fn parse() -> Opts {
         .unwrap_or((1280.0, 800.0));
     Opts {
         file,
-        root: arg_value(&args, "--root").map_or_else(|| std::env::current_dir().unwrap_or_default(), PathBuf::from),
-        mode: if flag("--light") { Mode::Light } else { Mode::Dark },
+        root: arg_value(&args, "--root").map_or_else(
+            || std::env::current_dir().unwrap_or_default(),
+            PathBuf::from,
+        ),
+        mode: if flag("--light") {
+            Mode::Light
+        } else {
+            Mode::Dark
+        },
         diff: flag("--diff"),
         split: flag("--split"),
         source: flag("--source"),
@@ -90,7 +102,12 @@ fn parse() -> Opts {
 
 /// `git status --porcelain` of `root` as tree markers.
 fn git_marks(root: &Path) -> HashMap<PathBuf, GitMark> {
-    let Ok(out) = Command::new("git").arg("-C").arg(root).args(["status", "--porcelain"]).output() else {
+    let Ok(out) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain"])
+        .output()
+    else {
         return HashMap::new();
     };
     String::from_utf8_lossy(&out.stdout)
@@ -122,7 +139,13 @@ struct Host {
 }
 
 impl Host {
-    fn open(&mut self, path: PathBuf, diff_base: Option<String>, diff: bool, cx: &mut Context<Self>) {
+    fn open(
+        &mut self,
+        path: PathBuf,
+        diff_base: Option<String>,
+        diff: bool,
+        cx: &mut Context<Self>,
+    ) {
         let cfg = ViewerConfig {
             project_root: Some(self.root.clone()),
             open_in_diff: diff,
@@ -137,7 +160,10 @@ impl Host {
     }
 
     fn watch(&self, viewer: &Entity<FileViewer>, cx: &mut Context<Self>) {
-        cx.subscribe(viewer, |_, _, ev: &ViewerEvent, _| eprintln!("viewer event: {ev:?}")).detach();
+        cx.subscribe(viewer, |_, _, ev: &ViewerEvent, _| {
+            eprintln!("viewer event: {ev:?}")
+        })
+        .detach();
     }
 }
 
@@ -145,7 +171,13 @@ impl Render for Host {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let c = t.colors;
-        let sidebar = Card::new(&t).tone(CardTone::Raised, &t).flex_none().w(px(272.0)).h_full().overflow_hidden().child(self.tree.clone());
+        let sidebar = Card::new(&t)
+            .tone(CardTone::Raised, &t)
+            .flex_none()
+            .w(px(272.0))
+            .h_full()
+            .overflow_hidden()
+            .child(self.tree.clone());
         let main: AnyView = match &self.main {
             Main::Viewer(v) => v.clone().into(),
             Main::Touches(v) => v.clone().into(),
@@ -159,7 +191,12 @@ impl Render for Host {
             .items_center()
             .gap(px(8.0))
             .child(Logo::new(t.mode).size(22.0))
-            .child(Pill::new("t-files", &t).icon(Icon::Files).label("Archivos").active(true));
+            .child(
+                Pill::new("t-files", &t)
+                    .icon(Icon::Files)
+                    .label("Archivos")
+                    .active(true),
+            );
         div()
             .size_full()
             .bg(c.bg)

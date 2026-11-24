@@ -60,7 +60,9 @@ mod tests {
 
     #[test]
     fn png() {
-        let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        let mut b = vec![
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+        ];
         b.extend(256u32.to_be_bytes());
         b.extend(128u32.to_be_bytes());
         assert_eq!(image_dimensions(&b), Some((256, 128)));
@@ -98,7 +100,10 @@ mod tests {
 
     #[test]
     fn unknown_data_is_none() {
-        assert_eq!(image_dimensions(b"hello world, definitely not an image"), None);
+        assert_eq!(
+            image_dimensions(b"hello world, definitely not an image"),
+            None
+        );
         assert_eq!(image_dimensions(&[]), None);
     }
 }

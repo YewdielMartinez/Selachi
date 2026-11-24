@@ -27,7 +27,11 @@ pub fn truncate_end(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let keep = max.max(2) - 1;
-    let mut out: String = chars[..keep].iter().collect::<String>().trim_end().to_string();
+    let mut out: String = chars[..keep]
+        .iter()
+        .collect::<String>()
+        .trim_end()
+        .to_string();
     out.push('…');
     out
 }
@@ -51,14 +55,23 @@ pub fn path_label(path: &str, budget: usize) -> PathLabel {
     };
     let total = path.chars().count();
     if total <= budget {
-        return PathLabel { dir: dir.to_string(), name: name.to_string() };
+        return PathLabel {
+            dir: dir.to_string(),
+            name: name.to_string(),
+        };
     }
     let name_len = name.chars().count();
     if name_len + 3 >= budget {
-        return PathLabel { dir: String::new(), name: truncate_middle(name, budget) };
+        return PathLabel {
+            dir: String::new(),
+            name: truncate_middle(name, budget),
+        };
     }
     let dir_budget = budget - name_len;
-    PathLabel { dir: truncate_middle(dir, dir_budget), name: name.to_string() }
+    PathLabel {
+        dir: truncate_middle(dir, dir_budget),
+        name: name.to_string(),
+    }
 }
 
 /// Status letter of a change (`M`, `A`, `D`, `R`, `C`, `T`).
@@ -75,7 +88,8 @@ pub fn change_letter(kind: ChangeKind) -> char {
 
 /// Seconds since the epoch (0 before it).
 pub fn unix_secs(t: SystemTime) -> i64 {
-    t.duration_since(UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+    t.duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// Short relative time: `ahora`, `5m`, `3h`, `2d`, `3sem`, `4mes`, `2a`.
@@ -94,7 +108,11 @@ pub fn relative_time(ts: i64, now: i64) -> String {
 
 /// `1 archivo`, `3 archivos`.
 pub fn plural(n: usize, one: &str, many: &str) -> String {
-    if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{n} {many}")
+    }
 }
 
 /// Normalises a path to forward slashes (git's notation).
@@ -104,7 +122,10 @@ pub fn slashes(p: &std::path::Path) -> String {
 
 /// First non-empty line of `s`, trimmed.
 pub fn first_line(s: &str) -> &str {
-    s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("")
+    s.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
 }
 
 #[cfg(test)]
@@ -122,14 +143,20 @@ mod tests {
     #[test]
     fn truncates_at_the_end() {
         assert_eq!(truncate_end("short", 10), "short");
-        assert_eq!(truncate_end("fix(parser): maneja entrada", 12), "fix(parser)…");
+        assert_eq!(
+            truncate_end("fix(parser): maneja entrada", 12),
+            "fix(parser)…"
+        );
         assert_eq!(truncate_end("abcdefghij", 5).chars().count(), 5);
     }
 
     #[test]
     fn path_labels_keep_the_file_name() {
         let l = path_label("crates/ui_git/src/view.rs", 60);
-        assert_eq!((l.dir.as_str(), l.name.as_str()), ("crates/ui_git/src/", "view.rs"));
+        assert_eq!(
+            (l.dir.as_str(), l.name.as_str()),
+            ("crates/ui_git/src/", "view.rs")
+        );
         let l = path_label("crates/ui_git/src/deeply/nested/folder/view.rs", 28);
         assert_eq!(l.name, "view.rs");
         assert!(l.dir.contains('…'), "{l:?}");

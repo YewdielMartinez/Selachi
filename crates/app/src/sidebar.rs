@@ -69,11 +69,15 @@ pub fn sidebar_collapsed(p: &SidebarProps) -> Stateful<Div> {
         let id = info.id;
         let shell = p.shell.clone();
         col = col.child(
-            IconButton::new(SharedString::from(format!("sb-tab-{}", id.as_u64())), theme, info.icon.icon())
-                .glass(p.glass)
-                .active(Some(id) == p.active)
-                .tooltip(info.title.clone())
-                .on_click(move |_, window, cx| shell.update(cx, |s, cx| s.select_tab(id, window, cx))),
+            IconButton::new(
+                SharedString::from(format!("sb-tab-{}", id.as_u64())),
+                theme,
+                info.icon.icon(),
+            )
+            .glass(p.glass)
+            .active(Some(id) == p.active)
+            .tooltip(info.title.clone())
+            .on_click(move |_, window, cx| shell.update(cx, |s, cx| s.select_tab(id, window, cx))),
         );
     }
     col
@@ -83,7 +87,9 @@ pub fn sidebar_collapsed(p: &SidebarProps) -> Stateful<Div> {
 pub fn sidebar_content(p: &SidebarProps) -> Stateful<Div> {
     let compact = p.layout.density == Density::Compact;
     let mut sections = p.layout.sidebar.sections.clone();
-    let has_list = sections.iter().any(|s| matches!(s, SidebarSection::Agents | SidebarSection::Threads));
+    let has_list = sections
+        .iter()
+        .any(|s| matches!(s, SidebarSection::Agents | SidebarSection::Threads));
     let forced = p.layout.tabs_position == store::TabsPosition::Sidebar && !has_list;
     if forced {
         sections.push(SidebarSection::Agents);
@@ -100,13 +106,10 @@ pub fn sidebar_content(p: &SidebarProps) -> Stateful<Div> {
     for section in sections {
         let mut block = div().flex().flex_col();
         if labels {
-            block = block.child(
-                div()
-                    .px(px(10.0))
-                    .pt(px(2.0))
-                    .pb(px(4.0))
-                    .child(SectionLabel::new(p.theme, section_title(section, forced)).uppercase(true)),
-            );
+            block =
+                block.child(div().px(px(10.0)).pt(px(2.0)).pb(px(4.0)).child(
+                    SectionLabel::new(p.theme, section_title(section, forced)).uppercase(true),
+                ));
         }
         block = match section {
             SidebarSection::Spaces => block.children(project_rows(p, true)),
@@ -119,7 +122,10 @@ pub fn sidebar_content(p: &SidebarProps) -> Stateful<Div> {
     body
 }
 
-fn select(shell: &Entity<AppShell>, id: TabId) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+fn select(
+    shell: &Entity<AppShell>,
+    id: TabId,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
     let shell = shell.clone();
     move |_, window, cx| shell.update(cx, |s, cx| s.select_tab(id, window, cx))
 }
@@ -130,8 +136,11 @@ fn project_rows(p: &SidebarProps, rich: bool) -> Vec<impl IntoElement + use<>> {
     entries
         .into_iter()
         .map(|e| {
-            let members: Vec<&TabInfo> =
-                p.tabs.iter().filter(|t| grouping::project_key(t).as_deref() == Some(e.root.as_path())).collect();
+            let members: Vec<&TabInfo> = p
+                .tabs
+                .iter()
+                .filter(|t| grouping::project_key(t).as_deref() == Some(e.root.as_path()))
+                .collect();
             let contains_active = members.iter().any(|t| Some(t.id) == p.active);
             let first = &p.tabs[e.first_tab];
             let mut row = ListRow::new((if rich { "space" } else { "project" }, first.id), p.theme)
@@ -148,7 +157,9 @@ fn project_rows(p: &SidebarProps, rich: bool) -> Vec<impl IntoElement + use<>> {
                     row = row.status(s);
                 }
             } else {
-                row = row.title(e.name.clone()).subtitle(paths::breadcrumb(&e.root));
+                row = row
+                    .title(e.name.clone())
+                    .subtitle(paths::breadcrumb(&e.root));
             }
             if e.tabs > 1 {
                 row = row.meta(format!("{}", e.tabs));
@@ -163,11 +174,16 @@ fn worktree_rows(p: &SidebarProps) -> Vec<impl IntoElement + use<>> {
     let mut seen: Vec<std::path::PathBuf> = Vec::new();
     let mut rows = Vec::new();
     for t in p.tabs {
-        let (Some(root), Some(branch)) = (t.project_root.clone(), t.subtitle.clone()) else { continue };
+        let (Some(root), Some(branch)) = (t.project_root.clone(), t.subtitle.clone()) else {
+            continue;
+        };
         if seen.contains(&root) {
             continue;
         }
-        let selected = p.tabs.iter().any(|o| o.project_root.as_ref() == Some(&root) && Some(o.id) == p.active);
+        let selected = p
+            .tabs
+            .iter()
+            .any(|o| o.project_root.as_ref() == Some(&root) && Some(o.id) == p.active);
         rows.push(
             ListRow::new(("worktree", t.id), p.theme)
                 .icon(Icon::GitBranch)
@@ -198,18 +214,27 @@ fn tab_list(p: &SidebarProps) -> impl IntoElement + use<> {
                     .flex_row()
                     .gap(px(6.0))
                     .child(SectionLabel::new(p.theme, label))
-                    .child(div().text_size(px(11.0)).text_color(p.theme.colors.outline).child(g.tabs.len().to_string())),
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(p.theme.colors.outline)
+                            .child(g.tabs.len().to_string()),
+                    ),
             );
         }
         for ix in g.tabs {
             col = col.child(tab_row(p, &p.tabs[ix]));
         }
     }
-    col.child(div().mt(px(4.0)).child(
-        GhostButton::new("sb-new-tab", p.theme, "Nueva pestaña").icon(Icon::Plus).on_click(move |_, window, cx| {
-            shell.update(cx, |s, cx| s.new_tab_here(window, cx));
-        }),
-    ))
+    col.child(
+        div().mt(px(4.0)).child(
+            GhostButton::new("sb-new-tab", p.theme, "Nueva pestaña")
+                .icon(Icon::Plus)
+                .on_click(move |_, window, cx| {
+                    shell.update(cx, |s, cx| s.new_tab_here(window, cx));
+                }),
+        ),
+    )
 }
 
 /// A tab as a sidebar row, with a close button that appears on hover.
@@ -233,7 +258,9 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
     if let Some(s) = info.status {
         row = row.status(s);
         if let Some(t) = info.last_activity.filter(|_| !show_close) {
-            row = row.meta(format_elapsed(Instant::now().saturating_duration_since(t).as_secs()));
+            row = row.meta(format_elapsed(
+                Instant::now().saturating_duration_since(t).as_secs(),
+            ));
         }
     }
     let shell = p.shell.clone();
@@ -242,22 +269,18 @@ fn tab_row(p: &SidebarProps, info: &TabInfo) -> impl IntoElement + use<> {
         .relative()
         .child(row)
         .children(show_close.then(|| {
-            div()
-                .absolute()
-                .right(px(8.0))
-                .top(px(10.0))
-                .child(
-                    IconButton::new(close_id, theme, Icon::Close)
-                        .glass(p.glass)
-                        .passthrough(true)
-                        .size(22.0)
-                        .icon_size(10.0)
-                        .tooltip("Cerrar (Ctrl+W)")
-                        .on_click(move |_, window, cx| {
-                            cx.stop_propagation();
-                            shell.update(cx, |s, cx| s.request_close(id, window, cx));
-                        }),
-                )
+            div().absolute().right(px(8.0)).top(px(10.0)).child(
+                IconButton::new(close_id, theme, Icon::Close)
+                    .glass(p.glass)
+                    .passthrough(true)
+                    .size(22.0)
+                    .icon_size(10.0)
+                    .tooltip("Cerrar (Ctrl+W)")
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        shell.update(cx, |s, cx| s.request_close(id, window, cx));
+                    }),
+            )
         }))
         .text_color(c.text)
 }

@@ -54,23 +54,26 @@ mod validate;
 mod view;
 
 pub use agents::{AgentRow, AgentStatus, AgentsState};
-pub use sections::LANGUAGES;
 pub use keys::{
-    ChordError, KeyAction, chord_from_keystroke, default_catalog, display_chord, effective, find_conflict, normalize_chord,
-    set_binding, swap_bindings,
+    ChordError, KeyAction, chord_from_keystroke, default_catalog, display_chord, effective,
+    find_conflict, normalize_chord, set_binding, swap_bindings,
 };
 #[cfg(any(test, feature = "dev-file-urls"))]
 pub use net::LocalFetcher;
 pub use net::{
-    ARCHIVE_TIMEOUT, FetchError, Fetcher, HttpFetcher, INDEX_TIMEOUT, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES, check_https,
+    ARCHIVE_TIMEOUT, FetchError, Fetcher, HttpFetcher, INDEX_TIMEOUT, MAX_ARCHIVE_BYTES,
+    MAX_INDEX_BYTES, check_https,
 };
 pub use panel::{PANEL_ID, SettingsPanelProvider, thumbnail};
 pub use plugins::{
-    Group, INDEX_TTL, IndexState, Op, PluginRow, PluginState, PluginsEvent, PluginsModel, RestartKind, build_rows,
-    download_and_install, fetch_index,
+    Group, INDEX_TTL, IndexState, Op, PluginRow, PluginState, PluginsEvent, PluginsModel,
+    RestartKind, build_rows, download_and_install, fetch_index,
 };
 pub use save::{SAVE_DEBOUNCE, SaveGate, merge_external};
-pub use validate::{FieldError, field_errors, first_error, join_args, parse_count, parse_number, split_args};
+pub use sections::LANGUAGES;
+pub use validate::{
+    FieldError, field_errors, first_error, join_args, parse_count, parse_number, split_args,
+};
 pub use view::{Section, SettingsEvent, SettingsOptions, SettingsView, init, settings_view};
 
 #[cfg(test)]

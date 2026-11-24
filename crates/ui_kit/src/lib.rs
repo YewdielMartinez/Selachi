@@ -35,9 +35,9 @@ mod action_button;
 mod agent_mark;
 mod assets;
 mod button;
+mod checkbox;
 mod controls;
 mod drop_zone;
-mod checkbox;
 mod file_icon;
 pub mod focus;
 mod icon;
@@ -70,9 +70,7 @@ pub use drop_zone::{DropZone, debug_forced as drop_debug_forced};
 pub use file_icon::{FileIcon, file_icon};
 pub use focus::{FocusNext, FocusPrev, InputModality, debug_force_focus_ring, input_modality};
 pub use icon::{Icon, icon};
-pub use list::{
-    ListRow, RowStatus, Spinner, StatusGlyph, UniformListScrollHandle, VirtualList,
-};
+pub use list::{ListRow, RowStatus, Spinner, StatusGlyph, UniformListScrollHandle, VirtualList};
 pub use logo::Logo;
 pub use measure::{MeasuredWidth, WidthClass, WindowClass, is_narrow};
 pub use meter::DitherMeter;

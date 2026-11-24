@@ -20,7 +20,9 @@ pub fn flag_path(dir: &Path) -> PathBuf {
 
 /// Directory that holds `db`'s files.
 pub fn data_dir_of(db: &StateDb) -> PathBuf {
-    db.path().parent().map_or_else(PathBuf::new, Path::to_path_buf)
+    db.path()
+        .parent()
+        .map_or_else(PathBuf::new, Path::to_path_buf)
 }
 
 /// `true` until the wizard has been finished or skipped once in `dir` (marker file only).
@@ -30,7 +32,10 @@ pub fn needs_onboarding_in(dir: &Path) -> bool {
 
 fn write_marker(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(flag_path(dir), format!("selachi onboarding v1 done at {}\n", store::now_ms()))
+    std::fs::write(
+        flag_path(dir),
+        format!("selachi onboarding v1 done at {}\n", store::now_ms()),
+    )
 }
 
 /// Whether the first-run wizard must be shown before the main window. A legacy marker file in
@@ -52,7 +57,9 @@ pub fn needs_onboarding(db: &StateDb) -> bool {
 /// Records that the wizard is done: in `db` when there is one, else as the marker file in `dir`.
 pub fn mark_done_with(db: Option<&StateDb>, dir: &Path) -> Result<(), String> {
     match db {
-        Some(db) => db.meta_set(ONBOARDING_DONE, &format!("done at {}", store::now_ms())).map_err(|e| e.to_string()),
+        Some(db) => db
+            .meta_set(ONBOARDING_DONE, &format!("done at {}", store::now_ms()))
+            .map_err(|e| e.to_string()),
         None => write_marker(dir).map_err(|e| e.to_string()),
     }
 }
@@ -97,7 +104,10 @@ mod tests {
         let db = StateDb::open(&dir.path().join("state.db")).unwrap();
         write_marker(dir.path()).unwrap();
         assert!(!needs_onboarding(&db));
-        assert!(!flag_path(dir.path()).exists(), "marker removed after migrating");
+        assert!(
+            !flag_path(dir.path()).exists(),
+            "marker removed after migrating"
+        );
         assert!(db.meta_get(ONBOARDING_DONE).unwrap().is_some());
         assert!(!needs_onboarding(&db));
     }

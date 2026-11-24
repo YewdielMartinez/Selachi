@@ -55,22 +55,23 @@ pub struct FileRow {
 /// Non-empty sections in display order: conflicts (urgent) first, then Staged, Cambios and
 /// Sin seguimiento.
 pub fn build_sections(status: &RepoStatus, counts: &Counts) -> Vec<(Section, Vec<FileRow>)> {
-    let tracked = |section: Section, list: &[git_svc::FileChange], map: &HashMap<PathBuf, LineCounts>| {
-        list.iter()
-            .map(|c| {
-                let found = map.get(&c.path);
-                FileRow {
-                    section,
-                    path: c.path.clone(),
-                    text: slashes(&c.path),
-                    letter: change_letter(c.kind),
-                    orig: c.orig_path.clone(),
-                    counts: found.copied().flatten(),
-                    counted: found.is_some(),
-                }
-            })
-            .collect::<Vec<_>>()
-    };
+    let tracked =
+        |section: Section, list: &[git_svc::FileChange], map: &HashMap<PathBuf, LineCounts>| {
+            list.iter()
+                .map(|c| {
+                    let found = map.get(&c.path);
+                    FileRow {
+                        section,
+                        path: c.path.clone(),
+                        text: slashes(&c.path),
+                        letter: change_letter(c.kind),
+                        orig: c.orig_path.clone(),
+                        counts: found.copied().flatten(),
+                        counted: found.is_some(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
     let plain = |section: Section, list: &[PathBuf], letter: char| {
         list.iter()
             .map(|p| FileRow {
@@ -85,12 +86,27 @@ pub fn build_sections(status: &RepoStatus, counts: &Counts) -> Vec<(Section, Vec
             .collect::<Vec<_>>()
     };
     let groups = [
-        (Section::Conflicts, plain(Section::Conflicts, &status.conflicted, '!')),
-        (Section::Staged, tracked(Section::Staged, &status.staged, &counts.staged)),
-        (Section::Changes, tracked(Section::Changes, &status.unstaged, &counts.unstaged)),
-        (Section::Untracked, plain(Section::Untracked, &status.untracked, 'U')),
+        (
+            Section::Conflicts,
+            plain(Section::Conflicts, &status.conflicted, '!'),
+        ),
+        (
+            Section::Staged,
+            tracked(Section::Staged, &status.staged, &counts.staged),
+        ),
+        (
+            Section::Changes,
+            tracked(Section::Changes, &status.unstaged, &counts.unstaged),
+        ),
+        (
+            Section::Untracked,
+            plain(Section::Untracked, &status.untracked, 'U'),
+        ),
     ];
-    groups.into_iter().filter(|(_, rows)| !rows.is_empty()).collect()
+    groups
+        .into_iter()
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect()
 }
 
 /// Parses `git diff --numstat -z` output (`added\tdeleted\tpath\0`; a rename is
@@ -104,7 +120,9 @@ pub fn parse_numstat(bytes: &[u8]) -> HashMap<PathBuf, LineCounts> {
             continue;
         }
         let mut parts = head.splitn(3, '\t');
-        let (Some(a), Some(d), Some(path)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let (Some(a), Some(d), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
         let counts = match (a.parse::<u32>(), d.parse::<u32>()) {
             (Ok(a), Ok(d)) => Some((a, d)),
             _ => None,
@@ -146,14 +164,21 @@ mod tests {
     use super::*;
 
     fn change(p: &str, kind: ChangeKind) -> FileChange {
-        FileChange { path: p.into(), orig_path: None, kind }
+        FileChange {
+            path: p.into(),
+            orig_path: None,
+            kind,
+        }
     }
 
     #[test]
     fn sections_are_ordered_and_empty_ones_dropped() {
         let st = RepoStatus {
             staged: vec![change("a.rs", ChangeKind::Added)],
-            unstaged: vec![change("src\\b.rs", ChangeKind::Modified), change("c.rs", ChangeKind::Deleted)],
+            unstaged: vec![
+                change("src\\b.rs", ChangeKind::Modified),
+                change("c.rs", ChangeKind::Deleted),
+            ],
             untracked: vec!["new.txt".into()],
             conflicted: vec!["x.rs".into()],
             ..RepoStatus::default()
@@ -163,7 +188,15 @@ mod tests {
         counts.unstaged.insert("c.rs".into(), None);
         let s = build_sections(&st, &counts);
         let order: Vec<Section> = s.iter().map(|(s, _)| *s).collect();
-        assert_eq!(order, [Section::Conflicts, Section::Staged, Section::Changes, Section::Untracked]);
+        assert_eq!(
+            order,
+            [
+                Section::Conflicts,
+                Section::Staged,
+                Section::Changes,
+                Section::Untracked
+            ]
+        );
         let changes = &s[2].1;
         assert_eq!(changes[0].letter, 'M');
         assert_eq!(changes[0].text, "src/b.rs");
@@ -173,7 +206,10 @@ mod tests {
         assert_eq!(s[0].1[0].letter, '!');
         assert_eq!(s[3].1[0].letter, 'U');
 
-        let only_untracked = RepoStatus { untracked: vec!["n".into()], ..RepoStatus::default() };
+        let only_untracked = RepoStatus {
+            untracked: vec!["n".into()],
+            ..RepoStatus::default()
+        };
         assert_eq!(build_sections(&only_untracked, &Counts::default()).len(), 1);
         assert!(build_sections(&RepoStatus::default(), &Counts::default()).is_empty());
     }

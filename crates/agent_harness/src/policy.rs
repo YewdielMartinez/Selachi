@@ -90,7 +90,8 @@ impl fmt::Display for Permission {
 impl<'de> Deserialize<'de> for Permission {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
-        Permission::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown permission {s:?}")))
+        Permission::parse(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown permission {s:?}")))
     }
 }
 
@@ -128,7 +129,10 @@ pub struct Refusal {
 
 impl Refusal {
     pub fn new(code: RefusalCode, reason: impl Into<String>) -> Refusal {
-        Refusal { code, reason: reason.into() }
+        Refusal {
+            code,
+            reason: reason.into(),
+        }
     }
 }
 
@@ -149,7 +153,13 @@ pub struct Caller {
 
 impl Default for Caller {
     fn default() -> Self {
-        Caller { permission: Permission::ReadOnly, depth: 0, parent_thread: None, parent_tab: None, channel: "cli".into() }
+        Caller {
+            permission: Permission::ReadOnly,
+            depth: 0,
+            parent_thread: None,
+            parent_tab: None,
+            channel: "cli".into(),
+        }
     }
 }
 
@@ -162,17 +172,27 @@ impl Caller {
 
     /// [`Caller::from_env`] over any variable source (tests).
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Caller {
-        let non_empty = |k: &str| get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let non_empty = |k: &str| {
+            get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
         Caller {
             // An unparsable value fails closed to read-only, never open.
             permission: non_empty(ENV_PARENT_PERMISSION)
                 .map(|v| Permission::parse(&v).unwrap_or(Permission::ReadOnly))
                 .unwrap_or(Permission::ReadOnly),
-            depth: non_empty(ENV_DELEGATION_DEPTH).and_then(|v| v.parse().ok()).unwrap_or(0),
+            depth: non_empty(ENV_DELEGATION_DEPTH)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             parent_thread: non_empty(ENV_PARENT_THREAD).and_then(|v| v.parse().ok()),
             parent_tab: non_empty(ENV_PARENT_TAB),
             // Only the known channels are accepted; anything else is a plain CLI call.
-            channel: if non_empty(ENV_CHANNEL).as_deref() == Some("mcp") { "mcp".into() } else { "cli".into() },
+            channel: if non_empty(ENV_CHANNEL).as_deref() == Some("mcp") {
+                "mcp".into()
+            } else {
+                "cli".into()
+            },
         }
     }
 }
@@ -224,7 +244,9 @@ impl DelegationConfig {
     /// file that does not parse also gives the defaults, with the problem returned as a warning.
     pub fn load(data_dir: &Path) -> (DelegationConfig, Option<String>) {
         let path = store::paths::config_path_in(data_dir);
-        let Ok(text) = std::fs::read_to_string(&path) else { return (DelegationConfig::default(), None) };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return (DelegationConfig::default(), None);
+        };
         DelegationConfig::from_toml(&text)
     }
 
@@ -232,9 +254,18 @@ impl DelegationConfig {
     pub fn from_toml(text: &str) -> (DelegationConfig, Option<String>) {
         let value: toml::Value = match text.parse() {
             Ok(v) => v,
-            Err(e) => return (DelegationConfig::default(), Some(format!("config.toml is not valid TOML ({e}); using the default delegation limits"))),
+            Err(e) => {
+                return (
+                    DelegationConfig::default(),
+                    Some(format!(
+                        "config.toml is not valid TOML ({e}); using the default delegation limits"
+                    )),
+                )
+            }
         };
-        let Some(section) = value.get("delegation") else { return (DelegationConfig::default(), None) };
+        let Some(section) = value.get("delegation") else {
+            return (DelegationConfig::default(), None);
+        };
         match section.clone().try_into::<DelegationConfig>() {
             Ok(c) => (c, None),
             Err(e) => (
@@ -267,11 +298,18 @@ impl Policy<'_> {
             ));
         }
         if !self.cfg.allowed_agents.is_empty()
-            && !self.cfg.allowed_agents.iter().any(|a| a.eq_ignore_ascii_case(agent))
+            && !self
+                .cfg
+                .allowed_agents
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(agent))
         {
             return Err(Refusal::new(
                 RefusalCode::AgentNotAllowed,
-                format!("{agent} is not in the allowed agents ({})", self.cfg.allowed_agents.join(", ")),
+                format!(
+                    "{agent} is not in the allowed agents ({})",
+                    self.cfg.allowed_agents.join(", ")
+                ),
             ));
         }
         if requested == Permission::Full {
@@ -294,7 +332,9 @@ impl Policy<'_> {
         if requested > cap {
             return Err(Refusal::new(
                 RefusalCode::PermissionExceedsConfig,
-                format!("requested permission {requested} exceeds [delegation] max_permission = {cap}"),
+                format!(
+                    "requested permission {requested} exceeds [delegation] max_permission = {cap}"
+                ),
             ));
         }
         let child_depth = self.caller.depth.saturating_add(1);
@@ -316,27 +356,49 @@ impl Policy<'_> {
 mod tests {
     use super::*;
 
-    fn policy_check(caller: Caller, cfg: DelegationConfig, agent: &str, p: Permission) -> Result<Permission, Refusal> {
-        Policy { cfg: &cfg, caller: &caller }.check(agent, p)
+    fn policy_check(
+        caller: Caller,
+        cfg: DelegationConfig,
+        agent: &str,
+        p: Permission,
+    ) -> Result<Permission, Refusal> {
+        Policy {
+            cfg: &cfg,
+            caller: &caller,
+        }
+        .check(agent, p)
     }
 
     #[test]
     fn permission_order_and_parse() {
-        assert!(Permission::ReadOnly < Permission::Ask && Permission::Ask < Permission::AcceptEdits);
+        assert!(
+            Permission::ReadOnly < Permission::Ask && Permission::Ask < Permission::AcceptEdits
+        );
         assert!(Permission::AcceptEdits < Permission::Full);
-        for p in [Permission::ReadOnly, Permission::Ask, Permission::AcceptEdits, Permission::Full] {
+        for p in [
+            Permission::ReadOnly,
+            Permission::Ask,
+            Permission::AcceptEdits,
+            Permission::Full,
+        ] {
             assert_eq!(Permission::parse(p.as_str()), Some(p));
             assert_eq!(Permission::from_driver(p.to_driver()), p);
         }
         assert_eq!(Permission::parse("READ_ONLY"), Some(Permission::ReadOnly));
-        assert_eq!(Permission::parse("accept_edits"), Some(Permission::AcceptEdits));
+        assert_eq!(
+            Permission::parse("accept_edits"),
+            Some(Permission::AcceptEdits)
+        );
         assert_eq!(Permission::parse("yolo"), None);
     }
 
     #[test]
     fn caller_defaults_to_read_only_and_fails_closed() {
         let c = Caller::from_vars(|_| None);
-        assert_eq!((c.permission, c.depth, c.parent_thread), (Permission::ReadOnly, 0, None));
+        assert_eq!(
+            (c.permission, c.depth, c.parent_thread),
+            (Permission::ReadOnly, 0, None)
+        );
         let c = Caller::from_vars(|k| match k {
             ENV_PARENT_PERMISSION => Some("accept-edits".into()),
             ENV_DELEGATION_DEPTH => Some("1".into()),
@@ -344,18 +406,36 @@ mod tests {
             ENV_PARENT_TAB => Some("tab-3".into()),
             _ => None,
         });
-        assert_eq!((c.permission, c.depth, c.parent_thread, c.parent_tab.as_deref()), (Permission::AcceptEdits, 1, Some(42), Some("tab-3")));
+        assert_eq!(
+            (
+                c.permission,
+                c.depth,
+                c.parent_thread,
+                c.parent_tab.as_deref()
+            ),
+            (Permission::AcceptEdits, 1, Some(42), Some("tab-3"))
+        );
         let c = Caller::from_vars(|k| (k == ENV_PARENT_PERMISSION).then(|| "garbage".to_string()));
         assert_eq!(c.permission, Permission::ReadOnly);
     }
 
     #[test]
     fn permission_never_exceeds_the_parent() {
-        let parent_ask = Caller { permission: Permission::Ask, ..Caller::default() };
+        let parent_ask = Caller {
+            permission: Permission::Ask,
+            ..Caller::default()
+        };
         let cfg = DelegationConfig::default();
-        assert!(policy_check(parent_ask.clone(), cfg.clone(), "codex", Permission::ReadOnly).is_ok());
+        assert!(policy_check(
+            parent_ask.clone(),
+            cfg.clone(),
+            "codex",
+            Permission::ReadOnly
+        )
+        .is_ok());
         assert!(policy_check(parent_ask.clone(), cfg.clone(), "codex", Permission::Ask).is_ok());
-        let e = policy_check(parent_ask, cfg.clone(), "codex", Permission::AcceptEdits).unwrap_err();
+        let e =
+            policy_check(parent_ask, cfg.clone(), "codex", Permission::AcceptEdits).unwrap_err();
         assert_eq!(e.code, RefusalCode::PermissionExceedsParent);
         assert!(e.reason.contains(ENV_PARENT_PERMISSION));
         // default parent (nothing in the environment) is read-only
@@ -365,40 +445,91 @@ mod tests {
 
     #[test]
     fn full_is_never_delegable_even_from_a_full_parent() {
-        let parent = Caller { permission: Permission::Full, ..Caller::default() };
-        let e = policy_check(parent.clone(), DelegationConfig::default(), "claude", Permission::Full).unwrap_err();
+        let parent = Caller {
+            permission: Permission::Full,
+            ..Caller::default()
+        };
+        let e = policy_check(
+            parent.clone(),
+            DelegationConfig::default(),
+            "claude",
+            Permission::Full,
+        )
+        .unwrap_err();
         assert_eq!(e.code, RefusalCode::PermissionFull);
         // ... and a config that says `full` is still clamped to accept-edits
-        let cfg = DelegationConfig { max_permission: Permission::Full, ..DelegationConfig::default() };
+        let cfg = DelegationConfig {
+            max_permission: Permission::Full,
+            ..DelegationConfig::default()
+        };
         assert!(policy_check(parent, cfg, "claude", Permission::AcceptEdits).is_ok());
     }
 
     #[test]
     fn config_cap_depth_and_allowed_agents() {
-        let parent = Caller { permission: Permission::AcceptEdits, ..Caller::default() };
-        let cfg = DelegationConfig { max_permission: Permission::Ask, ..DelegationConfig::default() };
+        let parent = Caller {
+            permission: Permission::AcceptEdits,
+            ..Caller::default()
+        };
+        let cfg = DelegationConfig {
+            max_permission: Permission::Ask,
+            ..DelegationConfig::default()
+        };
         assert_eq!(
-            policy_check(parent, cfg, "codex", Permission::AcceptEdits).unwrap_err().code,
+            policy_check(parent, cfg, "codex", Permission::AcceptEdits)
+                .unwrap_err()
+                .code,
             RefusalCode::PermissionExceedsConfig
         );
 
         let cfg = DelegationConfig::default(); // max_depth 1: a child cannot re-delegate
-        let at = |d| Caller { depth: d, permission: Permission::AcceptEdits, ..Caller::default() };
+        let at = |d| Caller {
+            depth: d,
+            permission: Permission::AcceptEdits,
+            ..Caller::default()
+        };
         assert!(policy_check(at(0), cfg.clone(), "codex", Permission::ReadOnly).is_ok());
         let e = policy_check(at(1), cfg, "codex", Permission::ReadOnly).unwrap_err();
         assert_eq!(e.code, RefusalCode::DepthExceeded);
-        let two = DelegationConfig { max_depth: 2, ..DelegationConfig::default() };
+        let two = DelegationConfig {
+            max_depth: 2,
+            ..DelegationConfig::default()
+        };
         assert!(policy_check(at(1), two.clone(), "codex", Permission::ReadOnly).is_ok());
-        assert_eq!(policy_check(at(2), two, "codex", Permission::ReadOnly).unwrap_err().code, RefusalCode::DepthExceeded);
-
-        let cfg = DelegationConfig { allowed_agents: vec!["Codex".into()], ..DelegationConfig::default() };
-        assert!(policy_check(Caller::default(), cfg.clone(), "codex", Permission::ReadOnly).is_ok());
         assert_eq!(
-            policy_check(Caller::default(), cfg, "gemini", Permission::ReadOnly).unwrap_err().code,
+            policy_check(at(2), two, "codex", Permission::ReadOnly)
+                .unwrap_err()
+                .code,
+            RefusalCode::DepthExceeded
+        );
+
+        let cfg = DelegationConfig {
+            allowed_agents: vec!["Codex".into()],
+            ..DelegationConfig::default()
+        };
+        assert!(policy_check(
+            Caller::default(),
+            cfg.clone(),
+            "codex",
+            Permission::ReadOnly
+        )
+        .is_ok());
+        assert_eq!(
+            policy_check(Caller::default(), cfg, "gemini", Permission::ReadOnly)
+                .unwrap_err()
+                .code,
             RefusalCode::AgentNotAllowed
         );
-        let off = DelegationConfig { enabled: false, ..DelegationConfig::default() };
-        assert_eq!(policy_check(Caller::default(), off, "codex", Permission::ReadOnly).unwrap_err().code, RefusalCode::Disabled);
+        let off = DelegationConfig {
+            enabled: false,
+            ..DelegationConfig::default()
+        };
+        assert_eq!(
+            policy_check(Caller::default(), off, "codex", Permission::ReadOnly)
+                .unwrap_err()
+                .code,
+            RefusalCode::Disabled
+        );
     }
 
     #[test]
@@ -409,7 +540,10 @@ mod tests {
             "[delegation]\nmax_concurrent = 2\nmax_permission = \"read_only\"\nallowed_agents = [\"codex\"]\ndaily_token_budget = 10\nunknown = 1\n",
         );
         assert!(w.is_none(), "{w:?}");
-        assert_eq!((c.max_concurrent, c.max_permission, c.daily_token_budget), (2, Permission::ReadOnly, 10));
+        assert_eq!(
+            (c.max_concurrent, c.max_permission, c.daily_token_budget),
+            (2, Permission::ReadOnly, 10)
+        );
         assert_eq!(c.allowed_agents, vec!["codex"]);
         assert_eq!(c.timeout_secs, 900, "unlisted fields keep their defaults");
         let (c, w) = DelegationConfig::from_toml("[delegation]\nmax_permission = \"root\"\n");

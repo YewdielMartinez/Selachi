@@ -151,36 +151,34 @@ impl Repo {
     /// `node_modules/` and similar are ignored. No polling: purely OS notifications.
     ///
     /// Dropping the [`WatchHandle`] stops everything and closes the receiver (it yields `None`).
-    pub fn watch(
-        &self,
-        debounce: Duration,
-    ) -> Result<(WatchHandle, UnboundedReceiver<()>)> {
+    pub fn watch(&self, debounce: Duration) -> Result<(WatchHandle, UnboundedReceiver<()>)> {
         let (out_tx, out_rx) = unbounded::<()>();
         let (tx, rx) = mpsc::channel::<Msg>();
 
         let filter = PathFilter::new(&self.root, &self.git_dir, &self.common_dir);
         let handler_tx = tx.clone();
         let root_norm = normalize(&self.root);
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let Ok(event) = res else { return };
-            if matches!(event.kind, EventKind::Access(_)) {
-                return;
-            }
-            if matches!(event.kind, EventKind::Create(_)) {
-                for p in &event.paths {
-                    let n = normalize(p);
-                    let is_top = strip_dir(&n, &root_norm)
-                        .is_some_and(|rel| !rel.is_empty() && !rel.contains('/'));
-                    let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                    if is_top && is_watchable_top_dir(name) && p.is_dir() {
-                        let _ = handler_tx.send(Msg::NewTopDir(p.clone()));
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                let Ok(event) = res else { return };
+                if matches!(event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                if matches!(event.kind, EventKind::Create(_)) {
+                    for p in &event.paths {
+                        let n = normalize(p);
+                        let is_top = strip_dir(&n, &root_norm)
+                            .is_some_and(|rel| !rel.is_empty() && !rel.contains('/'));
+                        let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                        if is_top && is_watchable_top_dir(name) && p.is_dir() {
+                            let _ = handler_tx.send(Msg::NewTopDir(p.clone()));
+                        }
                     }
                 }
-            }
-            if event.paths.iter().any(|p| filter.is_relevant(p)) {
-                let _ = handler_tx.send(Msg::Change);
-            }
-        })?;
+                if event.paths.iter().any(|p| filter.is_relevant(p)) {
+                    let _ = handler_tx.send(Msg::Change);
+                }
+            })?;
 
         // The root itself is watched non-recursively; every top-level directory except `.git`
         // and the noise dirs is watched recursively. (Watching the root recursively would wake

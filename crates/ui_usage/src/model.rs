@@ -216,13 +216,18 @@ impl UsageModel {
         if !self.visible || self.in_flight {
             return;
         }
-        let Some(source) = self.source.clone() else { return };
+        let Some(source) = self.source.clone() else {
+            return;
+        };
         self.dirty = false;
         self.in_flight = true;
         self.queries += 1;
         let query = self.query();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { source.load(&query) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { source.load(&query) })
+                .await;
             let _ = this.update(cx, |m, cx| m.apply(result, cx));
         }));
     }
@@ -261,7 +266,10 @@ pub(crate) mod testing {
 
     impl FakeSource {
         pub fn new() -> Arc<Self> {
-            Arc::new(Self { calls: AtomicUsize::new(0), fail: Default::default() })
+            Arc::new(Self {
+                calls: AtomicUsize::new(0),
+                fail: Default::default(),
+            })
         }
 
         pub fn calls(&self) -> usize {
@@ -275,7 +283,10 @@ pub(crate) mod testing {
             if self.fail.load(Ordering::SeqCst) {
                 return Err("boom".to_string());
             }
-            Ok(UsageSnapshot { query: query.clone(), ..UsageSnapshot::default() })
+            Ok(UsageSnapshot {
+                query: query.clone(),
+                ..UsageSnapshot::default()
+            })
         }
     }
 }

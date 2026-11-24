@@ -14,7 +14,9 @@ pub enum AgentKind {
     /// Any Agent Client Protocol agent (Gemini CLI, ...). `command` is the
     /// executable (and optional leading args, double quotes group a path with spaces)
     /// that speaks ACP over stdio, e.g. `"C:/Program Files/x/gemini.exe" --acp`.
-    Acp { command: String },
+    Acp {
+        command: String,
+    },
 }
 
 /// UI-level permission pill. Each driver maps it to its CLI's native knobs.
@@ -96,7 +98,11 @@ pub fn is_antigravity(command: &str) -> bool {
         Some(rest) => rest.split('"').next().unwrap_or(""),
         None => c.split_whitespace().next().unwrap_or(""),
     };
-    let stem = first.rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+    let stem = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let stem = stem.trim_end_matches(".exe").trim_end_matches(".cmd");
     stem == "agy" || stem == "antigravity"
 }
@@ -182,8 +188,14 @@ pub enum AgentEvent {
         model: Option<String>,
     },
     /// `delta == true`: append to the current message. `false`: complete text of a message.
-    Text { text: String, delta: bool },
-    Thinking { text: String, delta: bool },
+    Text {
+        text: String,
+        delta: bool,
+    },
+    Thinking {
+        text: String,
+        delta: bool,
+    },
     ToolCall {
         id: String,
         kind: ToolKind,
@@ -195,7 +207,9 @@ pub enum AgentEvent {
         ok: bool,
         summary: String,
     },
-    Plan { tasks: Vec<(String, TaskState)> },
+    Plan {
+        tasks: Vec<(String, TaskState)>,
+    },
     /// Answer with [`AgentDriver::approve`] using `id`.
     ApprovalRequest {
         id: String,
@@ -213,13 +227,20 @@ pub enum AgentEvent {
         context_window: Option<u64>,
     },
     /// Subscription/rate-limit windows pushed by the CLI (no estimation).
-    RateLimits { windows: Vec<RateWindow> },
+    RateLimits {
+        windows: Vec<RateWindow>,
+    },
     Status(AgentStatus),
     /// The models the agent offers (Codex `model/list`, ACP `session/new`). Informational: the
     /// chat core ignores it; [`crate::probe_models`] and the model picker use it.
-    Models { models: Vec<ModelInfo>, current: Option<String> },
+    Models {
+        models: Vec<ModelInfo>,
+        current: Option<String>,
+    },
     /// The agent process exited (stream closed).
-    Exited { code: Option<i32> },
+    Exited {
+        code: Option<i32>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -45,12 +45,24 @@ fn item(path: &str, title: String, meta: &str, score: f32) -> PaletteItem {
     PaletteItem::new(
         format!("project:{}", normalize_key(path)),
         title,
-        ItemAction::emit("Abrir en pestaña nueva", PaletteEvent::OpenPath { path: p.clone(), new_tab: true })
-            .with_effect(Effect::PathOpened(path.to_string())),
+        ItemAction::emit(
+            "Abrir en pestaña nueva",
+            PaletteEvent::OpenPath {
+                path: p.clone(),
+                new_tab: true,
+            },
+        )
+        .with_effect(Effect::PathOpened(path.to_string())),
     )
     .alt(
-        ItemAction::emit("Abrir aquí", PaletteEvent::OpenPath { path: p, new_tab: false })
-            .with_effect(Effect::PathOpened(path.to_string())),
+        ItemAction::emit(
+            "Abrir aquí",
+            PaletteEvent::OpenPath {
+                path: p,
+                new_tab: false,
+            },
+        )
+        .with_effect(Effect::PathOpened(path.to_string())),
     )
     .subtitle(display_path(path))
     .meta(meta.to_string())
@@ -98,7 +110,9 @@ impl PaletteSource for ProjectsSource {
                 // Pinned first, then most recently opened (the store already ordered them).
                 Some(ordered_score(i) + if p.pinned { 0.5 } else { 0.0 })
             } else {
-                matcher.score(&needle, &[(&p.name, 1.0), (&p.path, 0.5)]).map(|s| s + if p.pinned { 0.2 } else { 0.0 })
+                matcher
+                    .score(&needle, &[(&p.name, 1.0), (&p.path, 0.5)])
+                    .map(|s| s + if p.pinned { 0.2 } else { 0.0 })
             };
             let Some(score) = score else { continue };
             if seen.insert(normalize_key(&p.path)) {
@@ -119,7 +133,9 @@ impl PaletteSource for ProjectsSource {
             let score = if needle.is_empty() {
                 Some(ordered_score(i) - 0.3)
             } else {
-                matcher.score(&needle, &[(&name, 1.0), (&e.path, 0.5)]).map(|s| s - 0.1)
+                matcher
+                    .score(&needle, &[(&name, 1.0), (&e.path, 0.5)])
+                    .map(|s| s - 0.1)
             };
             let Some(score) = score else { continue };
             out.push(item(&e.path, name, "reciente", score));

@@ -58,7 +58,9 @@ pub struct Registry {
 
 impl Registry {
     pub fn new(data_dir: &Path) -> Registry {
-        Registry { dir: data_dir.join("agent-runs") }
+        Registry {
+            dir: data_dir.join("agent-runs"),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -89,7 +91,9 @@ impl Registry {
 
     pub fn load(&self, run_id: &str) -> Result<RunRecord, String> {
         if !Registry::valid_id(run_id) {
-            return Err(format!("`{run_id}` is not a run id (run ids are numbers, see `selachi-agent run`)"));
+            return Err(format!(
+                "`{run_id}` is not a run id (run ids are numbers, see `selachi-agent run`)"
+            ));
         }
         let text = std::fs::read_to_string(self.file(run_id)).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => format!("no run {run_id} in {}", self.dir.display()),
@@ -100,7 +104,9 @@ impl Registry {
 
     /// Every readable record, newest first.
     pub fn list(&self) -> Vec<RunRecord> {
-        let Ok(rd) = std::fs::read_dir(&self.dir) else { return Vec::new() };
+        let Ok(rd) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
         let mut out: Vec<RunRecord> = rd
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
@@ -175,7 +181,13 @@ mod tests {
         reg.save(&rec("2", 200, 20)).unwrap();
         reg.save(&rec("3", 300, 30)).unwrap();
         assert_eq!(reg.load("2").unwrap().started_ms, 200);
-        assert_eq!(reg.list().iter().map(|r| r.run_id.as_str()).collect::<Vec<_>>(), vec!["3", "2", "1"]);
+        assert_eq!(
+            reg.list()
+                .iter()
+                .map(|r| r.run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["3", "2", "1"]
+        );
         assert_eq!(reg.billable_tokens_between(150, 301), 50);
         assert!(reg.load("9").unwrap_err().contains("no run 9"));
     }
@@ -184,7 +196,15 @@ mod tests {
     fn ids_cannot_escape_the_directory() {
         let dir = tempfile::tempdir().unwrap();
         let reg = Registry::new(dir.path());
-        for bad in ["", "..", "..\\x", "1/2", "a1", "1.json", "12345678901234567890"] {
+        for bad in [
+            "",
+            "..",
+            "..\\x",
+            "1/2",
+            "a1",
+            "1.json",
+            "12345678901234567890",
+        ] {
             assert!(!Registry::valid_id(bad), "{bad}");
             assert!(reg.load(bad).is_err());
         }

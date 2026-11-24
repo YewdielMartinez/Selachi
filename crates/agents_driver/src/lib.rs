@@ -24,8 +24,8 @@
 pub mod acp;
 pub mod antigravity;
 pub mod claude;
-pub mod codex;
 pub mod coalesce;
+pub mod codex;
 pub mod detect;
 #[cfg(windows)]
 mod job;
@@ -59,9 +59,9 @@ pub fn spawn_with(
         AgentKind::ClaudeCode => Box::new(claude::ClaudeDriver::spawn_with(cfg, tx, &opts)?),
         AgentKind::Codex => Box::new(codex::CodexDriver::spawn_with(cfg, tx, &opts)?),
         AgentKind::OpenCode => Box::new(acp::AcpDriver::spawn_opencode_with(cfg, tx, &opts)?),
-        AgentKind::Acp { command } => {
-            Box::new(acp::AcpDriver::spawn_command_line_with(&command, cfg, tx, &opts)?)
-        }
+        AgentKind::Acp { command } => Box::new(acp::AcpDriver::spawn_command_line_with(
+            &command, cfg, tx, &opts,
+        )?),
     };
     Ok((driver, rx))
 }
@@ -71,10 +71,16 @@ pub fn spawn_with(
 /// down. Blocking: call it from a background thread. Claude Code has no such call (its aliases are
 /// documented), so it returns `Unsupported`. The Antigravity CLI is answered by `agy models` (no session
 /// is opened), falling back to the ACP handshake.
-pub fn probe_models(kind: AgentKind, cwd: impl Into<std::path::PathBuf>, timeout: std::time::Duration) -> Result<Vec<ModelInfo>> {
+pub fn probe_models(
+    kind: AgentKind,
+    cwd: impl Into<std::path::PathBuf>,
+    timeout: std::time::Duration,
+) -> Result<Vec<ModelInfo>> {
     use futures::StreamExt;
     if kind == AgentKind::ClaudeCode {
-        return Err(DriverError::Unsupported("Claude Code does not list models".into()));
+        return Err(DriverError::Unsupported(
+            "Claude Code does not list models".into(),
+        ));
     }
     if let AgentKind::Acp { command } = &kind {
         if is_antigravity(command) {
@@ -85,16 +91,18 @@ pub fn probe_models(kind: AgentKind, cwd: impl Into<std::path::PathBuf>, timeout
     }
     let (mut driver, mut rx) = spawn(kind, &ThreadConfig::new(cwd))?;
     let (tx, out) = std::sync::mpsc::channel();
-    std::thread::Builder::new().name("model-probe".into()).spawn(move || {
-        futures::executor::block_on(async move {
-            while let Some(ev) = rx.next().await {
-                if let AgentEvent::Models { models, .. } = ev {
-                    let _ = tx.send(models);
-                    break;
+    std::thread::Builder::new()
+        .name("model-probe".into())
+        .spawn(move || {
+            futures::executor::block_on(async move {
+                while let Some(ev) = rx.next().await {
+                    if let AgentEvent::Models { models, .. } = ev {
+                        let _ = tx.send(models);
+                        break;
+                    }
                 }
-            }
-        });
-    })?;
+            });
+        })?;
     let got = out.recv_timeout(timeout);
     driver.shutdown();
     got.map_err(|_| DriverError::Protocol("the agent did not list its models in time".into()))
@@ -107,18 +115,30 @@ mod tests {
     #[test]
     fn spawn_acp_with_missing_executable_is_not_found() {
         let r = spawn(
-            AgentKind::Acp { command: "definitely-not-an-acp-agent --acp".into() },
+            AgentKind::Acp {
+                command: "definitely-not-an-acp-agent --acp".into(),
+            },
             &ThreadConfig::new("."),
         );
         assert!(matches!(r, Err(DriverError::NotFound(_))));
-        let r = spawn(AgentKind::Acp { command: "  ".into() }, &ThreadConfig::new("."));
+        let r = spawn(
+            AgentKind::Acp {
+                command: "  ".into(),
+            },
+            &ThreadConfig::new("."),
+        );
         assert!(matches!(r, Err(DriverError::NotFound(_))));
     }
 
     #[test]
     fn events_roundtrip_through_serde() {
         let e = AgentEvent::Usage {
-            input: 1, output: 2, cache_create: 3, cache_read: 4, cost_usd: Some(0.5), context_window: None,
+            input: 1,
+            output: 2,
+            cache_create: 3,
+            cache_read: 4,
+            cost_usd: Some(0.5),
+            context_window: None,
         };
         let s = serde_json::to_string(&e).unwrap();
         assert_eq!(serde_json::from_str::<AgentEvent>(&s).unwrap(), e);

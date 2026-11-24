@@ -61,7 +61,11 @@ fn new_repo() -> (TempDir, PathBuf, Repo) {
 
 fn same(a: &Path, b: &Path) -> bool {
     let n = |p: &Path| {
-        fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase().replace('\\', "/")
+        fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .to_lowercase()
+            .replace('\\', "/")
     };
     n(a) == n(b)
 }
@@ -78,7 +82,11 @@ fn dir_map(root: &Path) -> BTreeMap<String, Vec<u8>> {
             if e.file_type().unwrap().is_dir() {
                 walk(base, &p, out);
             } else {
-                let rel = p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+                let rel = p
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 out.insert(rel, fs::read(&p).unwrap());
             }
         }
@@ -116,7 +124,10 @@ fn worktree_create_list_remove() {
     assert!(repo.worktree_is_dirty(&w.path).unwrap());
     let pf = repo.preflight_remove_worktree(&w.path).unwrap();
     assert!(pf.requires_confirmation);
-    assert!(pf.warnings.iter().any(|m| m.contains("uncommitted")), "{pf:?}");
+    assert!(
+        pf.warnings.iter().any(|m| m.contains("uncommitted")),
+        "{pf:?}"
+    );
     let err = repo.remove_worktree(&w.path, false).unwrap_err();
     assert!(err.to_string().contains("uncommitted"), "{err}");
     assert!(w.path.exists());
@@ -167,28 +178,47 @@ fn worktree_clean_remove_without_force_and_custom_options() {
 #[test]
 fn worktree_creation_refusals() {
     let (td, root, repo) = new_repo();
-    for bad in ["", "..", "-x", "a/b", "a\\b", "CON", "nul", "com1", "lpt3.txt", "a:b", "a*b", "trail.", "x..y"] {
+    for bad in [
+        "", "..", "-x", "a/b", "a\\b", "CON", "nul", "com1", "lpt3.txt", "a:b", "a*b", "trail.",
+        "x..y",
+    ] {
         let r = repo.create_worktree(&NewWorktree::new(bad));
         assert!(r.is_err(), "{bad:?} should be rejected");
     }
     assert!(repo.worktrees().unwrap().len() == 1);
     // Bad base / branch.
     assert!(repo
-        .create_worktree(&NewWorktree { name: "ok".into(), base: Some("--evil".into()), ..Default::default() })
+        .create_worktree(&NewWorktree {
+            name: "ok".into(),
+            base: Some("--evil".into()),
+            ..Default::default()
+        })
         .is_err());
     assert!(repo
-        .create_worktree(&NewWorktree { name: "ok".into(), base: Some("nope-ref".into()), ..Default::default() })
+        .create_worktree(&NewWorktree {
+            name: "ok".into(),
+            base: Some("nope-ref".into()),
+            ..Default::default()
+        })
         .is_err());
     for b in ["-b", "a..b", "x y", "bad~1", "con", "a/aux", "end.lock"] {
         assert!(
-            repo.create_worktree(&NewWorktree { name: "ok".into(), branch: Some(b.into()), ..Default::default() })
-                .is_err(),
+            repo.create_worktree(&NewWorktree {
+                name: "ok".into(),
+                branch: Some(b.into()),
+                ..Default::default()
+            })
+            .is_err(),
             "branch {b:?}"
         );
     }
     // Existing branch.
     assert!(repo
-        .create_worktree(&NewWorktree { name: "ok".into(), branch: Some("main".into()), ..Default::default() })
+        .create_worktree(&NewWorktree {
+            name: "ok".into(),
+            branch: Some("main".into()),
+            ..Default::default()
+        })
         .is_err());
     // Custom location inside the repo, with `..`, or non-empty.
     assert!(repo
@@ -260,7 +290,16 @@ fn worktree_removal_refusals() {
     assert!(inside.worktrees().unwrap()[0].is_main);
 
     // Locked.
-    git(&root, &["worktree", "lock", "--reason", "in use", &w.path.to_string_lossy()]);
+    git(
+        &root,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "in use",
+            &w.path.to_string_lossy(),
+        ],
+    );
     let l = repo.worktrees().unwrap();
     assert!(l[1].locked);
     assert_eq!(l[1].lock_reason.as_deref(), Some("in use"));
@@ -276,7 +315,10 @@ fn worktree_preflight_warns_about_unpushed_commits() {
     let (_td, _root, repo) = new_repo();
     let w = repo.create_worktree(&NewWorktree::new("work")).unwrap();
     let pf = repo.preflight_remove_worktree(&w.path).unwrap();
-    assert!(pf.warnings.is_empty() && !pf.requires_confirmation, "{pf:?}");
+    assert!(
+        pf.warnings.is_empty() && !pf.requires_confirmation,
+        "{pf:?}"
+    );
 
     commit_file(&w.path, "f.txt", "1", "wip commit");
     let pf = repo.preflight_remove_worktree(&w.path).unwrap();
@@ -332,8 +374,14 @@ fn worktree_copy_untracked_is_opt_in() {
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(fs::read_to_string(c.worktree.path.join(".env")).unwrap(), "SECRET=1");
-    assert_eq!(fs::read_to_string(c.worktree.path.join("sub/.env")).unwrap(), "SECRET=2");
+    assert_eq!(
+        fs::read_to_string(c.worktree.path.join(".env")).unwrap(),
+        "SECRET=1"
+    );
+    assert_eq!(
+        fs::read_to_string(c.worktree.path.join("sub/.env")).unwrap(),
+        "SECRET=2"
+    );
     assert!(c.worktree.path.join("sub/x.local").is_file());
     assert!(!c.worktree.path.join("untracked.txt").exists());
     assert_eq!(c.copied.len(), 3, "{:?}", c.copied);
@@ -358,7 +406,10 @@ fn worktree_create_from_linked_worktree_uses_main_siblings() {
     let w = repo.create_worktree(&NewWorktree::new("one")).unwrap();
     let inside = Repo::discover(&w.path).unwrap().unwrap();
     let w2 = inside.create_worktree(&NewWorktree::new("two")).unwrap();
-    assert!(same(&w2.path, &td.path().join("my repo.worktrees").join("two")));
+    assert!(same(
+        &w2.path,
+        &td.path().join("my repo.worktrees").join("two")
+    ));
 }
 
 #[test]
@@ -371,19 +422,29 @@ fn worktree_open_in_editor_argv() {
     assert!(same(Path::new(&argv[2]), &w.path));
 
     let argv = repo
-        .open_in_editor(&w.path, &Editor::Custom(r#""C:\Program Files\Ed\ed.exe" --new"#.into()))
+        .open_in_editor(
+            &w.path,
+            &Editor::Custom(r#""C:\Program Files\Ed\ed.exe" --new"#.into()),
+        )
         .unwrap();
     assert_eq!(argv[0], r"C:\Program Files\Ed\ed.exe");
     assert_eq!(argv[1], "--new");
     assert_eq!(argv.len(), 3);
     let argv = repo
-        .open_in_editor(&w.path, &Editor::Custom("zed --folder={path} {path}".into()))
+        .open_in_editor(
+            &w.path,
+            &Editor::Custom("zed --folder={path} {path}".into()),
+        )
         .unwrap();
     assert_eq!(argv.len(), 3);
     assert!(same(Path::new(&argv[2]), &w.path));
     // Only worktrees of this repo; empty command rejected.
-    assert!(repo.open_in_editor(&root.join("nope"), &Editor::VsCode).is_err());
-    assert!(repo.open_in_editor(&w.path, &Editor::Custom("  ".into())).is_err());
+    assert!(repo
+        .open_in_editor(&root.join("nope"), &Editor::VsCode)
+        .is_err());
+    assert!(repo
+        .open_in_editor(&w.path, &Editor::Custom("  ".into()))
+        .is_err());
 }
 
 // ------------------------------------------------------------------ checkpoints
@@ -417,33 +478,71 @@ fn busy_repo() -> (TempDir, PathBuf, Repo) {
 #[test]
 fn checkpoint_create_changes_nothing() {
     let (_td, root, repo) = busy_repo();
-    let status = git(&root, &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"]);
+    let status = git(
+        &root,
+        &[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--branch",
+            "--untracked-files=all",
+        ],
+    );
     let head = git(&root, &["rev-parse", "HEAD"]);
     let stash = git(&root, &["stash", "list"]);
     let stash_ref = git(&root, &["rev-parse", "refs/stash"]);
     assert!(!stash.trim().is_empty());
     let index = index_bytes(&root);
     let files = dir_map(&root);
-    let refs_before = git(&root, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    let refs_before = git(
+        &root,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
 
     let cp = repo.create_checkpoint("before the agent").unwrap();
 
-    assert_eq!(git(&root, &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"]), status);
+    assert_eq!(
+        git(
+            &root,
+            &[
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                "--untracked-files=all"
+            ]
+        ),
+        status
+    );
     assert_eq!(git(&root, &["rev-parse", "HEAD"]), head);
     assert_eq!(git(&root, &["stash", "list"]), stash);
     assert_eq!(git(&root, &["rev-parse", "refs/stash"]), stash_ref);
-    assert_eq!(index_bytes(&root), index, "real index file must be byte-identical");
+    assert_eq!(
+        index_bytes(&root),
+        index,
+        "real index file must be byte-identical"
+    );
     assert_eq!(dir_map(&root), files);
     // No leftover temp index.
     let leftovers: Vec<_> = fs::read_dir(root.join(".git"))
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("selachi-tmp-index"))
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("selachi-tmp-index")
+        })
         .collect();
     assert!(leftovers.is_empty());
     // Only the checkpoint ref was added.
-    let refs_after = git(&root, &["for-each-ref", "--format=%(refname) %(objectname)"]);
-    let added: Vec<&str> = refs_after.lines().filter(|l| !refs_before.contains(l)).collect();
+    let refs_after = git(
+        &root,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
+    let added: Vec<&str> = refs_after
+        .lines()
+        .filter(|l| !refs_before.contains(l))
+        .collect();
     assert_eq!(added.len(), 1, "{added:?}");
     assert!(added[0].starts_with(&format!("refs/selachi/checkpoints/{}", cp.id)));
 
@@ -476,7 +575,10 @@ fn checkpoint_restore_all_is_exact_and_undoable() {
     fs::write(root.join("empty.txt"), b"").unwrap();
 
     let before_files = dir_map(&root);
-    let before_status = git(&root, &["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+    let before_status = git(
+        &root,
+        &["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+    );
     let head = git(&root, &["rev-parse", "HEAD"]);
     let cp = repo.create_checkpoint("snap").unwrap();
 
@@ -495,18 +597,33 @@ fn checkpoint_restore_all_is_exact_and_undoable() {
 
     let plan = repo.restore_plan(&cp.id, &RestoreMode::All).unwrap();
     let names = |v: &Vec<PathBuf>| {
-        let mut s: Vec<String> = v.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect();
+        let mut s: Vec<String> = v
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect();
         s.sort();
         s
     };
     assert_eq!(names(&plan.create), ["b.txt", "dir/sub/u.txt"]);
     assert_eq!(names(&plan.overwrite), ["a.txt", "bin.dat"]);
-    assert_eq!(names(&plan.delete), ["ignored2.log", "new.txt", "newdir/deep/n.txt"]);
+    assert_eq!(
+        names(&plan.delete),
+        ["ignored2.log", "new.txt", "newdir/deep/n.txt"]
+    );
     let pf = repo.preflight_restore(&cp.id, &RestoreMode::All).unwrap();
     assert!(pf.requires_confirmation);
-    assert!(pf.warnings.iter().any(|w| w.contains("will delete") && w.contains("new.txt")));
-    assert!(pf.warnings.iter().any(|w| w.contains("will overwrite") && w.contains("a.txt")));
-    assert!(pf.warnings.iter().any(|w| w.contains("will re-create") && w.contains("b.txt")));
+    assert!(pf
+        .warnings
+        .iter()
+        .any(|w| w.contains("will delete") && w.contains("new.txt")));
+    assert!(pf
+        .warnings
+        .iter()
+        .any(|w| w.contains("will overwrite") && w.contains("a.txt")));
+    assert!(pf
+        .warnings
+        .iter()
+        .any(|w| w.contains("will re-create") && w.contains("b.txt")));
     // Preflight changes nothing.
     assert_eq!(dir_map(&root), after_files);
 
@@ -517,17 +634,41 @@ fn checkpoint_restore_all_is_exact_and_undoable() {
     expected.insert("ignored.log".into(), b"changed by agent".to_vec());
     let got = dir_map(&root);
     assert_eq!(got, expected);
-    assert_eq!(fs::read(root.join("crlf.txt")).unwrap(), b"one\r\ntwo\nthree\r\n");
-    assert!(!root.join("newdir").exists(), "empty dirs left by deleted files are pruned");
-    assert_eq!(git(&root, &["status", "--porcelain=v2", "-z", "--untracked-files=all"]), before_status);
+    assert_eq!(
+        fs::read(root.join("crlf.txt")).unwrap(),
+        b"one\r\ntwo\nthree\r\n"
+    );
+    assert!(
+        !root.join("newdir").exists(),
+        "empty dirs left by deleted files are pruned"
+    );
+    assert_eq!(
+        git(
+            &root,
+            &["status", "--porcelain=v2", "-z", "--untracked-files=all"]
+        ),
+        before_status
+    );
     assert_eq!(git(&root, &["rev-parse", "HEAD"]), head);
-    assert_eq!(git(&root, &["ls-files", "--stage"]), git_ls_stage_of(&cp, &root));
+    assert_eq!(
+        git(&root, &["ls-files", "--stage"]),
+        git_ls_stage_of(&cp, &root)
+    );
 
     // Auto checkpoint exists and restoring it brings the agent's state back (undo).
     let auto = report.auto_checkpoint.expect("auto checkpoint");
     assert!(auto.auto);
-    assert!(auto.label.starts_with("antes de restaurar"), "{}", auto.label);
-    let ids: Vec<String> = repo.checkpoints().unwrap().into_iter().map(|c| c.id).collect();
+    assert!(
+        auto.label.starts_with("antes de restaurar"),
+        "{}",
+        auto.label
+    );
+    let ids: Vec<String> = repo
+        .checkpoints()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
     assert!(ids.contains(&auto.id) && ids.contains(&cp.id));
     assert!(report.skipped.is_empty());
     assert_eq!(report.deleted.len(), 3);
@@ -557,7 +698,10 @@ fn git_ls_stage_of(cp: &git_svc::Checkpoint, root: &Path) -> String {
             format!("{} {} 0\t{}", f[0], f[2], path)
         })
         .collect();
-    assert_eq!(real.lines().map(str::to_owned).collect::<Vec<_>>(), from_tree);
+    assert_eq!(
+        real.lines().map(str::to_owned).collect::<Vec<_>>(),
+        from_tree
+    );
     real
 }
 
@@ -589,12 +733,25 @@ fn checkpoint_restore_files_subset() {
     let r = repo
         .restore_checkpoint(
             &cp.id,
-            RestoreMode::Files(vec![PathBuf::from("a.txt"), PathBuf::from("dir"), root.join("new2.txt")]),
+            RestoreMode::Files(vec![
+                PathBuf::from("a.txt"),
+                PathBuf::from("dir"),
+                root.join("new2.txt"),
+            ]),
         )
         .unwrap();
-    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "alpha edited\n");
-    assert_eq!(fs::read_to_string(root.join("dir/sub/u.txt")).unwrap(), "untracked\n");
-    assert!(!root.join("new2.txt").exists(), "file created after the checkpoint is deleted");
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "alpha edited\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("dir/sub/u.txt")).unwrap(),
+        "untracked\n"
+    );
+    assert!(
+        !root.join("new2.txt").exists(),
+        "file created after the checkpoint is deleted"
+    );
     // Untouched: not requested.
     assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "agent b\n");
     assert_eq!(fs::read_to_string(root.join("new.txt")).unwrap(), "new");
@@ -611,13 +768,22 @@ fn checkpoint_restore_files_subset() {
     assert_eq!(repo.checkpoints().unwrap().len(), n);
 
     // Bad paths.
-    assert!(repo.restore_checkpoint(&cp.id, RestoreMode::Files(vec![])).is_err());
-    assert!(repo.restore_checkpoint(&cp.id, RestoreMode::Files(vec![PathBuf::from("../x")])).is_err());
     assert!(repo
-        .restore_checkpoint(&cp.id, RestoreMode::Files(vec![std::env::temp_dir().join("elsewhere.txt")]))
+        .restore_checkpoint(&cp.id, RestoreMode::Files(vec![]))
+        .is_err());
+    assert!(repo
+        .restore_checkpoint(&cp.id, RestoreMode::Files(vec![PathBuf::from("../x")]))
+        .is_err());
+    assert!(repo
+        .restore_checkpoint(
+            &cp.id,
+            RestoreMode::Files(vec![std::env::temp_dir().join("elsewhere.txt")])
+        )
         .is_err());
     assert!(repo.restore_checkpoint("nope", RestoreMode::All).is_err());
-    assert!(repo.restore_checkpoint("../../x", RestoreMode::All).is_err());
+    assert!(repo
+        .restore_checkpoint("../../x", RestoreMode::All)
+        .is_err());
 }
 
 #[test]
@@ -634,8 +800,10 @@ fn checkpoint_diff_and_changed_files() {
 
     let mut ch = repo.changed_files_since(&cp.id).unwrap();
     ch.sort_by(|a, b| a.path.cmp(&b.path));
-    let got: Vec<(String, DeltaKind)> =
-        ch.iter().map(|c| (c.path.to_string_lossy().replace('\\', "/"), c.kind)).collect();
+    let got: Vec<(String, DeltaKind)> = ch
+        .iter()
+        .map(|c| (c.path.to_string_lossy().replace('\\', "/"), c.kind))
+        .collect();
     assert_eq!(
         got,
         [
@@ -647,7 +815,10 @@ fn checkpoint_diff_and_changed_files() {
     let d = repo.diff_since_checkpoint(&cp.id).unwrap();
     assert!(d.contains("+alpha changed again"), "{d}");
     assert!(d.contains("-alpha edited"));
-    assert!(d.contains("+++ b/brand-new.txt"), "untracked files are part of the diff: {d}");
+    assert!(
+        d.contains("+++ b/brand-new.txt"),
+        "untracked files are part of the diff: {d}"
+    );
     assert!(d.contains("-untracked"));
     assert!(!d.contains("ignored.log"));
 }
@@ -663,9 +834,15 @@ fn checkpoint_tracked_only_never_touches_untracked() {
     fs::write(root.join("fresh.txt"), "fresh").unwrap();
     fs::write(root.join("dir/sub/u.txt"), "edited untracked").unwrap();
     repo.restore_checkpoint(&cp.id, RestoreMode::All).unwrap();
-    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "alpha edited\n");
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "alpha edited\n"
+    );
     assert_eq!(fs::read_to_string(root.join("fresh.txt")).unwrap(), "fresh");
-    assert_eq!(fs::read_to_string(root.join("dir/sub/u.txt")).unwrap(), "edited untracked");
+    assert_eq!(
+        fs::read_to_string(root.join("dir/sub/u.txt")).unwrap(),
+        "edited untracked"
+    );
 }
 
 #[test]
@@ -717,8 +894,18 @@ fn checkpoints_are_filtered_per_worktree() {
     let cw = wt.create_checkpoint("worktree").unwrap();
     assert!(same(&cw.worktree, &w.path));
 
-    let main_ids: Vec<_> = repo.checkpoints().unwrap().into_iter().map(|c| c.id).collect();
-    let wt_ids: Vec<_> = wt.checkpoints().unwrap().into_iter().map(|c| c.id).collect();
+    let main_ids: Vec<_> = repo
+        .checkpoints()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    let wt_ids: Vec<_> = wt
+        .checkpoints()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
     assert_eq!(main_ids, std::slice::from_ref(&cm.id));
     assert_eq!(wt_ids, std::slice::from_ref(&cw.id));
     // Refs are repo-wide.
@@ -759,14 +946,25 @@ fn checkpoint_delete_and_prune() {
     assert_eq!(list[4].label, "cp0");
 
     // Not old enough: nothing pruned even though over keep_last.
-    assert!(repo.prune_checkpoints(2, Duration::from_secs(3600)).unwrap().is_empty());
+    assert!(repo
+        .prune_checkpoints(2, Duration::from_secs(3600))
+        .unwrap()
+        .is_empty());
     assert_eq!(repo.checkpoints().unwrap().len(), 5);
     // keep_last wins over age.
-    assert!(repo.prune_checkpoints(10, Duration::ZERO).unwrap().is_empty());
+    assert!(repo
+        .prune_checkpoints(10, Duration::ZERO)
+        .unwrap()
+        .is_empty());
     // Old enough and beyond keep_last.
     let gone = repo.prune_checkpoints(2, Duration::ZERO).unwrap();
     assert_eq!(gone.len(), 3);
-    let left: Vec<_> = repo.checkpoints().unwrap().into_iter().map(|c| c.label).collect();
+    let left: Vec<_> = repo
+        .checkpoints()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.label)
+        .collect();
     assert_eq!(left, ["cp4", "cp3"]);
 
     repo.delete_checkpoint(&ids[3]).unwrap();

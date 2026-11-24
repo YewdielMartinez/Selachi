@@ -34,7 +34,9 @@ pub trait UsageProbe: Send + Sync {
             .into_iter()
             .filter(|l| {
                 l.agent.eq_ignore_ascii_case(agent)
-                    && (l.window == "seven_day" || agents_svc::model::window_len_ms(&l.window).is_some_and(|ms| ms >= WEEK_MS))
+                    && (l.window == "seven_day"
+                        || agents_svc::model::window_len_ms(&l.window)
+                            .is_some_and(|ms| ms >= WEEK_MS))
             })
             .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
     }
@@ -48,7 +50,9 @@ pub struct AgentsSvcProbe {
 
 impl AgentsSvcProbe {
     pub fn new(data_dir: &Path) -> AgentsSvcProbe {
-        AgentsSvcProbe { db: data_dir.join("selachi.db") }
+        AgentsSvcProbe {
+            db: data_dir.join("selachi.db"),
+        }
     }
 }
 
@@ -98,7 +102,14 @@ mod tests {
     }
 
     fn row(agent: &str, window: &str, pct: f64) -> LimitRow {
-        LimitRow { agent: agent.into(), window: window.into(), used_percent: pct, resets_at_ms: None, observed_ms: 0, source: "t".into() }
+        LimitRow {
+            agent: agent.into(),
+            window: window.into(),
+            used_percent: pct,
+            resets_at_ms: None,
+            observed_ms: 0,
+            source: "t".into(),
+        }
     }
 
     #[test]
@@ -110,9 +121,19 @@ mod tests {
             row("gemini", "43200m", 70.0),
             row("gemini", "300m", 99.0),
         ]);
-        assert_eq!(p.weekly_used_percent("gemini", 0).unwrap().used_percent, 70.0, "a 30-day window counts, a 5 h one does not");
-        assert_eq!(p.weekly_used_percent("claude", 0).unwrap().used_percent, 40.0);
-        assert_eq!(p.weekly_used_percent("CODEX", 0).unwrap().used_percent, 95.0);
+        assert_eq!(
+            p.weekly_used_percent("gemini", 0).unwrap().used_percent,
+            70.0,
+            "a 30-day window counts, a 5 h one does not"
+        );
+        assert_eq!(
+            p.weekly_used_percent("claude", 0).unwrap().used_percent,
+            40.0
+        );
+        assert_eq!(
+            p.weekly_used_percent("CODEX", 0).unwrap().used_percent,
+            95.0
+        );
         assert!(p.weekly_used_percent("opencode", 0).is_none());
     }
 
@@ -130,21 +151,34 @@ mod tests {
         let db = dir.path().join("selachi.db");
         {
             let s = Store::open(&db).unwrap();
-            let snap = |window: &str, pct: f64, resets: Option<i64>| agents_svc::RateLimitSnapshot {
-                agent: agents_svc::Agent::Codex,
-                ts_ms: 1_000,
-                window: window.into(),
-                used_percent: pct,
-                resets_at_ms: resets,
-                source: "codex-rollout".into(),
-            };
-            s.insert_rate_limit(&snap("seven_day", 93.0, Some(10_000))).unwrap();
-            s.insert_rate_limit(&snap("five_hour", 10.0, Some(500))).unwrap();
+            let snap =
+                |window: &str, pct: f64, resets: Option<i64>| agents_svc::RateLimitSnapshot {
+                    agent: agents_svc::Agent::Codex,
+                    ts_ms: 1_000,
+                    window: window.into(),
+                    used_percent: pct,
+                    resets_at_ms: resets,
+                    source: "codex-rollout".into(),
+                };
+            s.insert_rate_limit(&snap("seven_day", 93.0, Some(10_000)))
+                .unwrap();
+            s.insert_rate_limit(&snap("five_hour", 10.0, Some(500)))
+                .unwrap();
         }
         let p = AgentsSvcProbe::new(dir.path());
         let rows = p.limits(2_000);
-        assert_eq!(rows.len(), 1, "the five_hour window already reset: {rows:?}");
-        assert_eq!(p.weekly_used_percent("codex", 2_000).unwrap().used_percent, 93.0);
-        assert!(p.weekly_used_percent("codex", 20_000).is_none(), "the week reset");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the five_hour window already reset: {rows:?}"
+        );
+        assert_eq!(
+            p.weekly_used_percent("codex", 2_000).unwrap().used_percent,
+            93.0
+        );
+        assert!(
+            p.weekly_used_percent("codex", 20_000).is_none(),
+            "the week reset"
+        );
     }
 }

@@ -22,8 +22,14 @@ pub enum Scope {
 
 impl Scope {
     /// Order of the Tab cycle.
-    pub const CYCLE: [Scope; 6] =
-        [Scope::All, Scope::Actions, Scope::History, Scope::Projects, Scope::Tasks, Scope::Snippets];
+    pub const CYCLE: [Scope; 6] = [
+        Scope::All,
+        Scope::Actions,
+        Scope::History,
+        Scope::Projects,
+        Scope::Tasks,
+        Scope::Snippets,
+    ];
 
     pub const fn prefix(self) -> Option<char> {
         match self {
@@ -96,8 +102,14 @@ impl Query {
     pub fn parse(raw: &str) -> Query {
         let mut chars = raw.chars();
         match chars.next().and_then(Scope::from_prefix) {
-            Some(scope) => Query { scope, text: chars.as_str().trim_start().to_string() },
-            None => Query { scope: Scope::All, text: raw.trim_start().to_string() },
+            Some(scope) => Query {
+                scope,
+                text: chars.as_str().trim_start().to_string(),
+            },
+            None => Query {
+                scope: Scope::All,
+                text: raw.trim_start().to_string(),
+            },
         }
     }
 

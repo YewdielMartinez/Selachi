@@ -56,7 +56,10 @@ impl FileGlyph {
         if lower.ends_with(".lock") || lower == "package-lock.json" || lower == "pnpm-lock.yaml" {
             return FileGlyph::Lock;
         }
-        if matches!(lower.as_str(), ".env" | ".gitignore" | ".gitattributes" | ".editorconfig" | "dockerfile") {
+        if matches!(
+            lower.as_str(),
+            ".env" | ".gitignore" | ".gitattributes" | ".editorconfig" | "dockerfile"
+        ) {
             return FileGlyph::Config;
         }
         let ext = match lower.rsplit_once('.') {
@@ -67,12 +70,15 @@ impl FileGlyph {
             "rs" => FileGlyph::Rust,
             "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => FileGlyph::Script,
             "py" | "pyw" | "pyi" => FileGlyph::Python,
-            "json" | "jsonc" | "toml" | "yaml" | "yml" | "ini" | "cfg" | "env" | "xml" => FileGlyph::Config,
+            "json" | "jsonc" | "toml" | "yaml" | "yml" | "ini" | "cfg" | "env" | "xml" => {
+                FileGlyph::Config
+            }
             "md" | "mdx" | "markdown" => FileGlyph::Markdown,
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" => FileGlyph::Image,
             "sh" | "bash" | "zsh" | "ps1" | "psm1" | "bat" | "cmd" => FileGlyph::Shell,
             "html" | "htm" | "css" | "scss" | "svg" => FileGlyph::Web,
-            "exe" | "dll" | "bin" | "zip" | "7z" | "gz" | "tar" | "pdf" | "wasm" | "pdb" | "so" | "o" => FileGlyph::Binary,
+            "exe" | "dll" | "bin" | "zip" | "7z" | "gz" | "tar" | "pdf" | "wasm" | "pdb" | "so"
+            | "o" => FileGlyph::Binary,
             "txt" | "log" | "csv" | "tsv" => FileGlyph::Text,
             _ => FileGlyph::Generic,
         }
@@ -92,7 +98,9 @@ impl FileGlyph {
             FileGlyph::Image => bright(13, 5),
             FileGlyph::Shell => bright(10, 2),
             FileGlyph::Web => bright(9, 1),
-            FileGlyph::Lock | FileGlyph::Binary | FileGlyph::Text | FileGlyph::Generic => theme.colors.outline,
+            FileGlyph::Lock | FileGlyph::Binary | FileGlyph::Text | FileGlyph::Generic => {
+                theme.colors.outline
+            }
         }
     }
 }

@@ -88,23 +88,26 @@ impl OscScanner {
                 State::Ground => {
                     i += bytes[i..].iter().position(|&b| b == ESC)? + 1;
                     self.state = State::Esc;
-                },
+                }
                 State::Esc => {
                     let b = bytes[i];
                     i += 1;
                     match b {
                         b']' => self.begin(),
-                        ESC => {},
+                        ESC => {}
                         _ => self.state = State::Ground,
                     }
-                },
+                }
                 State::Osc => {
                     let rest = &bytes[i..];
-                    match rest.iter().position(|&b| matches!(b, BEL | ESC | CAN | SUB)) {
+                    match rest
+                        .iter()
+                        .position(|&b| matches!(b, BEL | ESC | CAN | SUB))
+                    {
                         None => {
                             self.push(rest);
                             return None;
-                        },
+                        }
                         Some(p) => {
                             self.push(&rest[..p]);
                             let terminator = rest[p];
@@ -114,14 +117,14 @@ impl OscScanner {
                                     if let Some(event) = self.finish() {
                                         return Some((i, event));
                                     }
-                                },
+                                }
                                 ESC => self.state = State::OscEsc,
                                 // CAN / SUB abort the sequence.
                                 _ => self.state = State::Ground,
                             }
-                        },
+                        }
                     }
-                },
+                }
                 State::OscEsc => {
                     let b = bytes[i];
                     i += 1;
@@ -130,12 +133,12 @@ impl OscScanner {
                             if let Some(event) = self.finish() {
                                 return Some((i, event));
                             }
-                        },
+                        }
                         b']' => self.begin(),
-                        ESC => {},
+                        ESC => {}
                         _ => self.state = State::Ground,
                     }
-                },
+                }
             }
         }
         None
@@ -179,7 +182,9 @@ fn parse_payload(payload: &str) -> Option<OscEvent> {
     if let Some(rest) = payload.strip_prefix("633;E") {
         // `633;E;<command>[;<nonce>]`; a `;` inside the command is escaped as `\x3b`.
         let rest = rest.strip_prefix(';').unwrap_or("");
-        return Some(OscEvent::Command(unescape_command(rest.split(';').next().unwrap_or(""))));
+        return Some(OscEvent::Command(unescape_command(
+            rest.split(';').next().unwrap_or(""),
+        )));
     }
     let rest = payload.strip_prefix("133;")?;
     let mut parts = rest.split(';');
@@ -253,10 +258,17 @@ pub(crate) fn parse_osc7(uri: &str) -> Option<PathBuf> {
     if drive {
         // `/C:/Users/me` -> `C:\Users\me`
         let p = &decoded[1..];
-        return Some(PathBuf::from(if cfg!(windows) { p.replace('/', "\\") } else { p.to_owned() }));
+        return Some(PathBuf::from(if cfg!(windows) {
+            p.replace('/', "\\")
+        } else {
+            p.to_owned()
+        }));
     }
     if !host.is_empty() && !is_local_host(host) && cfg!(windows) {
-        return Some(PathBuf::from(format!("\\\\{host}{}", decoded.replace('/', "\\"))));
+        return Some(PathBuf::from(format!(
+            "\\\\{host}{}",
+            decoded.replace('/', "\\")
+        )));
     }
     Some(PathBuf::from(decoded))
 }
@@ -313,7 +325,9 @@ mod tests {
 
     #[test]
     fn marks_with_both_terminators() {
-        let ev = scan(&[b"x\x1b]133;A\x07abc\x1b]133;B\x1b\\\x1b]133;C\x07\x1b]133;D;7\x07\x1b]133;D\x07"]);
+        let ev = scan(&[
+            b"x\x1b]133;A\x07abc\x1b]133;B\x1b\\\x1b]133;C\x07\x1b]133;D;7\x07\x1b]133;D\x07",
+        ]);
         assert_eq!(
             ev,
             vec![
@@ -328,7 +342,14 @@ mod tests {
 
     #[test]
     fn sequences_split_across_chunks() {
-        let ev = scan(&[b"\x1b", b"]13", b"3;D;", b"42", b"\x1b", b"\\ tail \x1b[31mred"]);
+        let ev = scan(&[
+            b"\x1b",
+            b"]13",
+            b"3;D;",
+            b"42",
+            b"\x1b",
+            b"\\ tail \x1b[31mred",
+        ]);
         assert_eq!(ev, vec![OscEvent::Mark(Mark::Finished(Some(42)))]);
     }
 
@@ -350,10 +371,21 @@ mod tests {
     #[test]
     fn osc7_windows_paths() {
         let ev = scan(&[b"\x1b]7;file://PC/C:/Users/venta/My%20Dir/%C3%B1\x07"]);
-        assert_eq!(ev, vec![OscEvent::Cwd(PathBuf::from("C:\\Users\\venta\\My Dir\\\u{f1}"))]);
+        assert_eq!(
+            ev,
+            vec![OscEvent::Cwd(PathBuf::from(
+                "C:\\Users\\venta\\My Dir\\\u{f1}"
+            ))]
+        );
         assert_eq!(parse_osc7("file:///D:/x"), Some(PathBuf::from("D:\\x")));
-        assert_eq!(parse_osc7("file://server/share/dir"), Some(PathBuf::from("\\\\server\\share\\dir")));
-        assert_eq!(parse_osc7("file://localhost/C%3A/tmp"), Some(PathBuf::from("C:\\tmp")));
+        assert_eq!(
+            parse_osc7("file://server/share/dir"),
+            Some(PathBuf::from("\\\\server\\share\\dir"))
+        );
+        assert_eq!(
+            parse_osc7("file://localhost/C%3A/tmp"),
+            Some(PathBuf::from("C:\\tmp"))
+        );
     }
 
     #[test]
@@ -383,13 +415,24 @@ mod tests {
     #[test]
     fn osc633_command_is_unescaped() {
         let ev = scan(&[b"\x1b]633;E;git commit -m \"a\\x3bb\" C:\\\\tmp\x07"]);
-        assert_eq!(ev, vec![OscEvent::Command("git commit -m \"a;b\" C:\\tmp".to_string())]);
+        assert_eq!(
+            ev,
+            vec![OscEvent::Command(
+                "git commit -m \"a;b\" C:\\tmp".to_string()
+            )]
+        );
         // A nonce after the command is ignored; both terminators work.
         let ev = scan(&[b"\x1b]633;E;ls;1234-nonce\x1b\\"]);
         assert_eq!(ev, vec![OscEvent::Command("ls".to_string())]);
         // Empty command.
-        assert_eq!(scan(&[b"\x1b]633;E;\x07"]), vec![OscEvent::Command(String::new())]);
-        assert_eq!(scan(&[b"\x1b]633;E\x07"]), vec![OscEvent::Command(String::new())]);
+        assert_eq!(
+            scan(&[b"\x1b]633;E;\x07"]),
+            vec![OscEvent::Command(String::new())]
+        );
+        assert_eq!(
+            scan(&[b"\x1b]633;E\x07"]),
+            vec![OscEvent::Command(String::new())]
+        );
         // Other 633 subcommands are ignored.
         assert!(scan(&[b"\x1b]633;A\x07\x1b]633;P;Cwd=C:\\x\x07"]).is_empty());
     }
@@ -406,8 +449,16 @@ mod tests {
             "",
         ] {
             let wire = format!("\x1b]633;E;{}\x07", escape_command(cmd));
-            assert!(wire.bytes().all(|b| b == 0x1b || b == 0x07 || (0x20..0x7f).contains(&b)), "{wire:?}");
-            assert_eq!(scan(&[wire.as_bytes()]), vec![OscEvent::Command(cmd.to_string())], "{cmd:?}");
+            assert!(
+                wire.bytes()
+                    .all(|b| b == 0x1b || b == 0x07 || (0x20..0x7f).contains(&b)),
+                "{wire:?}"
+            );
+            assert_eq!(
+                scan(&[wire.as_bytes()]),
+                vec![OscEvent::Command(cmd.to_string())],
+                "{cmd:?}"
+            );
         }
     }
 

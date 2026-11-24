@@ -14,11 +14,13 @@ use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::tty;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
+use crate::block::{
+    Block, BlockEvent, BlockId, BlockTracker, Clock, term_history_cap, truncate_middle,
+};
 use crate::color::{Palette, color_by_table_index};
 use crate::osc::{Mark, OscEvent};
 use crate::pty_loop::{self, Hooks, Msg, PtySender};
 use crate::snapshot::{Snapshot, build_snapshot_into};
-use crate::block::{Block, BlockEvent, BlockId, BlockTracker, Clock, term_history_cap, truncate_middle};
 
 /// Errors raised while creating or driving a [`Session`].
 #[derive(thiserror::Error, Debug)]
@@ -192,10 +194,12 @@ impl Shared {
         match &event {
             OscEvent::Cwd(path) => self.emit(SessionEvent::Cwd(path.clone())),
             OscEvent::Mark(Mark::Finished(exit_code)) => {
-                self.emit(SessionEvent::CommandFinished { exit_code: *exit_code });
-            },
+                self.emit(SessionEvent::CommandFinished {
+                    exit_code: *exit_code,
+                });
+            }
             OscEvent::Mark(Mark::PromptStart | Mark::CommandStart | Mark::Executed)
-            | OscEvent::Command(_) => {},
+            | OscEvent::Command(_) => {}
         }
         let events = self.tracker().on_osc(term, event, Clock::now());
         for event in events {
@@ -203,11 +207,19 @@ impl Shared {
                 #[cfg(feature = "block-events")]
                 BlockEvent::Started(id) => self.emit(SessionEvent::BlockStarted(id)),
                 #[cfg(feature = "block-events")]
-                BlockEvent::Finished { id, exit_code, duration } => {
-                    self.emit(SessionEvent::BlockFinished { id, exit_code, duration });
-                },
+                BlockEvent::Finished {
+                    id,
+                    exit_code,
+                    duration,
+                } => {
+                    self.emit(SessionEvent::BlockFinished {
+                        id,
+                        exit_code,
+                        duration,
+                    });
+                }
                 #[cfg(not(feature = "block-events"))]
-                BlockEvent::Started(_) | BlockEvent::Finished { .. } => {},
+                BlockEvent::Started(_) | BlockEvent::Finished { .. } => {}
             }
         }
     }
@@ -221,7 +233,7 @@ impl Shared {
                 if let Err(e) = sender.send(Msg::Input(Cow::Owned(bytes))) {
                     log::debug!("pty write failed: {e}");
                 }
-            },
+            }
             None => log::debug!("pty write before event loop was ready; dropped"),
         }
     }
@@ -239,7 +251,7 @@ impl EventListener for Listener {
                 if !s.wakeup_pending.swap(true, Ordering::AcqRel) {
                     s.emit(SessionEvent::Wakeup);
                 }
-            },
+            }
             Event::Title(t) => s.emit(SessionEvent::Title(t)),
             Event::ResetTitle => s.emit(SessionEvent::Title(String::new())),
             Event::Bell => s.emit(SessionEvent::Bell),
@@ -247,7 +259,7 @@ impl EventListener for Listener {
                 if !s.exited.swap(true, Ordering::AcqRel) {
                     s.emit(SessionEvent::Exit);
                 }
-            },
+            }
             // ConPTY sends DSR queries on startup; shells stall without the reply.
             Event::PtyWrite(text) => s.write_pty(text.into_bytes()),
             Event::ColorRequest(index, format) => {
@@ -255,15 +267,15 @@ impl EventListener for Listener {
                 if let Some(c) = color_by_table_index(&s.palette(), index) {
                     s.write_pty(format(c.into()).into_bytes());
                 }
-            },
+            }
             Event::TextAreaSizeRequest(format) => {
                 let size = unpack_size(s.size.load(Ordering::Acquire));
                 s.write_pty(format(size).into_bytes());
-            },
+            }
             Event::ClipboardStore(..) | Event::ClipboardLoad(..) => {
                 log::debug!("clipboard request ignored");
-            },
-            Event::MouseCursorDirty | Event::CursorBlinkingChange => {},
+            }
+            Event::MouseCursorDirty | Event::CursorBlinkingChange => {}
         }
     }
 }
@@ -323,7 +335,13 @@ impl Session {
         cfg: SessionConfig,
         extra_env: Vec<(String, String)>,
     ) -> Result<(Session, UnboundedReceiver<SessionEvent>), TermError> {
-        Self::spawn_with_options(cfg, SpawnOptions { env: extra_env, job: None })
+        Self::spawn_with_options(
+            cfg,
+            SpawnOptions {
+                env: extra_env,
+                job: None,
+            },
+        )
     }
 
     /// Like [`Session::spawn_with_env`], and can start the shell inside a Windows Job Object so
@@ -334,7 +352,10 @@ impl Session {
         cfg: SessionConfig,
         options: SpawnOptions,
     ) -> Result<(Session, UnboundedReceiver<SessionEvent>), TermError> {
-        let SpawnOptions { env: extra_env, job } = options;
+        let SpawnOptions {
+            env: extra_env,
+            job,
+        } = options;
         let cols = cfg.cols.max(1);
         let rows = cfg.rows.max(1);
         let (tx, rx) = unbounded();
@@ -351,10 +372,19 @@ impl Session {
 
         // The terminal may hold more history than the user asked for; the PTY thread trims it
         // back after every parsed slice so absolute line numbers stay exact (see `block.rs`).
-        let term_config =
-            term::Config { scrolling_history: term_history_cap(cfg.scrollback), ..Default::default() };
-        let dims = TermSize { cols: cols as usize, rows: rows as usize };
-        let term = Arc::new(FairMutex::new(Term::new(term_config, &dims, listener.clone())));
+        let term_config = term::Config {
+            scrolling_history: term_history_cap(cfg.scrollback),
+            ..Default::default()
+        };
+        let dims = TermSize {
+            cols: cols as usize,
+            rows: rows as usize,
+        };
+        let term = Arc::new(FairMutex::new(Term::new(
+            term_config,
+            &dims,
+            listener.clone(),
+        )));
 
         let mut env = HashMap::new();
         env.insert("TERM".to_string(), "xterm-256color".to_string());
@@ -368,7 +398,10 @@ impl Session {
             cell_width: cfg.cell_width,
             cell_height: cfg.cell_height,
         };
-        let pty_err = |source| TermError::Pty { program: cfg.program.clone(), source };
+        let pty_err = |source| TermError::Pty {
+            program: cfg.program.clone(),
+            source,
+        };
 
         #[cfg(windows)]
         let (pty, pid, attachment) = {
@@ -406,7 +439,16 @@ impl Session {
         })
         .map_err(TermError::EventLoop)?;
 
-        Ok((Session { term, sender, shared, pid, attachment }, rx))
+        Ok((
+            Session {
+                term,
+                sender,
+                shared,
+                pid,
+                attachment,
+            },
+            rx,
+        ))
     }
 
     /// Sends raw bytes (already encoded input, pasted text, ...) to the child's stdin.
@@ -431,11 +473,21 @@ impl Session {
         {
             let mut term = self.term.lock();
             let cols_changed = term.columns() != cols as usize;
-            term.resize(TermSize { cols: cols as usize, rows: rows as usize });
+            term.resize(TermSize {
+                cols: cols as usize,
+                rows: rows as usize,
+            });
             // A width change reflows the text and invalidates the stored block lines.
-            self.shared.tracker().after_resize(term.grid().history_size(), cols_changed);
+            self.shared
+                .tracker()
+                .after_resize(term.grid().history_size(), cols_changed);
         }
-        let window = WindowSize { num_lines: rows, num_cols: cols, cell_width, cell_height };
+        let window = WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width,
+            cell_height,
+        };
         if let Err(e) = self.sender.send(Msg::Resize(window)) {
             log::debug!("session resize failed (event loop gone): {e}");
         }
@@ -445,7 +497,11 @@ impl Session {
     /// the caller only has to repaint. Colors set explicitly by programs (OSC 4/10/11) and
     /// truecolor cells are not affected.
     pub fn set_palette(&self, palette: Palette) {
-        *self.shared.palette.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(palette);
+        *self
+            .shared
+            .palette
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::new(palette);
     }
 
     /// Copies the visible viewport. Also re-arms [`SessionEvent::Wakeup`] delivery.
@@ -504,7 +560,8 @@ impl Session {
         }
         let grid = term.grid();
         let tracker = self.shared.tracker();
-        let abs = tracker.abs_of_viewport_row(grid.history_size(), grid.display_offset(), viewport_row);
+        let abs =
+            tracker.abs_of_viewport_row(grid.history_size(), grid.display_offset(), viewport_row);
         tracker.block_at_abs(abs)
     }
 

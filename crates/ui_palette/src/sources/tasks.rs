@@ -28,7 +28,11 @@ pub struct TasksSource {
 impl TasksSource {
     /// `db` ranks the tasks by what you ran before; without it they keep the discovery order.
     pub fn new(db: Option<StateDb>) -> Self {
-        Self { db, cache: TaskCache::new(), session: Mutex::new(None) }
+        Self {
+            db,
+            cache: TaskCache::new(),
+            session: Mutex::new(None),
+        }
     }
 
     fn ranked(&self, root: &PathBuf, cwd: &str) -> Ranked {
@@ -43,7 +47,12 @@ impl TasksSource {
             Some(db) => rank_tasks(tasks.to_vec(), db, cwd),
             None => tasks
                 .iter()
-                .map(|t| RankedTask { task: t.clone(), score: 0.0, runs: 0, last_run: None })
+                .map(|t| RankedTask {
+                    task: t.clone(),
+                    score: 0.0,
+                    runs: 0,
+                    last_run: None,
+                })
                 .collect(),
         });
         if let Ok(mut guard) = self.session.lock() {
@@ -79,9 +88,17 @@ impl PaletteSource for TasksSource {
     }
 
     fn query(&self, q: &SourceQuery<'_>) -> Vec<PaletteItem> {
-        let Some(root) = q.ctx.root() else { return Vec::new() };
+        let Some(root) = q.ctx.root() else {
+            return Vec::new();
+        };
         let root = root.to_path_buf();
-        let cwd = q.ctx.cwd.as_deref().unwrap_or(&root).to_string_lossy().into_owned();
+        let cwd = q
+            .ctx
+            .cwd
+            .as_deref()
+            .unwrap_or(&root)
+            .to_string_lossy()
+            .into_owned();
         let ranked = self.ranked(&root, &cwd);
         if q.cancel.is_cancelled() {
             return Vec::new();
@@ -108,24 +125,40 @@ impl PaletteSource for TasksSource {
                     .map(|s| s + (r.score as f32).min(6.0) * 0.03)
             };
             let Some(score) = score else { continue };
-            let meta = if r.runs > 0 { format!("{kind} · {}×", r.runs) } else { kind.to_string() };
+            let meta = if r.runs > 0 {
+                format!("{kind} · {}×", r.runs)
+            } else {
+                kind.to_string()
+            };
             out.push(
                 PaletteItem::new(
                     format!("task:{}", t.id),
                     t.label.clone(),
                     ItemAction::emit(
                         "Ejecutar en pestaña nueva",
-                        PaletteEvent::RunCommand { line: t.command.clone(), cwd: Some(t.cwd.clone()), new_tab: true },
+                        PaletteEvent::RunCommand {
+                            line: t.command.clone(),
+                            cwd: Some(t.cwd.clone()),
+                            new_tab: true,
+                        },
                     ),
                 )
                 .alt(ItemAction::emit(
                     "Ejecutar aquí",
-                    PaletteEvent::RunCommand { line: t.command.clone(), cwd: Some(t.cwd.clone()), new_tab: false },
+                    PaletteEvent::RunCommand {
+                        line: t.command.clone(),
+                        cwd: Some(t.cwd.clone()),
+                        new_tab: false,
+                    },
                 ))
                 .subtitle(if t.cwd == root {
                     t.command.clone()
                 } else {
-                    format!("{}  ·  {}", t.command, display_path(&t.cwd.to_string_lossy()))
+                    format!(
+                        "{}  ·  {}",
+                        t.command,
+                        display_path(&t.cwd.to_string_lossy())
+                    )
                 })
                 .meta(meta)
                 .icon(Icon::Task)

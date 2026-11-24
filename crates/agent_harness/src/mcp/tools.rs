@@ -34,11 +34,19 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     fn ok(text: impl Into<String>, structured: Value) -> ToolOutput {
-        ToolOutput { is_error: false, text: text.into(), structured }
+        ToolOutput {
+            is_error: false,
+            text: text.into(),
+            structured,
+        }
     }
     pub fn error(text: impl Into<String>) -> ToolOutput {
         let text = text.into();
-        ToolOutput { is_error: true, structured: json!({"error": text}), text }
+        ToolOutput {
+            is_error: true,
+            structured: json!({"error": text}),
+            text,
+        }
     }
 }
 
@@ -67,7 +75,9 @@ pub fn call(ctx: &Ctx, name: &str, args: Value, state: &CallState) -> Option<Too
     let schema = schema::input_schema(name)?;
     let args = if args.is_null() { json!({}) } else { args };
     if let Err(e) = schema::validate(&schema, &args) {
-        return Some(ToolOutput::error(format!("invalid arguments for {name}: {e}")));
+        return Some(ToolOutput::error(format!(
+            "invalid arguments for {name}: {e}"
+        )));
     }
     let h = match ctx.harness() {
         Ok(h) => h,
@@ -92,16 +102,27 @@ fn to_value<T: serde::Serialize>(v: &T) -> Value {
 }
 
 fn list(h: &Harness, models: bool) -> ToolOutput {
-    let list = list_agents(h.config(), h.caller(), h.usage_probe().as_ref(), h.data_dir(), models);
+    let list = list_agents(
+        h.config(),
+        h.caller(),
+        h.usage_probe().as_ref(),
+        h.data_dir(),
+        models,
+    );
     ToolOutput::ok(list.to_text(), to_value(&list))
 }
 
 /// The text a model reads for a run result (the CLI's rendering without its CLI-only hint).
 fn run_text(r: &RunResult) -> String {
     let text = r.to_text();
-    let mut out: Vec<&str> = text.lines().filter(|l| !l.starts_with("next: selachi-agent")).collect();
+    let mut out: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.starts_with("next: selachi-agent"))
+        .collect();
     if r.worktree_path.is_some() && r.status == RunStatus::Done && !r.files_changed.is_empty() {
-        out.push("next: get_diff to review, apply_changes to bring the changes in (the user confirms)");
+        out.push(
+            "next: get_diff to review, apply_changes to bring the changes in (the user confirms)",
+        );
     }
     out.join("\n")
 }
@@ -110,15 +131,24 @@ fn run_output(r: &RunResult) -> ToolOutput {
     let mut structured = to_value(r);
     let text = match (r.status, r.code) {
         (RunStatus::Refused, code) => {
-            let code = code.map(|c| to_value(&c).as_str().unwrap_or("refused").to_string()).unwrap_or_else(|| "refused".into());
-            format!("refused ({code}): {}", r.reason.as_deref().unwrap_or("no reason given"))
+            let code = code
+                .map(|c| to_value(&c).as_str().unwrap_or("refused").to_string())
+                .unwrap_or_else(|| "refused".into());
+            format!(
+                "refused ({code}): {}",
+                r.reason.as_deref().unwrap_or("no reason given")
+            )
         }
         _ => run_text(r),
     };
     if let Some(o) = structured.as_object_mut() {
         o.insert("async".into(), Value::Bool(false));
     }
-    ToolOutput { is_error: r.status != RunStatus::Done, text, structured }
+    ToolOutput {
+        is_error: r.status != RunStatus::Done,
+        text,
+        structured,
+    }
 }
 
 fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
@@ -129,7 +159,10 @@ fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
         cwd: PathBuf::from(get("cwd").unwrap_or_default()),
         model: get("model").filter(|m| !m.trim().is_empty()),
         permission: get("permission").unwrap_or_else(|| "read_only".into()),
-        worktree: args.get("worktree").and_then(Value::as_bool).unwrap_or(false),
+        worktree: args
+            .get("worktree")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         timeout_s: args.get("timeout_s").and_then(Value::as_u64),
         budget_tokens: args.get("budget_tokens").and_then(Value::as_u64),
         background: args.get("async").and_then(Value::as_bool).unwrap_or(false),
@@ -188,9 +221,13 @@ fn cancel(h: &Harness, id: &str) -> ToolOutput {
                 o.insert("run_id".into(), json!(id));
             }
             let text = match &out {
-                crate::control::CancelOutcome::AlreadyFinished { status } => format!("run {id} had already finished ({})", status.as_str()),
+                crate::control::CancelOutcome::AlreadyFinished { status } => {
+                    format!("run {id} had already finished ({})", status.as_str())
+                }
                 crate::control::CancelOutcome::Cancelled => format!("run {id} cancelled"),
-                crate::control::CancelOutcome::Killed => format!("run {id} cancelled (its runner had to be killed)"),
+                crate::control::CancelOutcome::Killed => {
+                    format!("run {id} cancelled (its runner had to be killed)")
+                }
             };
             ToolOutput::ok(text, v)
         }
@@ -205,15 +242,26 @@ fn diff(h: &Harness, id: &str, stat_only: bool) -> ToolOutput {
     };
     let stat = diff_stat_of(&raw);
     if stat_only {
-        let text = if stat.text.is_empty() { "no changes".to_string() } else { stat.text.clone() };
+        let text = if stat.text.is_empty() {
+            "no changes".to_string()
+        } else {
+            stat.text.clone()
+        };
         return ToolOutput::ok(text, json!({"run_id": id, "diff_stat": stat}));
     }
     // what is shown is redacted; `apply` uses the exact patch
     let shown = store::redact(&raw).text;
     let truncated = shown.chars().count() > MAX_DIFF_CHARS;
     let diff = cap_chars(&shown, MAX_DIFF_CHARS);
-    let text = if diff.trim().is_empty() { "no changes".to_string() } else { diff.clone() };
-    ToolOutput::ok(text, json!({"run_id": id, "diff": diff, "truncated": truncated, "diff_stat": stat}))
+    let text = if diff.trim().is_empty() {
+        "no changes".to_string()
+    } else {
+        diff.clone()
+    };
+    ToolOutput::ok(
+        text,
+        json!({"run_id": id, "diff": diff, "truncated": truncated, "diff_stat": stat}),
+    )
 }
 
 /// How to apply from a terminal (`<exe> apply <id>`), with the executable quoted.
@@ -249,7 +297,12 @@ fn apply_changes(h: &Harness, id: &str) -> ToolOutput {
 }
 
 /// [`apply_changes`] with the pipe broker injected (`None` ping = ask the broker's own `ping`).
-pub fn apply_with(h: &Harness, id: &str, pipe: &PipeBroker, gui_reachable: Option<bool>) -> ToolOutput {
+pub fn apply_with(
+    h: &Harness,
+    id: &str,
+    pipe: &PipeBroker,
+    gui_reachable: Option<bool>,
+) -> ToolOutput {
     let mut plan = match h.apply_plan(id) {
         Ok(p) => p,
         Err(e) => return ToolOutput::error(e),
@@ -272,16 +325,34 @@ pub fn apply_with(h: &Harness, id: &str, pipe: &PipeBroker, gui_reachable: Optio
     };
 
     if plan.already_applied {
-        return ToolOutput::ok(format!("run {id} was already applied; nothing to do"), pending("already applied"));
+        return ToolOutput::ok(
+            format!("run {id} was already applied; nothing to do"),
+            pending("already applied"),
+        );
     }
     if !plan.can_apply {
-        let why = plan.conflict.clone().unwrap_or_else(|| if plan.empty { "nothing to apply".into() } else { "cannot be applied".into() });
-        return ToolOutput::ok(format!("NOT applied: {why}\n\n{}", plan.to_text()), pending(&why));
+        let why = plan.conflict.clone().unwrap_or_else(|| {
+            if plan.empty {
+                "nothing to apply".into()
+            } else {
+                "cannot be applied".into()
+            }
+        });
+        return ToolOutput::ok(
+            format!("NOT applied: {why}\n\n{}", plan.to_text()),
+            pending(&why),
+        );
     }
     if plan.risk == Risk::Full {
-        let why = format!("full-risk changes need a person at a terminal: {}", plan.risk_reasons.join("; "));
+        let why = format!(
+            "full-risk changes need a person at a terminal: {}",
+            plan.risk_reasons.join("; ")
+        );
         return ToolOutput::ok(
-            format!("NOT applied. {why}\nAsk the user to review and run: {command}\n\n{}", plan.to_text()),
+            format!(
+                "NOT applied. {why}\nAsk the user to review and run: {command}\n\n{}",
+                plan.to_text()
+            ),
             pending(&why),
         );
     }
@@ -294,19 +365,30 @@ pub fn apply_with(h: &Harness, id: &str, pipe: &PipeBroker, gui_reachable: Optio
                 Decision::Allow | Decision::Always if verdict.forwarded => {
                     return match h.apply(id, Confirmation::Gui) {
                         Ok(report) => ToolOutput::ok(
-                            format!("APPLIED {} file(s) to {} after the user confirmed in Selachi", report.files.len(), report.target),
+                            format!(
+                                "APPLIED {} file(s) to {} after the user confirmed in Selachi",
+                                report.files.len(),
+                                report.target
+                            ),
                             json!({"run_id": id, "applied": true, "confirmed_by": "selachi_window", "report": to_value(&report)}),
                         ),
-                        Err(e) => ToolOutput::error(format!("the user confirmed but the apply failed: {e}")),
+                        Err(e) => ToolOutput::error(format!(
+                            "the user confirmed but the apply failed: {e}"
+                        )),
                     };
                 }
                 _ => {
-                    let why = verdict.reason.unwrap_or_else(|| "the user denied it in Selachi".into());
+                    let why = verdict
+                        .reason
+                        .unwrap_or_else(|| "the user denied it in Selachi".into());
                     let mut v = pending(&why);
                     if let Some(o) = v.as_object_mut() {
                         o.insert("denied".into(), json!(true));
                     }
-                    return ToolOutput::ok(format!("NOT applied: {why}\nThe user can still run: {command}"), v);
+                    return ToolOutput::ok(
+                        format!("NOT applied: {why}\nThe user can still run: {command}"),
+                        v,
+                    );
                 }
             }
         }

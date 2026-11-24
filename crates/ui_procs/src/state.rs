@@ -43,7 +43,10 @@ pub enum Dialog {
     /// Terminating (graceful, then forced after the grace period).
     Running(StopPlan),
     /// Outcome of a run.
-    Done { plan: StopPlan, result: StopResult },
+    Done {
+        plan: StopPlan,
+        result: StopResult,
+    },
     /// A plain message ("Ya no hay huérfanos").
     Notice(SharedString),
 }
@@ -186,7 +189,9 @@ impl ProcsModel {
                 cx.background_executor().timer(interval).await;
                 let keep = this
                     .update(cx, |m, cx| {
-                        let stale = m.last_touch.is_some_and(|t| t.elapsed() > interval * 2 + Duration::from_millis(500));
+                        let stale = m.last_touch.is_some_and(|t| {
+                            t.elapsed() > interval * 2 + Duration::from_millis(500)
+                        });
                         if !m.visible || stale {
                             m.visible = false;
                             m.loop_running = false;
@@ -221,7 +226,10 @@ impl ProcsModel {
         self.last_refresh = Some(Instant::now());
         let source = self.source.clone();
         cx.spawn(async move |this, cx| {
-            let data = cx.background_executor().spawn(async move { source.collect() }).await;
+            let data = cx
+                .background_executor()
+                .spawn(async move { source.collect() })
+                .await;
             let _ = this.update(cx, |m, cx| m.apply(data, cx));
         })
         .detach();
@@ -248,7 +256,11 @@ impl ProcsModel {
 
     /// Refreshes (throttled) whenever a job reports a lifecycle event. Hand it the receiver of
     /// `JobGroup::notifications()`; the task ends with the job.
-    pub fn watch_job_events(&mut self, mut rx: UnboundedReceiver<JobEvent>, cx: &mut Context<Self>) {
+    pub fn watch_job_events(
+        &mut self,
+        mut rx: UnboundedReceiver<JobEvent>,
+        cx: &mut Context<Self>,
+    ) {
         let task = cx.spawn(async move |this, cx| {
             while rx.next().await.is_some() {
                 if this.update(cx, |m, cx| m.on_job_event(cx)).is_err() {
@@ -261,8 +273,14 @@ impl ProcsModel {
 
     /// One job event happened: refresh, but never more than once per throttle window.
     pub fn on_job_event(&mut self, cx: &mut Context<Self>) {
-        let gap = if self.visible { EVENT_GAP_VISIBLE } else { EVENT_GAP_HIDDEN };
-        let wait = self.last_refresh.map_or(Duration::ZERO, |t| gap.saturating_sub(t.elapsed()));
+        let gap = if self.visible {
+            EVENT_GAP_VISIBLE
+        } else {
+            EVENT_GAP_HIDDEN
+        };
+        let wait = self
+            .last_refresh
+            .map_or(Duration::ZERO, |t| gap.saturating_sub(t.elapsed()));
         if wait.is_zero() {
             self.refresh(cx);
             return;
@@ -294,7 +312,10 @@ impl ProcsModel {
     }
 
     fn begin_plan(&mut self, request: PlanRequest, cx: &mut Context<Self>) {
-        if matches!(self.dialog, Dialog::Planning | Dialog::Confirm(_) | Dialog::Running(_)) {
+        if matches!(
+            self.dialog,
+            Dialog::Planning | Dialog::Confirm(_) | Dialog::Running(_)
+        ) {
             return; // one dialog at a time
         }
         self.dialog = Dialog::Planning;
@@ -324,13 +345,21 @@ impl ProcsModel {
         .detach();
     }
 
-    fn plan_ready(&mut self, epoch: u64, snap: Snapshot, plan: Option<StopPlan>, cx: &mut Context<Self>) {
+    fn plan_ready(
+        &mut self,
+        epoch: u64,
+        snap: Snapshot,
+        plan: Option<StopPlan>,
+        cx: &mut Context<Self>,
+    ) {
         if epoch != self.dialog_epoch || self.dialog != Dialog::Planning {
             return; // cancelled meanwhile
         }
         self.dialog = match plan {
             Some(p) if !p.is_empty() || !p.refused.is_empty() => Dialog::Confirm(p),
-            Some(p) if p.denied > 0 => Dialog::Notice("Los huérfanos restantes no se pueden inspeccionar (sin permiso).".into()),
+            Some(p) if p.denied > 0 => Dialog::Notice(
+                "Los huérfanos restantes no se pueden inspeccionar (sin permiso).".into(),
+            ),
             Some(_) => Dialog::Notice("No hay huérfanos que limpiar.".into()),
             None => Dialog::Notice("Ese proceso ya no existe.".into()),
         };
@@ -360,7 +389,10 @@ impl ProcsModel {
         let source = self.source.clone();
         let for_task = plan.clone();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { source.terminate(&for_task) }).await;
+            let result = cx
+                .background_executor()
+                .spawn(async move { source.terminate(&for_task) })
+                .await;
             let _ = this.update(cx, |m, cx| {
                 m.dialog = Dialog::Done { plan, result };
                 cx.notify();
@@ -426,7 +458,10 @@ pub(crate) mod testing {
             if let Ok(mut t) = self.terminated.lock() {
                 t.push(pids.clone());
             }
-            StopResult { graceful: pids, ..StopResult::default() }
+            StopResult {
+                graceful: pids,
+                ..StopResult::default()
+            }
         }
 
         fn reset_sampling(&self) {

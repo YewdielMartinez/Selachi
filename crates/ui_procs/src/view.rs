@@ -5,13 +5,14 @@ use std::collections::HashSet;
 
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, ClickEvent, Context, ElementId, Entity, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Window, div, px, svg,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px, svg,
 };
 use panel_api::{Icon, PanelCtx, PanelId, PanelProvider, PanelZone, WidthClass};
 use theme::{Radius, Theme};
 use ui_kit::{
-    Button, GhostButton, IconButton, Segment, SegmentedControl, Spinner, Tooltip, WireFill, WireRect, Wireframe, icon,
+    Button, GhostButton, IconButton, Segment, SegmentedControl, Spinner, Tooltip, WireFill,
+    WireRect, Wireframe, icon,
 };
 
 use crate::assets::{ARROW_UP_RIGHT, runtime_icon_path};
@@ -51,7 +52,12 @@ impl PanelProvider for ProcsPanelProvider {
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {
-        &[PanelZone::Sidebar, PanelZone::Right, PanelZone::Main, PanelZone::Bottom]
+        &[
+            PanelZone::Sidebar,
+            PanelZone::Right,
+            PanelZone::Main,
+            PanelZone::Bottom,
+        ]
     }
 
     fn build(&self, ctx: PanelCtx, _window: &mut Window, cx: &mut App) -> AnyView {
@@ -59,8 +65,16 @@ impl PanelProvider for ProcsPanelProvider {
         cx.new(|cx| ProcsPanel::new(ctx, model, cx)).into()
     }
 
-    fn context_changed(&self, view: &AnyView, ctx: &PanelCtx, _window: &mut Window, cx: &mut App) -> bool {
-        let Ok(panel) = view.clone().downcast::<ProcsPanel>() else { return false };
+    fn context_changed(
+        &self,
+        view: &AnyView,
+        ctx: &PanelCtx,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Ok(panel) = view.clone().downcast::<ProcsPanel>() else {
+            return false;
+        };
         panel.update(cx, |p, cx| p.retarget(ctx.clone(), cx));
         true
     }
@@ -163,11 +177,20 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 fn probable_label(compact: bool) -> &'static str {
-    if compact { "probable" } else { "atribución probable" }
+    if compact {
+        "probable"
+    } else {
+        "atribución probable"
+    }
 }
 
 fn text_ellipsis_box() -> gpui::Div {
-    div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis()
+    div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
 }
 
 fn state_color(theme: &Theme, state: RowState) -> gpui::Rgba {
@@ -192,7 +215,11 @@ fn badge(theme: &Theme, state: RowState) -> impl IntoElement {
         .rounded_full()
         .bg(c.surface_3)
         .text_size(px(theme.typography.ui_size_xs))
-        .text_color(if state == RowState::Active { c.muted } else { color })
+        .text_color(if state == RowState::Active {
+            c.muted
+        } else {
+            color
+        })
         .child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
         .child(state.label())
 }
@@ -213,7 +240,11 @@ fn tag(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
 }
 
 fn runtime_icon(theme: &Theme, kind: proc_svc::RuntimeKind) -> impl IntoElement {
-    svg().path(runtime_icon_path(kind)).flex_none().size(px(16.0)).text_color(theme.colors.text)
+    svg()
+        .path(runtime_icon_path(kind))
+        .flex_none()
+        .size(px(16.0))
+        .text_color(theme.colors.text)
 }
 
 /// `:5173 ↗`: opens `http://localhost:PORT` for TCP; UDP is a plain, inert chip.
@@ -247,18 +278,40 @@ fn port_pill(theme: &Theme, pid: u32, pill: PortPill) -> impl IntoElement + use<
                 .tooltip(Tooltip::text(theme, tip))
                 .on_click(move |_, _, cx| cx.open_url(&url))
                 .child(pill.label())
-                .child(svg().path(ARROW_UP_RIGHT).flex_none().size(px(10.0)).text_color(c.accent))
+                .child(
+                    svg()
+                        .path(ARROW_UP_RIGHT)
+                        .flex_none()
+                        .size(px(10.0))
+                        .text_color(c.accent),
+                )
                 .into_any_element()
         }
-        None => base.text_color(c.muted).child(pill.label()).into_any_element(),
+        None => base
+            .text_color(c.muted)
+            .child(pill.label())
+            .into_any_element(),
     }
 }
 
 fn chevron(theme: &Theme, collapsed: bool) -> impl IntoElement {
-    icon(if collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, 16.0, theme.colors.muted)
+    icon(
+        if collapsed {
+            Icon::ChevronRight
+        } else {
+            Icon::ChevronDown
+        },
+        16.0,
+        theme.colors.muted,
+    )
 }
 
-pub(crate) fn metrics_text(row_ram: u64, cpu: Option<f32>, uptime: Option<std::time::Duration>, compact: bool) -> String {
+pub(crate) fn metrics_text(
+    row_ram: u64,
+    cpu: Option<f32>,
+    uptime: Option<std::time::Duration>,
+    compact: bool,
+) -> String {
     let ram = format_bytes(row_ram);
     if compact {
         return ram;
@@ -338,17 +391,24 @@ fn summary_line(theme: &Theme, snap: &Snapshot, compact: bool) -> impl IntoEleme
         line = line.child("·").child(format_bytes(snap.ram_total));
     }
     if snap.summary.count > 0 {
-        line = line.child("·").child(
-            div()
-                .text_color(theme.colors.warning)
-                .child(plural(snap.summary.count, "huérfano", "huérfanos")),
-        );
+        line = line
+            .child("·")
+            .child(div().text_color(theme.colors.warning).child(plural(
+                snap.summary.count,
+                "huérfano",
+                "huérfanos",
+            )));
     }
     line
 }
 
 impl ProcsPanel {
-    fn header(&self, snap: &Snapshot, dialog: &Dialog, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn header(
+        &self,
+        snap: &Snapshot,
+        dialog: &Dialog,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let theme = self.ctx.theme;
         let compact = self.is_compact();
         let view = cx.entity();
@@ -368,7 +428,10 @@ impl ProcsPanel {
             });
         });
 
-        let busy = !matches!(dialog, Dialog::None | Dialog::Done { .. } | Dialog::Notice(_));
+        let busy = !matches!(
+            dialog,
+            Dialog::None | Dialog::Done { .. } | Dialog::Notice(_)
+        );
         let orphans = snap.summary.count;
         let clean = Button::action("procs-clean", &theme, "Limpiar huérfanos")
             .no_icon()
@@ -383,7 +446,11 @@ impl ProcsPanel {
         if compact {
             row.flex_col().child(tabs).child(clean)
         } else {
-            row.flex_row().items_center().child(tabs).child(div().flex_1()).child(clean)
+            row.flex_row()
+                .items_center()
+                .child(tabs)
+                .child(div().flex_1())
+                .child(clean)
         }
     }
 
@@ -418,12 +485,22 @@ impl ProcsPanel {
         out
     }
 
-    fn agent_header(&self, agent: &AgentGroup, key: &str, folded: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn agent_header(
+        &self,
+        agent: &AgentGroup,
+        key: &str,
+        folded: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let view = cx.entity();
         let k = key.to_string();
-        let mut meta = format!("{} · {}", plural(agent.process_count(), "proceso", "procesos"), format_bytes(agent.ram()));
+        let mut meta = format!(
+            "{} · {}",
+            plural(agent.process_count(), "proceso", "procesos"),
+            format_bytes(agent.ram())
+        );
         if self.is_compact() {
             meta = plural(agent.process_count(), "proceso", "procesos");
         }
@@ -442,18 +519,34 @@ impl ProcsPanel {
             .hover(move |s| s.bg(c.surface_2))
             .on_click(move |_, _, cx| view.update(cx, |p, cx| p.toggle(k.clone(), cx)))
             .child(chevron(&theme, folded))
-            .child(ui_kit::agent_icon(ui_kit::AgentMark::from_name(&agent.id), 16.0, c.muted))
+            .child(ui_kit::agent_icon(
+                ui_kit::AgentMark::from_name(&agent.id),
+                16.0,
+                c.muted,
+            ))
             .child(
                 text_ellipsis_box()
                     .text_size(px(theme.typography.ui_size_md))
                     .font_weight(FontWeight::MEDIUM)
                     .child(agent.name.clone()),
             )
-            .child(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(meta))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(theme.typography.ui_size_xs))
+                    .text_color(c.muted)
+                    .child(meta),
+            )
             .into_any_element()
     }
 
-    fn owner_header(&self, owner: &OwnerGroup, key: &str, folded: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn owner_header(
+        &self,
+        owner: &OwnerGroup,
+        key: &str,
+        folded: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = self.ctx.theme;
         let c = theme.colors;
         let compact = self.is_compact();
@@ -497,7 +590,14 @@ impl ProcsPanel {
         }
         if owner.tree_tracked {
             // No Job Object (for example the Microsoft Store `pwsh`): "seguimiento por árbol".
-            el = el.child(tag(&theme, if compact { "árbol" } else { "seguimiento por árbol" }));
+            el = el.child(tag(
+                &theme,
+                if compact {
+                    "árbol"
+                } else {
+                    "seguimiento por árbol"
+                },
+            ));
         }
         let orphans = owner.orphan_count();
         if orphans > 0 {
@@ -584,9 +684,19 @@ impl ProcsPanel {
             )
             .child(stop);
 
-        let mut l2 = div().flex().flex_row().items_center().gap(px(6.0)).pl(px(24.0));
+        let mut l2 = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .pl(px(24.0));
         l2 = l2.child(badge(&theme, r.state));
-        l2 = l2.children(r.ports.iter().take(if compact { 1 } else { 3 }).map(|p| port_pill(&theme, pid, *p)));
+        l2 = l2.children(
+            r.ports
+                .iter()
+                .take(if compact { 1 } else { 3 })
+                .map(|p| port_pill(&theme, pid, *p)),
+        );
         if r.probable && !compact {
             l2 = l2.child(tag(&theme, probable_label(false)));
         }
@@ -624,7 +734,8 @@ impl ProcsPanel {
     fn ports_body(&self, snap: &Snapshot, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = self.ctx.theme;
         let c = theme.colors;
-        let (mine, others): (Vec<&PortRow>, Vec<&PortRow>) = snap.ports.iter().partition(|p| p.is_agent_related());
+        let (mine, others): (Vec<&PortRow>, Vec<&PortRow>) =
+            snap.ports.iter().partition(|p| p.is_agent_related());
         let mut out = Vec::new();
         if mine.is_empty() {
             out.push(empty_state(
@@ -689,7 +800,11 @@ impl ProcsPanel {
             "protegido",
         );
 
-        let pill = PortPill { port: p.port, tcp: p.tcp, exposed: p.exposed };
+        let pill = PortPill {
+            port: p.port,
+            tcp: p.tcp,
+            exposed: p.exposed,
+        };
         let l1 = div()
             .flex()
             .flex_row()
@@ -703,12 +818,26 @@ impl ProcsPanel {
             )
             .child(stop);
 
-        let mut l2 = div().flex().flex_row().items_center().gap(px(6.0)).pl(px(2.0));
+        let mut l2 = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .pl(px(2.0));
         l2 = l2.child(runtime_icon(&theme, p.runtime)).child(
             text_ellipsis_box()
                 .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
-                .child(clip(&p.origin.label(), if compact && p.state.is_some_and(|s| s.is_orphan()) { 9 } else if compact { 16 } else { 30 })),
+                .child(clip(
+                    &p.origin.label(),
+                    if compact && p.state.is_some_and(|s| s.is_orphan()) {
+                        9
+                    } else if compact {
+                        16
+                    } else {
+                        30
+                    },
+                )),
         );
         if let Some(s) = p.state.filter(|s| s.is_orphan()) {
             l2 = l2.child(badge(&theme, s));
@@ -720,7 +849,13 @@ impl ProcsPanel {
             l2 = l2.child(tag(&theme, "expuesto"));
         }
         if p.ram > 0 {
-            l2 = l2.child(div().flex_none().text_size(px(theme.typography.ui_size_xs)).text_color(c.muted).child(format_bytes(p.ram)));
+            l2 = l2.child(
+                div()
+                    .flex_none()
+                    .text_size(px(theme.typography.ui_size_xs))
+                    .text_color(c.muted)
+                    .child(format_bytes(p.ram)),
+            );
         }
 
         div()
@@ -756,8 +891,18 @@ impl ProcsPanel {
                 .rounded(px(Radius::SM))
                 .bg(c.surface_2)
         };
-        let title = |t: String| div().text_size(px(ty.ui_size_lg)).font_weight(FontWeight::MEDIUM).child(t);
-        let note = |t: String| div().text_size(px(ty.ui_size_sm)).text_color(c.muted).child(t);
+        let title = |t: String| {
+            div()
+                .text_size(px(ty.ui_size_lg))
+                .font_weight(FontWeight::MEDIUM)
+                .child(t)
+        };
+        let note = |t: String| {
+            div()
+                .text_size(px(ty.ui_size_sm))
+                .text_color(c.muted)
+                .child(t)
+        };
         let buttons = || div().flex().flex_row().flex_wrap().gap(px(8.0));
 
         Some(match dialog {
@@ -773,31 +918,48 @@ impl ProcsPanel {
                 let m = model;
                 card()
                     .child(note(msg.to_string()))
-                    .child(buttons().child(Button::tonal("dlg-close", &theme, "Cerrar").on_click(move |_, _, cx| {
-                        m.update(cx, |m, cx| m.cancel(cx));
-                    })))
+                    .child(
+                        buttons().child(Button::tonal("dlg-close", &theme, "Cerrar").on_click(
+                            move |_, _, cx| {
+                                m.update(cx, |m, cx| m.cancel(cx));
+                            },
+                        )),
+                    )
                     .into_any_element()
             }
             Dialog::Confirm(plan) => {
                 let (m_cancel, m_ok) = (model.clone(), model);
                 let n = plan.items.len();
-                let mut el = card().child(title(plan.title())).child(note(confirm_note(plan)));
+                let mut el = card()
+                    .child(title(plan.title()))
+                    .child(note(confirm_note(plan)));
                 el = el.child(plan_list(&theme, plan, self.is_compact()));
                 for (item, reason) in &plan.refused {
-                    el = el.child(note(format!("No se tocará {} (pid {}): {reason}", item.name, item.pid)));
+                    el = el.child(note(format!(
+                        "No se tocará {} (pid {}): {reason}",
+                        item.name, item.pid
+                    )));
                 }
                 if plan.denied > 0 {
                     el = el.child(note(format!("{} sin permiso: se omiten.", plan.denied)));
                 }
                 el.child(
                     buttons()
-                        .child(Button::tonal("dlg-cancel", &theme, "Cancelar").on_click(
-                            move |_, _, cx| m_cancel.update(cx, |m, cx| m.cancel(cx)),
-                        ))
                         .child(
-                            Button::primary("dlg-confirm", &theme, format!("Detener {}", plan_roots_label(n)))
-                                .disabled(plan.is_empty())
-                                .on_click(move |_: &ClickEvent, _, cx| m_ok.update(cx, |m, cx| m.confirm(cx))),
+                            Button::tonal("dlg-cancel", &theme, "Cancelar").on_click(
+                                move |_, _, cx| m_cancel.update(cx, |m, cx| m.cancel(cx)),
+                            ),
+                        )
+                        .child(
+                            Button::primary(
+                                "dlg-confirm",
+                                &theme,
+                                format!("Detener {}", plan_roots_label(n)),
+                            )
+                            .disabled(plan.is_empty())
+                            .on_click(move |_: &ClickEvent, _, cx| {
+                                m_ok.update(cx, |m, cx| m.confirm(cx))
+                            }),
                         ),
                 )
                 .into_any_element()
@@ -810,9 +972,14 @@ impl ProcsPanel {
                         .items_center()
                         .gap(px(10.0))
                         .child(Spinner::new(c.accent))
-                        .child(title(format!("Deteniendo {}…", plural(plan.items.len(), "proceso", "procesos")))),
+                        .child(title(format!(
+                            "Deteniendo {}…",
+                            plural(plan.items.len(), "proceso", "procesos")
+                        ))),
                 )
-                .child(note("Se pide el cierre y, si no responden en 3 s, se fuerzan.".into()))
+                .child(note(
+                    "Se pide el cierre y, si no responden en 3 s, se fuerzan.".into(),
+                ))
                 .into_any_element(),
             Dialog::Done { plan, result } => {
                 let m = model;
@@ -822,15 +989,31 @@ impl ProcsPanel {
                     "No se detuvo nada".to_string()
                 }));
                 if !result.forced.is_empty() {
-                    el = el.child(note(format!("{} se forzaron tras 3 s.", result.forced.len())));
+                    el = el.child(note(format!(
+                        "{} se forzaron tras 3 s.",
+                        result.forced.len()
+                    )));
                 }
                 for (pid, reason) in result.failed.iter().chain(result.skipped.iter()) {
-                    let name = plan.items.iter().find(|i| i.pid == *pid).map_or("proceso", |i| i.name.as_str());
-                    el = el.child(div().text_size(px(ty.ui_size_sm)).text_color(c.error).child(format!("{name} (pid {pid}): {reason}")));
+                    let name = plan
+                        .items
+                        .iter()
+                        .find(|i| i.pid == *pid)
+                        .map_or("proceso", |i| i.name.as_str());
+                    el = el.child(
+                        div()
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.error)
+                            .child(format!("{name} (pid {pid}): {reason}")),
+                    );
                 }
-                el.child(buttons().child(Button::tonal("dlg-close", &theme, "Cerrar").on_click(move |_, _, cx| {
-                    m.update(cx, |m, cx| m.cancel(cx));
-                })))
+                el.child(
+                    buttons().child(Button::tonal("dlg-close", &theme, "Cerrar").on_click(
+                        move |_, _, cx| {
+                            m.update(cx, |m, cx| m.cancel(cx));
+                        },
+                    )),
+                )
                 .into_any_element()
             }
         })
@@ -842,7 +1025,9 @@ fn plan_roots_label(n: usize) -> String {
 }
 
 fn confirm_note(plan: &StopPlan) -> String {
-    let mut s = String::from("Se pide el cierre y, si no responden en 3 s, se fuerzan. Incluye sus subprocesos.");
+    let mut s = String::from(
+        "Se pide el cierre y, si no responden en 3 s, se fuerzan. Incluye sus subprocesos.",
+    );
     if plan.outside_jobs {
         s.push_str(" No pertenecen a un job de Selachi (atribución probable o elegidos por ti).");
     }
@@ -893,7 +1078,11 @@ fn plan_row(theme: &Theme, item: &PlanItem, compact: bool) -> impl IntoElement +
                 .flex_none()
                 .text_size(px(theme.typography.ui_size_xs))
                 .text_color(c.muted)
-                .child(if compact { format_bytes(item.ram) } else { format!("pid {} · {}", item.pid, format_bytes(item.ram)) }),
+                .child(if compact {
+                    format_bytes(item.ram)
+                } else {
+                    format!("pid {} · {}", item.pid, format_bytes(item.ram))
+                }),
         )
 }
 
@@ -907,7 +1096,17 @@ fn empty_state(theme: &Theme, title: &'static str, hint: &'static str) -> AnyEle
         .flex_col()
         .items_center()
         .gap(px(4.0))
-        .child(div().text_size(px(theme.typography.ui_size_md)).text_color(c.text).child(title))
-        .child(div().text_size(px(theme.typography.ui_size_sm)).text_color(c.muted).child(hint))
+        .child(
+            div()
+                .text_size(px(theme.typography.ui_size_md))
+                .text_color(c.text)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(theme.typography.ui_size_sm))
+                .text_color(c.muted)
+                .child(hint),
+        )
         .into_any_element()
 }

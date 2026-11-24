@@ -16,7 +16,10 @@ use crate::view::{CONTEXT, FocusNextField, FocusPrevField, Section, SelectSlot, 
 const SELECT_WIDTH: f32 = 220.0;
 
 fn select_options(options: &[(String, String)]) -> Vec<SelectOption> {
-    options.iter().map(|(v, l)| SelectOption::new(v.clone(), l.clone())).collect()
+    options
+        .iter()
+        .map(|(v, l)| SelectOption::new(v.clone(), l.clone()))
+        .collect()
 }
 
 impl SettingsView {
@@ -29,9 +32,11 @@ impl SettingsView {
         f: impl Fn(&mut Self, bool, &mut Context<Self>) + 'static,
     ) -> Toggle {
         let this = cx.entity();
-        Toggle::new(id, &self.theme).on(on).on_change(move |v, _, cx| {
-            this.update(cx, |s, cx| f(s, v, cx));
-        })
+        Toggle::new(id, &self.theme)
+            .on(on)
+            .on_change(move |v, _, cx| {
+                this.update(cx, |s, cx| f(s, v, cx));
+            })
     }
 
     /// A segmented control wired to `f` (index of the picked segment).
@@ -44,12 +49,19 @@ impl SettingsView {
         f: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
     ) -> SegmentedControl {
         let this = cx.entity();
-        SegmentedControl::new(id, &self.theme, labels.into_iter().map(Into::into).collect::<Vec<SharedString>>())
-            .selected(selected)
-            .track(self.theme.colors.surface_2)
-            .on_change(move |ix, _, cx| {
-                this.update(cx, |s, cx| f(s, ix, cx));
-            })
+        SegmentedControl::new(
+            id,
+            &self.theme,
+            labels
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<SharedString>>(),
+        )
+        .selected(selected)
+        .track(self.theme.colors.surface_2)
+        .on_change(move |ix, _, cx| {
+            this.update(cx, |s, cx| f(s, ix, cx));
+        })
     }
 
     /// A drop-down (`ui_kit::Select`) over `(value, label)` options. The entity lives in
@@ -68,7 +80,8 @@ impl SettingsView {
             Some(slot) => {
                 if slot.options != options {
                     slot.options = options.clone();
-                    slot.entity.update(cx, |s, cx| s.set_options(select_options(&options), cx));
+                    slot.entity
+                        .update(cx, |s, cx| s.set_options(select_options(&options), cx));
                 }
                 slot.entity.update(cx, |s, cx| {
                     s.set_theme(theme, cx);
@@ -78,7 +91,10 @@ impl SettingsView {
             }
             None => {
                 let entity = cx.new(|cx| {
-                    Select::new(id, theme, cx).options(select_options(&options)).with_value(selected).width(SELECT_WIDTH)
+                    Select::new(id, theme, cx)
+                        .options(select_options(&options))
+                        .with_value(selected)
+                        .width(SELECT_WIDTH)
                 });
                 let f = Rc::new(f);
                 let sub = cx.subscribe(&entity, move |this, select, ev: &SelectEvent, cx| {
@@ -87,7 +103,14 @@ impl SettingsView {
                         f(this, &value, cx);
                     }
                 });
-                self.selects.insert(id, SelectSlot { entity: entity.clone(), options, _sub: sub });
+                self.selects.insert(
+                    id,
+                    SelectSlot {
+                        entity: entity.clone(),
+                        options,
+                        _sub: sub,
+                    },
+                );
                 entity
             }
         };
@@ -110,10 +133,21 @@ impl SettingsView {
         width: f32,
         mono: bool,
     ) -> AnyElement {
-        let field = self.field(key, |s| s.field_value(key).unwrap_or_default(), placeholder, mono, cx);
+        let field = self.field(
+            key,
+            |s| s.field_value(key).unwrap_or_default(),
+            placeholder,
+            mono,
+            cx,
+        );
         let message = self.errors.get(key).cloned();
         field.update(cx, |f, cx| f.set_error(message, cx));
-        div().w(px(width)).max_w_full().flex().child(field).into_any_element()
+        div()
+            .w(px(width))
+            .max_w_full()
+            .flex()
+            .child(field)
+            .into_any_element()
     }
 
     pub(crate) fn error_for(&self, key: &str) -> Option<SharedString> {
@@ -201,12 +235,21 @@ impl SettingsView {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let (status, is_err) = self.save_status();
-        let options = Section::ALL.iter().map(|s| (s.label().to_string(), s.label().to_string())).collect();
-        let sections = self.select(cx, "settings-section", options, self.section.label(), |s, v, cx| {
-            if let Some(section) = Section::ALL.into_iter().find(|s| s.label() == v) {
-                s.set_section(section, cx);
-            }
-        });
+        let options = Section::ALL
+            .iter()
+            .map(|s| (s.label().to_string(), s.label().to_string()))
+            .collect();
+        let sections = self.select(
+            cx,
+            "settings-section",
+            options,
+            self.section.label(),
+            |s, v, cx| {
+                if let Some(section) = Section::ALL.into_iter().find(|s| s.label() == v) {
+                    s.set_section(section, cx);
+                }
+            },
+        );
         div()
             .w_full()
             .flex_none()
@@ -262,8 +305,15 @@ impl Render for SettingsView {
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle_ref())
-            .on_action(cx.listener(|_, _: &FocusNextField, window, _| window.focus_next()))
-            .on_action(cx.listener(|_, _: &FocusPrevField, window, _| window.focus_prev()))
+            .on_action(cx.listener(|s, _: &FocusNextField, window, cx| {
+                // Tab leaves an open drop-down: close it first (the kit's own Tab handler is shadowed here).
+                s.close_selects(cx);
+                window.focus_next();
+            }))
+            .on_action(cx.listener(|s, _: &FocusPrevField, window, cx| {
+                s.close_selects(cx);
+                window.focus_prev();
+            }))
             .relative()
             .size_full()
             .flex()
@@ -273,7 +323,11 @@ impl Render for SettingsView {
             .text_size(px(t.typography.ui_size_md))
             .text_color(c.text)
             .child(self.measured.probe())
-            .child(if narrow { self.top_menu(cx) } else { self.nav(cx) })
+            .child(if narrow {
+                self.top_menu(cx)
+            } else {
+                self.nav(cx)
+            })
             .child(content)
     }
 }

@@ -163,7 +163,11 @@ pub const CREDENTIAL_ENV: &[&str] = &[
 
 /// Command-line arguments (after the executable) to start the ACP server for `cfg`.
 pub fn acp_args(cfg: &ThreadConfig) -> Vec<String> {
-    let mut v = vec!["acp".to_string(), "--cwd".to_string(), cfg.cwd.to_string_lossy().into_owned()];
+    let mut v = vec![
+        "acp".to_string(),
+        "--cwd".to_string(),
+        cfg.cwd.to_string_lossy().into_owned(),
+    ];
     v.extend(cfg.extra_args.iter().cloned());
     v
 }
@@ -198,7 +202,10 @@ mod tests {
         }
         let dir = std::env::temp_dir().join("agents_driver_opencode_baseline");
         let _ = std::fs::remove_dir_all(&dir);
-        let name = platform_packages().into_iter().find(|n| n.ends_with("-baseline")).unwrap();
+        let name = platform_packages()
+            .into_iter()
+            .find(|n| n.ends_with("-baseline"))
+            .unwrap();
         let bin = dir.join("node_modules").join(&name).join("bin"); // hoisted layout
         std::fs::create_dir_all(&bin).unwrap();
         let exe = bin.join(binary_name());
@@ -219,7 +226,10 @@ mod tests {
     fn acp_args_carry_cwd_and_extras() {
         let mut cfg = ThreadConfig::new("C:/work/proj");
         cfg.extra_args = vec!["--pure".into()];
-        assert_eq!(acp_args(&cfg), vec!["acp", "--cwd", "C:/work/proj", "--pure"]);
+        assert_eq!(
+            acp_args(&cfg),
+            vec!["acp", "--cwd", "C:/work/proj", "--pure"]
+        );
     }
 
     #[test]

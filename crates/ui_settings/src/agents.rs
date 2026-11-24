@@ -67,7 +67,12 @@ fn mark_of(kind: &AgentKind, path: &Path) -> AgentMark {
         AgentKind::Acp { command } => {
             let by_cmd = AgentMark::from_name(command);
             if by_cmd == AgentMark::Unknown {
-                AgentMark::from_name(&path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())
+                AgentMark::from_name(
+                    &path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                )
             } else {
                 by_cmd
             }
@@ -79,8 +84,8 @@ fn mark_of(kind: &AgentKind, path: &Path) -> AgentMark {
 pub fn rows(detected: &[DetectedAgent]) -> Vec<AgentRow> {
     let mut out: Vec<AgentRow> = KNOWN
         .iter()
-        .map(|(name, mark)| {
-            match detected.iter().find(|d| mark_of(&d.kind, &d.path) == *mark) {
+        .map(
+            |(name, mark)| match detected.iter().find(|d| mark_of(&d.kind, &d.path) == *mark) {
                 Some(d) => AgentRow {
                     mark: *mark,
                     name: (*name).to_string(),
@@ -99,8 +104,8 @@ pub fn rows(detected: &[DetectedAgent]) -> Vec<AgentRow> {
                     path: None,
                     status: AgentStatus::NotInstalled,
                 },
-            }
-        })
+            },
+        )
         .collect();
     // Anything else `detect()` returned that is not one of the known four (future agents).
     for d in detected {
@@ -108,7 +113,11 @@ pub fn rows(detected: &[DetectedAgent]) -> Vec<AgentRow> {
         if !KNOWN.iter().any(|(_, k)| *k == m) {
             out.push(AgentRow {
                 mark: m,
-                name: d.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "agente".into()),
+                name: d
+                    .path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "agente".into()),
                 version: d.version.clone(),
                 path: Some(d.path.clone()),
                 status: match d.logged_in {
@@ -127,14 +136,22 @@ mod tests {
     use super::*;
 
     fn found(kind: AgentKind, path: &str, logged: Option<bool>) -> DetectedAgent {
-        DetectedAgent { kind, path: PathBuf::from(path), version: Some("1.2.3".into()), logged_in: logged }
+        DetectedAgent {
+            kind,
+            path: PathBuf::from(path),
+            version: Some("1.2.3".into()),
+            logged_in: logged,
+        }
     }
 
     #[test]
     fn every_known_cli_has_a_row_and_missing_ones_say_so() {
         let r = rows(&[]);
         assert_eq!(r.len(), 4);
-        assert!(r.iter().all(|r| r.status == AgentStatus::NotInstalled && r.path.is_none()));
+        assert!(
+            r.iter()
+                .all(|r| r.status == AgentStatus::NotInstalled && r.path.is_none())
+        );
         assert_eq!(r[0].name, "Claude Code");
     }
 
@@ -143,12 +160,26 @@ mod tests {
         let r = rows(&[
             found(AgentKind::ClaudeCode, "C:/bin/claude.exe", Some(true)),
             found(AgentKind::OpenCode, "C:/bin/opencode.exe", None),
-            found(AgentKind::Acp { command: "\"C:/x y/gemini.cmd\"".into() }, "C:/x y/gemini.cmd", None),
+            found(
+                AgentKind::Acp {
+                    command: "\"C:/x y/gemini.cmd\"".into(),
+                },
+                "C:/x y/gemini.cmd",
+                None,
+            ),
         ]);
         assert_eq!(r[0].status, AgentStatus::Ready);
         assert_eq!(r[0].version.as_deref(), Some("1.2.3"));
-        assert_eq!(r[1].status, AgentStatus::NotInstalled, "codex was not found");
-        assert_eq!(r[2].status, AgentStatus::Installed, "unknown login is not reported as logged out");
+        assert_eq!(
+            r[1].status,
+            AgentStatus::NotInstalled,
+            "codex was not found"
+        );
+        assert_eq!(
+            r[2].status,
+            AgentStatus::Installed,
+            "unknown login is not reported as logged out"
+        );
         assert_eq!(r[3].mark, AgentMark::Gemini);
         assert_eq!(r[3].status, AgentStatus::Installed);
         assert_eq!(r.len(), 4);

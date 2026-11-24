@@ -47,26 +47,47 @@ impl Runtime {
 /// optional full image path. Matching is case-insensitive.
 pub fn classify(name: &str, cmdline: Option<&str>, exe_path: Option<&str>) -> Runtime {
     let n = name.to_ascii_lowercase();
-    let stem = n.strip_suffix(".exe").or_else(|| n.strip_suffix(".cmd")).unwrap_or(&n);
+    let stem = n
+        .strip_suffix(".exe")
+        .or_else(|| n.strip_suffix(".cmd"))
+        .unwrap_or(&n);
     let cmd = cmdline.map(str::to_ascii_lowercase).unwrap_or_default();
     let toks: Vec<&str> = tokens(&cmd);
     let has = |t: &str| toks.contains(&t);
     // Token stems: "vite.js" -> "vite", so `node_modules/vite/bin/vite.js` matches.
     let first_of = |cands: &[&'static str]| -> Option<&'static str> {
-        cands.iter().copied().find(|c| toks.iter().any(|t| stem_of(t) == *c))
+        cands
+            .iter()
+            .copied()
+            .find(|c| toks.iter().any(|t| stem_of(t) == *c))
     };
 
     match stem {
         "node" | "npm" | "npx" | "pnpm" | "yarn" | "nodejs" => Runtime::new(
             RuntimeKind::Node,
             first_of(&[
-                "vite", "next", "nuxt", "astro", "remix", "webpack", "storybook", "vitest", "jest",
-                "nodemon", "ts-node", "tsx", "turbo", "expo", "ng",
+                "vite",
+                "next",
+                "nuxt",
+                "astro",
+                "remix",
+                "webpack",
+                "storybook",
+                "vitest",
+                "jest",
+                "nodemon",
+                "ts-node",
+                "tsx",
+                "turbo",
+                "expo",
+                "ng",
             ]),
         ),
         "dotnet" => Runtime::new(
             RuntimeKind::Dotnet,
-            ["watch", "run", "test", "build", "ef"].into_iter().find(|c| has(c)),
+            ["watch", "run", "test", "build", "ef"]
+                .into_iter()
+                .find(|c| has(c)),
         ),
         "vbcscompiler" => Runtime::new(RuntimeKind::Dotnet, Some("compiler")),
         "msbuild" | "msbuildtaskhost" => Runtime::new(RuntimeKind::Dotnet, Some("msbuild")),
@@ -75,8 +96,15 @@ pub fn classify(name: &str, cmdline: Option<&str>, exe_path: Option<&str>) -> Ru
         | "poetry" | "pytest" => Runtime::new(
             RuntimeKind::Python,
             first_of(&[
-                "uvicorn", "gunicorn", "flask", "manage", "jupyter", "streamlit", "pytest",
-                "fastapi", "celery",
+                "uvicorn",
+                "gunicorn",
+                "flask",
+                "manage",
+                "jupyter",
+                "streamlit",
+                "pytest",
+                "fastapi",
+                "celery",
             ])
             .map(|t| if t == "manage" { "django" } else { t }),
         ),
@@ -109,24 +137,39 @@ pub fn classify(name: &str, cmdline: Option<&str>, exe_path: Option<&str>) -> Ru
                 None
             },
         ),
-        "docker" | "dockerd" | "docker-compose" | "docker desktop" | "docker-credential-desktop" => {
-            Runtime::new(
-                RuntimeKind::Docker,
-                if stem == "docker-compose" || has("compose") { Some("compose") } else { None },
-            )
-        }
+        "docker"
+        | "dockerd"
+        | "docker-compose"
+        | "docker desktop"
+        | "docker-credential-desktop" => Runtime::new(
+            RuntimeKind::Docker,
+            if stem == "docker-compose" || has("compose") {
+                Some("compose")
+            } else {
+                None
+            },
+        ),
         s if s.starts_with("com.docker.") => Runtime::new(RuntimeKind::Docker, None),
-        "bun" | "bunx" => Runtime::new(RuntimeKind::Bun, ["dev", "run", "test"].into_iter().find(|c| has(c))),
-        "deno" => Runtime::new(RuntimeKind::Deno, ["task", "run", "test"].into_iter().find(|c| has(c))),
-        "go" => Runtime::new(RuntimeKind::Go, ["run", "test", "build"].into_iter().find(|c| has(c))),
+        "bun" | "bunx" => Runtime::new(
+            RuntimeKind::Bun,
+            ["dev", "run", "test"].into_iter().find(|c| has(c)),
+        ),
+        "deno" => Runtime::new(
+            RuntimeKind::Deno,
+            ["task", "run", "test"].into_iter().find(|c| has(c)),
+        ),
+        "go" => Runtime::new(
+            RuntimeKind::Go,
+            ["run", "test", "build"].into_iter().find(|c| has(c)),
+        ),
         "gopls" => Runtime::new(RuntimeKind::Go, Some("gopls")),
         "dlv" => Runtime::new(RuntimeKind::Go, Some("delve")),
         "cmd" | "powershell" | "pwsh" | "bash" | "sh" | "zsh" | "fish" | "nu" | "wsl" => {
             Runtime::new(RuntimeKind::Shell, None)
         }
         _ => {
-            let in_go_build = exe_path
-                .is_some_and(|p| p.to_ascii_lowercase().contains("\\go-build"));
+            let in_go_build =
+                exe_path.is_some_and(|p| p.to_ascii_lowercase().contains("\\go-build"));
             if in_go_build {
                 Runtime::new(RuntimeKind::Go, Some("go-run"))
             } else {
@@ -164,9 +207,21 @@ mod tests {
 
     #[test]
     fn node_frameworks() {
-        let r = c("node.exe", r#""C:\Program Files\nodejs\node.exe" C:\app\node_modules\vite\bin\vite.js --port 5173"#);
-        assert_eq!(r, Runtime { kind: RuntimeKind::Node, tag: Some("vite") });
-        let r = c("node.exe", r"node C:\app\node_modules\next\dist\bin\next dev");
+        let r = c(
+            "node.exe",
+            r#""C:\Program Files\nodejs\node.exe" C:\app\node_modules\vite\bin\vite.js --port 5173"#,
+        );
+        assert_eq!(
+            r,
+            Runtime {
+                kind: RuntimeKind::Node,
+                tag: Some("vite")
+            }
+        );
+        let r = c(
+            "node.exe",
+            r"node C:\app\node_modules\next\dist\bin\next dev",
+        );
         assert_eq!(r.tag, Some("next"));
         assert_eq!(c("node.exe", "node server.js").tag, None);
         assert_eq!(c("NODE.EXE", "node server.js").kind, RuntimeKind::Node);
@@ -175,12 +230,21 @@ mod tests {
     #[test]
     fn other_runtimes() {
         assert_eq!(c("dotnet.exe", "dotnet watch run").tag, Some("watch"));
-        assert_eq!(c("dotnet.exe", "dotnet run --project x").kind, RuntimeKind::Dotnet);
-        assert_eq!(c("python.exe", "python -m uvicorn app:app").tag, Some("uvicorn"));
+        assert_eq!(
+            c("dotnet.exe", "dotnet run --project x").kind,
+            RuntimeKind::Dotnet
+        );
+        assert_eq!(
+            c("python.exe", "python -m uvicorn app:app").tag,
+            Some("uvicorn")
+        );
         assert_eq!(c("python3.12.exe", "").kind, RuntimeKind::Python);
         assert_eq!(c("cargo.exe", "cargo watch -x run").tag, Some("watch"));
         assert_eq!(c("cargo-watch.exe", "").kind, RuntimeKind::Rust);
-        assert_eq!(c("java.exe", "java -jar gradle-wrapper.jar").tag, Some("gradle"));
+        assert_eq!(
+            c("java.exe", "java -jar gradle-wrapper.jar").tag,
+            Some("gradle")
+        );
         assert_eq!(c("docker.exe", "docker compose up").tag, Some("compose"));
         assert_eq!(c("bun.exe", "bun dev").kind, RuntimeKind::Bun);
         assert_eq!(c("deno.exe", "deno task dev").tag, Some("task"));
@@ -188,7 +252,17 @@ mod tests {
         assert_eq!(c("pwsh.exe", "").kind, RuntimeKind::Shell);
         assert_eq!(c("cmd.exe", "").kind, RuntimeKind::Shell);
         assert_eq!(c("chrome.exe", "").kind, RuntimeKind::Other);
-        let r = classify("server.exe", None, Some(r"C:\Temp\go-build123\b001\exe\server.exe"));
-        assert_eq!(r, Runtime { kind: RuntimeKind::Go, tag: Some("go-run") });
+        let r = classify(
+            "server.exe",
+            None,
+            Some(r"C:\Temp\go-build123\b001\exe\server.exe"),
+        );
+        assert_eq!(
+            r,
+            Runtime {
+                kind: RuntimeKind::Go,
+                tag: Some("go-run")
+            }
+        );
     }
 }

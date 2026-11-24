@@ -18,7 +18,11 @@ use crate::item::{Effect, PaletteEvent};
 #[derive(Clone, Debug)]
 pub enum FormSubmit {
     /// Enter inserts the rendered line at the prompt, Ctrl+Enter runs it.
-    Snippet { id: i64, template: String, cwd: Option<PathBuf> },
+    Snippet {
+        id: i64,
+        template: String,
+        cwd: Option<PathBuf>,
+    },
     /// `git commit -m <mensaje>`.
     GitCommit,
     /// `git switch <rama>`.
@@ -43,23 +47,47 @@ impl FormSpec {
         params: Vec<Param>,
         cwd: Option<PathBuf>,
     ) -> Self {
-        Self { title: title.into(), params, submit: FormSubmit::Snippet { id, template: template.into(), cwd } }
+        Self {
+            title: title.into(),
+            params,
+            submit: FormSubmit::Snippet {
+                id,
+                template: template.into(),
+                cwd,
+            },
+        }
     }
 
     fn text_param(name: &str) -> Param {
-        Param { name: name.to_string(), default: None, options: Vec::new() }
+        Param {
+            name: name.to_string(),
+            default: None,
+            options: Vec::new(),
+        }
     }
 
     pub fn git_commit() -> Self {
-        Self { title: "git commit".into(), params: vec![Self::text_param("mensaje")], submit: FormSubmit::GitCommit }
+        Self {
+            title: "git commit".into(),
+            params: vec![Self::text_param("mensaje")],
+            submit: FormSubmit::GitCommit,
+        }
     }
 
     pub fn git_switch() -> Self {
-        Self { title: "git switch".into(), params: vec![Self::text_param("rama")], submit: FormSubmit::GitSwitch }
+        Self {
+            title: "git switch".into(),
+            params: vec![Self::text_param("rama")],
+            submit: FormSubmit::GitSwitch,
+        }
     }
 
     pub fn git_checkout() -> Self {
-        Self { title: "git checkout".into(), params: vec![Self::text_param("destino")], submit: FormSubmit::GitCheckout }
+        Self {
+            title: "git checkout".into(),
+            params: vec![Self::text_param("destino")],
+            submit: FormSubmit::GitCheckout,
+        }
     }
 
     /// Footer verbs of the form: `(Enter, Ctrl+Enter)`.
@@ -87,11 +115,22 @@ impl FormSpec {
     }
 
     fn git_action(&self, values: &HashMap<String, String>) -> Result<GitAction, String> {
-        let get = |name: &str| values.get(name).map(|v| v.trim().to_string()).unwrap_or_default();
+        let get = |name: &str| {
+            values
+                .get(name)
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default()
+        };
         let action = match self.submit {
-            FormSubmit::GitCommit => GitAction::Commit { message: get("mensaje") },
-            FormSubmit::GitSwitch => GitAction::Switch { branch: get("rama") },
-            FormSubmit::GitCheckout => GitAction::Checkout { target: get("destino") },
+            FormSubmit::GitCommit => GitAction::Commit {
+                message: get("mensaje"),
+            },
+            FormSubmit::GitSwitch => GitAction::Switch {
+                branch: get("rama"),
+            },
+            FormSubmit::GitCheckout => GitAction::Checkout {
+                target: get("destino"),
+            },
             FormSubmit::Snippet { .. } => return Err("no es una acción git".into()),
         };
         action.validate().map_err(|e| e.to_string())?;
@@ -108,7 +147,11 @@ impl FormSpec {
             FormSubmit::Snippet { id, cwd, .. } => {
                 let line = self.render(values)?;
                 let event = if alt {
-                    PaletteEvent::RunCommand { line, cwd: cwd.clone(), new_tab: false }
+                    PaletteEvent::RunCommand {
+                        line,
+                        cwd: cwd.clone(),
+                        new_tab: false,
+                    }
                 } else {
                     PaletteEvent::InsertText(line)
                 };
@@ -122,7 +165,13 @@ impl FormSpec {
 /// `git commit -m "fix: a b"` for display (quotes only what needs them).
 fn display_argv(argv: &[String]) -> String {
     argv.iter()
-        .map(|a| if a.is_empty() || a.contains(' ') { format!("\"{a}\"") } else { a.clone() })
+        .map(|a| {
+            if a.is_empty() || a.contains(' ') {
+                format!("\"{a}\"")
+            } else {
+                a.clone()
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -139,8 +188,17 @@ pub struct FormState {
 
 impl FormState {
     pub fn new(spec: Arc<FormSpec>) -> Self {
-        let values = spec.params.iter().map(|p| p.default.clone().unwrap_or_default()).collect();
-        Self { spec, values, active: 0, error: None }
+        let values = spec
+            .params
+            .iter()
+            .map(|p| p.default.clone().unwrap_or_default())
+            .collect();
+        Self {
+            spec,
+            values,
+            active: 0,
+            error: None,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -187,18 +245,29 @@ impl FormState {
 
     /// Cycles the active choice field.
     pub fn cycle_choice(&mut self, delta: isize) {
-        let Some(p) = self.spec.params.get(self.active) else { return };
+        let Some(p) = self.spec.params.get(self.active) else {
+            return;
+        };
         if p.options.is_empty() {
             return;
         }
-        let cur = p.options.iter().position(|o| *o == self.values[self.active]).unwrap_or(0) as isize;
+        let cur = p
+            .options
+            .iter()
+            .position(|o| *o == self.values[self.active])
+            .unwrap_or(0) as isize;
         let next = (cur + delta).rem_euclid(p.options.len() as isize) as usize;
         self.values[self.active] = p.options[next].clone();
         self.error = None;
     }
 
     pub fn values_map(&self) -> HashMap<String, String> {
-        self.spec.params.iter().zip(&self.values).map(|(p, v)| (p.name.clone(), v.clone())).collect()
+        self.spec
+            .params
+            .iter()
+            .zip(&self.values)
+            .map(|(p, v)| (p.name.clone(), v.clone()))
+            .collect()
     }
 
     /// Live preview of the final line, or why it is not ready.
@@ -224,7 +293,13 @@ mod tests {
     use store::parse_template;
 
     fn snippet(template: &str) -> FormState {
-        let spec = FormSpec::snippet(7, "demo", template, parse_template(template), Some(PathBuf::from("C:/p")));
+        let spec = FormSpec::snippet(
+            7,
+            "demo",
+            template,
+            parse_template(template),
+            Some(PathBuf::from("C:/p")),
+        );
         FormState::new(Arc::new(spec))
     }
 
@@ -246,7 +321,10 @@ mod tests {
         // Type a value with a space and a quote: it must stay one literal argument.
         f.set_active_value("Add user's table");
         assert!(f.error.is_none());
-        assert_eq!(f.preview().unwrap(), "dotnet ef migrations add 'Add user''s table' -c Debug");
+        assert_eq!(
+            f.preview().unwrap(),
+            "dotnet ef migrations add 'Add user''s table' -c Debug"
+        );
 
         // Move to the choice field and cycle it.
         f.move_active(1);
@@ -260,7 +338,12 @@ mod tests {
 
         // Enter inserts, Ctrl+Enter runs; both record the use.
         let (ev, effect) = f.submit(false).unwrap();
-        assert_eq!(ev, PaletteEvent::InsertText("dotnet ef migrations add 'Add user''s table' -c Release".into()));
+        assert_eq!(
+            ev,
+            PaletteEvent::InsertText(
+                "dotnet ef migrations add 'Add user''s table' -c Release".into()
+            )
+        );
         assert_eq!(effect, Some(Effect::SnippetUsed(7)));
         let (ev, effect) = f.submit(true).unwrap();
         assert_eq!(
@@ -301,15 +384,28 @@ mod tests {
         let mut f = FormState::new(Arc::new(FormSpec::git_commit()));
         assert!(f.submit(false).is_none());
         f.set_active_value("fix: arreglar el parser");
-        assert_eq!(f.preview().unwrap(), "git commit -m \"fix: arreglar el parser\"");
+        assert_eq!(
+            f.preview().unwrap(),
+            "git commit -m \"fix: arreglar el parser\""
+        );
         let (ev, effect) = f.submit(false).unwrap();
-        assert_eq!(ev, PaletteEvent::GitAction(GitAction::Commit { message: "fix: arreglar el parser".into() }));
+        assert_eq!(
+            ev,
+            PaletteEvent::GitAction(GitAction::Commit {
+                message: "fix: arreglar el parser".into()
+            })
+        );
         assert_eq!(effect, None);
 
         let mut s = FormState::new(Arc::new(FormSpec::git_switch()));
         s.set_active_value("--detach");
         assert!(s.submit(false).is_none(), "options are rejected by git_svc");
         s.set_active_value("feature/x");
-        assert_eq!(s.submit(false).unwrap().0, PaletteEvent::GitAction(GitAction::Switch { branch: "feature/x".into() }));
+        assert_eq!(
+            s.submit(false).unwrap().0,
+            PaletteEvent::GitAction(GitAction::Switch {
+                branch: "feature/x".into()
+            })
+        );
     }
 }

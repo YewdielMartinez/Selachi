@@ -19,12 +19,14 @@ use futures::StreamExt as _;
 use futures::channel::mpsc::unbounded;
 use gpui::{Context, EventEmitter, Task};
 use viewer_svc::grammars::{
-    GrammarIndex, GrammarInfo, GrammarRegistry, GrammarSource, GrammarState, IndexEntry, InstallOutcome,
-    UninstallOutcome,
+    GrammarIndex, GrammarInfo, GrammarRegistry, GrammarSource, GrammarState, IndexEntry,
+    InstallOutcome, UninstallOutcome,
 };
 
 use crate::fmt;
-use crate::net::{ARCHIVE_TIMEOUT, FetchError, Fetcher, INDEX_TIMEOUT, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES};
+use crate::net::{
+    ARCHIVE_TIMEOUT, FetchError, Fetcher, INDEX_TIMEOUT, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES,
+};
 
 /// How long a fetched index is trusted.
 pub const INDEX_TTL: Duration = Duration::from_secs(60 * 60);
@@ -43,7 +45,10 @@ pub enum IndexState {
 /// What a row is doing right now.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
-    Downloading { received: u64, total: Option<u64> },
+    Downloading {
+        received: u64,
+        total: Option<u64>,
+    },
     Installing,
     Removing,
     /// The last action failed; kept until the next one.
@@ -66,7 +71,9 @@ pub enum PluginState {
     Builtin,
     Installed,
     /// Installed, and the index offers a newer version.
-    Update { to: String },
+    Update {
+        to: String,
+    },
     /// Only in the index.
     Available,
     /// Done, but takes effect after restarting.
@@ -99,7 +106,10 @@ impl PluginRow {
                 Op::Downloading { received, total } => {
                     return match total {
                         Some(t) if *t > 0 => {
-                            format!("Descargando {} %", ((*received as f64 / *t as f64) * 100.0).min(100.0) as u32)
+                            format!(
+                                "Descargando {} %",
+                                ((*received as f64 / *t as f64) * 100.0).min(100.0) as u32
+                            )
                         }
                         _ => format!("Descargando {}", fmt::bytes(*received)),
                     };
@@ -112,16 +122,25 @@ impl PluginRow {
         match &self.state {
             PluginState::Builtin => "Incluido".to_string(),
             PluginState::Installed => "Instalado".to_string(),
-            PluginState::Update { to } => format!("Actualización disponible v{}", to.trim_start_matches('v')),
+            PluginState::Update { to } => {
+                format!("Actualización disponible v{}", to.trim_start_matches('v'))
+            }
             PluginState::Available => "Disponible".to_string(),
-            PluginState::PendingRestart(RestartKind::Update) => "Actualizado: reinicia para completar".to_string(),
-            PluginState::PendingRestart(RestartKind::Removal) => "Se quitará al reiniciar".to_string(),
+            PluginState::PendingRestart(RestartKind::Update) => {
+                "Actualizado: reinicia para completar".to_string()
+            }
+            PluginState::PendingRestart(RestartKind::Removal) => {
+                "Se quitará al reiniciar".to_string()
+            }
             PluginState::Broken(m) => format!("Fallo: {m}"),
         }
     }
 
     pub fn is_busy(&self) -> bool {
-        matches!(self.op, Some(Op::Downloading { .. } | Op::Installing | Op::Removing))
+        matches!(
+            self.op,
+            Some(Op::Downloading { .. } | Op::Installing | Op::Removing)
+        )
     }
 
     /// The index has an entry that can be (re)installed and nothing is running or staged.
@@ -137,7 +156,10 @@ impl PluginRow {
 
     pub fn can_remove(&self) -> bool {
         !self.is_busy()
-            && matches!(self.state, PluginState::Installed | PluginState::Update { .. } | PluginState::Broken(_))
+            && matches!(
+                self.state,
+                PluginState::Installed | PluginState::Update { .. } | PluginState::Broken(_)
+            )
     }
 
     pub fn needs_restart(&self) -> bool {
@@ -185,7 +207,9 @@ pub fn build_rows(
                 } else if let (Some(e), Some(v)) = (entry, &g.version)
                     && fmt::is_newer(&e.version, v)
                 {
-                    PluginState::Update { to: e.version.clone() }
+                    PluginState::Update {
+                        to: e.version.clone(),
+                    }
                 } else {
                     PluginState::Installed
                 }
@@ -230,7 +254,11 @@ pub fn build_rows(
         _ => 2,
     };
     rows.sort_by(|a, b| {
-        (a.group(), rank(a), a.name.to_lowercase()).cmp(&(b.group(), rank(b), b.name.to_lowercase()))
+        (a.group(), rank(a), a.name.to_lowercase()).cmp(&(
+            b.group(),
+            rank(b),
+            b.name.to_lowercase(),
+        ))
     });
     rows
 }
@@ -255,12 +283,17 @@ pub fn download_and_install(
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<InstallOutcome, String> {
     if entry.size > MAX_ARCHIVE_BYTES {
-        return Err(FetchError::TooLarge { cap: MAX_ARCHIVE_BYTES }.to_string());
+        return Err(FetchError::TooLarge {
+            cap: MAX_ARCHIVE_BYTES,
+        }
+        .to_string());
     }
     let bytes = fetcher
         .get(&entry.url, MAX_ARCHIVE_BYTES, ARCHIVE_TIMEOUT, progress)
         .map_err(|e| e.to_string())?;
-    registry.install_from_archive(&bytes, entry).map_err(|e| e.to_string())
+    registry
+        .install_from_archive(&bytes, entry)
+        .map_err(|e| e.to_string())
 }
 
 /// What the model tells the host.
@@ -293,7 +326,11 @@ pub struct PluginsModel {
 impl EventEmitter<PluginsEvent> for PluginsModel {}
 
 impl PluginsModel {
-    pub fn new(registry: Arc<GrammarRegistry>, fetcher: Arc<dyn Fetcher>, index_url: impl Into<String>) -> Self {
+    pub fn new(
+        registry: Arc<GrammarRegistry>,
+        fetcher: Arc<dyn Fetcher>,
+        index_url: impl Into<String>,
+    ) -> Self {
         Self {
             registry,
             fetcher,
@@ -404,11 +441,20 @@ impl PluginsModel {
             return;
         }
         let Some(entry) = self.index.as_ref().and_then(|i| i.entry(id)).cloned() else {
-            self.ops.insert(id.to_string(), Op::Failed("no está en el índice".to_string()));
+            self.ops.insert(
+                id.to_string(),
+                Op::Failed("no está en el índice".to_string()),
+            );
             cx.notify();
             return;
         };
-        self.ops.insert(id.to_string(), Op::Downloading { received: 0, total: (entry.size > 0).then_some(entry.size) });
+        self.ops.insert(
+            id.to_string(),
+            Op::Downloading {
+                received: 0,
+                total: (entry.size > 0).then_some(entry.size),
+            },
+        );
         cx.notify();
         let registry = self.registry.clone();
         let fetcher = self.fetcher.clone();
@@ -418,18 +464,25 @@ impl PluginsModel {
             let work = cx.background_executor().spawn(async move {
                 let mut last = Instant::now();
                 let mut last_pct = u64::MAX;
-                let result = download_and_install(registry.as_ref(), fetcher.as_ref(), &entry, &mut |n, t| {
-                    // Throttle: at most ~8 redraws/s, plus the first and the last.
-                    let pct = t.filter(|t| *t > 0).map_or(n / 65_536, |t| n * 100 / t);
-                    if pct != last_pct && (last.elapsed() >= Duration::from_millis(120) || Some(n) == t) {
-                        last = Instant::now();
-                        last_pct = pct;
-                        let _ = tx.unbounded_send(Msg::Progress(n, t));
-                    }
-                    if Some(n) == t {
-                        let _ = tx.unbounded_send(Msg::Installing);
-                    }
-                });
+                let result = download_and_install(
+                    registry.as_ref(),
+                    fetcher.as_ref(),
+                    &entry,
+                    &mut |n, t| {
+                        // Throttle: at most ~8 redraws/s, plus the first and the last.
+                        let pct = t.filter(|t| *t > 0).map_or(n / 65_536, |t| n * 100 / t);
+                        if pct != last_pct
+                            && (last.elapsed() >= Duration::from_millis(120) || Some(n) == t)
+                        {
+                            last = Instant::now();
+                            last_pct = pct;
+                            let _ = tx.unbounded_send(Msg::Progress(n, t));
+                        }
+                        if Some(n) == t {
+                            let _ = tx.unbounded_send(Msg::Installing);
+                        }
+                    },
+                );
                 drop(tx);
                 result
             });
@@ -444,7 +497,9 @@ impl PluginsModel {
     }
 
     fn on_msg(&mut self, id: &str, msg: Msg, cx: &mut Context<Self>) {
-        let Some(op) = self.ops.get_mut(id) else { return };
+        let Some(op) = self.ops.get_mut(id) else {
+            return;
+        };
         match msg {
             Msg::Progress(received, total) => *op = Op::Downloading { received, total },
             Msg::Installing => *op = Op::Installing,
@@ -452,13 +507,21 @@ impl PluginsModel {
         cx.notify();
     }
 
-    fn install_done(&mut self, id: &str, result: Result<InstallOutcome, String>, cx: &mut Context<Self>) {
+    fn install_done(
+        &mut self,
+        id: &str,
+        result: Result<InstallOutcome, String>,
+        cx: &mut Context<Self>,
+    ) {
         self.tasks.remove(id);
         match result {
             Ok(outcome) => {
                 self.ops.remove(id);
                 let restart = matches!(outcome, InstallOutcome::PendingRestart { .. });
-                cx.emit(PluginsEvent::Installed { id: id.to_string(), restart });
+                cx.emit(PluginsEvent::Installed {
+                    id: id.to_string(),
+                    restart,
+                });
             }
             Err(e) => {
                 self.ops.insert(id.to_string(), Op::Failed(e));
@@ -487,7 +550,12 @@ impl PluginsModel {
         self.tasks.insert(id.to_string(), task);
     }
 
-    fn uninstall_done(&mut self, id: &str, result: Result<UninstallOutcome, String>, cx: &mut Context<Self>) {
+    fn uninstall_done(
+        &mut self,
+        id: &str,
+        result: Result<UninstallOutcome, String>,
+        cx: &mut Context<Self>,
+    ) {
         self.tasks.remove(id);
         match result {
             Ok(outcome) => {
@@ -515,7 +583,14 @@ impl PluginsModel {
     /// Size and message the confirmation popover shows before installing `id`.
     pub fn confirm_text(&self, id: &str) -> Option<(u64, String)> {
         let e = self.index.as_ref()?.entry(id)?;
-        Some((e.size, format!("v{} · {}", e.version.trim_start_matches('v'), fmt::bytes(e.size))))
+        Some((
+            e.size,
+            format!(
+                "v{} · {}",
+                e.version.trim_start_matches('v'),
+                fmt::bytes(e.size)
+            ),
+        ))
     }
 }
 
@@ -530,7 +605,11 @@ mod tests {
             display_name: id.to_uppercase(),
             version: version.map(Into::into),
             file_extensions: vec![id.into()],
-            state: if source == GrammarSource::Builtin { GrammarState::Builtin } else { GrammarState::Installed },
+            state: if source == GrammarSource::Builtin {
+                GrammarState::Builtin
+            } else {
+                GrammarState::Installed
+            },
             source,
             size_bytes: 1000,
             pending_removal: false,
@@ -562,17 +641,33 @@ mod tests {
             info("csharp", Some("0.23.5"), GrammarSource::Plugin),
             info("python", Some("0.25.0"), GrammarSource::Plugin),
         ];
-        let idx = index(&[("rust", "0.24.2", 500), ("csharp", "0.24.0", 600), ("go", "1.0.0", 700)]);
+        let idx = index(&[
+            ("rust", "0.24.2", 500),
+            ("csharp", "0.24.0", 600),
+            ("go", "1.0.0", 700),
+        ]);
         let rows = build_rows(Some(&idx), &installed, &BTreeMap::new());
         assert_eq!(rows.len(), 5);
         assert_eq!(row(&rows, "json").state, PluginState::Builtin);
         assert_eq!(row(&rows, "json").label(), "Incluido");
         assert_eq!(row(&rows, "rust").state, PluginState::Installed);
         assert_eq!(row(&rows, "rust").label(), "Instalado");
-        assert_eq!(row(&rows, "csharp").state, PluginState::Update { to: "0.24.0".into() });
-        assert_eq!(row(&rows, "csharp").label(), "Actualización disponible v0.24.0");
+        assert_eq!(
+            row(&rows, "csharp").state,
+            PluginState::Update {
+                to: "0.24.0".into()
+            }
+        );
+        assert_eq!(
+            row(&rows, "csharp").label(),
+            "Actualización disponible v0.24.0"
+        );
         assert!(row(&rows, "csharp").can_update());
-        assert_eq!(row(&rows, "csharp").size, 600, "the index size wins while it is listed");
+        assert_eq!(
+            row(&rows, "csharp").size,
+            600,
+            "the index size wins while it is listed"
+        );
         // Installed but not in the index: still Installed, removable, not updatable.
         assert_eq!(row(&rows, "python").state, PluginState::Installed);
         assert!(row(&rows, "python").can_remove() && !row(&rows, "python").can_update());
@@ -608,14 +703,22 @@ mod tests {
         let mut rem = info("csharp", Some("0.23.5"), GrammarSource::Plugin);
         rem.pending_removal = true;
         let mut bad = info("python", Some("0.25.0"), GrammarSource::Plugin);
-        bad.state = GrammarState::Failed(GrammarError::MissingFile { file: "grammar.dll".into() });
+        bad.state = GrammarState::Failed(GrammarError::MissingFile {
+            file: "grammar.dll".into(),
+        });
         let idx = index(&[("python", "0.25.0", 10)]);
         let rows = build_rows(Some(&idx), &[upd, rem, bad], &BTreeMap::new());
-        assert_eq!(row(&rows, "rust").state, PluginState::PendingRestart(RestartKind::Update));
+        assert_eq!(
+            row(&rows, "rust").state,
+            PluginState::PendingRestart(RestartKind::Update)
+        );
         assert!(row(&rows, "rust").needs_restart() && !row(&rows, "rust").can_remove());
         assert_eq!(row(&rows, "csharp").label(), "Se quitará al reiniciar");
         assert!(row(&rows, "python").label().starts_with("Fallo: "));
-        assert!(row(&rows, "python").can_install(), "a broken plugin can be reinstalled from the index");
+        assert!(
+            row(&rows, "python").can_install(),
+            "a broken plugin can be reinstalled from the index"
+        );
         assert!(row(&rows, "python").can_remove());
     }
 
@@ -623,7 +726,13 @@ mod tests {
     fn operations_override_the_label_and_block_actions() {
         let idx = index(&[("go", "1.0.0", 1000)]);
         let mut ops = BTreeMap::new();
-        ops.insert("go".to_string(), Op::Downloading { received: 250, total: Some(1000) });
+        ops.insert(
+            "go".to_string(),
+            Op::Downloading {
+                received: 250,
+                total: Some(1000),
+            },
+        );
         let rows = build_rows(Some(&idx), &[], &ops);
         assert_eq!(rows[0].label(), "Descargando 25 %");
         assert!(rows[0].is_busy() && !rows[0].can_install());
@@ -633,8 +742,17 @@ mod tests {
         let rows = build_rows(Some(&idx), &[], &ops);
         assert_eq!(rows[0].label(), "Fallo: sha256 distinto");
         assert!(rows[0].can_install(), "retry is allowed after a failure");
-        ops.insert("go".to_string(), Op::Downloading { received: 2048, total: None });
-        assert_eq!(build_rows(Some(&idx), &[], &ops)[0].label(), "Descargando 2 KB");
+        ops.insert(
+            "go".to_string(),
+            Op::Downloading {
+                received: 2048,
+                total: None,
+            },
+        );
+        assert_eq!(
+            build_rows(Some(&idx), &[], &ops)[0].label(),
+            "Descargando 2 KB"
+        );
     }
 
     #[test]
@@ -678,17 +796,29 @@ mod tests {
     #[test]
     fn fetch_index_parses_and_surfaces_errors_in_spanish() {
         let good = index(&[("go", "1.0.0", 1)]).to_toml();
-        let idx = fetch_index(&Fixed(good.into_bytes()), "https://example.com/grammars.toml").unwrap();
+        let idx = fetch_index(
+            &Fixed(good.into_bytes()),
+            "https://example.com/grammars.toml",
+        )
+        .unwrap();
         assert_eq!(idx.grammars.len(), 1);
-        let err = fetch_index(&Fixed(b"garbage = ".to_vec()), "https://example.com/g.toml").unwrap_err();
-        assert!(err.contains("índice") || err.to_lowercase().contains("index"), "{err}");
+        let err =
+            fetch_index(&Fixed(b"garbage = ".to_vec()), "https://example.com/g.toml").unwrap_err();
+        assert!(
+            err.contains("índice") || err.to_lowercase().contains("index"),
+            "{err}"
+        );
         let err = fetch_index(&Fixed(vec![0xff, 0xfe]), "https://example.com/g.toml").unwrap_err();
         assert!(err.contains("UTF-8"));
         let err = fetch_index(&Fixed(vec![]), "http://example.com/g.toml").unwrap_err();
         assert!(err.contains("https"), "{err}");
         // The 1 MB cap applies to the index.
         let big = Fixed(vec![b'#'; MAX_INDEX_BYTES as usize + 1]);
-        assert!(fetch_index(&big, "https://example.com/g.toml").unwrap_err().contains("límite"));
+        assert!(
+            fetch_index(&big, "https://example.com/g.toml")
+                .unwrap_err()
+                .contains("límite")
+        );
     }
 
     #[test]
@@ -699,7 +829,13 @@ mod tests {
         entry.size = MAX_ARCHIVE_BYTES + 1;
         struct Never;
         impl Fetcher for Never {
-            fn get(&self, _: &str, _: u64, _: Duration, _: &mut dyn FnMut(u64, Option<u64>)) -> Result<Vec<u8>, FetchError> {
+            fn get(
+                &self,
+                _: &str,
+                _: u64,
+                _: Duration,
+                _: &mut dyn FnMut(u64, Option<u64>),
+            ) -> Result<Vec<u8>, FetchError> {
                 panic!("must not download");
             }
         }
@@ -712,8 +848,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let registry = GrammarRegistry::new(dir.path());
         let entry = index(&[("go", "1.0.0", 0)]).grammars[0].clone(); // pins sha "abab..."
-        let err = download_and_install(&registry, &Fixed(b"PK-not-the-pinned-bytes".to_vec()), &entry, &mut |_, _| {})
-            .unwrap_err();
+        let err = download_and_install(
+            &registry,
+            &Fixed(b"PK-not-the-pinned-bytes".to_vec()),
+            &entry,
+            &mut |_, _| {},
+        )
+        .unwrap_err();
         assert!(err.contains("sha256"), "{err}");
         assert!(!registry.has_plugin("go"));
     }

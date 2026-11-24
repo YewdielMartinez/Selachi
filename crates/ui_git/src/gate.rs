@@ -49,7 +49,10 @@ pub struct Review {
 
 impl Review {
     fn line(&mut self, kind: LineKind, text: impl Into<String>) {
-        self.lines.push(ReviewLine { kind, text: text.into() });
+        self.lines.push(ReviewLine {
+            kind,
+            text: text.into(),
+        });
     }
 
     pub fn warnings(&self) -> impl Iterator<Item = &ReviewLine> {
@@ -82,19 +85,32 @@ pub fn translate_warning(w: &str) -> String {
     } else if w.starts_with("working tree has uncommitted changes; pull") {
         "Hay cambios sin confirmar: el pull puede generar conflictos".into()
     } else if w.starts_with("branch has diverged") {
-        let mut n = w.split(|c: char| !c.is_ascii_digit()).filter_map(|t| t.parse::<u32>().ok());
+        let mut n = w
+            .split(|c: char| !c.is_ascii_digit())
+            .filter_map(|t| t.parse::<u32>().ok());
         let (a, b) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
-        format!("La rama ha divergido ({a} por delante, {b} por detrás): el pull fusionará o rebasará")
+        format!(
+            "La rama ha divergido ({a} por delante, {b} por detrás): el pull fusionará o rebasará"
+        )
     } else if w.contains("have unresolved conflicts") {
-        format!("{} archivo(s) con conflictos sin resolver", num(w).unwrap_or(0))
+        format!(
+            "{} archivo(s) con conflictos sin resolver",
+            num(w).unwrap_or(0)
+        )
     } else if w.starts_with("working tree has uncommitted changes that may be overwritten") {
         "Hay cambios sin confirmar que podrían sobrescribirse".into()
     } else if w.starts_with("worktree is locked") {
-        format!("El worktree está bloqueado{}", w.trim_start_matches("worktree is locked"))
+        format!(
+            "El worktree está bloqueado{}",
+            w.trim_start_matches("worktree is locked")
+        )
     } else if w.starts_with("directory is already missing") {
         "La carpeta ya no existe: solo se limpian los metadatos".into()
     } else if w.contains("file(s) with uncommitted changes will be lost") {
-        format!("{} archivo(s) con cambios sin confirmar se perderán", num(w).unwrap_or(0))
+        format!(
+            "{} archivo(s) con cambios sin confirmar se perderán",
+            num(w).unwrap_or(0)
+        )
     } else if let Some((head, rest)) = w.split_once(" commit(s) on ") {
         let n = head.trim();
         let what = rest.split(" are not pushed").next().unwrap_or(rest);
@@ -133,15 +149,24 @@ pub fn build_review(
     match op {
         GitOp::Action(git_svc::GitAction::Commit { message }) => {
             commit_checks(&mut r);
-            r.line(LineKind::Info, format!("Mensaje: {}", crate::fmt::first_line(message)));
             r.line(
                 LineKind::Info,
-                format!("{} en staged", plural(status.staged.len(), "archivo", "archivos")),
+                format!("Mensaje: {}", crate::fmt::first_line(message)),
+            );
+            r.line(
+                LineKind::Info,
+                format!(
+                    "{} en staged",
+                    plural(status.staged.len(), "archivo", "archivos")
+                ),
             );
         }
         GitOp::CommitAndPush { message } => {
             commit_checks(&mut r);
-            r.line(LineKind::Info, format!("Mensaje: {}", crate::fmt::first_line(message)));
+            r.line(
+                LineKind::Info,
+                format!("Mensaje: {}", crate::fmt::first_line(message)),
+            );
             r.line(
                 LineKind::Info,
                 format!(
@@ -150,17 +175,26 @@ pub fn build_review(
                 ),
             );
             if status.upstream.is_none() && !status.detached {
-                r.line(LineKind::Warn, "La rama no tiene upstream: el push fallará. Usa «Publicar» después");
+                r.line(
+                    LineKind::Warn,
+                    "La rama no tiene upstream: el push fallará. Usa «Publicar» después",
+                );
             }
         }
         GitOp::PublishBranch { branch } => {
             r.confirm_label = "Publicar".into();
-            r.line(LineKind::Info, format!("Se creará origin/{branch} y quedará como upstream"));
+            r.line(
+                LineKind::Info,
+                format!("Se creará origin/{branch} y quedará como upstream"),
+            );
         }
         GitOp::RemoveWorktree { .. } => {
             r.confirm_label = "Eliminar".into();
             r.danger = true;
-            r.line(LineKind::Info, "La rama se conserva; solo se borra la carpeta");
+            r.line(
+                LineKind::Info,
+                "La rama se conserva; solo se borra la carpeta",
+            );
         }
         GitOp::RestoreCheckpoint { .. } => {
             r.confirm_label = "Restaurar".into();
@@ -180,9 +214,14 @@ pub fn build_review(
                         r.line(LineKind::Skip, format!("{} ({why})", slashes(f)));
                     }
                     if p.is_empty() {
-                        r.blocked = Some("Nada que restaurar: el árbol ya coincide con el checkpoint".into());
+                        r.blocked = Some(
+                            "Nada que restaurar: el árbol ya coincide con el checkpoint".into(),
+                        );
                     } else {
-                        r.line(LineKind::Info, "Antes se crea un checkpoint «antes de restaurar» para poder deshacer");
+                        r.line(
+                            LineKind::Info,
+                            "Antes se crea un checkpoint «antes de restaurar» para poder deshacer",
+                        );
                     }
                 }
                 None => r.blocked = Some("No se pudo calcular el plan de restauración".into()),
@@ -225,12 +264,23 @@ pub enum Gate {
     #[default]
     Idle,
     /// The preflight is being computed.
-    Preflighting { op: GitOp, epoch: u64 },
+    Preflighting {
+        op: GitOp,
+        epoch: u64,
+    },
     /// The card is shown, waiting for "Confirmar" / "Cancelar".
-    Confirm { op: GitOp, review: Review },
-    Running { op: GitOp },
+    Confirm {
+        op: GitOp,
+        review: Review,
+    },
+    Running {
+        op: GitOp,
+    },
     /// Banner with the result of the last operation.
-    Done { op: GitOp, outcome: Outcome },
+    Done {
+        op: GitOp,
+        outcome: Outcome,
+    },
 }
 
 /// What the model must do after [`Gate::begin`].
@@ -252,7 +302,10 @@ impl Gate {
             return Step::Busy;
         }
         if op.is_sensitive() {
-            *self = Gate::Preflighting { op: op.clone(), epoch };
+            *self = Gate::Preflighting {
+                op: op.clone(),
+                epoch,
+            };
             Step::Preflight { op, epoch }
         } else {
             // A quiet operation does not dismiss a card the user is still reading, nor a flow in
@@ -266,7 +319,9 @@ impl Gate {
 
     /// The preflight finished. Ignored when it is stale (the user cancelled or switched repo).
     pub fn preflight_ready(&mut self, epoch: u64, review: Result<Review, String>) {
-        let Gate::Preflighting { op, epoch: e } = self else { return };
+        let Gate::Preflighting { op, epoch: e } = self else {
+            return;
+        };
         if *e != epoch {
             return;
         }
@@ -274,7 +329,12 @@ impl Gate {
         *self = match review {
             Ok(review) => Gate::Confirm { op, review },
             Err(e) => Gate::Done {
-                outcome: Outcome { ok: false, summary: format!("{}: {e}", op.title()), detail: String::new(), retry: None },
+                outcome: Outcome {
+                    ok: false,
+                    summary: format!("{}: {e}", op.title()),
+                    detail: String::new(),
+                    retry: None,
+                },
                 op,
             },
         };
@@ -283,7 +343,9 @@ impl Gate {
     /// "Confirmar": the operation to run, only when the card is showing and the operation is not
     /// blocked. This is the single place a sensitive operation is released.
     pub fn confirm(&mut self) -> Option<GitOp> {
-        let Gate::Confirm { op, review } = self else { return None };
+        let Gate::Confirm { op, review } = self else {
+            return None;
+        };
         if review.blocked.is_some() {
             return None;
         }
@@ -295,7 +357,9 @@ impl Gate {
     /// "Cancelar" / dismiss the banner.
     pub fn cancel(&mut self) {
         match self {
-            Gate::Preflighting { .. } | Gate::Confirm { .. } | Gate::Done { .. } => *self = Gate::Idle,
+            Gate::Preflighting { .. } | Gate::Confirm { .. } | Gate::Done { .. } => {
+                *self = Gate::Idle
+            }
             Gate::Running { .. } | Gate::Idle => {}
         }
     }
@@ -309,11 +373,12 @@ impl Gate {
             Gate::Running { op: current } if *current != op => return false,
             _ => {}
         }
-        *self = if outcome.ok && !op.is_sensitive() && outcome.detail.is_empty() && !is_reported(&op) {
-            Gate::Idle
-        } else {
-            Gate::Done { op, outcome }
-        };
+        *self =
+            if outcome.ok && !op.is_sensitive() && outcome.detail.is_empty() && !is_reported(&op) {
+                Gate::Idle
+            } else {
+                Gate::Done { op, outcome }
+            };
         true
     }
 
@@ -392,7 +457,9 @@ mod tests {
     use super::*;
 
     fn commit(msg: &str) -> GitOp {
-        GitOp::Action(GitAction::Commit { message: msg.into() })
+        GitOp::Action(GitAction::Commit {
+            message: msg.into(),
+        })
     }
 
     fn status_with_staged(n: usize) -> RepoStatus {
@@ -409,15 +476,26 @@ mod tests {
     }
 
     fn ok_outcome() -> Outcome {
-        Outcome { ok: true, summary: "ok".into(), detail: String::new(), retry: None }
+        Outcome {
+            ok: true,
+            summary: "ok".into(),
+            detail: String::new(),
+            retry: None,
+        }
     }
 
     #[test]
     fn quiet_operations_run_without_a_card() {
         let mut g = Gate::default();
-        assert_eq!(g.begin(GitOp::Stage("a".into()), 1), Step::Run(GitOp::Stage("a".into())));
+        assert_eq!(
+            g.begin(GitOp::Stage("a".into()), 1),
+            Step::Run(GitOp::Stage("a".into()))
+        );
         assert_eq!(g, Gate::Idle);
-        assert_eq!(g.begin(GitOp::Action(GitAction::Fetch), 1), Step::Run(GitOp::Action(GitAction::Fetch)));
+        assert_eq!(
+            g.begin(GitOp::Action(GitAction::Fetch), 1),
+            Step::Run(GitOp::Action(GitAction::Fetch))
+        );
     }
 
     #[test]
@@ -426,19 +504,38 @@ mod tests {
             commit("m"),
             GitOp::Action(GitAction::Push),
             GitOp::Action(GitAction::Pull),
-            GitOp::CommitAndPush { message: "m".into() },
-            GitOp::RemoveWorktree { path: "w".into(), force: true },
+            GitOp::CommitAndPush {
+                message: "m".into(),
+            },
+            GitOp::RemoveWorktree {
+                path: "w".into(),
+                force: true,
+            },
             GitOp::RestoreCheckpoint { id: "1".into() },
         ] {
             let mut g = Gate::default();
             // begin never returns Run for a sensitive op.
             let step = g.begin(op.clone(), 7);
-            assert_eq!(step, Step::Preflight { op: op.clone(), epoch: 7 });
+            assert_eq!(
+                step,
+                Step::Preflight {
+                    op: op.clone(),
+                    epoch: 7
+                }
+            );
             // Confirming before the preflight arrived does nothing.
             assert_eq!(g.confirm(), None, "{op:?}");
             assert!(matches!(g, Gate::Preflighting { .. }));
             // The card shows; only confirm releases it.
-            let review = build_review(&op, &Preflight::default(), Some(&RestorePlan { overwrite: vec!["a".into()], ..RestorePlan::default() }), &status_with_staged(1));
+            let review = build_review(
+                &op,
+                &Preflight::default(),
+                Some(&RestorePlan {
+                    overwrite: vec!["a".into()],
+                    ..RestorePlan::default()
+                }),
+                &status_with_staged(1),
+            );
             g.preflight_ready(7, Ok(review));
             assert!(matches!(g, Gate::Confirm { .. }));
             assert_eq!(g.confirm(), Some(op.clone()));
@@ -456,13 +553,29 @@ mod tests {
         g.cancel();
         assert_eq!(g, Gate::Idle);
         // The late preflight of the cancelled request is ignored.
-        g.preflight_ready(3, Ok(build_review(&op, &Preflight::default(), None, &RepoStatus::default())));
+        g.preflight_ready(
+            3,
+            Ok(build_review(
+                &op,
+                &Preflight::default(),
+                None,
+                &RepoStatus::default(),
+            )),
+        );
         assert_eq!(g, Gate::Idle);
         assert_eq!(g.confirm(), None);
 
         // A newer request supersedes an older epoch.
         g.begin(op.clone(), 4);
-        g.preflight_ready(3, Ok(build_review(&op, &Preflight::default(), None, &RepoStatus::default())));
+        g.preflight_ready(
+            3,
+            Ok(build_review(
+                &op,
+                &Preflight::default(),
+                None,
+                &RepoStatus::default(),
+            )),
+        );
         assert!(matches!(g, Gate::Preflighting { .. }));
     }
 
@@ -475,7 +588,10 @@ mod tests {
         assert!(review.blocked.is_some());
         g.preflight_ready(1, Ok(review));
         assert_eq!(g.confirm(), None, "nothing staged: commit is blocked");
-        assert!(matches!(g, Gate::Confirm { .. }), "the card stays so the user can read why");
+        assert!(
+            matches!(g, Gate::Confirm { .. }),
+            "the card stays so the user can read why"
+        );
     }
 
     #[test]
@@ -495,7 +611,15 @@ mod tests {
         assert!(g.finished(GitOp::Stage("a".into()), ok_outcome()));
         assert_eq!(g, Gate::Idle);
 
-        g.finished(GitOp::Stage("a".into()), Outcome { ok: false, summary: "x".into(), detail: String::new(), retry: None });
+        g.finished(
+            GitOp::Stage("a".into()),
+            Outcome {
+                ok: false,
+                summary: "x".into(),
+                detail: String::new(),
+                retry: None,
+            },
+        );
         assert!(matches!(g, Gate::Done { .. }));
 
         let mut g = Gate::default();
@@ -510,9 +634,23 @@ mod tests {
         let mut g = Gate::default();
         let op = GitOp::Action(GitAction::Push);
         g.begin(op.clone(), 1);
-        g.preflight_ready(1, Ok(build_review(&op, &Preflight::default(), None, &RepoStatus::default())));
-        assert_eq!(g.begin(GitOp::Stage("a".into()), 2), Step::Run(GitOp::Stage("a".into())));
-        assert!(!g.finished(GitOp::Stage("a".into()), ok_outcome()), "outcome not shown over the card");
+        g.preflight_ready(
+            1,
+            Ok(build_review(
+                &op,
+                &Preflight::default(),
+                None,
+                &RepoStatus::default(),
+            )),
+        );
+        assert_eq!(
+            g.begin(GitOp::Stage("a".into()), 2),
+            Step::Run(GitOp::Stage("a".into()))
+        );
+        assert!(
+            !g.finished(GitOp::Stage("a".into()), ok_outcome()),
+            "outcome not shown over the card"
+        );
         assert!(matches!(g, Gate::Confirm { .. }));
 
         // The result of a quiet op does not close the banner of the running sensitive one.
@@ -549,9 +687,14 @@ mod tests {
 
     #[test]
     fn warnings_are_translated() {
-        assert_eq!(translate_warning("nothing to commit"), "No hay nada que confirmar");
         assert_eq!(
-            translate_warning("branch is 3 commit(s) behind upstream; push will likely be rejected"),
+            translate_warning("nothing to commit"),
+            "No hay nada que confirmar"
+        );
+        assert_eq!(
+            translate_warning(
+                "branch is 3 commit(s) behind upstream; push will likely be rejected"
+            ),
             "La rama va 3 commit(s) por detrás del upstream: el push probablemente será rechazado"
         );
         assert_eq!(
@@ -574,7 +717,12 @@ mod tests {
             skipped: vec![("sub".into(), "submodule".into())],
         };
         let op = GitOp::RestoreCheckpoint { id: "1".into() };
-        let r = build_review(&op, &Preflight::default(), Some(&plan), &RepoStatus::default());
+        let r = build_review(
+            &op,
+            &Preflight::default(),
+            Some(&plan),
+            &RepoStatus::default(),
+        );
         let kinds: Vec<LineKind> = r.lines.iter().map(|l| l.kind).collect();
         assert_eq!(
             kinds,
@@ -588,7 +736,12 @@ mod tests {
             ]
         );
         assert!(r.danger && r.blocked.is_none());
-        let empty = build_review(&op, &Preflight::default(), Some(&RestorePlan::default()), &RepoStatus::default());
+        let empty = build_review(
+            &op,
+            &Preflight::default(),
+            Some(&RestorePlan::default()),
+            &RepoStatus::default(),
+        );
         assert!(empty.blocked.is_some());
     }
 
@@ -597,9 +750,15 @@ mod tests {
         let mut st = status_with_staged(2);
         st.conflicted.push("x.rs".into());
         let op = commit("feat: x\n\nbody");
-        let pf = Preflight { warnings: vec!["HEAD is detached; the commit will not be on a branch".into()], ..Preflight::default() };
+        let pf = Preflight {
+            warnings: vec!["HEAD is detached; the commit will not be on a branch".into()],
+            ..Preflight::default()
+        };
         let r = build_review(&op, &pf, None, &st);
-        assert_eq!(r.blocked.as_deref(), Some("1 archivo con conflictos sin resolver"));
+        assert_eq!(
+            r.blocked.as_deref(),
+            Some("1 archivo con conflictos sin resolver")
+        );
         assert!(r.warnings().any(|l| l.text.contains("HEAD está separado")));
         assert!(r.lines.iter().any(|l| l.text == "Mensaje: feat: x"));
     }

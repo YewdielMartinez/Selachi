@@ -92,7 +92,11 @@ impl PortPill {
 
     /// `:5173`, or `:5353 udp`.
     pub fn label(&self) -> String {
-        if self.tcp { format!(":{}", self.port) } else { format!(":{} udp", self.port) }
+        if self.tcp {
+            format!(":{}", self.port)
+        } else {
+            format!(":{} udp", self.port)
+        }
     }
 }
 
@@ -103,7 +107,11 @@ pub fn pills(ports: &[PortInfo]) -> Vec<PortPill> {
         let tcp = p.proto == Proto::Tcp;
         match out.iter_mut().find(|q| q.port == p.port && q.tcp == tcp) {
             Some(q) => q.exposed |= p.is_exposed(),
-            None => out.push(PortPill { port: p.port, tcp, exposed: p.is_exposed() }),
+            None => out.push(PortPill {
+                port: p.port,
+                tcp,
+                exposed: p.is_exposed(),
+            }),
         }
     }
     out.sort_by_key(|p| (!p.tcp, p.port));
@@ -222,7 +230,11 @@ impl AgentGroup {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
     /// A process of one of our jobs.
-    Tracked { agent: Option<String>, label: String, owner: OwnerId },
+    Tracked {
+        agent: Option<String>,
+        label: String,
+        owner: OwnerId,
+    },
     /// Heuristic: a descendant of an agent running outside Selachi.
     Probable { agent: String },
     /// Anything else on the machine.
@@ -241,8 +253,14 @@ impl Origin {
     /// `Claude · api`, `Claude (probable)`, `Fuera de Selachi`.
     pub fn label(&self) -> String {
         match self {
-            Origin::Tracked { agent: Some(a), label, .. } => format!("{} · {label}", title_case(a)),
-            Origin::Tracked { agent: None, label, .. } => label.clone(),
+            Origin::Tracked {
+                agent: Some(a),
+                label,
+                ..
+            } => format!("{} · {label}", title_case(a)),
+            Origin::Tracked {
+                agent: None, label, ..
+            } => label.clone(),
             Origin::Probable { agent } => format!("{} (probable)", title_case(agent)),
             Origin::External => "Fuera de Selachi".to_string(),
         }
@@ -296,7 +314,11 @@ impl OrphanSummary {
     /// `None` when there are no orphans (the pill is hidden).
     pub fn label(&self) -> Option<String> {
         (self.count > 0).then(|| {
-            format!("{} · {}", plural(self.count, "huérfano", "huérfanos"), format_bytes(self.ram_bytes))
+            format!(
+                "{} · {}",
+                plural(self.count, "huérfano", "huérfanos"),
+                format_bytes(self.ram_bytes)
+            )
         })
     }
 }
@@ -317,7 +339,10 @@ pub struct Snapshot {
 impl Snapshot {
     /// Every row of every group.
     pub fn rows(&self) -> impl Iterator<Item = &ProcRow> {
-        self.agents.iter().flat_map(|a| a.owners.iter()).flat_map(|o| o.rows.iter())
+        self.agents
+            .iter()
+            .flat_map(|a| a.owners.iter())
+            .flat_map(|o| o.rows.iter())
     }
 
     pub fn find_row(&self, pid: u32) -> Option<&ProcRow> {
@@ -419,7 +444,12 @@ pub fn order_tree(rows: Vec<ProcRow>) -> Vec<ProcRow> {
             continue;
         }
         order.push((i, depth));
-        stack.extend(children[i].iter().rev().map(|&c| (c, depth.saturating_add(1))));
+        stack.extend(
+            children[i]
+                .iter()
+                .rev()
+                .map(|&c| (c, depth.saturating_add(1))),
+        );
     }
     // A cycle (impossible with the start-time guard, but cheap to survive) leaves rows unvisited.
     for i in 0..rows.len() {
@@ -444,8 +474,16 @@ fn agent_entry<'a>(agents: &'a mut Vec<AgentGroup>, agent: Option<&str>) -> &'a 
     let ix = match agents.iter().position(|g| g.id == id) {
         Some(ix) => ix,
         None => {
-            let name = if id.is_empty() { "Sin agente".to_string() } else { title_case(&id) };
-            agents.push(AgentGroup { id, name, owners: Vec::new() });
+            let name = if id.is_empty() {
+                "Sin agente".to_string()
+            } else {
+                title_case(&id)
+            };
+            agents.push(AgentGroup {
+                id,
+                name,
+                owners: Vec::new(),
+            });
             agents.len() - 1
         }
     };
@@ -454,7 +492,9 @@ fn agent_entry<'a>(agents: &'a mut Vec<AgentGroup>, agent: Option<&str>) -> &'a 
 
 fn dir_label(cwd: &Option<PathBuf>) -> Option<String> {
     let p = cwd.as_ref()?;
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).or_else(|| Some(p.display().to_string()))
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .or_else(|| Some(p.display().to_string()))
 }
 
 /// Attributes and groups a sample. Pure.
@@ -465,7 +505,11 @@ pub fn build_snapshot(c: &Collected) -> Snapshot {
     let mut origins: HashMap<u32, (Origin, Option<RowState>)> = HashMap::new();
 
     for rep in &c.reports {
-        let rows: Vec<ProcRow> = rep.processes.iter().map(|p| tracked_row(p, rep.owner, c, now)).collect();
+        let rows: Vec<ProcRow> = rep
+            .processes
+            .iter()
+            .map(|p| tracked_row(p, rep.owner, c, now))
+            .collect();
         if rows.is_empty() {
             continue;
         }
@@ -478,39 +522,58 @@ pub fn build_snapshot(c: &Collected) -> Snapshot {
             origins.insert(
                 r.pid,
                 (
-                    Origin::Tracked { agent: rep.meta.agent.clone(), label: label.clone(), owner: rep.owner },
+                    Origin::Tracked {
+                        agent: rep.meta.agent.clone(),
+                        label: label.clone(),
+                        owner: rep.owner,
+                    },
                     Some(r.state),
                 ),
             );
         }
-        agent_entry(&mut agents, rep.meta.agent.as_deref()).owners.push(OwnerGroup {
-            key: GroupKey::Owner(rep.owner),
-            label,
-            detail: dir_label(&rep.meta.cwd),
-            probable: false,
-            tree_tracked: c.tree_owners.contains(&rep.owner),
-            rows: order_tree(rows),
-        });
+        agent_entry(&mut agents, rep.meta.agent.as_deref())
+            .owners
+            .push(OwnerGroup {
+                key: GroupKey::Owner(rep.owner),
+                label,
+                detail: dir_label(&rep.meta.cwd),
+                probable: false,
+                tree_tracked: c.tree_owners.contains(&rep.owner),
+                rows: order_tree(rows),
+            });
     }
 
     let mut external: Vec<(&str, u32, Vec<ProcRow>)> = Vec::new();
     for u in &c.untracked {
-        origins.insert(u.info.pid, (Origin::Probable { agent: u.agent.clone() }, None));
+        origins.insert(
+            u.info.pid,
+            (
+                Origin::Probable {
+                    agent: u.agent.clone(),
+                },
+                None,
+            ),
+        );
         let row = untracked_row(u, c, now);
-        match external.iter_mut().find(|(a, pid, _)| *a == u.agent && *pid == u.agent_pid) {
+        match external
+            .iter_mut()
+            .find(|(a, pid, _)| *a == u.agent && *pid == u.agent_pid)
+        {
             Some((_, _, rows)) => rows.push(row),
             None => external.push((&u.agent, u.agent_pid, vec![row])),
         }
     }
     for (agent, agent_pid, rows) in external {
-        agent_entry(&mut agents, Some(agent)).owners.push(OwnerGroup {
-            key: GroupKey::External(agent_pid),
-            label: "Fuera de Selachi".to_string(),
-            detail: Some(format!("{agent} · pid {agent_pid}")),
-            probable: true,
-            tree_tracked: false,
-            rows: order_tree(rows),
-        });
+        agent_entry(&mut agents, Some(agent))
+            .owners
+            .push(OwnerGroup {
+                key: GroupKey::External(agent_pid),
+                label: "Fuera de Selachi".to_string(),
+                detail: Some(format!("{agent} · pid {agent_pid}")),
+                probable: true,
+                tree_tracked: false,
+                rows: order_tree(rows),
+            });
     }
 
     // Named agents alphabetically, "Sin agente" last; owners by key (tabs first, then external).
@@ -524,7 +587,11 @@ pub fn build_snapshot(c: &Collected) -> Snapshot {
 
     let (mut count, mut ram_bytes) = (0usize, 0u64);
     let (mut process_count, mut ram_total, mut has_cpu) = (0usize, 0u64, false);
-    for r in agents.iter().flat_map(|a| a.owners.iter()).flat_map(|o| o.rows.iter()) {
+    for r in agents
+        .iter()
+        .flat_map(|a| a.owners.iter())
+        .flat_map(|o| o.rows.iter())
+    {
         process_count += 1;
         ram_total += r.ram;
         has_cpu |= r.cpu.is_some();
@@ -553,12 +620,18 @@ fn build_port_rows(
     let mut rows: Vec<PortRow> = Vec::new();
     for p in &c.ports {
         let tcp = p.proto == Proto::Tcp;
-        let (origin, state) = origins.get(&p.pid).cloned().unwrap_or((Origin::External, None));
+        let (origin, state) = origins
+            .get(&p.pid)
+            .cloned()
+            .unwrap_or((Origin::External, None));
         // UDP sockets of unrelated processes are noise (mDNS, SSDP...).
         if !tcp && matches!(origin, Origin::External) {
             continue;
         }
-        if let Some(r) = rows.iter_mut().find(|r| r.pid == p.pid && r.port == p.port && r.tcp == tcp) {
+        if let Some(r) = rows
+            .iter_mut()
+            .find(|r| r.pid == p.pid && r.port == p.port && r.tcp == tcp)
+        {
             r.exposed |= p.is_exposed();
             continue;
         }
@@ -626,19 +699,43 @@ pub(crate) mod fixtures {
             proto: if tcp { Proto::Tcp } else { Proto::Udp },
             local_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port,
-            state: if tcp { PortState::Listen } else { PortState::Bound },
+            state: if tcp {
+                PortState::Listen
+            } else {
+                PortState::Bound
+            },
         }
     }
 
-    pub fn tracked(i: ProcInfo, ports: Vec<PortInfo>, state: ProcState, is_root: bool) -> TrackedProc {
+    pub fn tracked(
+        i: ProcInfo,
+        ports: Vec<PortInfo>,
+        state: ProcState,
+        is_root: bool,
+    ) -> TrackedProc {
         let runtime: Runtime = classify(&i.name, i.cmdline.as_deref(), None);
-        TrackedProc { info: i, ports, state, runtime, is_root }
+        TrackedProc {
+            info: i,
+            ports,
+            state,
+            runtime,
+            is_root,
+        }
     }
 
-    pub fn report(owner: OwnerId, agent: Option<&str>, label: &str, processes: Vec<TrackedProc>) -> OwnerReport {
+    pub fn report(
+        owner: OwnerId,
+        agent: Option<&str>,
+        label: &str,
+        processes: Vec<TrackedProc>,
+    ) -> OwnerReport {
         OwnerReport {
             owner,
-            meta: OwnerMeta { agent: agent.map(Into::into), label: label.into(), cwd: Some(PathBuf::from(r"C:\work\api")) },
+            meta: OwnerMeta {
+                agent: agent.map(Into::into),
+                label: label.into(),
+                cwd: Some(PathBuf::from(r"C:\work\api")),
+            },
             processes,
         }
     }
@@ -647,19 +744,43 @@ pub(crate) mod fixtures {
     /// orphan esbuild; plus one external codex descendant.
     pub fn sample() -> Collected {
         let shell = info(100, 1, "pwsh.exe", "pwsh -NoLogo", 9_000, 90);
-        let vite = info(101, 100, "node.exe", r"node C:\w\node_modules\vite\bin\vite.js", 9_100, 300);
+        let vite = info(
+            101,
+            100,
+            "node.exe",
+            r"node C:\w\node_modules\vite\bin\vite.js",
+            9_100,
+            300,
+        );
         let dotnet = info(102, 1, "dotnet.exe", "dotnet watch run", 9_200, 410);
         let esbuild = info(103, 102, "esbuild.exe", "esbuild --service", 9_300, 25);
         let ext_agent = info(200, 1, "codex.exe", "codex", 8_000, 80);
-        let ext_child = info(201, 200, "python.exe", "python -m http.server 8000", 9_500, 30);
+        let ext_child = info(
+            201,
+            200,
+            "python.exe",
+            "python -m http.server 8000",
+            9_500,
+            30,
+        );
         let report = report(
             1,
             Some("claude"),
             "api",
             vec![
                 tracked(shell.clone(), vec![], ProcState::Active, true),
-                tracked(vite.clone(), vec![port(101, 5173, true)], ProcState::Active, false),
-                tracked(dotnet.clone(), vec![port(102, 5000, true)], ProcState::PortZombie, false),
+                tracked(
+                    vite.clone(),
+                    vec![port(101, 5173, true)],
+                    ProcState::Active,
+                    false,
+                ),
+                tracked(
+                    dotnet.clone(),
+                    vec![port(102, 5000, true)],
+                    ProcState::PortZombie,
+                    false,
+                ),
                 tracked(esbuild.clone(), vec![], ProcState::Orphan, false),
             ],
         );
@@ -685,7 +806,9 @@ pub(crate) mod fixtures {
                 port(300, 5353, false),
                 port(102, 5001, false),
             ],
-            procs: vec![shell, vite, dotnet, esbuild, ext_agent, ext_child, sys, other],
+            procs: vec![
+                shell, vite, dotnet, esbuild, ext_agent, ext_child, sys, other,
+            ],
             cpu: HashMap::from([(101, 3.4), (102, 0.0)]),
             now: Some(now()),
             tree_owners: Vec::new(),
@@ -715,7 +838,10 @@ mod tests {
         let claude = &s.agents[0];
         assert_eq!(claude.owners.len(), 1);
         let tab = &claude.owners[0];
-        assert_eq!((tab.label.as_str(), tab.detail.as_deref(), tab.probable), ("api", Some("api"), false));
+        assert_eq!(
+            (tab.label.as_str(), tab.detail.as_deref(), tab.probable),
+            ("api", Some("api"), false)
+        );
         // Tree order: shell, vite (child of shell), dotnet, esbuild (child of dotnet).
         let pids: Vec<(u32, u8)> = tab.rows.iter().map(|r| (r.pid, r.depth)).collect();
         assert_eq!(pids, [(100, 0), (101, 1), (102, 0), (103, 1)]);
@@ -742,9 +868,18 @@ mod tests {
     fn orphan_summary_counts_only_tracked_orphans_and_zombies() {
         let s = build_snapshot(&sample());
         // dotnet (zombie, 410) + esbuild (orphan, 25).
-        assert_eq!(s.summary, OrphanSummary { count: 2, ram_bytes: 435 * 1024 * 1024 });
+        assert_eq!(
+            s.summary,
+            OrphanSummary {
+                count: 2,
+                ram_bytes: 435 * 1024 * 1024
+            }
+        );
         assert_eq!(s.summary.label().as_deref(), Some("2 huérfanos · 435 MB"));
-        let one = OrphanSummary { count: 1, ram_bytes: 1_288_490_189 };
+        let one = OrphanSummary {
+            count: 1,
+            ram_bytes: 1_288_490_189,
+        };
         assert_eq!(one.label().as_deref(), Some("1 huérfano · 1,2 GB"));
         assert_eq!(OrphanSummary::default().label(), None);
     }
@@ -758,7 +893,14 @@ mod tests {
         assert_eq!(vite.runtime, RuntimeKind::Node);
         assert_eq!(vite.tag, Some("vite"));
         assert_eq!(vite.command, "node vite.js");
-        assert_eq!(vite.ports, [PortPill { port: 5173, tcp: true, exposed: false }]);
+        assert_eq!(
+            vite.ports,
+            [PortPill {
+                port: 5173,
+                tcp: true,
+                exposed: false
+            }]
+        );
         assert_eq!(s.find_row(103).unwrap().cpu, None);
         assert!(s.has_cpu);
         assert_eq!(s.process_count, 5);
@@ -770,7 +912,16 @@ mod tests {
         let seen: Vec<(u16, bool, u32)> = s.ports.iter().map(|p| (p.port, p.tcp, p.pid)).collect();
         // Tracked first (5000 tcp, 5001 udp of dotnet, 5173), then probable (8000), then others
         // (445). svchost's UDP 5353 is dropped.
-        assert_eq!(seen, [(5000, true, 102), (5001, false, 102), (5173, true, 101), (8000, true, 201), (445, true, 4)]);
+        assert_eq!(
+            seen,
+            [
+                (5000, true, 102),
+                (5001, false, 102),
+                (5173, true, 101),
+                (8000, true, 201),
+                (445, true, 4)
+            ]
+        );
         let zombie = &s.ports[0];
         assert_eq!(zombie.state, Some(RowState::PortZombie));
         assert_eq!(zombie.origin.label(), "Claude · api");
@@ -778,7 +929,10 @@ mod tests {
         assert_eq!(s.ports[3].origin.label(), "Codex (probable)");
         let system = &s.ports[4];
         assert!(!system.is_agent_related());
-        assert!(system.access_denied && !system.can_stop(), "System pid 4 cannot be stopped");
+        assert!(
+            system.access_denied && !system.can_stop(),
+            "System pid 4 cannot be stopped"
+        );
         assert_eq!(s.ports[1].url(), None, "udp has no url");
     }
 
@@ -787,14 +941,31 @@ mod tests {
         let mut v6 = port(1, 3000, true);
         v6.local_addr = "::".parse().unwrap();
         let p = pills(&[port(1, 3000, true), v6, port(1, 53, false)]);
-        assert_eq!(p, [PortPill { port: 3000, tcp: true, exposed: true }, PortPill { port: 53, tcp: false, exposed: false }]);
+        assert_eq!(
+            p,
+            [
+                PortPill {
+                    port: 3000,
+                    tcp: true,
+                    exposed: true
+                },
+                PortPill {
+                    port: 53,
+                    tcp: false,
+                    exposed: false
+                }
+            ]
+        );
         assert_eq!(p[0].label(), ":3000");
         assert_eq!(p[1].label(), ":53 udp");
     }
 
     #[test]
     fn empty_owner_groups_are_hidden() {
-        let c = Collected { reports: vec![report(7, Some("claude"), "vacío", vec![])], ..Collected::default() };
+        let c = Collected {
+            reports: vec![report(7, Some("claude"), "vacío", vec![])],
+            ..Collected::default()
+        };
         let s = build_snapshot(&c);
         assert!(s.agents.is_empty() && s.is_empty());
     }
@@ -802,7 +973,17 @@ mod tests {
     #[test]
     fn rows_without_agent_group_last() {
         let mut c = sample();
-        c.reports.push(report(2, None, "", vec![tracked(info(500, 1, "cmd.exe", "cmd", 9_000, 5), vec![], ProcState::Active, true)]));
+        c.reports.push(report(
+            2,
+            None,
+            "",
+            vec![tracked(
+                info(500, 1, "cmd.exe", "cmd", 9_000, 5),
+                vec![],
+                ProcState::Active,
+                true,
+            )],
+        ));
         let s = build_snapshot(&c);
         assert_eq!(s.agents.last().unwrap().name, "Sin agente");
         assert_eq!(s.agents.last().unwrap().owners[0].label, "Pestaña 2");
