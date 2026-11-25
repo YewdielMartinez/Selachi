@@ -43,6 +43,7 @@ use serde_json::{json, Value};
 
 use super::{Library, OutputFormat, Profile, Scope, MAX_CONTEXT_BYTES};
 use crate::agents::canonical_name;
+use crate::approval_policy::{effective_mode, ApprovalMode};
 use crate::policy::{Caller, DelegationConfig, Permission, Policy, Refusal, RefusalCode};
 use crate::registry::RunLimits;
 use crate::run::{Harness, RunRequest};
@@ -82,6 +83,10 @@ pub struct Prepared {
     /// The agent can enforce the tool lists (`true` only for Claude).
     pub tools_enforced: bool,
     pub output_format: Option<OutputFormat>,
+    /// Effective approval mode (minimum of `[delegation]`, the profile and the request).
+    pub approvals: ApprovalMode,
+    /// The profile's `allowed_commands`.
+    pub allowed_commands: Vec<String>,
     /// The caller's prompt, redacted.
     pub task_prompt: String,
     /// What the agent receives, redacted.
@@ -165,6 +170,16 @@ impl Prepared {
             l.max_concurrent
         );
         let _ = writeln!(s, "  worktree: {}", l.worktree);
+        let _ = writeln!(
+            s,
+            "  approvals: {}{}",
+            l.approvals,
+            if l.allowed_commands.is_empty() {
+                String::new()
+            } else {
+                format!("  allowed_commands: [{}]", l.allowed_commands.join(", "))
+            }
+        );
         if !l.allowed_tools.is_empty() || !l.denied_tools.is_empty() {
             let _ = writeln!(
                 s,
@@ -690,6 +705,27 @@ impl Harness {
             .as_ref()
             .map(|p| (p.allowed_tools.clone(), p.denied_tools.clone()))
             .unwrap_or_default();
+        // approvals: the minimum of [delegation], the profile and the request
+        let profile_mode = profile.as_ref().and_then(|p| p.approvals);
+        let approvals = effective_mode(self.cfg.approvals, profile_mode, req.approvals);
+        for (who, asked) in [("the profile", profile_mode), ("--approvals", req.approvals)] {
+            if let Some(a) = asked.filter(|a| *a > approvals) {
+                notes.push(format!(
+                    "{who} asks for approvals = {a}; lowered to {approvals} (a profile or a run can only lower [delegation] approvals = {})",
+                    self.cfg.approvals
+                ));
+            }
+        }
+        let allowed_commands: Vec<String> = profile
+            .as_ref()
+            .map(|p| p.allowed_commands.clone())
+            .unwrap_or_default();
+        if approvals == ApprovalMode::Allowlist && allowed_commands.is_empty() {
+            notes.push(
+                "approvals = allowlist but there are no allowed_commands (they come from a profile): every request will be asked"
+                    .to_string(),
+            );
+        }
         let limits = RunLimits {
             permission: permission.to_string(),
             parent_permission: self.caller.permission.to_string(),
@@ -711,6 +747,11 @@ impl Harness {
             allowed_tools: allowed_tools.clone(),
             denied_tools: denied_tools.clone(),
             tools_enforced,
+            approvals: approvals.to_string(),
+            allowed_commands: allowed_commands.clone(),
+            auto_approved: 0,
+            auto_approved_commands: Vec::new(),
+            blocked: 0,
         };
         Ok(Prepared {
             project_root: cwd,
@@ -728,6 +769,8 @@ impl Harness {
             denied_tools,
             tools_enforced,
             output_format,
+            approvals,
+            allowed_commands,
             task_prompt,
             final_prompt: redaction.text,
             context_files: context,

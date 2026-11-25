@@ -20,6 +20,7 @@ use chrono::{Local, TimeZone};
 use parking_lot::Mutex;
 
 use crate::agents::{agent_name, AgentResolver, SystemResolver};
+use crate::approval_policy::{ApprovalMode, Gate, OwnedScope};
 use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PROTOCOL_VERSION};
 use crate::jobs::JobHooks;
 use crate::output::{cap_chars, diff_stat_of, CostOut, RunResult, RunStatus, UsageOut};
@@ -60,6 +61,9 @@ pub struct RunRequest {
     pub timeout: Option<Duration>,
     /// Stop the agent when it has used this many billable tokens.
     pub budget_tokens: Option<u64>,
+    /// Approval mode asked for (`--approvals`, MCP `approvals`). It can only lower the mode of
+    /// `[delegation]` and of the profile, never raise it.
+    pub approvals: Option<ApprovalMode>,
 }
 
 impl RunRequest {
@@ -79,6 +83,7 @@ impl RunRequest {
             worktree: false,
             timeout: None,
             budget_tokens: None,
+            approvals: None,
         }
     }
 }
@@ -525,7 +530,21 @@ impl Harness {
             Err(e) => return Err(Stop::Failed(format!("cannot open the child thread: {e}"))),
         };
         let outcome = match rt.send(prompt, Vec::new()) {
-            Ok(()) => self.wait(&rt, &record, prep.budget_tokens, timeout, &mut notes),
+            Ok(()) => {
+                let ctx = ApprovalCtx {
+                    mode: prep.approvals,
+                    allowed: prep.allowed_commands.clone(),
+                    scope: OwnedScope::new(&record.project_root, &run_dir),
+                };
+                self.wait(
+                    &rt,
+                    &mut record,
+                    ctx,
+                    prep.budget_tokens,
+                    timeout,
+                    &mut notes,
+                )
+            }
             Err(e) => Outcome::Failed(format!("cannot send the prompt: {e}")),
         };
 
@@ -582,6 +601,13 @@ impl Harness {
             }
         }
 
+        if let Some(l) = record.limits.as_ref().filter(|l| l.auto_approved > 0) {
+            notes.push(format!(
+                "{} request(s) were approved without asking (approvals = {}); the last ones are in the run record (limits.auto_approved_commands)",
+                l.auto_approved, l.approvals
+            ));
+        }
+
         let (files_changed, diff_stat) =
             match (&record.checkpoint_id, git_svc::Repo::discover(&run_dir)) {
                 (Some(cp), Ok(Some(repo))) => {
@@ -633,11 +659,19 @@ impl Harness {
         Ok(result)
     }
 
+    /// Persists what changed while the run is in flight (the map inspector reads the record).
+    fn save_progress(&self, record: &RunRecord) {
+        if let Err(e) = self.registry.save(record) {
+            log::warn!("agent_harness: cannot update the run record: {e}");
+        }
+    }
+
     /// Wait for the turn to end, answering approvals and enforcing timeout, cancel and token budget.
     fn wait(
         &self,
         rt: &ThreadRuntime,
-        record: &RunRecord,
+        record: &mut RunRecord,
+        mut ctx: ApprovalCtx,
         budget_tokens: Option<u64>,
         timeout: Duration,
         notes: &mut Vec<String>,
@@ -673,7 +707,16 @@ impl Harness {
             };
             for (request_id, tool, detail) in pending {
                 handled.lock().insert(request_id.clone());
-                self.answer_approval(rt, record, &request_id, &tool, &detail, deadline, notes);
+                self.answer_approval(
+                    rt,
+                    record,
+                    &mut ctx,
+                    &request_id,
+                    &tool,
+                    &detail,
+                    deadline,
+                    notes,
+                );
             }
             let (status, error) = rt.with_state(|s| (s.status, s.error.clone()));
             match status {
@@ -698,13 +741,45 @@ impl Harness {
     fn answer_approval(
         &self,
         rt: &ThreadRuntime,
-        record: &RunRecord,
+        record: &mut RunRecord,
+        ctx: &mut ApprovalCtx,
         request_id: &str,
         tool: &str,
         detail: &str,
         deadline: Instant,
         notes: &mut Vec<String>,
     ) {
+        // The hard blocklist first, in every mode; then the mode decides between answering on its
+        // own and sending the request to a Selachi window.
+        match ctx.scope.gate(ctx.mode, &ctx.allowed, tool, detail) {
+            Gate::Block(reason) => {
+                notes.push(format!(
+                    "approval denied for {}: blocked without asking, {reason}",
+                    cap_chars(&redacted(tool), 100)
+                ));
+                if let Some(l) = record.limits.as_mut() {
+                    l.blocked = l.blocked.saturating_add(1);
+                }
+                self.save_progress(record);
+                if let Err(e) = rt.approve(request_id, ChatDecision::Deny) {
+                    notes.push(format!("could not deliver the approval answer: {e}"));
+                }
+                return;
+            }
+            Gate::Auto => {
+                let shown = crate::approval_policy::shell_command(tool, detail)
+                    .unwrap_or_else(|| format!("{tool}: {detail}"));
+                if let Some(l) = record.limits.as_mut() {
+                    l.note_auto_approved(&redacted(&shown));
+                }
+                self.save_progress(record);
+                if let Err(e) = rt.approve(request_id, ChatDecision::Allow) {
+                    notes.push(format!("could not deliver the approval answer: {e}"));
+                }
+                return;
+            }
+            Gate::Ask => {}
+        }
         let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
         let wait = self.cfg.approval_timeout_secs.min(remaining.max(1));
         let req = ApprovalRequest {
@@ -735,7 +810,20 @@ impl Harness {
             Decision::Allow => ChatDecision::Allow,
             Decision::Deny => ChatDecision::Deny,
             Decision::Always => ChatDecision::Always,
+            // allowed now; the rest of the run is approved by the harness (see below)
+            Decision::AlwaysRun => ChatDecision::Allow,
         };
+        if verdict.decision == Decision::AlwaysRun && ctx.mode != ApprovalMode::Auto {
+            ctx.mode = ApprovalMode::Auto;
+            if let Some(l) = record.limits.as_mut() {
+                l.approvals = ApprovalMode::Auto.to_string();
+            }
+            self.save_progress(record);
+            notes.push(
+                "the user chose \"don't ask again in this run\" in Selachi: the rest of the run is approved automatically (the blocklist still applies)"
+                    .to_string(),
+            );
+        }
         match verdict.decision {
             Decision::Deny => notes.push(format!(
                 "approval denied for {}: {}",
@@ -754,6 +842,14 @@ impl Harness {
             notes.push(format!("could not deliver the approval answer: {e}"));
         }
     }
+}
+
+/// What decides the approvals of one run.
+struct ApprovalCtx {
+    /// Current mode (the effective one, or `auto` after "no volver a preguntar").
+    mode: ApprovalMode,
+    allowed: Vec<String>,
+    scope: OwnedScope,
 }
 
 enum Outcome {

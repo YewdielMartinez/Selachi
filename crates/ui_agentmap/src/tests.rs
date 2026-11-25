@@ -888,7 +888,11 @@ fn external_node_renders_in_all_views_and_inspector_emits_events(cx: &mut TestAp
 
     // StopExternal requires inline confirmation first.
     testing::click_id(vcx, "agentmap-act-stop-external");
-    assert_eq!(log.borrow().len(), 2, "must ask confirmation before stopping");
+    assert_eq!(
+        log.borrow().len(),
+        2,
+        "must ask confirmation before stopping"
+    );
     testing::click_id(vcx, "agentmap-confirm-stop-external-back");
     assert_eq!(log.borrow().len(), 2);
     testing::click_id(vcx, "agentmap-act-stop-external");
@@ -926,9 +930,7 @@ fn external_inspector_facts_and_available_actions() {
     let run_node = &f.nodes[f.index_of(&running_ext.key()).unwrap()];
     let av = available(run_node);
     assert!(av.stop_external && av.open_in_processes && av.copy_command);
-    assert!(
-        !av.retry && !av.apply && !av.cancel && !av.diff && !av.open_thread && !av.duplicate
-    );
+    assert!(!av.retry && !av.apply && !av.cancel && !av.diff && !av.open_thread && !av.duplicate);
 
     let facts = external_facts(run_node, 40_000);
     let find = |k: &str| facts.iter().find(|(l, _)| l == k).map(|(_, v)| v.as_str());

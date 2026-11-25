@@ -172,10 +172,7 @@ impl AgentMapModel {
 
     /// External (non-harness) agent processes currently retained for `parent`.
     pub fn external_procs(&self, parent: &NodeKey) -> &[ExternalProc] {
-        self.external
-            .get(parent)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.external.get(parent).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// The registry watcher and the chat stream are alive (true only while a view is attached).

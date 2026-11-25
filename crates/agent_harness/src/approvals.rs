@@ -17,7 +17,11 @@
 //!            "parent_thread_id":7,"agent":"codex","tool":"Bash","detail":"rm -rf build",
 //!            "permission":"ask","depth":1,"timeout_secs":120}
 //! server -> {"type":"approval_response","v":1,"request_id":"req_2","decision":"allow","reason":null}
-//!           decision: "allow" | "deny" | "always"   (always = also for the rest of this run)
+//!           decision: "allow" | "deny" | "always" | "always_run"
+//!             always     = also for the rest of this run (the agent's own "always allow")
+//!             always_run = allow, and answer the rest of this run's requests without asking
+//!                          (approval mode `auto`; the hard blocklist still denies). Additive in
+//!                          protocol 1: a server that never sends it changes nothing.
 //! server -> {"type":"error","v":1,"reason":"..."}   (any request; treated as a denial)
 //! ```
 //!
@@ -69,8 +73,11 @@ pub fn default_pipe_path() -> String {
 pub enum Decision {
     Allow,
     Deny,
-    /// Allow now and for the rest of this run.
+    /// Allow now and for the rest of this run (the agent's own "always allow this tool").
     Always,
+    /// Allow now and switch the rest of this run to the `auto` approval mode: no more questions
+    /// (the hard blocklist still denies). Sent by "No volver a preguntar en esta ejecución".
+    AlwaysRun,
 }
 
 /// A request to approve one action of a delegated agent.

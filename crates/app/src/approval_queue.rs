@@ -339,6 +339,73 @@ mod queue_tests {
         );
     }
 
+    /// Two delegated runs ask at the same moment and both call their request `req_1`. The harness
+    /// scopes the wire id by run (`run<id>:req_1`), so both reach the queue, neither is treated as a
+    /// retry of the other, and each decision reaches the run that asked.
+    #[gpui::test]
+    fn two_runs_asking_at_once_are_both_queued_and_answered_independently(
+        cx: &mut TestAppContext,
+    ) {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        let queue = cx.new(|cx| ApprovalQueue::new(Some(rx), cx));
+        let ask = |run: i64| {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut r = req(&format!("run{run}:req_1"), "Bash");
+                r.run_id = run.to_string();
+                r.thread_id = run;
+                handle_message(ClientMessage::ApprovalRequest(r), &tx, wait_for)
+            })
+        };
+        let (a, b) = (ask(5), ask(6));
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if queue.read_with(cx, |q, _| q.pending().len()) == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(queue.read_with(cx, |q, _| q.pending().len()), 2);
+        assert!(!a.is_finished() && !b.is_finished(), "nothing is superseded");
+
+        // answer the second one first, and differently
+        queue.update(cx, |q, cx| q.resolve("run6:req_1", Decision::Deny, cx));
+        let reply_b = b.join().unwrap();
+        assert!(matches!(
+            reply_b,
+            ServerMessage::ApprovalResponse { decision: Decision::Deny, ref request_id, .. } if request_id == "run6:req_1"
+        ));
+        assert!(!a.is_finished(), "the other run is still waiting for its own answer");
+        assert_eq!(queue.read_with(cx, |q, _| q.pending().len()), 1);
+
+        queue.update(cx, |q, cx| q.resolve("run5:req_1", Decision::AlwaysRun, cx));
+        let reply_a = a.join().unwrap();
+        assert!(matches!(
+            reply_a,
+            ServerMessage::ApprovalResponse { decision: Decision::AlwaysRun, ref request_id, .. } if request_id == "run5:req_1"
+        ));
+        assert_eq!(queue.read_with(cx, |q, _| q.pending().len()), 0);
+    }
+
+    /// A retry is the same id of the same run; the same id of another run is a different request.
+    #[gpui::test]
+    fn only_the_same_id_of_the_same_run_replaces_a_card(cx: &mut TestAppContext) {
+        let queue = cx.new(|cx| ApprovalQueue::new(None, cx));
+        let mut other = req("req_1", "Bash");
+        other.run_id = "6".into();
+        queue.update(cx, |q, cx| {
+            q.add_demo(req("req_1", "Bash"), cx);
+            q.add_demo(other, cx);
+        });
+        assert_eq!(queue.read_with(cx, |q, _| q.pending().len()), 2);
+        queue.update(cx, |q, cx| q.add_demo(req("req_1", "Bash"), cx));
+        assert_eq!(
+            queue.read_with(cx, |q, _| q.pending().len()),
+            2,
+            "a retry of run 5 replaced its own card"
+        );
+    }
+
     #[gpui::test]
     fn an_expired_request_disappears_and_a_full_queue_denies(cx: &mut TestAppContext) {
         let queue = cx.new(|cx| ApprovalQueue::new(None, cx));

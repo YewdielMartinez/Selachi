@@ -480,6 +480,7 @@ mod tests {
         assert_eq!(c.delegation.timeout_secs, 900);
         assert_eq!(c.delegation.daily_token_budget, 2_000_000);
         assert_eq!(c.delegation.approval_timeout_secs, 120);
+        assert_eq!(c.delegation.approvals, "ask");
         assert!(c.updates.check);
         assert_eq!(
             (c.updates.channel.as_str(), c.updates.install.as_str()),

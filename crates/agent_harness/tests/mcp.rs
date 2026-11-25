@@ -240,6 +240,10 @@ fn legacy_handshake_and_tool_list() {
         run["inputSchema"]["properties"]["permission"]["enum"],
         json!(["read_only", "ask", "accept_edits"])
     );
+    assert_eq!(
+        run["inputSchema"]["properties"]["approvals"]["enum"],
+        json!(["ask", "allowlist", "auto"])
+    );
     assert!(
         list["result"].get("resultType").is_none(),
         "legacy results carry no resultType"
@@ -807,6 +811,12 @@ fn invalid_arguments_are_tool_errors_and_full_is_not_even_expressible() {
         &mut m,
         "run_agent",
         json!({"agent": "codex", "prompt": "x", "cwd": repo, "permission": "full"}),
+        "one of",
+    );
+    check(
+        &mut m,
+        "run_agent",
+        json!({"agent": "codex", "prompt": "x", "cwd": repo, "approvals": "yolo"}),
         "one of",
     );
     check(

@@ -3,7 +3,8 @@
 //! ```text
 //! selachi-agent list   [--json] [--models]
 //! selachi-agent run    <agent> [--cwd DIR] [--model M] [--permission read-only|ask|accept-edits]
-//!                      [--worktree] [--timeout 15m] [--budget-tokens N] [--json] "<prompt>"   ("-" = stdin)
+//!                      [--worktree] [--timeout 15m] [--budget-tokens N] [--approvals ask|allowlist|auto]
+//!                      [--json] "<prompt>"   ("-" = stdin)
 //! selachi-agent run    --profile <name> [--agent A] [options] "<prompt>"
 //! selachi-agent profiles list|show|dry-run|init|import-claude ...   (see [`crate::profiles::cli`])
 //! selachi-agent status <run_id> [--json]
@@ -23,6 +24,7 @@ use std::time::Duration;
 
 use crate::agents::list_agents;
 use crate::apply::{Confirmation, Risk};
+use crate::approval_policy::ApprovalMode;
 use crate::control::CancelOutcome;
 use crate::output::RunStatus;
 use crate::policy::Permission;
@@ -59,6 +61,11 @@ RUN OPTIONS
   --worktree                run in a new git worktree + branch, apply the result later with `apply`
   --timeout <time>          90, 90s, 15m, 1h (default 15m)
   --budget-tokens <n>       stop the agent after n billable tokens
+  --approvals <mode>        how the agent's commands are approved: ask (default, everything goes to Selachi's
+                            attention queue) | allowlist (the profile's allowed_commands are approved on their
+                            own) | auto (nothing is asked). Never above [delegation] approvals nor the profile's;
+                            git push/commit/reset --hard, rm -rf outside the project, credential files... are
+                            always denied
   --json                    machine-readable result
 
 ENVIRONMENT
@@ -126,6 +133,8 @@ pub struct RunArgs {
     pub worktree: bool,
     pub timeout: Option<Duration>,
     pub budget_tokens: Option<u64>,
+    /// `--approvals`: can only lower the configured mode.
+    pub approvals: Option<ApprovalMode>,
     pub json: bool,
     /// Hidden: print `SELACHI_RUN_ID=<id>` on stderr as soon as the run exists (used by `mcp`).
     pub announce_run_id: bool,
@@ -173,6 +182,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "--permission",
         "--timeout",
         "--budget-tokens",
+        "--approvals",
         "--profile",
         "--agent",
         "--from",
@@ -225,6 +235,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--worktree",
             "--timeout",
             "--budget-tokens",
+            "--approvals",
             "--json",
             "--announce-run-id",
             "--profile",
@@ -351,6 +362,12 @@ pub(crate) fn build_run_args(
                     .map_err(|_| format!("--budget-tokens `{v}` is not a number"))
             })
             .transpose()?,
+        approvals: val("--approvals")
+            .map(|v| {
+                ApprovalMode::parse(&v)
+                    .ok_or_else(|| format!("unknown --approvals `{v}` (ask, allowlist, auto)"))
+            })
+            .transpose()?,
         json: has("--json"),
         announce_run_id: has("--announce-run-id"),
     })
@@ -451,6 +468,7 @@ fn execute(cmd: Command) -> Result<i32, String> {
             req.worktree = a.worktree;
             req.timeout = a.timeout;
             req.budget_tokens = a.budget_tokens;
+            req.approvals = a.approvals;
             let result = h.run(req);
             // not println!: when the caller (the MCP server) is gone the run is already saved, and a
             // closed pipe must not turn into a panic
@@ -660,6 +678,21 @@ mod tests {
         assert!(a.worktree && a.json);
         assert_eq!(a.timeout, Some(Duration::from_secs(300)));
         assert_eq!(a.budget_tokens, Some(50_000));
+        assert_eq!(a.approvals, None);
+    }
+
+    #[test]
+    fn approvals_flag() {
+        let Command::Run(a) = p("run codex --approvals auto hola").unwrap() else {
+            panic!()
+        };
+        assert_eq!(a.approvals, Some(ApprovalMode::Auto));
+        let Command::Run(a) = p("run codex --approvals=allowlist hola").unwrap() else {
+            panic!()
+        };
+        assert_eq!(a.approvals, Some(ApprovalMode::Allowlist));
+        assert!(p("run codex --approvals yolo hola").unwrap_err().contains("--approvals"));
+        assert!(p("run codex --approvals").is_err());
     }
 
     #[test]

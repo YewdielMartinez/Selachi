@@ -74,6 +74,8 @@ struct Inputs {
     instructions: Entity<TextField>,
     allow: Entity<TextField>,
     deny: Entity<TextField>,
+    /// New `allowed_commands` pattern.
+    command: Entity<TextField>,
     context: Entity<TextField>,
     task: Entity<TextField>,
     import: Entity<TextField>,
@@ -130,6 +132,7 @@ impl ProfilesEditor {
             }),
             allow: field(theme, "Añadir herramienta permitida (Enter)", cx),
             deny: field(theme, "Añadir herramienta prohibida (Enter)", cx),
+            command: field(theme, "Añadir comando permitido, p. ej. cargo * (Enter)", cx),
             context: field(theme, "Buscar un archivo del proyecto…", cx),
             task: cx.new(|cx| TextField::new(theme, cx).with_text(SAMPLE_TASK)),
             import: field(theme, "C:\\ruta\\perfil.toml o .claude\\agents\\x.md", cx),
@@ -160,6 +163,7 @@ impl ProfilesEditor {
         for (list, f) in [
             ("allowed_tools", inputs.allow.clone()),
             ("denied_tools", inputs.deny.clone()),
+            ("allowed_commands", inputs.command.clone()),
             ("context_files", inputs.context.clone()),
         ] {
             subs.push(
@@ -425,6 +429,7 @@ impl ProfilesEditor {
             i.instructions.clone(),
             i.allow.clone(),
             i.deny.clone(),
+            i.command.clone(),
             i.context.clone(),
             i.task.clone(),
             i.import.clone(),
@@ -457,7 +462,12 @@ impl ProfilesEditor {
             cx,
         );
         set(&self.inputs.instructions, &p.instructions, cx);
-        for f in [&self.inputs.allow, &self.inputs.deny, &self.inputs.context] {
+        for f in [
+            &self.inputs.allow,
+            &self.inputs.deny,
+            &self.inputs.command,
+            &self.inputs.context,
+        ] {
             set(f, "", cx);
         }
         if d.scope == Scope::Project && self.project_root.is_none() {
@@ -544,6 +554,14 @@ impl ProfilesEditor {
                     return;
                 }
             }
+        } else if list == "allowed_commands" {
+            let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if let Some(why) = profiles::command_pattern_error(&one_line) {
+                self.add_errors.insert(list, why.to_string());
+                cx.notify();
+                return;
+            }
+            one_line
         } else {
             text.to_string()
         };
@@ -552,6 +570,7 @@ impl ProfilesEditor {
             let v = match list {
                 "allowed_tools" => &mut d.profile.allowed_tools,
                 "denied_tools" => &mut d.profile.denied_tools,
+                "allowed_commands" => &mut d.profile.allowed_commands,
                 _ => &mut d.profile.context_files,
             };
             if !v.iter().any(|x| x.eq_ignore_ascii_case(&value)) {
@@ -561,6 +580,7 @@ impl ProfilesEditor {
         let input = match list {
             "allowed_tools" => &self.inputs.allow,
             "denied_tools" => &self.inputs.deny,
+            "allowed_commands" => &self.inputs.command,
             _ => &self.inputs.context,
         };
         input.update(cx, |f, cx| f.set_text("", cx));
@@ -572,6 +592,7 @@ impl ProfilesEditor {
             let v = match list {
                 "allowed_tools" => &mut d.profile.allowed_tools,
                 "denied_tools" => &mut d.profile.denied_tools,
+                "allowed_commands" => &mut d.profile.allowed_commands,
                 _ => &mut d.profile.context_files,
             };
             if i < v.len() {
@@ -1343,6 +1364,34 @@ impl ProfilesEditor {
             base
         };
 
+        // Approvals: a profile can only lower Delegación's mode, so the higher ones are disabled.
+        let global_approvals = profiles::normalize_approvals(&self.limits.approvals);
+        let mut approvals_opts: Vec<(String, String, bool)> =
+            vec![(String::new(), "Heredar de Delegación".to_string(), false)];
+        approvals_opts.extend(profiles::APPROVAL_MODES.iter().map(|m| {
+            let above = profiles::approvals_rank(m) > profiles::approvals_rank(global_approvals);
+            let label = if above {
+                format!("{} (Delegación no lo permite)", profiles::approvals_label(m))
+            } else {
+                profiles::approvals_label(m).to_string()
+            };
+            ((*m).to_string(), label, above)
+        }));
+        let approvals_sel = self.select(
+            cx,
+            "profile-approvals",
+            approvals_opts,
+            d.profile.approvals.as_deref().unwrap_or(""),
+            |s, v, cx| {
+                let v = Some(v.to_string()).filter(|v| !v.is_empty());
+                s.edit(cx, |d| d.profile.approvals = v);
+            },
+        );
+        let approvals_note = format!(
+            "Delegación: {}. Un perfil solo puede bajarlo, nunca subirlo.",
+            profiles::approvals_label(global_approvals)
+        );
+
         let worktree = {
             let this = cx.entity();
             ui_kit::Toggle::new("profile-worktree", &t)
@@ -1532,6 +1581,47 @@ impl ProfilesEditor {
                         .child(self.chips(cx, "denied_tools", &d.profile.denied_tools))
                         .child(self.input(&self.inputs.deny.clone(), 300.0)),
                     issue("denied_tools"),
+                )
+                .into_any_element(),
+            ],
+        )
+        .into_any_element();
+
+        // ---- approvals ----
+        let commands_err = self
+            .add_errors
+            .get("allowed_commands")
+            .map(|m| SharedString::from(m.clone()))
+            .or_else(|| issue("allowed_commands"));
+        let approvals = group(
+            &t,
+            Some("Aprobaciones"),
+            vec![
+                row(
+                    &t,
+                    narrow,
+                    "Modo",
+                    Some(approvals_note.into()),
+                    approvals_sel,
+                    issue("approvals"),
+                )
+                .into_any_element(),
+                row(
+                    &t,
+                    narrow,
+                    "Comandos permitidos",
+                    Some("Con «Solo comandos permitidos», lo que case se aprueba solo (patrones como `cargo *`, `git diff *`). Un comando con `;`, `|`, `&&` o `>` nunca casa; `git push`, `git commit` y `rm -rf` fuera del proyecto se rechazan siempre.".into()),
+                    div()
+                        .w(px(300.0))
+                        .max_w_full()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .items_end()
+                        .child(self.chips(cx, "allowed_commands", &d.profile.allowed_commands))
+                        .child(self.input(&self.inputs.command.clone(), 300.0)),
+                    commands_err,
                 )
                 .into_any_element(),
             ],
@@ -1738,6 +1828,7 @@ impl ProfilesEditor {
             identity,
             instructions,
             tools,
+            approvals,
             context,
             preview,
             footer.into_any_element(),
@@ -1808,6 +1899,10 @@ impl ProfilesEditor {
                 "Presupuesto",
                 e.budget_tokens
                     .map_or("el de Delegación".to_string(), |b| format!("{b} tokens")),
+            ))
+            .child(line(
+                "Aprobación",
+                profiles::approvals_label(&e.approvals).to_string(),
             ))
             .child(line("Profundidad máxima", e.depth.to_string()));
         if !files.is_empty() {

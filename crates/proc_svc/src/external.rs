@@ -567,7 +567,9 @@ mod tests {
                 105,
                 101,
                 "node.exe",
-                Some(r#"node C:\npm\node_modules\@google\gemini-cli\dist\index.js -m=gemini-2.5-pro"#),
+                Some(
+                    r#"node C:\npm\node_modules\@google\gemini-cli\dist\index.js -m=gemini-2.5-pro"#,
+                ),
                 15,
                 90,
             ),
@@ -603,7 +605,11 @@ mod tests {
         cpu.insert(104, 4.0);
 
         let found = find_external_agents(100, &procs, &cpu);
-        assert_eq!(found.len(), 3, "expected agy, codex, gemini; got {found:#?}");
+        assert_eq!(
+            found.len(),
+            3,
+            "expected agy, codex, gemini; got {found:#?}"
+        );
 
         // 1. agy (pid 102) + rg helper (pid 103)
         let agy = &found[0];

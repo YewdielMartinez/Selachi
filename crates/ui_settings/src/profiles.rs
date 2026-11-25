@@ -19,6 +19,8 @@
 //! budget_tokens = 200000                 # billable tokens of one run
 //! allowed_tools = ["Read", "Grep"]       # if the agent supports it
 //! denied_tools = ["Bash"]
+//! approvals = "allowlist"                # optional: ask | allowlist | auto (never above Delegación)
+//! allowed_commands = ["cargo *"]         # optional: shell commands approved on their own (allowlist)
 //! context_files = ["docs/PLAN.md"]       # project-relative; attached to the prompt
 //! output_format = "text"                 # text | json | diff
 //! instructions = """
@@ -51,6 +53,11 @@ pub fn effort_label(effort: &str) -> &str {
 pub const PERMISSIONS: [&str; 3] = ["read-only", "ask", "accept-edits"];
 /// Output formats.
 pub const OUTPUT_FORMATS: [&str; 3] = ["text", "json", "diff"];
+/// Approval modes, from the most careful to the most permissive (a profile can only lower
+/// `[delegation] approvals`).
+pub const APPROVAL_MODES: [&str; 3] = ["ask", "allowlist", "auto"];
+/// Most `allowed_commands` a profile can list.
+pub const MAX_ALLOWED_COMMANDS: usize = 200;
 /// Longest instructions text.
 pub const MAX_INSTRUCTIONS: usize = 32_000;
 /// Most context files one profile can attach.
@@ -90,6 +97,10 @@ pub struct Profile {
     pub instructions: String,
     pub allowed_tools: Vec<String>,
     pub denied_tools: Vec<String>,
+    /// `ask | allowlist | auto`; `None` = inherit `[delegation] approvals`.
+    pub approvals: Option<String>,
+    /// Glob patterns of shell commands approved on their own when the mode is `allowlist`.
+    pub allowed_commands: Vec<String>,
     pub context_files: Vec<String>,
     pub output_format: String,
     /// JSON Schema file (relative to the profile file's folder); only with `output_format = "json"`.
@@ -111,6 +122,8 @@ impl Default for Profile {
             instructions: String::new(),
             allowed_tools: Vec::new(),
             denied_tools: Vec::new(),
+            approvals: None,
+            allowed_commands: Vec::new(),
             context_files: Vec::new(),
             output_format: "text".into(),
             output_schema: None,
@@ -195,6 +208,15 @@ pub fn to_toml(p: &Profile) -> String {
     if !p.denied_tools.is_empty() {
         out.push_str(&format!("denied_tools = {}\n", list(&p.denied_tools)));
     }
+    if let Some(a) = p.approvals.as_deref().filter(|a| !a.trim().is_empty()) {
+        out.push_str(&format!("approvals = {}\n", quoted(a.trim())));
+    }
+    if !p.allowed_commands.is_empty() {
+        out.push_str(&format!(
+            "allowed_commands = {}\n",
+            list(&p.allowed_commands)
+        ));
+    }
     if !p.context_files.is_empty() {
         out.push_str(&format!("context_files = {}\n", list(&p.context_files)));
     }
@@ -263,7 +285,7 @@ pub fn parse_duration_text(s: &str) -> Option<u64> {
 }
 
 /// Keys a profile file may have (the harness parses with `deny_unknown_fields`).
-pub const KNOWN_KEYS: [&str; 15] = [
+pub const KNOWN_KEYS: [&str; 17] = [
     "name",
     "description",
     "agent",
@@ -276,6 +298,8 @@ pub const KNOWN_KEYS: [&str; 15] = [
     "instructions",
     "allowed_tools",
     "denied_tools",
+    "approvals",
+    "allowed_commands",
     "context_files",
     "output_format",
     "output_schema",
@@ -314,6 +338,10 @@ pub fn from_toml(text: &str) -> Result<Profile, String> {
             .unwrap_or_default(),
         allowed_tools: list_field(&t, "allowed_tools")?,
         denied_tools: list_field(&t, "denied_tools")?,
+        approvals: str_field(&t, "approvals")?
+            .map(|a| a.trim().to_ascii_lowercase())
+            .filter(|a| !a.is_empty()),
+        allowed_commands: list_field(&t, "allowed_commands")?,
         context_files: list_field(&t, "context_files")?,
         output_format: str_field(&t, "output_format")?.unwrap_or(d.output_format),
         output_schema: str_field(&t, "output_schema")?.filter(|s| !s.trim().is_empty()),
@@ -572,6 +600,24 @@ pub fn normalize_context_path(input: &str, project_root: Option<&Path>) -> Optio
     context_path_error(&p).is_none().then_some(p)
 }
 
+/// Why an `allowed_commands` pattern cannot be used (same rules as the harness: a command that chains
+/// or redirects never matches the allowlist).
+pub fn command_pattern_error(c: &str) -> Option<&'static str> {
+    let t = c.trim();
+    if t.is_empty() || t.chars().count() > 200 || t.chars().any(|ch| ch.is_control()) {
+        return Some("escribe un patrón de comando (1 a 200 caracteres, sin saltos de línea).");
+    }
+    if t.contains([';', '|', '&', '>', '<', '`']) || t.contains("$(") {
+        return Some(
+            "no puede llevar ; | & > < ` ni $(: un comando encadenado o con redirección nunca se aprueba solo.",
+        );
+    }
+    if t.trim_matches(['*', '?', ' ']).is_empty() {
+        return Some("casaría con todo; nombra el programa (por ejemplo `cargo *`).");
+    }
+    None
+}
+
 /// Every problem of `p`. `taken` are the names of the other profiles of the same scope.
 pub fn validate(p: &Profile, taken: &[String]) -> Vec<Issue> {
     let mut v = Vec::new();
@@ -658,6 +704,27 @@ pub fn validate(p: &Profile, taken: &[String]) -> Vec<Issue> {
             format!("«{both}» está a la vez permitida y prohibida."),
         ));
     }
+    if let Some(a) = p.approvals.as_deref()
+        && !APPROVAL_MODES.contains(&a)
+    {
+        v.push(issue(
+            "approvals",
+            "Modo no válido (ask, allowlist o auto).",
+        ));
+    }
+    if p.allowed_commands.len() > MAX_ALLOWED_COMMANDS {
+        v.push(issue(
+            "allowed_commands",
+            format!("Máximo {MAX_ALLOWED_COMMANDS} comandos permitidos."),
+        ));
+    }
+    if let Some((bad, why)) = p
+        .allowed_commands
+        .iter()
+        .find_map(|c| command_pattern_error(c).map(|w| (c, w)))
+    {
+        v.push(issue("allowed_commands", format!("«{bad}»: {why}")));
+    }
     if p.context_files.len() > MAX_CONTEXT_FILES {
         v.push(issue(
             "context_files",
@@ -726,6 +793,8 @@ pub struct Limits {
     pub timeout_secs: u64,
     pub max_depth: u32,
     pub daily_token_budget: u64,
+    /// `[delegation] approvals`: `ask | allowlist | auto`.
+    pub approvals: String,
 }
 
 impl Limits {
@@ -736,7 +805,31 @@ impl Limits {
             timeout_secs: d.timeout_secs,
             max_depth: d.max_depth,
             daily_token_budget: d.daily_token_budget,
+            approvals: normalize_approvals(&d.approvals).to_string(),
         }
+    }
+}
+
+/// An unknown value is the careful one.
+pub fn normalize_approvals(a: &str) -> &'static str {
+    APPROVAL_MODES
+        .iter()
+        .find(|m| m.eq_ignore_ascii_case(a.trim()))
+        .copied()
+        .unwrap_or("ask")
+}
+
+pub fn approvals_rank(a: &str) -> usize {
+    APPROVAL_MODES.iter().position(|x| *x == a).unwrap_or(0)
+}
+
+/// Spanish label of an approval mode.
+pub fn approvals_label(a: &str) -> &'static str {
+    match a {
+        "ask" => "Preguntar",
+        "allowlist" => "Solo comandos permitidos",
+        "auto" => "No preguntar",
+        _ => "—",
     }
 }
 
@@ -796,6 +889,8 @@ pub struct Effective {
     pub timeout_clamped: bool,
     pub budget_tokens: Option<u64>,
     pub depth: u32,
+    /// The approval mode: the lower of the profile's and Delegación's.
+    pub approvals: String,
     pub notes: Vec<String>,
 }
 
@@ -818,6 +913,23 @@ pub fn effective(p: &Profile, limits: &Limits) -> Effective {
     if timeout_secs < timeout_req {
         notes.push("El tiempo se limita al máximo de Delegación.".into());
     }
+    let global = normalize_approvals(&limits.approvals);
+    let approvals = match p.approvals.as_deref() {
+        Some(a) if approvals_rank(a) < approvals_rank(global) => normalize_approvals(a),
+        Some(a) if approvals_rank(a) > approvals_rank(global) => {
+            notes.push(format!(
+                "La aprobación se baja a «{}» porque Delegación no permite más.",
+                approvals_label(global)
+            ));
+            global
+        }
+        _ => global,
+    };
+    if approvals == "allowlist" && p.allowed_commands.is_empty() {
+        notes.push(
+            "Sin comandos permitidos, el modo «Solo comandos permitidos» pregunta todo.".into(),
+        );
+    }
     if limits.daily_token_budget > 0 {
         notes.push(format!(
             "Además rige el presupuesto diario de Delegación ({} tokens).",
@@ -833,6 +945,7 @@ pub fn effective(p: &Profile, limits: &Limits) -> Effective {
         timeout_clamped: timeout_secs < timeout_req,
         budget_tokens: p.budget_tokens,
         depth: limits.max_depth,
+        approvals: approvals.to_string(),
         notes,
     }
 }
@@ -1051,6 +1164,8 @@ mod tests {
                 .into(),
             allowed_tools: vec!["Read".into(), "Grep".into()],
             denied_tools: vec!["Bash".into()],
+            approvals: Some("allowlist".into()),
+            allowed_commands: vec!["cargo *".into(), "git diff *".into()],
             context_files: vec!["docs/PLAN.md".into(), "src/a b.rs".into()],
             output_format: "json".into(),
             output_schema: Some("schemas/out.json".into()),
@@ -1070,6 +1185,66 @@ mod tests {
                 ..p
             }
         );
+    }
+
+    #[test]
+    fn approvals_and_allowed_commands_are_validated_and_clamped() {
+        let ok = Profile {
+            name: "A".into(),
+            approvals: Some("allowlist".into()),
+            allowed_commands: vec!["cargo *".into(), "git diff *".into()],
+            ..Profile::default()
+        };
+        assert!(validate(&ok, &[]).is_empty());
+        let bad_mode = Profile {
+            approvals: Some("yolo".into()),
+            ..ok.clone()
+        };
+        assert!(validate(&bad_mode, &[]).iter().any(|i| i.field == "approvals"));
+        for cmd in ["cargo test; rm x", "rg a | b", "x > y", "a && b", "`id`", "$(id)", "", "*"] {
+            let p = Profile {
+                allowed_commands: vec![cmd.into()],
+                ..ok.clone()
+            };
+            assert!(
+                validate(&p, &[]).iter().any(|i| i.field == "allowed_commands"),
+                "{cmd:?}"
+            );
+        }
+        // the file keys are known to the strict reader, a typo is not
+        assert!(from_toml("name = \"x\"
+approvals = \"auto\"
+allowed_commands = [\"cargo *\"]").is_ok());
+        assert!(from_toml("name = \"x\"
+allow_commands = []").is_err());
+
+        // a profile can only lower Delegación's mode
+        let limits = |a: &str| Limits {
+            approvals: a.into(),
+            ..Limits::default()
+        };
+        let with = |a: Option<&str>| Profile {
+            approvals: a.map(str::to_string),
+            ..ok.clone()
+        };
+        assert_eq!(effective(&with(None), &limits("auto")).approvals, "auto");
+        assert_eq!(effective(&with(Some("ask")), &limits("auto")).approvals, "ask");
+        let e = effective(&with(Some("auto")), &limits("ask"));
+        assert_eq!(e.approvals, "ask");
+        assert!(e.notes.iter().any(|n| n.contains("La aprobación se baja")), "{:?}", e.notes);
+        let e = effective(
+            &Profile {
+                allowed_commands: Vec::new(),
+                ..with(Some("allowlist"))
+            },
+            &limits("allowlist"),
+        );
+        assert!(e.notes.iter().any(|n| n.contains("Sin comandos permitidos")));
+        // an unknown stored value is the careful one
+        assert_eq!(Limits::from_delegation(&store::config::Delegation {
+            approvals: "???".into(),
+            ..Default::default()
+        }).approvals, "ask");
     }
 
     #[test]

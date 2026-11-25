@@ -64,6 +64,7 @@ fn a_request_reaches_the_gui_and_the_decision_goes_back() {
     for (decision, id) in [
         (Decision::Allow, "r-allow"),
         (Decision::Always, "r-always"),
+        (Decision::AlwaysRun, "r-always-run"),
         (Decision::Deny, "r-deny"),
     ] {
         let broker = PipeBroker::new(path.clone());

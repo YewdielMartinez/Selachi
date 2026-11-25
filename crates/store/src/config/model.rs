@@ -64,7 +64,15 @@ pub struct Delegation {
     pub weekly_usage_threshold_percent: f64,
     /// Seconds to wait for the user to answer a forwarded approval before denying it.
     pub approval_timeout_secs: u64,
+    /// How the commands of a delegated agent are approved: `ask` (everything goes to the attention
+    /// queue, the default), `allowlist` (commands matching the profile's `allowed_commands` are
+    /// approved on their own) or `auto` (nothing is asked, but the fixed blocklist still denies).
+    /// A profile or a single run can only lower this, never raise it.
+    pub approvals: String,
 }
+
+/// Values of `[delegation] approvals`.
+pub const APPROVAL_MODES: [&str; 3] = ["ask", "allowlist", "auto"];
 
 impl Default for Delegation {
     fn default() -> Self {
@@ -78,6 +86,7 @@ impl Default for Delegation {
             daily_token_budget: 2_000_000,
             weekly_usage_threshold_percent: 90.0,
             approval_timeout_secs: 120,
+            approvals: "ask".to_string(),
         }
     }
 }
@@ -742,6 +751,12 @@ impl Config {
             problems.push(format!(
                 "delegation.weekly_usage_threshold_percent = {} must be within 0..=100",
                 d.weekly_usage_threshold_percent
+            ));
+        }
+        if !APPROVAL_MODES.contains(&d.approvals.as_str()) {
+            problems.push(format!(
+                "delegation.approvals = {:?} must be \"ask\", \"allowlist\" or \"auto\"",
+                d.approvals
             ));
         }
         if !(1..=MAX_PROFILE_CONTEXT_KB).contains(&self.agent_profiles.max_context_kb) {

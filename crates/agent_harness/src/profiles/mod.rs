@@ -25,6 +25,8 @@
 //! """
 //! allowed_tools = ["Read", "Grep"]     # optional, Claude only (--allowedTools); others ignore it
 //! denied_tools  = ["WebFetch"]         # optional, Claude only (--disallowedTools)
+//! approvals = "allowlist"              # optional: ask | allowlist | auto (never above [delegation] approvals)
+//! allowed_commands = ["cargo *", "git diff *"]  # optional: shell commands approved on their own (approvals = "allowlist")
 //! context_files = ["docs/testing.md"]  # optional, inside the project, <= 200 KiB in total, redacted
 //! output_format = "json"               # optional: text (default) | json | diff
 //! output_schema = "schemas/out.json"   # optional, json only: a JSON Schema, relative to this file's folder
@@ -52,6 +54,7 @@ use serde_json::{json, Value};
 use store::AgentProfiles;
 
 use crate::agents::canonical_name;
+use crate::approval_policy::{pattern_problem, ApprovalMode};
 use crate::cli::parse_duration;
 use crate::policy::Permission;
 
@@ -134,6 +137,11 @@ pub struct ProfileFile {
     pub instructions: String,
     pub allowed_tools: Vec<String>,
     pub denied_tools: Vec<String>,
+    /// `ask | allowlist | auto`; a profile can only lower `[delegation] approvals`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<String>,
+    /// Glob patterns of shell commands approved on their own when the mode is `allowlist`.
+    pub allowed_commands: Vec<String>,
     pub context_files: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_format: Option<String>,
@@ -158,6 +166,9 @@ pub struct Profile {
     pub instructions: String,
     pub allowed_tools: Vec<String>,
     pub denied_tools: Vec<String>,
+    /// `None` = the profile says nothing (`[delegation] approvals` applies).
+    pub approvals: Option<ApprovalMode>,
+    pub allowed_commands: Vec<String>,
     pub context_files: Vec<String>,
     pub output_format: OutputFormat,
     /// Path of the JSON Schema, relative to the profile file's folder.
@@ -344,6 +355,26 @@ impl ProfileFile {
         }
         validate_tools("allowed_tools", &self.allowed_tools, &mut problems);
         validate_tools("denied_tools", &self.denied_tools, &mut problems);
+        let approvals = match self.approvals.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(a) => match ApprovalMode::parse(a) {
+                Some(m) => Some(m),
+                None => {
+                    problems.push(format!(
+                        "`approvals` = {a:?} must be ask, allowlist or auto"
+                    ));
+                    None
+                }
+            },
+        };
+        for (i, c) in self.allowed_commands.iter().enumerate() {
+            if let Some(why) = pattern_problem(c) {
+                problems.push(format!("allowed_commands[{i}] = {c:?} {why}"));
+            }
+        }
+        if self.allowed_commands.len() > 200 {
+            problems.push("allowed_commands has more than 200 entries".into());
+        }
         for (i, f) in self.context_files.iter().enumerate() {
             if f.trim().is_empty() || has_control(f) {
                 problems.push(format!("context_files[{i}] must be a file path"));
@@ -407,6 +438,12 @@ impl ProfileFile {
                 .denied_tools
                 .iter()
                 .map(|t| t.trim().to_string())
+                .collect(),
+            approvals,
+            allowed_commands: self
+                .allowed_commands
+                .iter()
+                .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
                 .collect(),
             context_files: self
                 .context_files
@@ -479,6 +516,8 @@ impl Profile {
             "budget_tokens": self.budget_tokens,
             "allowed_tools": self.allowed_tools,
             "denied_tools": self.denied_tools,
+            "approvals": self.approvals.map(|a| a.as_str()),
+            "allowed_commands": self.allowed_commands,
             "context_files": self.context_files,
             "output_format": self.output_format.as_str(),
             "output_schema": self.output_schema,
@@ -742,6 +781,15 @@ pub fn emit_toml(p: &ProfileFile, header: Option<&str>) -> String {
     if !p.denied_tools.is_empty() {
         out.push_str(&format!("denied_tools = {}\n", list(&p.denied_tools)));
     }
+    if let Some(a) = &p.approvals {
+        out.push_str(&format!("approvals = {}\n", s(a)));
+    }
+    if !p.allowed_commands.is_empty() {
+        out.push_str(&format!(
+            "allowed_commands = {}\n",
+            list(&p.allowed_commands)
+        ));
+    }
     if !p.context_files.is_empty() {
         out.push_str(&format!("context_files = {}\n", list(&p.context_files)));
     }
@@ -817,6 +865,56 @@ output_schema = "schemas/out.json"
         // minimal
         let m = parse("name=\"a\"\nagent=\"acp:foo --acp\"\n").unwrap();
         assert!(m.permission.is_none() && m.output_format == OutputFormat::Text);
+    }
+
+    #[test]
+    fn approvals_and_allowed_commands_are_parsed_and_validated() {
+        let p = parse(
+            "name=\"a\"
+agent=\"codex\"
+approvals = \"Allowlist\"
+allowed_commands = [\"cargo *\", \"git   diff *\", \"rg *\"]
+",
+        )
+        .unwrap();
+        assert_eq!(p.approvals, Some(ApprovalMode::Allowlist));
+        assert_eq!(p.allowed_commands, ["cargo *", "git diff *", "rg *"]);
+        assert_eq!(p.to_value(false)["approvals"], "allowlist");
+        // not set: the config's mode applies
+        let m = parse("name=\"a\"
+agent=\"codex\"
+").unwrap();
+        assert!(m.approvals.is_none() && m.allowed_commands.is_empty());
+        // problems
+        let e = parse("name=\"a\"
+agent=\"codex\"
+approvals = \"yolo\"
+").unwrap_err();
+        assert!(e.problems.iter().any(|p| p.contains("ask, allowlist or auto")));
+        let e = parse(
+            "name=\"a\"
+agent=\"codex\"
+allowed_commands = [\"cargo test; rm x\", \"\", \"*\"]
+",
+        )
+        .unwrap_err();
+        assert_eq!(e.problems.len(), 3, "{:?}", e.problems);
+        // an unknown key is still an error (a typo must not drop a restriction)
+        assert!(parse("name=\"a\"
+agent=\"codex\"
+allow_commands = []
+").is_err());
+        // the TOML written by the editor reads back
+        let f = ProfileFile {
+            name: "a".into(),
+            agent: "codex".into(),
+            approvals: Some("auto".into()),
+            allowed_commands: vec!["cargo *".into()],
+            ..ProfileFile::default()
+        };
+        let back = ProfileFile::parse(&emit_toml(&f, None)).unwrap();
+        assert_eq!(back.approvals.as_deref(), Some("auto"));
+        assert_eq!(back.allowed_commands, ["cargo *"]);
     }
 
     #[test]

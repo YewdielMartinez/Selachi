@@ -134,6 +134,11 @@ pub fn tools() -> Vec<Value> {
                         "minimum": 1,
                         "description": "Interrupt the agent after this many billable tokens (input + output + cache writes). ES: presupuesto de tokens."
                     },
+                    "approvals": {
+                        "type": "string",
+                        "enum": ["ask", "allowlist", "auto"],
+                        "description": "How the child's commands are approved. ask (default): every request goes to the user's Selachi attention queue. allowlist: commands matching the profile's allowed_commands are approved on their own, the rest is asked. auto: nothing is asked. It can only LOWER what the user configured ([delegation] approvals and the profile's): you cannot grant yourself more. git push/commit/reset --hard, rm -rf outside the project, disk/registry commands and credential files are always denied. ES: modo de aprobación de los comandos del hijo (solo puede bajar el configurado)."
+                    },
                     "async": {
                         "type": "boolean",
                         "description": "Return immediately with the run_id and poll with agent_status / agent_result. Default false (blocks). ES: devolver al instante y consultar después."

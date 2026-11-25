@@ -62,6 +62,15 @@ fn fixtures() -> Vec<(&'static str, Profile)> {
             },
         ),
         (
+            "approvals and allowed commands (the harness must accept the editor's TOML)",
+            Profile {
+                instructions: "Corre las pruebas.".into(),
+                approvals: Some("allowlist".into()),
+                allowed_commands: vec!["cargo *".into(), "git diff *".into()],
+                ..base.clone()
+            },
+        ),
+        (
             "claude: diff, tools enforced (no advisory block)",
             Profile {
                 agent: "claude".into(),

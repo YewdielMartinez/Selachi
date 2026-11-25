@@ -127,6 +127,11 @@ daily_token_budget = 2000000
 weekly_usage_threshold_percent = 90.0
 # Segundos que se espera tu respuesta a una aprobación antes de denegarla.
 approval_timeout_secs = 120
+# Cómo se aprueban los comandos de un subagente: "ask" (todo va a la cola de atención),
+# "allowlist" (se aprueba solo lo que case con `allowed_commands` del perfil) o "auto" (no se
+# pregunta; una lista fija de comandos peligrosos se rechaza siempre). Un perfil o una ejecución
+# solo pueden bajar este modo, nunca subirlo.
+approvals = "ask"
 
 [agent_profiles]
 # Perfiles de subagente (`selachi-agent run --profile <nombre>`): `%APPDATA%\Selachi\agents\*.toml`

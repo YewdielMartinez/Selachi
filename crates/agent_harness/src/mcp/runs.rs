@@ -51,6 +51,8 @@ pub struct Spec {
     pub worktree: bool,
     pub timeout_s: Option<u64>,
     pub budget_tokens: Option<u64>,
+    /// `approvals`: can only lower the configured approval mode.
+    pub approvals: Option<crate::approval_policy::ApprovalMode>,
     pub background: bool,
 }
 
@@ -94,6 +96,9 @@ pub fn child_args(spec: &Spec) -> Vec<String> {
     }
     if let Some(b) = spec.budget_tokens {
         a.push(format!("--budget-tokens={b}"));
+    }
+    if let Some(m) = spec.approvals {
+        a.push(format!("--approvals={m}"));
     }
     match &spec.agent {
         // with a profile the agent is a flag too, so the prompt marker is the only positional
@@ -262,6 +267,7 @@ mod tests {
             worktree: true,
             timeout_s: Some(30),
             budget_tokens: Some(1000),
+            approvals: None,
             background: false,
         };
         let a = child_args(&spec);
@@ -274,6 +280,12 @@ mod tests {
         assert!(a.contains(&"--model=--worktree".to_string()));
         assert!(a.contains(&"--cwd=C:/my project".to_string()));
         assert!(a.contains(&"--timeout=30s".to_string()));
+        assert!(!a.iter().any(|x| x.starts_with("--approvals")));
+        let with = Spec {
+            approvals: Some(crate::approval_policy::ApprovalMode::Allowlist),
+            ..spec
+        };
+        assert!(child_args(&with).contains(&"--approvals=allowlist".to_string()));
     }
 
     #[test]
@@ -288,6 +300,7 @@ mod tests {
             worktree: false,
             timeout_s: None,
             budget_tokens: None,
+            approvals: None,
             background: false,
         };
         let a = child_args(&spec);

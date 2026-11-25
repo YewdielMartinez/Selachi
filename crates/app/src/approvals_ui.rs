@@ -5,7 +5,9 @@
 //! job. A card never decides anything by itself and has no timer (the server denies on its own when
 //! nobody answers; the card goes away with the `Removed` event).
 //!
-//! * Tool request: **Permitir** / **Siempre** (the rest of that run) / **Rechazar**.
+//! * Tool request: **Permitir** / **Siempre** (the rest of that run) / **Rechazar**, and a quiet
+//!   **No volver a preguntar en esta ejecución** (`Decision::AlwaysRun`: that run switches to the
+//!   `auto` approval mode; the harness' hard blocklist still denies).
 //! * `apply_changes`: the dry-run plan (files, stat, warnings) and **Aplicar**, the one
 //!   `ActionButton`; plans that cannot apply cleanly or carry a full-risk reason offer only
 //!   **Rechazar**.
@@ -230,14 +232,21 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
             .into_any_element()
     };
 
-    let (decide_deny, decide_allow, decide_always, decide_apply, open) = (
+    let (decide_deny, decide_allow, decide_always, decide_apply, decide_run, open) = (
+        ctx.on_decide.clone(),
         ctx.on_decide.clone(),
         ctx.on_decide.clone(),
         ctx.on_decide.clone(),
         ctx.on_decide.clone(),
         ctx.on_open_thread.clone(),
     );
-    let (id_deny, id_allow, id_always, id_apply) = (id.clone(), id.clone(), id.clone(), id.clone());
+    let (id_deny, id_allow, id_always, id_apply, id_run) = (
+        id.clone(),
+        id.clone(),
+        id.clone(),
+        id.clone(),
+        id.clone(),
+    );
     let thread = req.thread_id;
     let can_apply = p
         .plan
@@ -321,6 +330,20 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
         )
         .child(body)
         .child(buttons)
+        .when(!apply, |card| {
+            card.child(
+                div().flex().flex_row().child(
+                    Button::ghost(
+                        format!("appr-always-run-{id}"),
+                        theme,
+                        "No volver a preguntar en esta ejecución",
+                    )
+                    .on_click(move |_, w, cx| {
+                        decide_run(id_run.clone(), Decision::AlwaysRun, w, cx)
+                    }),
+                ),
+            )
+        })
         .child(
             div()
                 .text_size(px(ty.ui_size_xs))

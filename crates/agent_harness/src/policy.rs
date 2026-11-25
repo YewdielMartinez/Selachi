@@ -15,6 +15,8 @@ use std::path::Path;
 use agents_driver::PermissionMode;
 use serde::{Deserialize, Serialize};
 
+use crate::approval_policy::ApprovalMode;
+
 /// Environment variable: permission of the session that is calling the harness.
 pub const ENV_PARENT_PERMISSION: &str = "SELACHI_PARENT_PERMISSION";
 /// Environment variable: delegation depth of the calling session (0 / unset = top level).
@@ -224,6 +226,9 @@ pub struct DelegationConfig {
     pub weekly_usage_threshold_percent: f64,
     /// How long to wait for the user to answer a forwarded approval before denying it.
     pub approval_timeout_secs: u64,
+    /// How the commands of a delegated agent are approved: `ask` | `allowlist` | `auto` (see
+    /// [`crate::approval_policy`]). A profile or a single run can only lower it.
+    pub approvals: ApprovalMode,
 }
 
 impl Default for DelegationConfig {
@@ -239,6 +244,7 @@ impl Default for DelegationConfig {
             daily_token_budget: 2_000_000,
             weekly_usage_threshold_percent: 90.0,
             approval_timeout_secs: 120,
+            approvals: ApprovalMode::Ask,
         }
     }
 }
@@ -371,6 +377,21 @@ mod tests {
             caller: &caller,
         }
         .check(agent, p)
+    }
+
+    #[test]
+    fn the_approvals_mode_is_read_from_the_delegation_section() {
+        assert_eq!(DelegationConfig::default().approvals, ApprovalMode::Ask);
+        let (c, w) = DelegationConfig::from_toml("[delegation]
+approvals = \"allowlist\"
+");
+        assert_eq!((c.approvals, w), (ApprovalMode::Allowlist, None));
+        // an unknown value falls back to the defaults (ask) with a warning, never to something looser
+        let (c, w) = DelegationConfig::from_toml("[delegation]
+approvals = \"yolo\"
+");
+        assert_eq!(c, DelegationConfig::default());
+        assert!(w.unwrap().contains("approvals"));
     }
 
     #[test]

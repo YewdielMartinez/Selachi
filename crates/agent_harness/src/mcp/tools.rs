@@ -233,6 +233,17 @@ fn run_output(r: &RunResult) -> ToolOutput {
 
 fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
     let get = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
+    let approvals = match get("approvals").filter(|a| !a.trim().is_empty()) {
+        None => None,
+        Some(a) => match crate::approval_policy::ApprovalMode::parse(&a) {
+            Some(m) => Some(m),
+            None => {
+                return ToolOutput::error(format!(
+                    "invalid arguments for run_agent: approvals = {a:?} must be ask, allowlist or auto"
+                ))
+            }
+        },
+    };
     let spec = Spec {
         agent: get("agent").filter(|a| !a.trim().is_empty()),
         profile: get("profile").filter(|p| !p.trim().is_empty()),
@@ -247,6 +258,7 @@ fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
             .unwrap_or(false),
         timeout_s: args.get("timeout_s").and_then(Value::as_u64),
         budget_tokens: args.get("budget_tokens").and_then(Value::as_u64),
+        approvals,
         background: args.get("async").and_then(Value::as_bool).unwrap_or(false),
     };
     if spec.agent.is_none() && spec.profile.is_none() {
@@ -450,7 +462,7 @@ pub fn apply_with(
         if let Some(req) = approval_request(h, &plan) {
             let verdict = pipe.decide(&req);
             match verdict.decision {
-                Decision::Allow | Decision::Always if verdict.forwarded => {
+                Decision::Allow | Decision::Always | Decision::AlwaysRun if verdict.forwarded => {
                     return match h.apply(id, Confirmation::Gui) {
                         Ok(report) => ToolOutput::ok(
                             format!(

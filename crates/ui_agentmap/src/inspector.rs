@@ -339,7 +339,7 @@ impl AgentMapView {
             .child(close);
 
         if let Some(ext) = node.external() {
-            return self.external_inspector(&node, ext, top, av, now, &this);
+            return self.external_inspector(&node, ext, top.into_any_element(), av, now, &this);
         }
 
         // ---- title and status ----------------------------------------------------------------

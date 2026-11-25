@@ -33,6 +33,7 @@
 //! daily_token_budget = 2000000        # billable tokens (input + output + cache writes); 0 = unlimited
 //! weekly_usage_threshold_percent = 90 # 0 = never refuse
 //! approval_timeout_secs = 120
+//! approvals = "ask"                   # ask | allowlist | auto (see approval_policy)
 //! ```
 //!
 //! ```no_run
@@ -48,6 +49,7 @@
 
 pub mod agents;
 pub mod apply;
+pub mod approval_policy;
 pub mod approvals;
 pub mod cli;
 pub mod control;
@@ -66,6 +68,7 @@ pub use agents::{
     agent_name, canonical_name, list_agents, AgentList, AgentResolver, SystemResolver,
 };
 pub use apply::{ApplyPlan, ApplyReport, Confirmation, Risk};
+pub use approval_policy::{effective_mode, ApprovalMode};
 pub use approvals::{
     default_pipe_path, pipe_path_for, ApprovalBroker, ApprovalRequest, ClientMessage, Decision,
     DenyAll, PipeBroker, ServerMessage, Verdict, PROTOCOL_VERSION,

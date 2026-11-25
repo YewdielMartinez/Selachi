@@ -42,6 +42,8 @@ or the user asked you not to. A delegation costs real tokens on someone's plan.
    - `worktree: true` whenever the agent may edit files: your working tree stays untouched.
    - `async: true` for anything that may take more than a minute; then poll.
    - `timeout_s` / `budget_tokens` to bound it (defaults: 15 min, no token cap beyond the daily budget).
+   - `approvals`: `ask` | `allowlist` | `auto`, how the child's own commands are approved (see "Approvals").
+     Leave it out unless you want it stricter than the user's setting.
    - `model` only if you know the id (`list_agents` with `models: true`; Claude accepts `sonnet|opus|haiku`).
 4. **Write a self-contained prompt**: the goal, the files or symbols involved, the constraints, and the
    output you want ("reply with a bullet list of problems, file:line first"). The other agent has none of
@@ -82,6 +84,27 @@ or the user asked you not to. A delegation costs real tokens on someone's plan.
 - Never write or change profile files on your own; creating them is the user's decision
   (`selachi-agent profiles init` / `import-claude`).
 
+## Approvals
+
+Whatever the delegated agent wants to run that needs a yes goes through Selachi, not through you:
+
+- `ask` (the user's default): every request goes to the attention queue of the Selachi window and waits
+  for the user. A long queue is normal for a worktree run that edits a lot; prefer `read_only` or a profile.
+- `allowlist`: commands that match the profile's `allowed_commands` (`cargo *`, `git diff *`, `rg *`) are
+  approved on their own; anything else is asked. A command that chains or redirects (`;`, `|`, `&&`, `>`,
+  backticks, `$(`) never matches.
+- `auto`: nothing is asked.
+- The `approvals` you pass can only **lower** the mode the user configured (Settings, Agents, Delegation,
+  and the profile's own `approvals`); asking for `auto` when the user chose `ask` changes nothing, and the
+  run's `notes` say it was lowered. The effective mode is in the run record (`limits.approvals`).
+- In every mode a fixed blocklist is **denied without asking**: `git push`, `git commit`, `git stash`,
+  `git clean`, `git reset --hard`, `git checkout --`, `rm -rf` / `Remove-Item -Recurse` outside the project,
+  `del /s`, `format`, `diskpart`, `reg add|delete`, and anything that touches credential files (`.env`,
+  `.ssh`, `.aws`, `.npmrc`, ...). If the child needs one of those, do it yourself after the run, with the
+  user's say-so. Denials show up in the result's `notes`.
+- Do not try to talk the child into approving something itself, and do not wrap a blocked command in
+  `cmd /c` or a script to get it past the check.
+
 ## Rules you must follow
 
 - **Never put secrets in a prompt**: no API keys, tokens, passwords, connection strings, private keys,
@@ -113,7 +136,8 @@ or the user asked you not to. A delegation costs real tokens on someone's plan.
 list_agents({models?: bool})
 list_profiles({cwd?: string})
 run_agent({agent | profile, prompt, cwd, model?, permission?: "read_only"|"ask"|"accept_edits",
-           worktree?: bool, timeout_s?: int, budget_tokens?: int, async?: bool})
+           worktree?: bool, timeout_s?: int, budget_tokens?: int,
+           approvals?: "ask"|"allowlist"|"auto", async?: bool})
 agent_status({run_id})     agent_result({run_id})     cancel_agent({run_id})
 get_diff({run_id, stat?: bool})        apply_changes({run_id})   // plan only, user confirms
 ```
@@ -121,3 +145,4 @@ get_diff({run_id, stat?: bool})        apply_changes({run_id})   // plan only, u
 Fallback without MCP: the same engine from any shell, `selachi-agent run codex --cwd . --worktree
 --permission read-only --json "<prompt>"` (see `selachi-agent --help`). With a profile:
 `selachi-agent run --profile Tests --cwd . --json "<prompt>"`; list them with `selachi-agent profiles list`.
+`--approvals ask|allowlist|auto` is the same as the `approvals` argument.

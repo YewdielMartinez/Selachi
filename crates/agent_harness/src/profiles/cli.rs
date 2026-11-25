@@ -71,6 +71,7 @@ fn allowed(action: &str) -> &'static [&'static str] {
             "--worktree",
             "--timeout",
             "--budget-tokens",
+            "--approvals",
         ],
         "init" => &["--project", "--cwd", "--only", "--force", "--dry-run"],
         "import-claude" => &[
@@ -430,6 +431,7 @@ pub fn execute(cmd: ProfilesCmd) -> Result<i32, String> {
             req.worktree = run.worktree;
             req.timeout = run.timeout;
             req.budget_tokens = run.budget_tokens;
+            req.approvals = run.approvals;
             match h.prepare(&req) {
                 Ok(prep) => {
                     if json {

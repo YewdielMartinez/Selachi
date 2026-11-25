@@ -61,6 +61,47 @@ pub fn toggled_allowed(list: &[String], agent: &str) -> Option<Vec<String>> {
     )
 }
 
+/// `[delegation] approvals`: `(value, label, one-line explanation)`. A profile or a single run can
+/// only lower the mode, never raise it.
+pub const APPROVAL_MODES: [(&str, &str, &str); 3] = [
+    (
+        "ask",
+        "Preguntar",
+        "Todo lo que pide el agente hijo va a la cola de atención.",
+    ),
+    (
+        "allowlist",
+        "Solo comandos permitidos",
+        "Se aprueba solo lo que case con los comandos permitidos del perfil; lo demás se pregunta.",
+    ),
+    (
+        "auto",
+        "No preguntar",
+        "No se pregunta nada. Los comandos peligrosos se rechazan siempre.",
+    ),
+];
+
+/// The select value for a stored mode (anything unknown is the safe one).
+pub fn approvals_value(stored: &str) -> &'static str {
+    APPROVAL_MODES
+        .iter()
+        .find(|(v, _, _)| v.eq_ignore_ascii_case(stored.trim()))
+        .map_or("ask", |(v, _, _)| v)
+}
+
+/// The text under the select: what each mode does, and what never changes.
+pub fn approvals_help() -> String {
+    let mut s = String::new();
+    for (_, label, help) in APPROVAL_MODES {
+        s.push_str(label);
+        s.push_str(": ");
+        s.push_str(help);
+        s.push(' ');
+    }
+    s.push_str("`git push`, `git commit`, `rm -rf` fuera del proyecto y los archivos de credenciales se rechazan en los tres modos. Un perfil o una ejecución solo pueden bajarlo.");
+    s
+}
+
 /// Minutes as the field shows them (`15`, `7,5`).
 pub fn minutes_text(secs: u64) -> String {
     if secs.is_multiple_of(60) {
@@ -139,6 +180,19 @@ impl SettingsView {
                 s.edit_cfg(cx, |c| c.delegation.max_permission = v);
             },
         );
+        let approvals = self.select(
+            cx,
+            "deleg-approvals",
+            APPROVAL_MODES
+                .iter()
+                .map(|(v, l, _)| ((*v).to_string().into(), (*l).to_string().into()))
+                .collect(),
+            approvals_value(&d.approvals),
+            |s, v, cx| {
+                let v = v.to_string();
+                s.edit_cfg(cx, |c| c.delegation.approvals = v);
+            },
+        );
         let depth = self.select(
             cx,
             "deleg-max-depth",
@@ -192,6 +246,15 @@ impl SettingsView {
                 row(
                     &t,
                     narrow,
+                    "Aprobación de comandos",
+                    Some(approvals_help().into()),
+                    approvals,
+                    self.error_for("delegation.approvals"),
+                )
+                .into_any_element(),
+                row(
+                    &t,
+                    narrow,
                     "Ejecuciones a la vez",
                     Some("Entre 1 y 16.".into()),
                     concurrent,
@@ -238,7 +301,7 @@ impl SettingsView {
                     &t,
                     narrow,
                     "Tiempo para responder una aprobación (s)",
-                    Some("Si no contestas a lo que pide el agente hijo, se rechaza. Nunca se aprueba solo.".into()),
+                    Some("Si no contestas a lo que pide el agente hijo, se rechaza.".into()),
                     approval,
                     self.error_for("deleg_approval"),
                 )

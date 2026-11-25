@@ -98,6 +98,51 @@ pub struct RunLimits {
     /// `true` when the agent was started with the tool restrictions (`--allowedTools` /
     /// `--disallowedTools`); `false` when the profile has none or the agent cannot enforce them.
     pub tools_enforced: bool,
+    // ---- ola 8D (additive; records written before it load with the defaults) ----
+    /// Effective approval mode: the minimum of `[delegation] approvals`, the profile's and the
+    /// request's (`ask | allowlist | auto`); `auto` also after "No volver a preguntar en esta ejecución".
+    #[serde(default = "default_approvals")]
+    pub approvals: String,
+    /// The profile's `allowed_commands` (only used when the mode is `allowlist`).
+    #[serde(default)]
+    pub allowed_commands: Vec<String>,
+    /// Commands approved without asking so far (allowlist matches and the `auto` mode).
+    #[serde(default)]
+    pub auto_approved: u32,
+    /// The last [`MAX_AUTO_APPROVED_LOG`] of them, redacted and shortened.
+    #[serde(default)]
+    pub auto_approved_commands: Vec<String>,
+    /// Requests denied by the hard blocklist, without asking.
+    #[serde(default)]
+    pub blocked: u32,
+}
+
+fn default_approvals() -> String {
+    "ask".to_string()
+}
+
+/// How many auto-approved commands a record keeps.
+pub const MAX_AUTO_APPROVED_LOG: usize = 50;
+
+impl RunLimits {
+    /// Counts one command approved on its own and keeps it in the (bounded) log.
+    pub fn note_auto_approved(&mut self, command: &str) {
+        self.auto_approved = self.auto_approved.saturating_add(1);
+        let one_line = command.trim().replace(['\r', '\n'], " ");
+        let shown: String = if one_line.chars().count() > 300 {
+            one_line.chars().take(300).chain(Some('…')).collect()
+        } else {
+            one_line
+        };
+        self.auto_approved_commands.push(shown);
+        let extra = self
+            .auto_approved_commands
+            .len()
+            .saturating_sub(MAX_AUTO_APPROVED_LOG);
+        if extra > 0 {
+            self.auto_approved_commands.drain(..extra);
+        }
+    }
 }
 
 impl RunRecord {
