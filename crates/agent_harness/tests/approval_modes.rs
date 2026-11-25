@@ -128,7 +128,10 @@ fn ask_mode_sends_everything_but_the_blocklist_to_the_queue() {
         .unwrap()
         .limits
         .unwrap();
-    assert_eq!((l.approvals.as_str(), l.auto_approved, l.blocked), ("ask", 0, 1));
+    assert_eq!(
+        (l.approvals.as_str(), l.auto_approved, l.blocked),
+        ("ask", 0, 1)
+    );
 }
 
 #[test]
@@ -149,13 +152,18 @@ fn auto_mode_approves_on_its_own_and_counts_and_logs_them() {
     );
     let rec = h.registry().load(r.run_id.as_deref().unwrap()).unwrap();
     let l = rec.limits.unwrap();
-    assert_eq!((l.approvals.as_str(), l.auto_approved, l.blocked), ("auto", 2, 1));
+    assert_eq!(
+        (l.approvals.as_str(), l.auto_approved, l.blocked),
+        ("auto", 2, 1)
+    );
     assert_eq!(
         l.auto_approved_commands,
         ["cargo test -p store", "npm install"]
     );
     assert!(
-        r.notes.iter().any(|n| n.contains("2 request(s) were approved without asking")),
+        r.notes
+            .iter()
+            .any(|n| n.contains("2 request(s) were approved without asking")),
         "{:?}",
         r.notes
     );
@@ -196,11 +204,13 @@ fn the_auto_log_is_redacted_and_bounded() {
     let s = setup(|_, _, _| {
         vec![
             working(),
-            ask(1, "curl -H 'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789' x"),
+            ask(
+                1,
+                "curl -H 'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789' x",
+            ),
         ]
     });
-    s.factory
-        .on_approve(|_, _| vec![text("done"), done()]);
+    s.factory.on_approve(|_, _| vec![text("done"), done()]);
     let broker = Counting::new(agent_harness::Decision::Deny);
     let (h, r) = run_with(&s, cfg(ApprovalMode::Auto), broker, |_, _| {});
     let l = h
@@ -274,10 +284,17 @@ fn a_profile_or_a_request_can_only_lower_the_mode() {
         req.agent = String::new();
     });
     assert_eq!(broker.details(), ["npm install"], "still asked");
-    let l = h.registry().load(r.run_id.as_deref().unwrap()).unwrap().limits.unwrap();
+    let l = h
+        .registry()
+        .load(r.run_id.as_deref().unwrap())
+        .unwrap()
+        .limits
+        .unwrap();
     assert_eq!(l.approvals, "ask");
     assert!(
-        r.notes.iter().any(|n| n.contains("the profile asks for approvals = auto; lowered to ask")),
+        r.notes
+            .iter()
+            .any(|n| n.contains("the profile asks for approvals = auto; lowered to ask")),
         "{:?}",
         r.notes
     );
@@ -293,12 +310,25 @@ fn a_profile_or_a_request_can_only_lower_the_mode() {
 
     let s = agent_running(&["npm install"]);
     let broker = Counting::new(agent_harness::Decision::Allow);
-    let (h, r) = run_with(&s, cfg(ApprovalMode::Allowlist), broker.clone(), |req, _| {
-        req.approvals = Some(ApprovalMode::Auto);
-    });
-    let l = h.registry().load(r.run_id.as_deref().unwrap()).unwrap().limits.unwrap();
+    let (h, r) = run_with(
+        &s,
+        cfg(ApprovalMode::Allowlist),
+        broker.clone(),
+        |req, _| {
+            req.approvals = Some(ApprovalMode::Auto);
+        },
+    );
+    let l = h
+        .registry()
+        .load(r.run_id.as_deref().unwrap())
+        .unwrap()
+        .limits
+        .unwrap();
     assert_eq!(l.approvals, "allowlist");
-    assert!(r.notes.iter().any(|n| n.contains("--approvals asks for approvals = auto")));
+    assert!(r
+        .notes
+        .iter()
+        .any(|n| n.contains("--approvals asks for approvals = auto")));
     assert_eq!(broker.details(), ["npm install"]);
 }
 
@@ -341,8 +371,16 @@ fn no_volver_a_preguntar_switches_the_rest_of_the_run_to_auto() {
         ],
         "git push is still denied"
     );
-    let l = h.registry().load(r.run_id.as_deref().unwrap()).unwrap().limits.unwrap();
-    assert_eq!((l.approvals.as_str(), l.auto_approved, l.blocked), ("auto", 2, 1));
+    let l = h
+        .registry()
+        .load(r.run_id.as_deref().unwrap())
+        .unwrap()
+        .limits
+        .unwrap();
+    assert_eq!(
+        (l.approvals.as_str(), l.auto_approved, l.blocked),
+        ("auto", 2, 1)
+    );
     assert!(
         r.notes.iter().any(|n| n.contains("don't ask again")),
         "{:?}",
@@ -363,7 +401,9 @@ fn the_effective_mode_is_in_the_dry_run() {
     req.profile = Some("Tests".into());
     let prep = h.prepare(&req).unwrap();
     assert_eq!(prep.approvals, ApprovalMode::Allowlist);
-    assert!(prep.to_text().contains("approvals: allowlist  allowed_commands: [cargo *]"));
+    assert!(prep
+        .to_text()
+        .contains("approvals: allowlist  allowed_commands: [cargo *]"));
     assert_eq!(prep.to_value()["limits"]["approvals"], "allowlist");
 }
 
@@ -398,6 +438,8 @@ impl ApprovalBroker for Together {
     }
 }
 
+// all the runs must be spawned before the first is joined: the collect is the point
+#[allow(clippy::needless_collect)]
 #[test]
 fn two_runs_asking_at_once_with_the_same_agent_id_are_answered_independently() {
     // both fake agents call their request `req_1`
@@ -429,7 +471,9 @@ fn two_runs_asking_at_once_with_the_same_agent_id_are_answered_independently() {
                 })
             })
             .collect();
-        jobs.into_iter().map(|j| j.join().unwrap()).collect::<Vec<_>>()
+        jobs.into_iter()
+            .map(|j| j.join().unwrap())
+            .collect::<Vec<_>>()
     });
     for r in &results {
         assert_eq!(r.status, RunStatus::Done, "{r:?}");
@@ -445,9 +489,6 @@ fn two_runs_asking_at_once_with_the_same_agent_id_are_answered_independently() {
     let mut summaries: Vec<&str> = results.iter().map(|r| r.summary.as_str()).collect();
     summaries.sort();
     assert_eq!(summaries, ["done after approval", "ok, I will not do that"]);
-    let lowest = results
-        .iter()
-        .min_by_key(|r| r.thread_id)
-        .unwrap();
+    let lowest = results.iter().min_by_key(|r| r.thread_id).unwrap();
     assert_eq!(lowest.summary, "done after approval");
 }

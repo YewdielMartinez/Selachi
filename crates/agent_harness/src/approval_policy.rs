@@ -65,7 +65,12 @@ impl ApprovalMode {
 
     /// Accepts `ask`, `allowlist` (also `allow-list`, `allow_list`), `auto`; case-insensitive.
     pub fn parse(s: &str) -> Option<ApprovalMode> {
-        match s.trim().to_ascii_lowercase().replace(['_', '-'], "").as_str() {
+        match s
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['_', '-'], "")
+            .as_str()
+        {
             "ask" => Some(ApprovalMode::Ask),
             "allowlist" => Some(ApprovalMode::Allowlist),
             "auto" => Some(ApprovalMode::Auto),
@@ -504,7 +509,9 @@ fn blocked_segment(toks: &[Tok], scope: Scope<'_>, depth: usize) -> Option<Strin
 fn blocked_program(program: &str, args: &[String], scope: Scope<'_>) -> Option<String> {
     match program {
         "git" => blocked_git(args),
-        "rm" | "remove-item" | "ri" | "rd" | "rmdir" => blocked_recursive_delete(program, args, scope),
+        "rm" | "remove-item" | "ri" | "rd" | "rmdir" => {
+            blocked_recursive_delete(program, args, scope)
+        }
         "del" | "erase" => args
             .iter()
             .any(|a| a == "/s")
@@ -515,12 +522,16 @@ fn blocked_program(program: &str, args: &[String], scope: Scope<'_>) -> Option<S
         }
         "cmdkey" | "vaultcmd" => Some(format!("`{program}` manages stored credentials")),
         "reg" => match args.first().map(String::as_str) {
-            Some("add" | "delete" | "import" | "copy" | "restore" | "load" | "unload") => Some(
-                format!("`reg {}` changes the Windows registry", args[0]),
-            ),
+            Some("add" | "delete" | "import" | "copy" | "restore" | "load" | "unload") => {
+                Some(format!("`reg {}` changes the Windows registry", args[0]))
+            }
             _ => None,
         },
-        "set-itemproperty" | "sp" | "new-itemproperty" | "remove-itemproperty" | "new-item"
+        "set-itemproperty"
+        | "sp"
+        | "new-itemproperty"
+        | "remove-itemproperty"
+        | "new-item"
         | "set-item" => args
             .iter()
             .any(|a| is_registry_path(a))
@@ -686,7 +697,9 @@ fn classify_path(p: &str, scope: Scope<'_>) -> PathClass {
     } else if norm.starts_with('\\') {
         return PathClass::Outside;
     } else {
-        let mut base = components(strip_verbatim(&scope.cwd.to_string_lossy().replace('/', "\\")));
+        let mut base = components(strip_verbatim(
+            &scope.cwd.to_string_lossy().replace('/', "\\"),
+        ));
         base.extend(components(&norm));
         base
     };
@@ -880,7 +893,11 @@ mod tests {
 
     #[test]
     fn a_command_that_chains_or_redirects_never_matches() {
-        let pats = vec!["cargo *".to_string(), "git diff *".to_string(), "rg *".to_string()];
+        let pats = vec![
+            "cargo *".to_string(),
+            "git diff *".to_string(),
+            "rg *".to_string(),
+        ];
         for cmd in [
             "cargo test; rm -rf x",
             "cargo test | tee out.txt",
@@ -1011,13 +1028,19 @@ mod tests {
 
     #[test]
     fn the_run_worktree_counts_as_inside() {
-        let roots = [Path::new(r"C:\Users\me\proj"), Path::new(r"C:\wt\proj-codex")];
+        let roots = [
+            Path::new(r"C:\Users\me\proj"),
+            Path::new(r"C:\wt\proj-codex"),
+        ];
         let scope = Scope {
             cwd: Path::new(r"C:\wt\proj-codex"),
             roots: &roots,
         };
         assert_eq!(blocked("Bash", "rm -rf target", scope), None);
-        assert_eq!(blocked("Bash", r"rm -rf C:\wt\proj-codex\target", scope), None);
+        assert_eq!(
+            blocked("Bash", r"rm -rf C:\wt\proj-codex\target", scope),
+            None
+        );
         assert!(blocked("Bash", r"rm -rf C:\wt\other", scope).is_some());
         assert!(blocked("Bash", r"rm -rf C:\wt\proj-codex", scope).is_some());
     }
@@ -1127,10 +1150,7 @@ mod tests {
             Some("rg foo src")
         );
         // `Bash: command` inside the detail
-        assert_eq!(
-            shell_command("Tool", "Bash: ls").as_deref(),
-            Some("ls")
-        );
+        assert_eq!(shell_command("Tool", "Bash: ls").as_deref(), Some("ls"));
         // not commands
         assert_eq!(shell_command("Edit", r"C:\x\a.rs"), None);
         assert_eq!(shell_command("write_text_file", r"C:\x\a.rs"), None);
@@ -1153,18 +1173,33 @@ mod tests {
             );
         }
         // ask: everything else goes to the queue
-        assert_eq!(gate(ApprovalMode::Ask, &allow, "Bash", "cargo test", scope), Gate::Ask);
+        assert_eq!(
+            gate(ApprovalMode::Ask, &allow, "Bash", "cargo test", scope),
+            Gate::Ask
+        );
         // allowlist: matching commands are approved, the rest asks
         assert_eq!(
             gate(ApprovalMode::Allowlist, &allow, "Bash", "cargo test", scope),
             Gate::Auto
         );
         assert_eq!(
-            gate(ApprovalMode::Allowlist, &allow, "Bash", "npm install", scope),
+            gate(
+                ApprovalMode::Allowlist,
+                &allow,
+                "Bash",
+                "npm install",
+                scope
+            ),
             Gate::Ask
         );
         assert_eq!(
-            gate(ApprovalMode::Allowlist, &allow, "Bash", "cargo test && npm i", scope),
+            gate(
+                ApprovalMode::Allowlist,
+                &allow,
+                "Bash",
+                "cargo test && npm i",
+                scope
+            ),
             Gate::Ask
         );
         assert_eq!(
@@ -1177,8 +1212,14 @@ mod tests {
             Gate::Ask
         );
         // auto approves everything that is not blocked
-        assert_eq!(gate(ApprovalMode::Auto, &[], "Bash", "npm install", scope), Gate::Auto);
-        assert_eq!(gate(ApprovalMode::Auto, &[], "Edit", r"C:\x\a.rs", scope), Gate::Auto);
+        assert_eq!(
+            gate(ApprovalMode::Auto, &[], "Bash", "npm install", scope),
+            Gate::Auto
+        );
+        assert_eq!(
+            gate(ApprovalMode::Auto, &[], "Edit", r"C:\x\a.rs", scope),
+            Gate::Auto
+        );
         assert!(matches!(
             gate(ApprovalMode::Auto, &[], "Bash", "cat .env", scope),
             Gate::Block(_)

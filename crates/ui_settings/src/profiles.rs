@@ -1200,23 +1200,48 @@ mod tests {
             approvals: Some("yolo".into()),
             ..ok.clone()
         };
-        assert!(validate(&bad_mode, &[]).iter().any(|i| i.field == "approvals"));
-        for cmd in ["cargo test; rm x", "rg a | b", "x > y", "a && b", "`id`", "$(id)", "", "*"] {
+        assert!(
+            validate(&bad_mode, &[])
+                .iter()
+                .any(|i| i.field == "approvals")
+        );
+        for cmd in [
+            "cargo test; rm x",
+            "rg a | b",
+            "x > y",
+            "a && b",
+            "`id`",
+            "$(id)",
+            "",
+            "*",
+        ] {
             let p = Profile {
                 allowed_commands: vec![cmd.into()],
                 ..ok.clone()
             };
             assert!(
-                validate(&p, &[]).iter().any(|i| i.field == "allowed_commands"),
+                validate(&p, &[])
+                    .iter()
+                    .any(|i| i.field == "allowed_commands"),
                 "{cmd:?}"
             );
         }
         // the file keys are known to the strict reader, a typo is not
-        assert!(from_toml("name = \"x\"
+        assert!(
+            from_toml(
+                "name = \"x\"
 approvals = \"auto\"
-allowed_commands = [\"cargo *\"]").is_ok());
-        assert!(from_toml("name = \"x\"
-allow_commands = []").is_err());
+allowed_commands = [\"cargo *\"]"
+            )
+            .is_ok()
+        );
+        assert!(
+            from_toml(
+                "name = \"x\"
+allow_commands = []"
+            )
+            .is_err()
+        );
 
         // a profile can only lower Delegación's mode
         let limits = |a: &str| Limits {
@@ -1228,10 +1253,17 @@ allow_commands = []").is_err());
             ..ok.clone()
         };
         assert_eq!(effective(&with(None), &limits("auto")).approvals, "auto");
-        assert_eq!(effective(&with(Some("ask")), &limits("auto")).approvals, "ask");
+        assert_eq!(
+            effective(&with(Some("ask")), &limits("auto")).approvals,
+            "ask"
+        );
         let e = effective(&with(Some("auto")), &limits("ask"));
         assert_eq!(e.approvals, "ask");
-        assert!(e.notes.iter().any(|n| n.contains("La aprobación se baja")), "{:?}", e.notes);
+        assert!(
+            e.notes.iter().any(|n| n.contains("La aprobación se baja")),
+            "{:?}",
+            e.notes
+        );
         let e = effective(
             &Profile {
                 allowed_commands: Vec::new(),
@@ -1239,12 +1271,20 @@ allow_commands = []").is_err());
             },
             &limits("allowlist"),
         );
-        assert!(e.notes.iter().any(|n| n.contains("Sin comandos permitidos")));
+        assert!(
+            e.notes
+                .iter()
+                .any(|n| n.contains("Sin comandos permitidos"))
+        );
         // an unknown stored value is the careful one
-        assert_eq!(Limits::from_delegation(&store::config::Delegation {
-            approvals: "???".into(),
-            ..Default::default()
-        }).approvals, "ask");
+        assert_eq!(
+            Limits::from_delegation(&store::config::Delegation {
+                approvals: "???".into(),
+                ..Default::default()
+            })
+            .approvals,
+            "ask"
+        );
     }
 
     #[test]
@@ -1423,6 +1463,7 @@ timeout = \"15m\"",
             timeout_secs: 600,
             max_depth: 1,
             daily_token_budget: 0,
+            approvals: "ask".into(),
         };
         let p = Profile {
             name: "x".into(),

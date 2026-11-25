@@ -802,12 +802,18 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
             .into_any_element()
     };
     let align = |i: usize| t.aligns.get(i).copied().unwrap_or(MdAlign::None);
-    let header = div().w_full().min_w_0().flex().flex_row().bg(c.surface_2).children(
-        t.header
-            .iter()
-            .enumerate()
-            .map(|(i, h)| cell(h, align(i), true, 0, i)),
-    );
+    let header = div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .bg(c.surface_2)
+        .children(
+            t.header
+                .iter()
+                .enumerate()
+                .map(|(i, h)| cell(h, align(i), true, 0, i)),
+        );
     let rows = t.rows.iter().enumerate().map(|(ri, row)| {
         div().w_full().min_w_0().flex().flex_row().children(
             row.iter()

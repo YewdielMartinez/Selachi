@@ -10,8 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 
 /// Maximum image file size we inline into a JSON-RPC / stream-json message (20 MiB).
 pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
@@ -100,10 +100,7 @@ mod tests {
 
     #[test]
     fn extract_attached_images_reads_only_existing_images() {
-        let dir = std::env::temp_dir().join(format!(
-            "selachi-img-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("selachi-img-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let png = dir.join("shot.png");
         let jpg = dir.join("pic.jpg");
@@ -133,18 +130,13 @@ mod tests {
 
     #[test]
     fn acp_claude_and_codex_emit_image_content_blocks() {
-        let dir = std::env::temp_dir().join(format!(
-            "selachi-driver-img-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("selachi-driver-img-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let png = dir.join("clip.png");
         let raw = b"\x89PNG\r\n\x1a\nhello";
         std::fs::write(&png, raw).unwrap();
-        let prompt = format!(
-            "Mira esto\n\n{ATTACHMENTS_HEADER}\n- {}\n",
-            png.display()
-        );
+        let prompt = format!("Mira esto\n\n{ATTACHMENTS_HEADER}\n- {}\n", png.display());
 
         // Claude stream-json user message
         let claude_msg = crate::claude::user_message_json(&prompt);
@@ -207,7 +199,9 @@ mod tests {
             "result": { "sessionId": "s2" }
         }));
         let step_no_img = acp_no_img.user_message(&prompt);
-        let blocks_no_img = step_no_img.outgoing[0]["params"]["prompt"].as_array().unwrap();
+        let blocks_no_img = step_no_img.outgoing[0]["params"]["prompt"]
+            .as_array()
+            .unwrap();
         assert_eq!(blocks_no_img.len(), 1);
         assert_eq!(blocks_no_img[0]["type"], "text");
 

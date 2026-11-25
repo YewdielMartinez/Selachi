@@ -317,6 +317,8 @@ impl AppShell {
         // A deferred shell registers its process owner when it starts: refresh the doctor's
         // "tracked by tree" count (equality-guarded, so nothing repaints when it is the same).
         self.update_doctor_stats(cx);
+        // the map names terminal parents by their tab title (a no-op while the map is closed)
+        self.sync_agentmap_context(cx);
         self.recompute_layout(true, cx);
         self.sync_chat_active(cx);
         self.mark_session_dirty(cx);

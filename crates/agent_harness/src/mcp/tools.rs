@@ -239,8 +239,8 @@ fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
             Some(m) => Some(m),
             None => {
                 return ToolOutput::error(format!(
-                    "invalid arguments for run_agent: approvals = {a:?} must be ask, allowlist or auto"
-                ))
+                "invalid arguments for run_agent: approvals = {a:?} must be ask, allowlist or auto"
+            ))
             }
         },
     };

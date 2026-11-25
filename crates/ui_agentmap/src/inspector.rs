@@ -110,6 +110,16 @@ pub fn external_facts(node: &MapNode, now_ms: i64) -> Vec<(String, String)> {
     rows
 }
 
+/// Spanish label of an approval mode as the harness spells it (`ask | allowlist | auto`).
+pub fn approval_mode_label(m: &str) -> String {
+    match m.trim().to_ascii_lowercase().as_str() {
+        "ask" => "Preguntar".into(),
+        "allowlist" => "Solo comandos permitidos".into(),
+        "auto" => "No preguntar".into(),
+        other => other.to_string(),
+    }
+}
+
 /// Spanish word of a permission as the harness spells it.
 pub fn permission_label(p: &str) -> String {
     match p.trim().to_ascii_lowercase().replace('_', "-").as_str() {
@@ -124,6 +134,15 @@ pub fn permission_label(p: &str) -> String {
 /// `(label, value)` rows of "Límites aplicados": what the harness recorded, translated; without
 /// that, what can be deduced from the run (permission, depth, time budget).
 pub fn limit_rows(node: &MapNode) -> Vec<(String, String)> {
+    let mut rows = limit_rows_base(node);
+    // how the child's commands were approved (harness record, `limits.approvals`)
+    if let Some(m) = node.run.as_ref().and_then(|r| r.approval_mode.as_deref()) {
+        rows.push(("Aprobación de comandos".to_string(), approval_mode_label(m)));
+    }
+    rows
+}
+
+fn limit_rows_base(node: &MapNode) -> Vec<(String, String)> {
     let recorded = node
         .run
         .as_ref()
@@ -424,6 +443,14 @@ impl AgentMapView {
         }
         if let Some(w) = &node.worktree {
             facts.push(fact(&t, "Worktree", w.display().to_string()));
+        }
+        if let Some(n) = node
+            .run
+            .as_ref()
+            .and_then(|r| r.auto_approved)
+            .filter(|n| *n > 0)
+        {
+            facts.push(fact(&t, "Aprobaciones", fmt::auto_approved(n)));
         }
         let facts = section(&t, "Resumen", facts);
 

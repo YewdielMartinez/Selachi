@@ -405,6 +405,9 @@ pub struct AppShell {
     marks_sub: Option<Subscription>,
     /// Owners (process jobs) of tabs that were closed and still have processes.
     closed_owners: Vec<u64>,
+    /// The map's sampling of agent CLIs launched outside the harness: runs only while the map is
+    /// on screen (see `agentmap_feed`).
+    agentmap_feed: crate::agentmap_feed::AgentMapFeed,
     /// The layout popover's content (open exactly while it exists).
     layout_panel: Option<AnyView>,
     cfg_save: ConfigSave,
@@ -792,6 +795,7 @@ impl AppShell {
             grammars: Vec::new(),
             marks_sub: None,
             closed_owners: Vec::new(),
+            agentmap_feed: crate::agentmap_feed::AgentMapFeed::default(),
             layout_panel: None,
             cfg_save: ConfigSave::default(),
             spaces: SpaceData::default(),

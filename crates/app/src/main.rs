@@ -4,6 +4,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod adapt;
+mod agentmap_feed;
 mod agentmap_host;
 mod agents;
 mod app_shell;

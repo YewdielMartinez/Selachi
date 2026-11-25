@@ -64,21 +64,13 @@ pub fn toggled_allowed(list: &[String], agent: &str) -> Option<Vec<String>> {
 /// `[delegation] approvals`: `(value, label, one-line explanation)`. A profile or a single run can
 /// only lower the mode, never raise it.
 pub const APPROVAL_MODES: [(&str, &str, &str); 3] = [
-    (
-        "ask",
-        "Preguntar",
-        "Todo lo que pide el agente hijo va a la cola de atención.",
-    ),
+    ("ask", "Preguntar", "todo va a la cola de atención."),
     (
         "allowlist",
         "Solo comandos permitidos",
-        "Se aprueba solo lo que case con los comandos permitidos del perfil; lo demás se pregunta.",
+        "se aprueba lo que case con la lista del perfil, lo demás se pregunta.",
     ),
-    (
-        "auto",
-        "No preguntar",
-        "No se pregunta nada. Los comandos peligrosos se rechazan siempre.",
-    ),
+    ("auto", "No preguntar", "no se pregunta nada."),
 ];
 
 /// The select value for a stored mode (anything unknown is the safe one).
@@ -98,7 +90,7 @@ pub fn approvals_help() -> String {
         s.push_str(help);
         s.push(' ');
     }
-    s.push_str("`git push`, `git commit`, `rm -rf` fuera del proyecto y los archivos de credenciales se rechazan en los tres modos. Un perfil o una ejecución solo pueden bajarlo.");
+    s.push_str("git push, git commit, rm -rf fuera del proyecto y los archivos de credenciales se rechazan siempre; un perfil o una ejecución solo pueden bajarlo.");
     s
 }
 
@@ -185,7 +177,7 @@ impl SettingsView {
             "deleg-approvals",
             APPROVAL_MODES
                 .iter()
-                .map(|(v, l, _)| ((*v).to_string().into(), (*l).to_string().into()))
+                .map(|(v, l, _)| ((*v).to_string(), (*l).to_string()))
                 .collect(),
             approvals_value(&d.approvals),
             |s, v, cx| {
@@ -540,6 +532,25 @@ mod tests {
             toggled_allowed(&v(&["agy"]), "claude").unwrap(),
             v(&["claude", "agy"])
         );
+    }
+
+    #[test]
+    fn approval_modes_have_spanish_labels_and_an_explanation_each() {
+        let labels: Vec<_> = APPROVAL_MODES.iter().map(|(_, l, _)| *l).collect();
+        assert_eq!(
+            labels,
+            ["Preguntar", "Solo comandos permitidos", "No preguntar"]
+        );
+        assert!(APPROVAL_MODES.iter().all(|(_, _, h)| h.ends_with('.')));
+        // every value is one the store accepts
+        for (v, _, _) in APPROVAL_MODES {
+            assert!(store::config::APPROVAL_MODES.contains(&v));
+        }
+        assert_eq!(approvals_value("allowlist"), "allowlist");
+        assert_eq!(approvals_value(" AUTO "), "auto");
+        assert_eq!(approvals_value("???"), "ask", "unknown is the careful one");
+        let help = approvals_help();
+        assert!(help.contains("No preguntar: ") && help.contains("git push"));
     }
 
     #[test]

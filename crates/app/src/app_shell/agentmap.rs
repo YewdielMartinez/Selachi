@@ -6,7 +6,7 @@
 //! thread. Nothing here polls: the map's model listens to `agent-runs` and the chat store only
 //! while a map view is on screen, and the shell only feeds it tab titles while that is true.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use agent_harness::{Confirmation, Harness, Registry};
@@ -14,12 +14,13 @@ use chat_core::ThreadId;
 use gpui::{Context, Hsla, IntoElement, SharedString, Window, div, prelude::*, px};
 use panel_api::{PanelId, TabId};
 use theme::Radius;
-use ui_agentmap::{AgentMapEvent, AgentMapModel, NodeKey, PANEL_ID};
+use ui_agentmap::{AgentMapEvent, AgentMapModel, ExternalProc, NodeKey, PANEL_ID};
 use ui_kit::{Button, Card};
 use ui_review::ReviewSource;
 
 use super::AppShell;
 use super::delegation::data_dir;
+use crate::agentmap_feed;
 use crate::agentmap_host::{self, ApplyView};
 use crate::hint::Hint;
 use crate::services::Services;
@@ -31,6 +32,11 @@ const MAX_APPLY_LINES: usize = 12;
 pub(super) struct ApplyPrompt {
     pub view: ApplyView,
     pub busy: bool,
+}
+
+/// "agy (PID 4120)" for hints.
+fn agentmap_feed_label(ext: &ExternalProc) -> String {
+    format!("{} (PID {})", ext.agent, ext.pid)
 }
 
 fn panel_id() -> PanelId {
@@ -67,6 +73,180 @@ impl AppShell {
                 this.on_agentmap_event(ev.clone(), window, cx)
             },
         ));
+        // A map view attaching / detaching notifies the model: start or stop the sampling of agent
+        // CLIs launched outside the harness (idempotent, so the notifications of the feed itself
+        // change nothing).
+        self._subs
+            .push(cx.observe(&model, |this, _, cx| this.sync_agentmap_feed(cx)));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Agents launched outside the harness (ola 8A -> 8C)
+    // ------------------------------------------------------------------------------------
+
+    /// Runs the sampling loop exactly while a map view is on screen. Hidden: no task, no timer, no
+    /// snapshot, no CPU baseline.
+    pub(super) fn sync_agentmap_feed(&mut self, cx: &mut Context<Self>) {
+        let visible = self
+            .agentmap_model(cx)
+            .is_some_and(|m| m.read(cx).viewers() > 0);
+        match (visible, self.agentmap_feed.is_running()) {
+            (true, false) => self.start_agentmap_feed(cx),
+            (false, true) => self.agentmap_feed.stop(),
+            _ => {}
+        }
+    }
+
+    fn start_agentmap_feed(&mut self, cx: &mut Context<Self>) {
+        let Some(services) = cx.try_global::<Services>().cloned() else {
+            return;
+        };
+        let tracker = services.tracker;
+        let cpu = self.agentmap_feed.cpu.clone();
+        self.agentmap_feed.task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let (t, c) = (tracker.clone(), cpu.clone());
+                let rows = cx
+                    .background_executor()
+                    .spawn(async move { agentmap_feed::sample(&t, &c) })
+                    .await;
+                if this
+                    .update(cx, |shell, cx| shell.apply_external_rows(rows, cx))
+                    .is_err()
+                {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(agentmap_feed::SAMPLE_INTERVAL)
+                    .await;
+            }
+        }));
+    }
+
+    /// One sample arrived: hand every parent its external agents (an empty list marks the ones that
+    /// ended) and drop the parents whose tab or thread is gone.
+    pub(super) fn apply_external_rows(
+        &mut self,
+        rows: Vec<(NodeKey, Vec<ExternalProc>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(model) = self.agentmap_model(cx) else {
+            return;
+        };
+        let live: HashSet<NodeKey> = rows.iter().map(|(k, _)| k.clone()).collect();
+        let gone: Vec<NodeKey> = self
+            .agentmap_feed
+            .fed
+            .iter()
+            .filter(|k| !live.contains(*k))
+            .cloned()
+            .collect();
+        model.update(cx, |m, cx| {
+            for k in &gone {
+                m.clear_external(k, cx);
+            }
+            for (key, procs) in rows {
+                m.set_external(key, procs, cx);
+            }
+        });
+        for k in &gone {
+            self.agentmap_feed.fed.remove(k);
+        }
+        self.agentmap_feed.fed.extend(live);
+    }
+
+    /// The external process the map shows for `pid` (searched among the parents that were fed).
+    fn external_proc(&self, pid: u32, cx: &gpui::App) -> Option<ExternalProc> {
+        let model = self.agentmap_model(cx)?;
+        let model = model.read(cx);
+        self.agentmap_feed
+            .fed
+            .iter()
+            .flat_map(|k| model.external_procs(k))
+            .find(|e| e.pid == pid)
+            .cloned()
+    }
+
+    /// "Detener" of an external agent (the user already confirmed inline in the inspector): ends that
+    /// process subtree only, with `proc_svc`'s own termination (graceful, then forced, same safety
+    /// rules as the Processes panel). A reused pid is never touched: the process must still be the one
+    /// the map shows (same start time).
+    fn agentmap_stop_external(&mut self, pid: u32, cx: &mut Context<Self>) {
+        let Some(ext) = self.external_proc(pid, cx) else {
+            self.show_hint(Hint::text("Ese proceso ya no está en el mapa"), cx);
+            return;
+        };
+        let started = ext.started_ms;
+        let label = agentmap_feed_label(&ext);
+        let job = cx.background_executor().spawn(async move {
+            let same = proc_svc::start_time_of(pid)
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .is_some_and(|ms| (ms - started).abs() <= 2_000);
+            if !same {
+                return Err("el proceso ya terminó o su PID lo usa otro programa".to_string());
+            }
+            proc_svc::terminate_tree(pid, std::time::Duration::from_secs(3))
+                .map(|o| o.is_clean())
+                .map_err(|e| e.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let text = match job.await {
+                Ok(true) => format!("{label} detenido"),
+                Ok(false) => format!("{label}: algunos procesos no se pudieron detener"),
+                Err(e) => format!("No se pudo detener {label}: {e}"),
+            };
+            this.update(cx, |shell, cx| {
+                shell.show_hint(Hint::text(text), cx);
+                // reflect it now instead of waiting for the next sample
+                shell.resample_agentmap_feed(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Takes one sample right away (only while the map is on screen).
+    fn resample_agentmap_feed(&mut self, cx: &mut Context<Self>) {
+        if !self.agentmap_feed.is_running() {
+            return;
+        }
+        let Some(services) = cx.try_global::<Services>().cloned() else {
+            return;
+        };
+        let (tracker, cpu) = (services.tracker, self.agentmap_feed.cpu.clone());
+        let job = cx
+            .background_executor()
+            .spawn(async move { agentmap_feed::sample(&tracker, &cpu) });
+        cx.spawn(async move |this, cx| {
+            let rows = job.await;
+            this.update(cx, |shell, cx| {
+                if shell.agentmap_feed.is_running() {
+                    shell.apply_external_rows(rows, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// "Abrir en Procesos": the Processes panel (it has no per-pid focus yet, so the hint says which
+    /// process to look for).
+    fn agentmap_open_in_processes(&mut self, pid: u32, cx: &mut Context<Self>) {
+        let id = PanelId::new(ui_procs::PANEL_ID);
+        if !self.right_panel_active(&id) {
+            self.toggle_right_panel(id, cx);
+        }
+        self.show_hint(
+            Hint::text(format!("Proceso {pid} en el panel de Procesos")),
+            cx,
+        );
+    }
+
+    /// "Copiar comando": the redacted command line of the external agent.
+    fn agentmap_copy_command(&mut self, command: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(command));
+        self.show_hint(Hint::text("Comando copiado"), cx);
     }
 
     // ------------------------------------------------------------------------------------
@@ -173,6 +353,9 @@ impl AppShell {
             AgentMapEvent::DuplicateAsProfile(run_id) => {
                 self.agentmap_duplicate(run_id, window, cx)
             }
+            AgentMapEvent::StopExternal(pid) => self.agentmap_stop_external(pid, cx),
+            AgentMapEvent::OpenInProcesses(pid) => self.agentmap_open_in_processes(pid, cx),
+            AgentMapEvent::CopyCommand(command) => self.agentmap_copy_command(command, cx),
         }
     }
 

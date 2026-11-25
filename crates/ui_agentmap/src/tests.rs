@@ -741,6 +741,29 @@ fn limits_are_translated_or_deduced() {
     let rows = limit_rows(&deduced);
     assert!(rows.contains(&("Permiso".to_string(), "Solo lectura".to_string())));
     assert!(rows.contains(&("Tiempo máximo".to_string(), "1 min".to_string())));
+
+    // the approval mode and the commands approved on their own come from the harness record's `limits`
+    let approved = forest(
+        RunInfo::from_json(
+            r#"{"run_id":"2","permission":"ask","limits":{"approvals":"auto","auto_approved":12,"blocked":1}}"#,
+        )
+        .unwrap(),
+    );
+    let run = approved.run.as_ref().unwrap();
+    assert_eq!(run.approval_mode.as_deref(), Some("auto"));
+    assert_eq!((run.auto_approved, run.blocked), (Some(12), Some(1)));
+    assert!(limit_rows(&approved).contains(&(
+        "Aprobación de comandos".to_string(),
+        "No preguntar".to_string()
+    )));
+    // an older record has none of it
+    assert!(
+        !limit_rows(&deduced)
+            .iter()
+            .any(|(k, _)| k == "Aprobación de comandos")
+    );
+    assert_eq!(crate::fmt::auto_approved(12), "12 comandos aprobados solos");
+    assert_eq!(crate::fmt::auto_approved(1), "1 comando aprobado solo");
 }
 
 // ---------------------------------------------------------------------------------------------

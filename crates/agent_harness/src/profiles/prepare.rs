@@ -708,7 +708,10 @@ impl Harness {
         // approvals: the minimum of [delegation], the profile and the request
         let profile_mode = profile.as_ref().and_then(|p| p.approvals);
         let approvals = effective_mode(self.cfg.approvals, profile_mode, req.approvals);
-        for (who, asked) in [("the profile", profile_mode), ("--approvals", req.approvals)] {
+        for (who, asked) in [
+            ("the profile", profile_mode),
+            ("--approvals", req.approvals),
+        ] {
             if let Some(a) = asked.filter(|a| *a > approvals) {
                 notes.push(format!(
                     "{who} asks for approvals = {a}; lowered to {approvals} (a profile or a run can only lower [delegation] approvals = {})",

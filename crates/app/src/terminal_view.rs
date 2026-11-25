@@ -115,6 +115,24 @@ pub fn hsla(c: Rgb8) -> Hsla {
     gpui::rgb((u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b)).into()
 }
 
+/// `SELACHI_PARENT_PERMISSION` of a terminal's shell: a delegation started from a terminal never has
+/// more than "ask" (the user is at the keyboard and the approvals go to the attention queue).
+const PARENT_PERMISSION: &str = "ask";
+
+/// How a tab's shell is spawned: the app's extra environment, the job it is born in and, for a tab,
+/// `SELACHI_PARENT_TAB=<tab id>` / `SELACHI_PARENT_PERMISSION=ask`.
+fn spawn_options(
+    env: Vec<(String, String)>,
+    job: Option<isize>,
+    tab_id: Option<u64>,
+) -> SpawnOptions {
+    let options = SpawnOptions { env, job };
+    match tab_id {
+        Some(tab) => options.with_parent_tab(tab, PARENT_PERMISSION),
+        None => options,
+    }
+}
+
 pub struct TerminalView {
     pub(crate) session: Option<Session>,
     pub(crate) theme: Theme,
@@ -150,6 +168,10 @@ pub struct TerminalView {
     _pump: Option<Task<()>>,
     /// The job the shell is born in, if the app tracks processes.
     job: Option<JobCtx>,
+    /// The id of the tab this shell belongs to (`TabId::as_u64`). Exported to the shell as
+    /// `SELACHI_PARENT_TAB` (with `SELACHI_PARENT_PERMISSION`) so a `selachi-agent run` started
+    /// from here hangs from this tab in the agent map.
+    tab_id: Option<u64>,
     /// Command blocks: gutter, folding, the hover bar and Ctrl+click paths.
     pub(crate) block_ui: BlockUi,
 }
@@ -163,7 +185,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::build(theme, cwd, false, None, window, cx)
+        Self::build(theme, cwd, false, None, None, window, cx)
     }
 
     /// Like [`TerminalView::new`], with the shell born in `job`.
@@ -171,10 +193,11 @@ impl TerminalView {
         theme: Theme,
         cwd: Option<PathBuf>,
         job: Option<JobCtx>,
+        tab_id: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::build(theme, cwd, false, job, window, cx)
+        Self::build(theme, cwd, false, job, tab_id, window, cx)
     }
 
     /// Like [`TerminalView::new`] but the shell starts the first time the view is painted.
@@ -185,7 +208,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::build(theme, cwd, true, None, window, cx)
+        Self::build(theme, cwd, true, None, None, window, cx)
     }
 
     /// Deferred, with the shell born in `job` when it starts.
@@ -193,10 +216,11 @@ impl TerminalView {
         theme: Theme,
         cwd: Option<PathBuf>,
         job: Option<JobCtx>,
+        tab_id: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::build(theme, cwd, true, job, window, cx)
+        Self::build(theme, cwd, true, job, tab_id, window, cx)
     }
 
     fn build(
@@ -204,6 +228,7 @@ impl TerminalView {
         cwd: Option<PathBuf>,
         defer: bool,
         job: Option<JobCtx>,
+        tab_id: Option<u64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -275,6 +300,7 @@ impl TerminalView {
             _start: None,
             _pump: None,
             job,
+            tab_id,
             block_ui: BlockUi::default(),
         };
 
@@ -319,10 +345,7 @@ impl TerminalView {
             "spawning with job {:?}",
             self.job.as_ref().map(|j| (j.owner, j.handle))
         );
-        let options = SpawnOptions {
-            env,
-            job: self.job.as_ref().map(|j| j.handle),
-        };
+        let options = spawn_options(env, self.job.as_ref().map(|j| j.handle), self.tab_id);
         self.starting = true;
         let spawn = cx
             .background_executor()
@@ -780,5 +803,44 @@ impl Render for TerminalView {
                     .text_size(px(ty.ui_size_md))
                     .child(text)
             }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_of(o: &SpawnOptions, key: &str) -> Option<String> {
+        o.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    /// 8B: the shell of a tab learns which tab it is, so a `selachi-agent run` started in it hangs
+    /// from that tab in the map (the harness reads `SELACHI_PARENT_TAB`).
+    #[test]
+    fn a_tab_shell_gets_its_tab_id_and_the_ask_permission() {
+        let o = spawn_options(Vec::new(), None, Some(4_294_967_297));
+        assert_eq!(
+            env_of(&o, "SELACHI_PARENT_TAB").as_deref(),
+            Some("4294967297")
+        );
+        assert_eq!(
+            env_of(&o, "SELACHI_PARENT_PERMISSION").as_deref(),
+            Some("ask")
+        );
+        // the app's own variables stay, and a stale parent from the environment is replaced
+        let o = spawn_options(
+            vec![
+                ("FOO".into(), "1".into()),
+                ("SELACHI_PARENT_TAB".into(), "stale".into()),
+            ],
+            Some(7),
+            Some(9),
+        );
+        assert_eq!(env_of(&o, "FOO").as_deref(), Some("1"));
+        assert_eq!(env_of(&o, "SELACHI_PARENT_TAB").as_deref(), Some("9"));
+        assert_eq!(o.job, Some(7));
+        // a view without a tab (examples) exports nothing
+        let o = spawn_options(Vec::new(), None, None);
+        assert!(env_of(&o, "SELACHI_PARENT_TAB").is_none());
     }
 }

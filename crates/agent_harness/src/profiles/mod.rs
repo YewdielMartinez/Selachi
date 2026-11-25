@@ -881,16 +881,25 @@ allowed_commands = [\"cargo *\", \"git   diff *\", \"rg *\"]
         assert_eq!(p.allowed_commands, ["cargo *", "git diff *", "rg *"]);
         assert_eq!(p.to_value(false)["approvals"], "allowlist");
         // not set: the config's mode applies
-        let m = parse("name=\"a\"
+        let m = parse(
+            "name=\"a\"
 agent=\"codex\"
-").unwrap();
+",
+        )
+        .unwrap();
         assert!(m.approvals.is_none() && m.allowed_commands.is_empty());
         // problems
-        let e = parse("name=\"a\"
+        let e = parse(
+            "name=\"a\"
 agent=\"codex\"
 approvals = \"yolo\"
-").unwrap_err();
-        assert!(e.problems.iter().any(|p| p.contains("ask, allowlist or auto")));
+",
+        )
+        .unwrap_err();
+        assert!(e
+            .problems
+            .iter()
+            .any(|p| p.contains("ask, allowlist or auto")));
         let e = parse(
             "name=\"a\"
 agent=\"codex\"
@@ -900,10 +909,13 @@ allowed_commands = [\"cargo test; rm x\", \"\", \"*\"]
         .unwrap_err();
         assert_eq!(e.problems.len(), 3, "{:?}", e.problems);
         // an unknown key is still an error (a typo must not drop a restriction)
-        assert!(parse("name=\"a\"
+        assert!(parse(
+            "name=\"a\"
 agent=\"codex\"
 allow_commands = []
-").is_err());
+"
+        )
+        .is_err());
         // the TOML written by the editor reads back
         let f = ProfileFile {
             name: "a".into(),

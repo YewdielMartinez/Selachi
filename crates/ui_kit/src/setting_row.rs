@@ -209,14 +209,14 @@ mod tests {
             _cx: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
             let t = Theme::dark();
-            div()
-                .w(px(self.card_w))
-                .flex()
-                .flex_col()
-                .child(
-                    SettingRow::new(&t, "Hook statusLine de Claude", crate::Toggle::new("sr-ctrl", &t))
-                        .description(self.long_desc),
+            div().w(px(self.card_w)).flex().flex_col().child(
+                SettingRow::new(
+                    &t,
+                    "Hook statusLine de Claude",
+                    crate::Toggle::new("sr-ctrl", &t),
                 )
+                .description(self.long_desc),
+            )
         }
     }
 

@@ -79,9 +79,10 @@ impl TerminalTab {
         cx: &mut Context<Self>,
     ) -> Self {
         // The job must exist before the shell is spawned: the shell is born inside it.
-        let job = crate::services::open_tab_job(cx.entity_id().as_u64(), cwd.as_deref(), cx);
+        let tab_id = cx.entity_id().as_u64();
+        let job = crate::services::open_tab_job(tab_id, cwd.as_deref(), cx);
         Self::with_view(
-            cx.new(|cx| TerminalView::new_in_job(theme, cwd, job, window, cx)),
+            cx.new(|cx| TerminalView::new_in_job(theme, cwd, job, Some(tab_id), window, cx)),
             cx,
         )
     }
@@ -93,9 +94,12 @@ impl TerminalTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let job = crate::services::open_tab_job(cx.entity_id().as_u64(), cwd.as_deref(), cx);
+        let tab_id = cx.entity_id().as_u64();
+        let job = crate::services::open_tab_job(tab_id, cwd.as_deref(), cx);
         Self::with_view(
-            cx.new(|cx| TerminalView::new_deferred_in_job(theme, cwd, job, window, cx)),
+            cx.new(|cx| {
+                TerminalView::new_deferred_in_job(theme, cwd, job, Some(tab_id), window, cx)
+            }),
             cx,
         )
     }

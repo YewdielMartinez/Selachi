@@ -240,13 +240,8 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
         ctx.on_decide.clone(),
         ctx.on_open_thread.clone(),
     );
-    let (id_deny, id_allow, id_always, id_apply, id_run) = (
-        id.clone(),
-        id.clone(),
-        id.clone(),
-        id.clone(),
-        id.clone(),
-    );
+    let (id_deny, id_allow, id_always, id_apply, id_run) =
+        (id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
     let thread = req.thread_id;
     let can_apply = p
         .plan

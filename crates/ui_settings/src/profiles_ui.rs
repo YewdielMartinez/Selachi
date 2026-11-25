@@ -132,7 +132,11 @@ impl ProfilesEditor {
             }),
             allow: field(theme, "Añadir herramienta permitida (Enter)", cx),
             deny: field(theme, "Añadir herramienta prohibida (Enter)", cx),
-            command: field(theme, "Añadir comando permitido, p. ej. cargo * (Enter)", cx),
+            command: field(
+                theme,
+                "Añadir comando permitido, p. ej. cargo * (Enter)",
+                cx,
+            ),
             context: field(theme, "Buscar un archivo del proyecto…", cx),
             task: cx.new(|cx| TextField::new(theme, cx).with_text(SAMPLE_TASK)),
             import: field(theme, "C:\\ruta\\perfil.toml o .claude\\agents\\x.md", cx),
@@ -1371,7 +1375,10 @@ impl ProfilesEditor {
         approvals_opts.extend(profiles::APPROVAL_MODES.iter().map(|m| {
             let above = profiles::approvals_rank(m) > profiles::approvals_rank(global_approvals);
             let label = if above {
-                format!("{} (Delegación no lo permite)", profiles::approvals_label(m))
+                format!(
+                    "{} (Delegación no lo permite)",
+                    profiles::approvals_label(m)
+                )
             } else {
                 profiles::approvals_label(m).to_string()
             };

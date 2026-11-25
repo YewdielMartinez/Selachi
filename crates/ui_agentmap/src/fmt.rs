@@ -53,6 +53,15 @@ pub fn files(n: usize) -> String {
     }
 }
 
+/// `1 comando aprobado solo` / `12 comandos aprobados solos`.
+pub fn auto_approved(n: u32) -> String {
+    if n == 1 {
+        "1 comando aprobado solo".to_string()
+    } else {
+        format!("{n} comandos aprobados solos")
+    }
+}
+
 /// Last path component for pills (`C:\repo.worktrees\fix-tests` -> `fix-tests`).
 pub fn leaf(path: &std::path::Path) -> String {
     path.file_name()

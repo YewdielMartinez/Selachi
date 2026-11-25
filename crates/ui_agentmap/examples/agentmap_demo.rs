@@ -4,7 +4,10 @@
 //!
 //! ```text
 //! cargo run -p ui_agentmap --example agentmap_demo -- [dark|light] [--mode tree|graph|timeline]
-//!     [--select <thread id>] [--zone main|right] [--size WxH]
+//!     [--select <thread id>] [--zone main|right] [--size WxH] [--external] [--select-external <pid>]
+//!
+//! `--external` adds three FAKE `agy` processes launched outside the harness under the orchestrator
+//! (two running, one finished); `--select-external 4120` opens the inspector of the first one.
 //! ```
 //!
 //! Thread ids: 1 orchestrator, 2 tests (done), 3 docs (running), 4 security (waiting for an
@@ -24,7 +27,8 @@ use gpui::{
 use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
 use theme::{Mode, Theme};
 use ui_agentmap::{
-    AgentMapEvent, AgentMapModel, AgentMapPanelProvider, AgentMapView, ChatStoreSource, MapMode,
+    AgentMapEvent, AgentMapModel, AgentMapPanelProvider, AgentMapView, ChatStoreSource,
+    ExternalProc, MapMode, NodeKey,
 };
 use ui_kit::{Assets, Card, CardTone};
 
@@ -304,6 +308,7 @@ fn build_fake_data(root: &Path) -> (ChatStore, std::path::PathBuf) {
             "parent_thread_id":{parent},"depth":{},"started_ms":{started},{fin}"status":"{}",
             "launcher":"{}","profile":"{}","deadline_ms":{},
             "effective_limits":{{"permission":"{perm}","timeout_secs":900,"budget_tokens":300000,"depth":{}}},
+            "limits":{{"approvals":"{}","auto_approved":{},"auto_approved_commands":["cargo test -p auth","rg -n token src"],"blocked":{}}},
             "approvals":[{{"tool":"Bash","detail":"cargo test -p auth","decision":"allowed"}},{{"tool":"Edit","detail":"src/auth/mod.rs","decision":"{}"}}]{result}}}"#,
             s.agent_id,
             s.model,
@@ -325,6 +330,9 @@ fn build_fake_data(root: &Path) -> (ChatStore, std::path::PathBuf) {
             if s.agent_id == "codex" { "Tests" } else { "" },
             started + min(15.0),
             if parent == ids[0] { 1 } else { 2 },
+            if s.agent_id == "codex" { "auto" } else { "ask" },
+            if s.agent_id == "codex" { 12 } else { 0 },
+            if s.agent_id == "codex" { 1 } else { 0 },
             if s.thread_status == ThreadStatus::WaitingForInput {
                 "pending"
             } else {
@@ -357,6 +365,9 @@ fn main() {
         Some("right") => PanelZone::Right,
         _ => PanelZone::Main,
     };
+    let external = args.iter().any(|a| a == "--external");
+    let select_external: Option<u32> =
+        arg_value(&args, "--select-external").and_then(|s| s.parse().ok());
     let (w, h) = arg_value(&args, "--size")
         .and_then(|s| s.split_once('x'))
         .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
@@ -398,8 +409,59 @@ fn main() {
                         v.update(cx, |v, cx| v.set_mode(map_mode, cx));
                     }
                     model.update(cx, |m, cx| {
+                        if external {
+                            let now = now_ms();
+                            let agy = |pid: u32, ago_min: i64, cmd: &str, ended: Option<i64>| {
+                                ExternalProc {
+                                    agent: "agy".into(),
+                                    pid,
+                                    cmdline_redacted: cmd.into(),
+                                    cwd: Some("C:/Users/demo/proyecto".into()),
+                                    model: Some("gemini-3-pro".into()),
+                                    effort: Some("medium".into()),
+                                    started_ms: now - ago_min * 60_000,
+                                    ended_ms: ended.map(|m| now - m * 60_000),
+                                    exit_code: ended.map(|_| 0),
+                                    cpu_pct: ended.is_none().then_some(3.4),
+                                    rss_bytes: if ended.is_some() { 0 } else { 214 << 20 },
+                                }
+                            };
+                            m.set_external(
+                                NodeKey::Thread(ThreadId(1)),
+                                vec![
+                                    agy(
+                                        4120,
+                                        6,
+                                        "agy -p \"revisa los tests de auth\" --effort medium",
+                                        None,
+                                    ),
+                                    agy(
+                                        4188,
+                                        5,
+                                        "agy -p \"actualiza la documentación\" --effort medium",
+                                        None,
+                                    ),
+                                    agy(
+                                        3980,
+                                        14,
+                                        "agy -p \"lista los TODO\" --effort low",
+                                        Some(9),
+                                    ),
+                                ],
+                                cx,
+                            );
+                        }
                         if let Some(id) = select {
                             m.open_run(ThreadId(id), cx);
+                        }
+                        if let Some(pid) = select_external
+                            && let Some(key) = m
+                                .external_procs(&NodeKey::Thread(ThreadId(1)))
+                                .iter()
+                                .find(|e| e.pid == pid)
+                                .map(ExternalProc::key)
+                        {
+                            m.select(Some(key), cx);
                         }
                     });
                     cx.new(move |_| Host {

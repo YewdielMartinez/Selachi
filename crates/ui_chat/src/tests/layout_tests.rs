@@ -10,8 +10,7 @@ use gpui::{
 };
 
 const LONG_USER_MSG: &str = "Esta es una frase bastante larga que debería envolverse dentro de la burbuja del usuario sin salirse del borde derecho";
-const LONG_TOKEN_MSG: &str =
-    "Reinicia C:\\Users\\venta\\Desktop\\Terminal\\crates\\ui_chat\\src\\very_long_unbroken_token_path_name.rs ahora";
+const LONG_TOKEN_MSG: &str = "Reinicia C:\\Users\\venta\\Desktop\\Terminal\\crates\\ui_chat\\src\\very_long_unbroken_token_path_name.rs ahora";
 const LONG_ASSISTANT_MD: &str = "Aquí tienes un párrafo largo de respuesta del asistente que debe envolverse correctamente dentro de la columna estrecha con `un_identificador_muy_largo_sin_espacios_para_probar_el_corte`.\n\n- Primer elemento de lista con texto largo que también debe ajustarse a la columna\n\n```rust\nlet very_long_line_of_code = \"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\";\n```\n";
 
 fn narrow_thread<'a>(
@@ -81,7 +80,9 @@ fn narrow_chat_wraps_user_and_assistant_bubbles_within_column(cx: &mut TestAppCo
     );
 
     let user_g = view
-        .read_with(vcx, |v, _| v.selections.get(&(user_key.clone(), 0)).cloned())
+        .read_with(vcx, |v, _| {
+            v.selections.get(&(user_key.clone(), 0)).cloned()
+        })
         .expect("user selection group");
     let user_b = user_g.bounds_of(0).expect("user text bounds");
     assert!(
@@ -94,7 +95,9 @@ fn narrow_chat_wraps_user_and_assistant_bubbles_within_column(cx: &mut TestAppCo
     );
 
     let text_g = view
-        .read_with(vcx, |v, _| v.selections.get(&(text_key.clone(), 0)).cloned())
+        .read_with(vcx, |v, _| {
+            v.selections.get(&(text_key.clone(), 0)).cloned()
+        })
         .expect("assistant selection group");
     for seg in text_g.painted_segments() {
         let b = text_g.bounds_of(seg).expect("segment bounds");
@@ -170,7 +173,7 @@ fn narrow_chat_in_split_pane_and_after_resize_stays_within_column(cx: &mut TestA
     spec.permission = PermissionMode::Ask;
     let rec = e.store.create_thread(spec).unwrap();
     let rt = e.store.open(rec.id).unwrap();
-    let hub = e.hub.clone();
+    let hub = e.hub;
     let chat_cell: Rc<RefCell<Option<Entity<ChatView>>>> = Rc::new(RefCell::new(None));
     let cell2 = chat_cell.clone();
     let (host, vcx) = cx.add_window_view(move |_, cx| {

@@ -816,6 +816,7 @@ mod delegation {
                 "deleg-agent-gemini",
                 "deleg-agent-agy",
                 "deleg-max-permission-trigger",
+                "deleg-approvals-trigger",
                 "deleg-max-depth-trigger",
             ] {
                 let b = testing::bounds_of(vcx, id)

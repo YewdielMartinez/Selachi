@@ -104,6 +104,12 @@ pub struct RunInfo {
     pub launcher: Option<String>,
     /// Limits the policy applied, as the harness recorded them: `(key, value)` scalars.
     pub effective_limits: Vec<(String, String)>,
+    /// `limits.approvals` of the harness record: `ask | allowlist | auto` (the mode in force).
+    pub approval_mode: Option<String>,
+    /// `limits.auto_approved`: commands the harness approved without asking (allowlist or auto).
+    pub auto_approved: Option<u32>,
+    /// `limits.blocked`: requests denied by the harness' fixed blocklist without asking.
+    pub blocked: Option<u32>,
     pub approvals: Vec<ApprovalEntry>,
     pub result: Option<ResultInfo>,
 }
@@ -260,6 +266,15 @@ impl RunInfo {
             profile: s(v, "profile"),
             launcher: s(v, "launcher"),
             effective_limits: parse_limits(v),
+            approval_mode: v.get("limits").and_then(|l| s(l, "approvals")),
+            auto_approved: v
+                .get("limits")
+                .and_then(|l| u(l, "auto_approved"))
+                .map(|n| n.min(u64::from(u32::MAX)) as u32),
+            blocked: v
+                .get("limits")
+                .and_then(|l| u(l, "blocked"))
+                .map(|n| n.min(u64::from(u32::MAX)) as u32),
             approvals,
             result,
         })

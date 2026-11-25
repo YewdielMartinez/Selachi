@@ -73,6 +73,13 @@ fn unified_preset_shows_the_panel_buttons_once() {
     let l = ResolvedLayout::builtin(store::BuiltinPreset::EspaciosUnificados);
     // The titlebar holds them; the sidebar's icon row stays off unless the user asks for it.
     assert!(!l.titlebar.panel_buttons.is_empty());
+    // the subagent map has its button next to the other panels (ola 8C)
+    assert!(
+        l.titlebar
+            .panel_buttons
+            .iter()
+            .any(|b| b.as_str() == "agentmap")
+    );
     assert!(!l.sidebar.panel_icons);
 }
 
@@ -470,11 +477,17 @@ mod window {
             cx.update_global::<PanelRegistry, _>(|r, _| r.register(provider));
             m
         });
-        // Hidden: no view, no watcher, no task, no load.
+        // (the rig builds the shell without `finish_startup`, which is what wires the map)
+        vcx.update(|window, cx| rig.shell.update(cx, |s, cx| s.init_agentmap(window, cx)));
+        // Hidden: no view, no watcher, no task, no load, and no sampling of external agents.
         vcx.update(|_, cx| {
             let m = model.read(cx);
             assert_eq!((m.viewers(), m.builds()), (0, 0));
             assert!(!m.is_watching());
+            assert!(
+                !rig.shell.read(cx).agentmap_feed.is_running(),
+                "no process sampling while the map is hidden"
+            );
         });
         vcx.update(|_, cx| rig.shell.update(cx, |s, cx| s.show_agentmap(cx)));
         vcx.run_until_parked();
@@ -482,6 +495,10 @@ mod window {
             let m = model.read(cx);
             assert_eq!(m.viewers(), 1, "the docked map attached");
             assert!(m.is_watching());
+            assert!(
+                rig.shell.read(cx).agentmap_feed.is_running(),
+                "the map on screen samples the processes (8A)"
+            );
         });
         // Hidden again: the view goes away and with it every listener.
         vcx.update(|_, cx| {
@@ -497,7 +514,144 @@ mod window {
             let m = model.read(cx);
             assert_eq!(m.viewers(), 0);
             assert!(!m.is_watching());
+            assert!(
+                !rig.shell.read(cx).agentmap_feed.is_running(),
+                "the sampling stopped with the last view"
+            );
         });
+    }
+
+    /// 8C: the inspector's actions on an external agent reach the shell. Nothing is killed for a
+    /// process the map does not show (a stale or reused pid), and "Copiar comando" fills the clipboard.
+    #[gpui::test]
+    fn external_agent_actions_are_routed_and_never_touch_unknown_processes(
+        cx: &mut TestAppContext,
+    ) {
+        let (rig, vcx) = rig(cx, false);
+        add_tab(&rig, vcx, "uno", None);
+        let model = vcx.update(|_, cx| cx.global::<Services>().agentmap.clone());
+        vcx.update(|window, cx| rig.shell.update(cx, |s, cx| s.init_agentmap(window, cx)));
+        let hint = |vcx: &mut VisualTestContext| {
+            vcx.update(|_, cx| {
+                rig.shell
+                    .read(cx)
+                    .prompts
+                    .hint
+                    .as_ref()
+                    .map(|h| h.text.to_string())
+            })
+        };
+
+        vcx.update(|_, cx| {
+            model.update(cx, |_, cx| {
+                cx.emit(ui_agentmap::AgentMapEvent::CopyCommand(
+                    "agy -p \"hola\" --effort medium".into(),
+                ))
+            })
+        });
+        vcx.run_until_parked();
+        let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()));
+        assert_eq!(copied.as_deref(), Some("agy -p \"hola\" --effort medium"));
+        assert_eq!(hint(vcx).as_deref(), Some("Comando copiado"));
+
+        // our own pid is not in the map: refused, and (above all) not terminated
+        vcx.update(|_, cx| {
+            model.update(cx, |_, cx| {
+                cx.emit(ui_agentmap::AgentMapEvent::StopExternal(std::process::id()))
+            })
+        });
+        vcx.run_until_parked();
+        assert_eq!(
+            hint(vcx).as_deref(),
+            Some("Ese proceso ya no está en el mapa")
+        );
+    }
+
+    /// 8A: samples are handed to the map per parent, an empty sample marks the finished ones, parents
+    /// that vanished are cleared, and "Detener" refuses a pid whose start time is not the one shown.
+    #[gpui::test]
+    fn external_samples_reach_the_map_and_stop_checks_the_process_identity(
+        cx: &mut TestAppContext,
+    ) {
+        let (rig, vcx) = rig(cx, false);
+        add_tab(&rig, vcx, "uno", None);
+        let model = vcx.update(|_, cx| cx.global::<Services>().agentmap.clone());
+        let me = std::process::id();
+        let ext = |pid: u32, started_ms: i64| ui_agentmap::ExternalProc {
+            agent: "agy".into(),
+            pid,
+            cmdline_redacted: "agy -p x".into(),
+            cwd: None,
+            model: None,
+            effort: None,
+            started_ms,
+            ended_ms: None,
+            exit_code: None,
+            cpu_pct: None,
+            rss_bytes: 1,
+        };
+        let tab = ui_agentmap::NodeKey::Tab("7".into());
+        let other = ui_agentmap::NodeKey::Tab("8".into());
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                s.apply_external_rows(
+                    vec![
+                        (tab.clone(), vec![ext(me, 1)]),
+                        (other.clone(), vec![ext(5, 2)]),
+                    ],
+                    cx,
+                )
+            })
+        });
+        vcx.update(|_, cx| {
+            let m = model.read(cx);
+            assert_eq!(m.external_procs(&tab).len(), 1);
+            assert_eq!(m.external_procs(&other).len(), 1);
+        });
+        // next sample: tab 8 is gone, tab 7's agy ended
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                s.apply_external_rows(vec![(tab.clone(), vec![])], cx)
+            })
+        });
+        vcx.update(|_, cx| {
+            let m = model.read(cx);
+            assert!(
+                m.external_procs(&other).is_empty(),
+                "the vanished parent was cleared"
+            );
+            let kept = m.external_procs(&tab);
+            assert_eq!(kept.len(), 1, "a finished agent stays in the map");
+            assert!(kept[0].ended_ms.is_some(), "and is marked as finished");
+        });
+
+        // "Detener" on a pid whose start time is not the one the map shows (a reused pid, or here our
+        // own process with a made-up start): refused, nothing terminated
+        vcx.update(|window, cx| {
+            rig.shell.update(cx, |s, cx| {
+                s.init_agentmap(window, cx);
+                s.agentmap_feed.fed.insert(tab.clone());
+            })
+        });
+        vcx.update(|_, cx| {
+            model.update(cx, |_, cx| {
+                cx.emit(ui_agentmap::AgentMapEvent::StopExternal(me))
+            })
+        });
+        vcx.run_until_parked();
+        let hint = vcx.update(|_, cx| {
+            rig.shell
+                .read(cx)
+                .prompts
+                .hint
+                .as_ref()
+                .map(|h| h.text.to_string())
+        });
+        let hint = hint.unwrap_or_default();
+        assert!(
+            hint.contains("No se pudo detener") && hint.contains("PID lo usa otro programa"),
+            "{hint}"
+        );
     }
 
     #[gpui::test]

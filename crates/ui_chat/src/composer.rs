@@ -1738,13 +1738,7 @@ mod tests {
         std::fs::write(&rs, b"fn f() {}").unwrap();
         std::fs::create_dir(&subdir).unwrap();
 
-        let kept = image_paths_from_drop(vec![
-            png.clone(),
-            rs,
-            missing,
-            subdir,
-            jpg.clone(),
-        ]);
+        let kept = image_paths_from_drop(vec![png.clone(), rs, missing, subdir, jpg.clone()]);
         assert_eq!(kept, vec![png, jpg]);
     }
 

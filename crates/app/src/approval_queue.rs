@@ -164,14 +164,10 @@ impl ApprovalQueue {
         }
         // The same request id twice (a client retry) replaces the old card: the old connection is
         // denied so only one answer is ever pending per id.
-        if let Some(pos) = self
-            .pending
-            .iter()
-            .position(|p| {
-                // A retry is the same request of the same run; ids are only unique per run.
-                p.request.request_id == request.request_id && p.request.run_id == request.run_id
-            })
-        {
+        if let Some(pos) = self.pending.iter().position(|p| {
+            // A retry is the same request of the same run; ids are only unique per run.
+            p.request.request_id == request.request_id && p.request.run_id == request.run_id
+        }) {
             let old = self.pending.remove(pos);
             if let Some(i) = old.incoming {
                 i.answer(Decision::Deny, Some("superseded by a newer request".into()));
@@ -343,9 +339,7 @@ mod queue_tests {
     /// scopes the wire id by run (`run<id>:req_1`), so both reach the queue, neither is treated as a
     /// retry of the other, and each decision reaches the run that asked.
     #[gpui::test]
-    fn two_runs_asking_at_once_are_both_queued_and_answered_independently(
-        cx: &mut TestAppContext,
-    ) {
+    fn two_runs_asking_at_once_are_both_queued_and_answered_independently(cx: &mut TestAppContext) {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let queue = cx.new(|cx| ApprovalQueue::new(Some(rx), cx));
         let ask = |run: i64| {
@@ -366,7 +360,10 @@ mod queue_tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(queue.read_with(cx, |q, _| q.pending().len()), 2);
-        assert!(!a.is_finished() && !b.is_finished(), "nothing is superseded");
+        assert!(
+            !a.is_finished() && !b.is_finished(),
+            "nothing is superseded"
+        );
 
         // answer the second one first, and differently
         queue.update(cx, |q, cx| q.resolve("run6:req_1", Decision::Deny, cx));
@@ -375,7 +372,10 @@ mod queue_tests {
             reply_b,
             ServerMessage::ApprovalResponse { decision: Decision::Deny, ref request_id, .. } if request_id == "run6:req_1"
         ));
-        assert!(!a.is_finished(), "the other run is still waiting for its own answer");
+        assert!(
+            !a.is_finished(),
+            "the other run is still waiting for its own answer"
+        );
         assert_eq!(queue.read_with(cx, |q, _| q.pending().len()), 1);
 
         queue.update(cx, |q, cx| q.resolve("run5:req_1", Decision::AlwaysRun, cx));

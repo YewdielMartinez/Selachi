@@ -691,7 +691,9 @@ mod tests {
             panic!()
         };
         assert_eq!(a.approvals, Some(ApprovalMode::Allowlist));
-        assert!(p("run codex --approvals yolo hola").unwrap_err().contains("--approvals"));
+        assert!(p("run codex --approvals yolo hola")
+            .unwrap_err()
+            .contains("--approvals"));
         assert!(p("run codex --approvals").is_err());
     }
 

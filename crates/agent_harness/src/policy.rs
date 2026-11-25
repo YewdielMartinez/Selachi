@@ -382,14 +382,18 @@ mod tests {
     #[test]
     fn the_approvals_mode_is_read_from_the_delegation_section() {
         assert_eq!(DelegationConfig::default().approvals, ApprovalMode::Ask);
-        let (c, w) = DelegationConfig::from_toml("[delegation]
+        let (c, w) = DelegationConfig::from_toml(
+            "[delegation]
 approvals = \"allowlist\"
-");
+",
+        );
         assert_eq!((c.approvals, w), (ApprovalMode::Allowlist, None));
         // an unknown value falls back to the defaults (ask) with a warning, never to something looser
-        let (c, w) = DelegationConfig::from_toml("[delegation]
+        let (c, w) = DelegationConfig::from_toml(
+            "[delegation]
 approvals = \"yolo\"
-");
+",
+        );
         assert_eq!(c, DelegationConfig::default());
         assert!(w.unwrap().contains("approvals"));
     }

@@ -345,7 +345,9 @@ impl Element for SelectableText {
                 match laid.as_ref() {
                     None => true,
                     Some(l) if *wraps && bounds.size.width > px(0.0) => {
-                        let too_wide = l.size.is_some_and(|s| s.width > bounds.size.width + px(0.5))
+                        let too_wide = l
+                            .size
+                            .is_some_and(|s| s.width > bounds.size.width + px(0.5))
                             && l.wrap_width != Some(bounds.size.width);
                         let wrong_wrap = l
                             .wrap_width
@@ -357,13 +359,11 @@ impl Element for SelectableText {
             };
             if needs_reshape {
                 let wrap = (*wraps && bounds.size.width > px(0.0)).then_some(bounds.size.width);
-                if let Ok(shaped) = window.text_system().shape_text(
-                    self.text.clone(),
-                    *font_size,
-                    runs,
-                    wrap,
-                    None,
-                ) {
+                if let Ok(shaped) =
+                    window
+                        .text_system()
+                        .shape_text(self.text.clone(), *font_size, runs, wrap, None)
+                {
                     let lines: Vec<WrappedLine> = shaped.into_iter().collect();
                     let mut total: Size<Pixels> = Size::default();
                     for line in &lines {

@@ -17,6 +17,8 @@ use gpui::{
 };
 use panel_api::{RowStatus, TabId};
 use ui_chat::{ChatTab, DelegationRun, RunState};
+
+use crate::terminal_tab::TerminalTab;
 use ui_review::{AttentionItem, AttentionKind, FocusTarget};
 
 use super::AppShell;
@@ -334,12 +336,48 @@ impl AppShell {
             out.nested.extend(rows.iter().filter_map(|r| r.tab));
             out.children.insert(tab, rows);
         }
+        // Terminal tabs that delegated (`selachi-agent run` started in their shell carries the tab's
+        // id in `SELACHI_PARENT_TAB`): their delegations nest under the terminal row too, and the row
+        // gets the map icon.
+        for slot in &self.tabs {
+            if slot.handle.downcast::<TerminalTab>().is_none() {
+                continue;
+            }
+            let tab = slot.handle.id();
+            let key = tab.as_u64().to_string();
+            let mut rows = Vec::new();
+            let mut seen = HashSet::new();
+            for child in terminal_children(hub.threads(), &key) {
+                if seen.insert(child.id) {
+                    push_child(hub, child, 0, &tab_of, &mut seen, now, &mut rows);
+                }
+            }
+            if rows.is_empty() {
+                continue;
+            }
+            out.nested.extend(rows.iter().filter_map(|r| r.tab));
+            out.children.insert(tab, rows);
+        }
         out
     }
 }
 
 /// Toast "tab" id of an approval (the click only brings the window forward).
 pub const APPROVAL_TOAST: u64 = u64::MAX;
+
+/// The delegations started from the terminal tab `tab` (its id as the harness recorded it in
+/// `parent_tab`), oldest first. A thread that also names a parent thread belongs to that thread.
+pub(crate) fn terminal_children<'a>(
+    threads: &'a [chat_core::ThreadRecord],
+    tab: &str,
+) -> Vec<&'a chat_core::ThreadRecord> {
+    let mut out: Vec<&chat_core::ThreadRecord> = threads
+        .iter()
+        .filter(|t| t.link.parent_thread_id.is_none() && t.link.parent_tab.as_deref() == Some(tab))
+        .collect();
+    out.sort_by_key(|t| (t.created_ms, t.id.0));
+    out
+}
 
 fn collect_children(
     hub: &ui_chat::ChatHub,
@@ -354,28 +392,41 @@ fn collect_children(
         if !seen.insert(child.id) {
             continue;
         }
-        let run = hub.delegation_run(child.id);
-        let mut subtitle = ui_chat::run_state_label(child, run).to_string();
-        if let Some(r) = run {
-            if r.state != RunState::Running {
-                subtitle.push_str(" · ");
-                subtitle.push_str(&ui_chat::files_label(r.files_changed));
-            }
+        push_child(hub, child, depth, tab_of, seen, now, out);
+    }
+}
+
+/// One delegated thread as a row, then its own delegations.
+fn push_child(
+    hub: &ui_chat::ChatHub,
+    child: &chat_core::ThreadRecord,
+    depth: usize,
+    tab_of: &HashMap<ThreadId, TabId>,
+    seen: &mut HashSet<ThreadId>,
+    now: i64,
+    out: &mut Vec<ChildRow>,
+) {
+    let run = hub.delegation_run(child.id);
+    let mut subtitle = ui_chat::run_state_label(child, run).to_string();
+    if let Some(r) = run {
+        if r.state != RunState::Running {
             subtitle.push_str(" · ");
-            subtitle.push_str(&ui_chat::format_duration_ms(r.duration_ms(now)));
+            subtitle.push_str(&ui_chat::files_label(r.files_changed));
         }
-        out.push(ChildRow {
-            thread: child.id.0,
-            tab: tab_of.get(&child.id).copied(),
-            title: SharedString::from(child.display_title().to_string()),
-            agent: chat_core::agent_label(&child.agent),
-            status: child_status(child, run),
-            subtitle: SharedString::from(subtitle),
-            depth,
-        });
-        if depth < MAX_LINEAGE_DEPTH {
-            collect_children(hub, child.id, depth + 1, tab_of, seen, now, out);
-        }
+        subtitle.push_str(" · ");
+        subtitle.push_str(&ui_chat::format_duration_ms(r.duration_ms(now)));
+    }
+    out.push(ChildRow {
+        thread: child.id.0,
+        tab: tab_of.get(&child.id).copied(),
+        title: SharedString::from(child.display_title().to_string()),
+        agent: chat_core::agent_label(&child.agent),
+        status: child_status(child, run),
+        subtitle: SharedString::from(subtitle),
+        depth,
+    });
+    if depth < MAX_LINEAGE_DEPTH {
+        collect_children(hub, child.id, depth + 1, tab_of, seen, now, out);
     }
 }
 
@@ -418,6 +469,59 @@ mod tests {
             output_format: None,
             context_files: Vec::new(),
         }
+    }
+
+    fn thread(
+        id: i64,
+        parent_thread: Option<i64>,
+        parent_tab: Option<&str>,
+    ) -> chat_core::ThreadRecord {
+        chat_core::ThreadRecord {
+            id: ThreadId(id),
+            title: format!("hilo {id}"),
+            project_root: "C:/p".into(),
+            worktree_path: None,
+            agent: agents_driver::AgentKind::Codex,
+            model: None,
+            effort: None,
+            permission: agents_driver::PermissionMode::ReadOnly,
+            status: chat_core::ThreadStatus::Done,
+            created_ms: 1_000 * id,
+            updated_ms: 1_000 * id,
+            agent_session_id: None,
+            archived: false,
+            checkpoint_before_turn: false,
+            link: chat_core::ThreadLink {
+                parent_thread_id: parent_thread.map(ThreadId),
+                parent_tab: parent_tab.map(str::to_string),
+                depth: 1,
+                delegated_by: Some("cli".into()),
+            },
+        }
+    }
+
+    /// 8B/8C: a `selachi-agent run` started in a terminal carries the tab's id; those threads nest
+    /// under that terminal row (which gets the map icon), oldest first.
+    #[test]
+    fn delegations_started_from_a_terminal_belong_to_its_tab() {
+        let threads = vec![
+            thread(3, None, Some("77")),
+            thread(1, None, Some("77")),
+            thread(2, None, Some("88")),
+            // names a parent thread too: it belongs to that thread, not to the tab
+            thread(4, Some(1), Some("77")),
+            // not a delegation from a terminal
+            thread(5, None, None),
+        ];
+        let ids: Vec<i64> = terminal_children(&threads, "77")
+            .iter()
+            .map(|t| t.id.0)
+            .collect();
+        assert_eq!(ids, [1, 3]);
+        assert_eq!(terminal_children(&threads, "88").len(), 1);
+        assert!(terminal_children(&threads, "99").is_empty());
+        // ids are the tab's entity id as text, never a prefix match
+        assert!(terminal_children(&threads, "7").is_empty());
     }
 
     #[test]
