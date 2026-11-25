@@ -30,6 +30,9 @@ use crate::sidebar_view::{ChildRow, Lineage};
 
 /// The registry is reread this long after the last change (a run writes a few files in a burst).
 pub const REGISTRY_DEBOUNCE: Duration = Duration::from_millis(250);
+/// How long after «Permitir siempre en este perfil» the profile library is reread (the harness
+/// writes the file right after it receives the answer).
+const PROFILE_RELOAD_DELAY: Duration = Duration::from_millis(800);
 /// A run that says "running" this long after its deadline has lost its process.
 const STALE_RUN_GRACE_MS: i64 = 60_000;
 /// Deepest delegation level listed in the sidebar.
@@ -179,6 +182,9 @@ impl AppShell {
                 };
                 // The child is a new thread: show it in the sidebar and the chat list.
                 self.reload_runs(cx);
+                if plan.is_none() {
+                    self.read_run_profile(id, &request.run_id, cx);
+                }
                 let title = self.child_title(request.thread_id, cx);
                 let agent = approvals_ui::display_agent(&request.agent);
                 // What the agent wants to run may carry secrets: through the redactor like the rest.
@@ -239,6 +245,56 @@ impl AppShell {
         self.deleg
             .approvals
             .update(cx, |q, cx| q.resolve(id, decision, cx));
+        if decision == Decision::AlwaysProfile {
+            self.reload_profile_library_soon(cx);
+        }
+    }
+
+    /// Reads the profile of a run off the UI thread (one small JSON file, once per request) so the card
+    /// can offer «Permitir siempre en este perfil» only when there is a profile to save into.
+    fn read_run_profile(&mut self, request_id: &str, run_id: &str, cx: &mut Context<Self>) {
+        let Some(dir) = data_dir() else { return };
+        if !Registry::valid_id(run_id) {
+            return;
+        }
+        let (request_id, run_id) = (request_id.to_string(), run_id.to_string());
+        let job = cx.background_executor().spawn(async move {
+            Registry::new(&dir)
+                .load(&run_id)
+                .ok()
+                .and_then(|r| r.profile)
+                .filter(|p| !p.trim().is_empty())
+        });
+        cx.spawn(async move |this, cx| {
+            let profile = job.await;
+            this.update(cx, |shell, cx| {
+                shell
+                    .deleg
+                    .approvals
+                    .update(cx, |q, cx| q.set_profile(&request_id, profile, cx));
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// After «Permitir siempre en este perfil» the harness rewrites the profile file a moment later;
+    /// if the settings tab is open its profile library is reread once, then (a one-shot timer started
+    /// by the user's click: nothing polls).
+    fn reload_profile_library_soon(&mut self, cx: &mut Context<Self>) {
+        if self.settings_view().is_none() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(PROFILE_RELOAD_DELAY).await;
+            this.update(cx, |shell, cx| {
+                if let Some(v) = shell.settings_view() {
+                    v.update(cx, |s, cx| s.reload_profiles(cx));
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn child_title(&self, thread: i64, cx: &App) -> String {
@@ -570,6 +626,7 @@ mod tests {
         cfg.delegation.daily_token_budget = 123_456;
         cfg.delegation.weekly_usage_threshold_percent = 75.0;
         cfg.delegation.approval_timeout_secs = 45;
+        cfg.delegation.extra_agents = vec!["aider".into(), "acp:goose --acp".into()];
         cfg.save_to(&store::paths::config_path_in(&dir)).unwrap();
         let (h, warning) = agent_harness::DelegationConfig::load(&dir);
         assert!(warning.is_none(), "{warning:?}");
@@ -580,6 +637,7 @@ mod tests {
         assert_eq!(h.daily_token_budget, 123_456);
         assert_eq!(h.weekly_usage_threshold_percent, 75.0);
         assert_eq!(h.approval_timeout_secs, 45);
+        assert_eq!(h.extra_agents, ["aider", "acp:goose --acp"]);
         // and the defaults of both sides agree
         let d = agent_harness::DelegationConfig::default();
         let s = store::Delegation::default();
@@ -605,6 +663,7 @@ mod tests {
             d.weekly_usage_threshold_percent,
             s.weekly_usage_threshold_percent
         );
+        assert_eq!(d.extra_agents, s.extra_agents);
         std::fs::remove_dir_all(&dir).ok();
     }
 

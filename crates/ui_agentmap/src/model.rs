@@ -9,7 +9,8 @@
 //! more than one in flight, and chat updates are debounced by [`CHAT_DEBOUNCE`].
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,15 +19,52 @@ use futures::StreamExt as _;
 use gpui::{Context, EventEmitter, Task};
 use store::DirWatcher;
 
+use crate::activity::{
+    ActivityFeed, ExternalChild, LiveHint, LiveTrack, MAX_EXTERNAL_CHILDREN, build_feed,
+    external_feed, external_live_line, live_line, log_events,
+};
 use crate::events::AgentMapEvent;
+use crate::events_log::{LogBatch, LogEvent, LogReader};
 use crate::registry::{ApprovalEntry, read_runs};
 use crate::source::SessionSource;
-use crate::tree::{ExternalProc, Forest, ForestInput, NodeKey, build_forest, cap_external};
+use crate::tree::{
+    ExternalProc, Forest, ForestInput, NodeKey, NodeStatus, build_forest, cap_external,
+};
 
 /// Debounce of the registry watcher (the harness writes a record in a few steps).
 pub const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
 /// Chat updates are bursty while an agent streams: fold them into one reload.
 pub const CHAT_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// Folds the bursts of chat updates and log appends of the activity feed into one read.
+pub const ACTIVITY_DEBOUNCE: Duration = Duration::from_millis(200);
+/// Raw log events one feed keeps (the feed itself keeps 500 rows).
+const MAX_RAW_LOG: usize = 4_000;
+
+/// The tabs of the inspector.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InspectorTab {
+    #[default]
+    Summary,
+    Activity,
+    Prompt,
+}
+
+impl InspectorTab {
+    pub const ALL: [InspectorTab; 3] = [
+        InspectorTab::Summary,
+        InspectorTab::Activity,
+        InspectorTab::Prompt,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InspectorTab::Summary => "Resumen",
+            InspectorTab::Activity => "Actividad",
+            InspectorTab::Prompt => "Prompt",
+        }
+    }
+}
 
 /// The forest changed (a reload finished).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +129,8 @@ pub struct AgentMapModel {
     tab_titles: HashMap<String, String>,
     /// External (non-harness) agent processes fed by the host from `proc_svc` snapshots.
     external: HashMap<NodeKey, Vec<ExternalProc>>,
+    /// Tokens and estimated cost of external nodes, matched by the host from the ingested usage logs.
+    ext_usage: HashMap<NodeKey, (u64, Option<f64>)>,
     /// Thread ids previously observed from `SessionSource::threads`, so deleted threads prune their
     /// external processes automatically.
     seen_threads: HashSet<ThreadId>,
@@ -110,6 +150,151 @@ pub struct AgentMapModel {
     selected: Option<NodeKey>,
     /// A run to show as soon as the forest knows it (`open_run` before the first load).
     pending_focus: Option<NodeKey>,
+    /// The inspector tab (shared by every view, like `selected`).
+    tab: InspectorTab,
+    /// Child processes of external agents (fed by the host; only kept while a view is attached).
+    ext_children: HashMap<NodeKey, Vec<ExternalChild>>,
+    /// The status line of external nodes (their newest running child).
+    live_ext: HashMap<NodeKey, String>,
+    /// The status line of running thread nodes (`ejecutando `cargo test``...).
+    live: HashMap<NodeKey, String>,
+    /// Incremental readers of the events log of every running node (for the status line).
+    tails: HashMap<NodeKey, Tail>,
+    /// The feed of the node whose inspector shows the Activity tab (and nothing else).
+    activity: Option<ActivityWatch>,
+    pass_task: Option<Task<()>>,
+    pass_loading: bool,
+    pass_again: bool,
+    pass_debounce: Option<Task<()>>,
+    sig_task: Option<Task<()>>,
+    /// Fingerprint of the registry files the last forest was built from.
+    reg_sig: Option<u64>,
+    passes: usize,
+}
+
+/// Where the events log of a run is read from, and what the status line knows of it.
+struct Tail {
+    reader: LogReader,
+    track: LiveTrack,
+}
+
+/// The raw (redacted) log events of the watched node.
+struct LogAccum {
+    reader: LogReader,
+    raw: Vec<LogEvent>,
+}
+
+impl LogAccum {
+    fn ingest(&mut self, batch: LogBatch) {
+        if batch.reset {
+            self.raw.clear();
+        }
+        self.raw
+            .extend(batch.events.into_iter().map(LogEvent::redacted));
+        if self.raw.len() > MAX_RAW_LOG {
+            let extra = self.raw.len() - MAX_RAW_LOG;
+            self.raw.drain(..extra);
+        }
+    }
+}
+
+struct ActivityWatch {
+    key: NodeKey,
+    /// `None` while a pass has it.
+    accum: Option<LogAccum>,
+    feed: Arc<ActivityFeed>,
+    loaded: bool,
+}
+
+struct PassTarget {
+    key: NodeKey,
+    thread: ThreadId,
+    status: NodeStatus,
+    log: PathBuf,
+}
+
+struct PassWatch {
+    key: NodeKey,
+    thread: ThreadId,
+    started_ms: Option<i64>,
+    active: bool,
+    accum: LogAccum,
+}
+
+struct PassOut {
+    tails: HashMap<NodeKey, Tail>,
+    lines: HashMap<NodeKey, String>,
+    watch: Option<(NodeKey, LogAccum, ActivityFeed)>,
+}
+
+/// The background half of an activity pass: advances the log readers of the running nodes (status
+/// lines) and rebuilds the feed of the watched one. Reads only what was appended since last time.
+fn run_activity_pass(
+    source: &dyn SessionSource,
+    targets: Vec<PassTarget>,
+    mut tails: HashMap<NodeKey, Tail>,
+    watch: Option<PassWatch>,
+) -> PassOut {
+    let mut lines = HashMap::new();
+    tails.retain(|k, _| targets.iter().any(|t| &t.key == k));
+    for t in &targets {
+        let tail = tails.entry(t.key.clone()).or_insert_with(|| Tail {
+            reader: LogReader::new(t.log.clone()),
+            track: LiveTrack::default(),
+        });
+        let batch = tail.reader.poll();
+        if batch.reset {
+            tail.track = LiveTrack::default();
+        }
+        for ev in batch.events {
+            tail.track.apply(&ev.redacted());
+        }
+        let hint = if t.status == NodeStatus::Running && tail.track.is_empty() {
+            source.live_hint(t.thread)
+        } else {
+            LiveHint::None
+        };
+        if let Some(l) = live_line(t.status, &tail.track, &hint) {
+            lines.insert(t.key.clone(), l);
+        }
+    }
+    let watch = watch.map(|mut w| {
+        let batch = w.accum.reader.poll();
+        w.accum.ingest(batch);
+        let chat = source.activity(w.thread, w.active);
+        let log = log_events(&w.accum.raw, w.started_ms, w.active);
+        let feed = build_feed(chat, log, w.active);
+        (w.key, w.accum, feed)
+    });
+    PassOut {
+        tails,
+        lines,
+        watch,
+    }
+}
+
+/// Fingerprint of the run records (`*.json`: names, sizes, times). Appends to the events logs and
+/// cancel markers do not change it, so they do not reload the forest.
+fn registry_signature(dir: &Path) -> u64 {
+    let mut items: Vec<(String, u64, u128)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| {
+            let md = e.metadata().ok()?;
+            let ms = md
+                .modified()
+                .ok()
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_millis());
+            Some((e.file_name().to_string_lossy().into_owned(), md.len(), ms))
+        })
+        .collect();
+    items.sort();
+    let mut h = DefaultHasher::new();
+    items.hash(&mut h);
+    h.finish()
 }
 
 impl EventEmitter<MapChanged> for AgentMapModel {}
@@ -126,6 +311,7 @@ impl AgentMapModel {
             wanted: None,
             tab_titles: HashMap::new(),
             external: HashMap::new(),
+            ext_usage: HashMap::new(),
             seen_threads: HashSet::new(),
             viewers: 0,
             watcher: None,
@@ -141,6 +327,19 @@ impl AgentMapModel {
             detail_tasks: Vec::new(),
             selected: None,
             pending_focus: None,
+            tab: InspectorTab::Summary,
+            ext_children: HashMap::new(),
+            live_ext: HashMap::new(),
+            live: HashMap::new(),
+            tails: HashMap::new(),
+            activity: None,
+            pass_task: None,
+            pass_loading: false,
+            pass_again: false,
+            pass_debounce: None,
+            sig_task: None,
+            reg_sig: None,
+            passes: 0,
         }
     }
 
@@ -207,6 +406,51 @@ impl AgentMapModel {
         self.details.get(key).cloned()
     }
 
+    /// The tab the inspector shows.
+    pub fn inspector_tab(&self) -> InspectorTab {
+        self.tab
+    }
+
+    /// The live feed of `key`, when its inspector shows the Activity tab (the only node whose
+    /// activity is read). `None` otherwise or before the first read finished ([`Self::activity_loaded`]).
+    pub fn activity_feed(&self, key: &NodeKey) -> Option<Arc<ActivityFeed>> {
+        self.activity
+            .as_ref()
+            .filter(|a| &a.key == key)
+            .map(|a| a.feed.clone())
+    }
+
+    /// The first read of the feed of `key` finished.
+    pub fn activity_loaded(&self, key: &NodeKey) -> bool {
+        self.activity
+            .as_ref()
+            .is_some_and(|a| &a.key == key && a.loaded)
+    }
+
+    /// The status line of a running node (`ejecutando `cargo test -p store``, `escribiendo…`,
+    /// `esperando aprobación`). `None` for nodes that are not in flight or when nothing is known.
+    pub fn live_line(&self, key: &NodeKey) -> Option<&str> {
+        self.live
+            .get(key)
+            .or_else(|| self.live_ext.get(key))
+            .map(String::as_str)
+    }
+
+    /// Whether any node has a status line (the tree makes its rows taller then).
+    pub fn has_live_lines(&self) -> bool {
+        !self.live.is_empty() || !self.live_ext.is_empty()
+    }
+
+    /// Activity passes run so far (tests use it to prove nothing is read while hidden).
+    pub fn passes(&self) -> usize {
+        self.passes
+    }
+
+    /// Child processes currently retained for the external node `key`.
+    pub fn external_children(&self, key: &NodeKey) -> &[ExternalChild] {
+        self.ext_children.get(key).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     /// The data of "Duplicar como perfil" for `key`.
     pub fn profile_seed(&self, key: &NodeKey) -> Option<ProfileSeed> {
         let n = &self.forest.nodes[self.forest.index_of(key)?];
@@ -253,8 +497,30 @@ impl AgentMapModel {
     pub fn select(&mut self, key: Option<NodeKey>, cx: &mut Context<Self>) {
         if self.selected != key {
             self.selected = key.clone();
+            if matches!(key, Some(NodeKey::External { .. })) && self.tab == InspectorTab::Prompt {
+                // External nodes have no prompt tab.
+                self.tab = InspectorTab::Summary;
+            }
             if let Some(k) = key {
                 self.load_detail(&k, cx);
+            }
+            if self.sync_activity(cx) {
+                self.run_pass(cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Switches the inspector tab. The activity of the selected node is read only while the
+    /// Activity tab is shown.
+    pub fn set_inspector_tab(&mut self, tab: InspectorTab, cx: &mut Context<Self>) {
+        if matches!(self.selected, Some(NodeKey::External { .. })) && tab == InspectorTab::Prompt {
+            return;
+        }
+        if self.tab != tab {
+            self.tab = tab;
+            if self.sync_activity(cx) {
+                self.run_pass(cx);
             }
             cx.notify();
         }
@@ -332,6 +598,112 @@ impl AgentMapModel {
         }
     }
 
+    /// Feeds the live **child processes** of an external agent (what `agy` started: `cargo`, `git`...),
+    /// obtained by the host from the same `proc_svc` snapshot as [`Self::set_external`]. `agent` is
+    /// the external node (`ExternalProc::key()`). The Activity tab of that node shows them as
+    /// commands in progress, and its tree row shows the newest one.
+    ///
+    /// * Previously running children missing from `procs` are marked finished and kept (at most
+    ///   [`MAX_EXTERNAL_CHILDREN`] per agent, finished ones dropped first).
+    /// * Command lines are passed through `store::redact` again.
+    /// * While no view is attached nothing is stored and nothing is done (the host samples only
+    ///   while the map is visible anyway).
+    pub fn set_external_children(
+        &mut self,
+        agent: NodeKey,
+        procs: Vec<ExternalChild>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_external_children_at(agent, procs, store::now_ms(), cx);
+    }
+
+    /// Like [`Self::set_external_children`] with an explicit timestamp (deterministic tests).
+    pub fn set_external_children_at(
+        &mut self,
+        agent: NodeKey,
+        procs: Vec<ExternalChild>,
+        now_ms: i64,
+        cx: &mut Context<Self>,
+    ) {
+        if self.viewers == 0 || !matches!(agent, NodeKey::External { .. }) {
+            return;
+        }
+        if procs.is_empty() && !self.ext_children.contains_key(&agent) {
+            return;
+        }
+        let entry = self.ext_children.entry(agent.clone()).or_default();
+        if merge_children(entry, procs, now_ms) {
+            self.refresh_external_feed(&agent, now_ms);
+            cx.notify();
+        }
+    }
+
+    /// Tokens and cost the host found for the external agent `key` (`ExternalProc::key()`), from the
+    /// usage logs `agents_svc` ingests. The cost is always an estimate (the inspector says so).
+    /// `None` clears it. Applies in place (no reload) and, while no view is attached, stores
+    /// nothing: the host only computes it while the map is visible.
+    pub fn set_external_usage(
+        &mut self,
+        key: NodeKey,
+        usage: Option<(u64, Option<f64>)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.viewers == 0 || !matches!(key, NodeKey::External { .. }) {
+            return;
+        }
+        let changed = match usage {
+            Some(u) => self.ext_usage.insert(key, u) != Some(u),
+            None => self.ext_usage.remove(&key).is_some(),
+        };
+        if changed {
+            self.apply_ext_usage();
+            cx.notify();
+        }
+    }
+
+    /// Tokens and estimated cost the host attached to an external node.
+    pub fn external_usage(&self, key: &NodeKey) -> Option<(u64, Option<f64>)> {
+        self.ext_usage.get(key).copied()
+    }
+
+    /// Writes the matched usage into the external nodes of the forest (a node that is not in the
+    /// forest yet gets it when it is).
+    fn apply_ext_usage(&mut self) {
+        if self.ext_usage.is_empty() && self.forest.nodes.iter().all(|n| n.tokens.is_none() || !n.is_external()) {
+            return;
+        }
+        let f = Arc::make_mut(&mut self.forest);
+        for n in f.nodes.iter_mut().filter(|n| n.is_external()) {
+            let u = self.ext_usage.get(&n.key).copied();
+            n.tokens = u.map(|(t, _)| t);
+            n.cost_usd = u.and_then(|(_, c)| c);
+        }
+    }
+
+    /// Recomputes the status line of external node `key` and, when its Activity tab is open, its feed.
+    fn refresh_external_feed(&mut self, key: &NodeKey, now_ms: i64) {
+        let kids = self.ext_children.get(key).cloned().unwrap_or_default();
+        match external_live_line(&kids) {
+            Some(l) => {
+                self.live_ext.insert(key.clone(), l);
+            }
+            None => {
+                self.live_ext.remove(key);
+            }
+        }
+        if let Some(a) = self.activity.as_mut()
+            && &a.key == key
+        {
+            let active = self
+                .forest
+                .index_of(key)
+                .map(|i| self.forest.nodes[i].status.is_active())
+                .unwrap_or(true);
+            a.feed = Arc::new(external_feed(&kids, now_ms, active));
+            a.loaded = true;
+        }
+    }
+
     // ----- lifecycle --------------------------------------------------------------------------
 
     /// A view is shown: start listening (first view) and load.
@@ -372,6 +744,19 @@ impl AgentMapModel {
         self.detail_loading.clear();
         self.loading = false;
         self.again = false;
+        // The activity side: no readers, no feed, no status lines, no child processes.
+        self.pass_task = None;
+        self.pass_debounce = None;
+        self.sig_task = None;
+        self.pass_loading = false;
+        self.pass_again = false;
+        self.tails.clear();
+        self.live.clear();
+        self.live_ext.clear();
+        self.ext_children.clear();
+        self.ext_usage.clear();
+        self.activity = None;
+        self.reg_sig = None;
     }
 
     fn start_watching(&mut self, cx: &mut Context<Self>) {
@@ -380,7 +765,7 @@ impl AgentMapModel {
                 self.watcher = Some(watcher);
                 self.tasks.push(cx.spawn(async move |this, cx| {
                     while rx.next().await.is_some() {
-                        if this.update(cx, |m, cx| m.refresh(cx)).is_err() {
+                        if this.update(cx, |m, cx| m.on_registry_event(cx)).is_err() {
                             break;
                         }
                     }
@@ -402,6 +787,11 @@ impl AgentMapModel {
     /// A chat thread changed: reload when it matters to the map (one of its nodes, or a new thread).
     fn on_thread_update(&mut self, u: &ThreadUpdate, cx: &mut Context<Self>) {
         let ch = u.changed;
+        // The status line of a running node and the feed of the watched one follow the thread's
+        // messages (streaming text, commands) and approvals.
+        if (ch.messages || ch.approvals || ch.status) && self.follows_thread(u.thread_id) {
+            self.schedule_pass(cx);
+        }
         let relevant = ch.list || ch.status || ch.approvals || ch.usage;
         let known = self
             .forest
@@ -444,9 +834,10 @@ impl AgentMapModel {
         let titles = self.tab_titles.clone();
         let external = self.external.clone();
         self.load_task = Some(cx.spawn(async move |this, cx| {
-            let (forest, live_threads) = cx
+            let (forest, live_threads, sig) = cx
                 .background_executor()
                 .spawn(async move {
+                    let sig = registry_signature(&dir);
                     let threads = source.threads();
                     let live_threads: HashSet<ThreadId> = threads.iter().map(|t| t.id).collect();
                     let runs = read_runs(&dir);
@@ -458,10 +849,10 @@ impl AgentMapModel {
                         tab_titles: &titles,
                         external: &external,
                     });
-                    (forest, live_threads)
+                    (forest, live_threads, sig)
                 })
                 .await;
-            this.update(cx, |m, cx| m.loaded_forest(forest, live_threads, cx))
+            this.update(cx, |m, cx| m.loaded_forest(forest, live_threads, sig, cx))
                 .ok();
         }));
     }
@@ -470,8 +861,10 @@ impl AgentMapModel {
         &mut self,
         forest: Forest,
         live_threads: HashSet<ThreadId>,
+        sig: u64,
         cx: &mut Context<Self>,
     ) {
+        self.reg_sig = Some(sig);
         self.loading = false;
         self.load_task = None;
         self.loaded = true;
@@ -504,7 +897,12 @@ impl AgentMapModel {
         for k in live {
             self.details.remove(&k);
         }
+        // the usage of an external process that left the map goes with it
+        let external = &self.external;
+        self.ext_usage
+            .retain(|k, _| external.values().any(|v| v.iter().any(|p| &p.key() == k)));
         self.forest = Arc::new(forest);
+        self.apply_ext_usage();
         if let Some(key) = self.pending_focus.take()
             && self.apply_focus(&key)
         {
@@ -520,10 +918,196 @@ impl AgentMapModel {
         if let Some(k) = self.selected.clone() {
             self.load_detail(&k, cx);
         }
+        // External nodes that vanished take their child processes with them.
+        let forest = self.forest.clone();
+        self.ext_children
+            .retain(|k, _| forest.index_of(k).is_some());
+        self.live_ext.retain(|k, _| forest.index_of(k).is_some());
+        let now = store::now_ms();
+        let ext_keys: Vec<NodeKey> = self.ext_children.keys().cloned().collect();
+        for k in ext_keys {
+            self.refresh_external_feed(&k, now);
+        }
+        self.sync_activity(cx);
+        self.run_pass(cx);
         cx.emit(MapChanged);
         cx.notify();
         if std::mem::take(&mut self.again) {
             self.refresh(cx);
+        }
+    }
+
+    // ----- live activity ----------------------------------------------------------------------
+
+    /// The events log of run `run_id`: `<runs dir>\<run id>.events.jsonl`.
+    fn log_path(&self, run_id: &str) -> PathBuf {
+        self.runs_dir.join(format!("{run_id}.events.jsonl"))
+    }
+
+    /// Does the status line of `thread` or the watched feed depend on it?
+    fn follows_thread(&self, thread: ThreadId) -> bool {
+        let key = NodeKey::Thread(thread);
+        if self.activity.as_ref().is_some_and(|a| a.key == key) {
+            return true;
+        }
+        self.forest
+            .index_of(&key)
+            .is_some_and(|i| self.forest.nodes[i].status.is_active())
+    }
+
+    /// Makes the watched node match what the inspector shows: the selected node while the Activity
+    /// tab is open and a view is attached, nothing otherwise. Returns true when a new watch started
+    /// (it needs a pass).
+    fn sync_activity(&mut self, _cx: &mut Context<Self>) -> bool {
+        let wanted = self
+            .selected
+            .clone()
+            .filter(|_| self.viewers > 0 && self.tab == InspectorTab::Activity)
+            .filter(|k| self.forest.index_of(k).is_some());
+        if wanted.as_ref() == self.activity.as_ref().map(|a| &a.key) {
+            return false;
+        }
+        self.activity = None;
+        let Some(key) = wanted else {
+            return false;
+        };
+        let accum = key.run_id().map(|id| LogAccum {
+            reader: LogReader::new(self.log_path(&id)),
+            raw: Vec::new(),
+        });
+        self.activity = Some(ActivityWatch {
+            key: key.clone(),
+            accum,
+            feed: Arc::new(ActivityFeed::default()),
+            loaded: false,
+        });
+        if matches!(key, NodeKey::External { .. }) {
+            self.refresh_external_feed(&key, store::now_ms());
+            if let Some(a) = self.activity.as_mut() {
+                a.loaded = true;
+            }
+            return false;
+        }
+        true
+    }
+
+    /// The registry folder changed (a record, or an events log line). Reloads the forest only when
+    /// a record changed; always advances the activity readers.
+    fn on_registry_event(&mut self, cx: &mut Context<Self>) {
+        let dir = self.runs_dir.clone();
+        self.sig_task = Some(cx.spawn(async move |this, cx| {
+            let sig = cx
+                .background_executor()
+                .spawn(async move { registry_signature(&dir) })
+                .await;
+            this.update(cx, |m, cx| {
+                m.sig_task = None;
+                if m.reg_sig != Some(sig) {
+                    m.refresh(cx);
+                } else {
+                    m.run_pass(cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    fn schedule_pass(&mut self, cx: &mut Context<Self>) {
+        if self.viewers == 0 || self.pass_debounce.is_some() {
+            return;
+        }
+        self.pass_debounce = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(ACTIVITY_DEBOUNCE).await;
+            this.update(cx, |m, cx| {
+                m.pass_debounce = None;
+                m.run_pass(cx);
+            })
+            .ok();
+        }));
+    }
+
+    /// One activity pass: status lines of the running nodes and the feed of the watched node. Reads
+    /// only the appended part of each events log (and the chat state of the watched thread) on the
+    /// background executor. A no-op while hidden; folds calls made while one is running.
+    fn run_pass(&mut self, cx: &mut Context<Self>) {
+        if self.viewers == 0 {
+            return;
+        }
+        if self.pass_loading {
+            self.pass_again = true;
+            return;
+        }
+        let targets: Vec<PassTarget> = self
+            .forest
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.key {
+                NodeKey::Thread(id) if n.status.is_active() => Some(PassTarget {
+                    key: n.key.clone(),
+                    thread: *id,
+                    status: n.status,
+                    log: self.log_path(&id.0.to_string()),
+                }),
+                _ => None,
+            })
+            .collect();
+        let forest = self.forest.clone();
+        let watch = self.activity.as_mut().and_then(|a| {
+            let NodeKey::Thread(id) = a.key else {
+                return None;
+            };
+            let node = &forest.nodes[forest.index_of(&a.key)?];
+            Some(PassWatch {
+                key: a.key.clone(),
+                thread: id,
+                started_ms: node.started_ms,
+                active: node.status.is_active(),
+                accum: a.accum.take()?,
+            })
+        });
+        if targets.is_empty() && watch.is_none() {
+            if !self.live.is_empty() || !self.tails.is_empty() {
+                self.live.clear();
+                self.tails.clear();
+                cx.notify();
+            }
+            return;
+        }
+        self.passes += 1;
+        self.pass_loading = true;
+        let source = self.source.clone();
+        let tails = std::mem::take(&mut self.tails);
+        self.pass_task = Some(cx.spawn(async move |this, cx| {
+            let out = cx
+                .background_executor()
+                .spawn(async move { run_activity_pass(&*source, targets, tails, watch) })
+                .await;
+            this.update(cx, |m, cx| m.pass_done(out, cx)).ok();
+        }));
+    }
+
+    fn pass_done(&mut self, out: PassOut, cx: &mut Context<Self>) {
+        self.pass_loading = false;
+        self.pass_task = None;
+        self.tails = out.tails;
+        let mut changed = self.live != out.lines;
+        self.live = out.lines;
+        if let Some((key, accum, feed)) = out.watch
+            && let Some(a) = self.activity.as_mut()
+            && a.key == key
+        {
+            a.accum = Some(accum);
+            if !a.loaded || *a.feed != feed {
+                a.feed = Arc::new(feed);
+                changed = true;
+            }
+            a.loaded = true;
+        }
+        if changed {
+            cx.notify();
+        }
+        if std::mem::take(&mut self.pass_again) {
+            self.run_pass(cx);
         }
     }
 
@@ -646,6 +1230,57 @@ fn merge_external(
     if changed {
         existing.sort_by_key(|p| (p.started_ms, p.pid));
         cap_external(existing);
+    }
+    changed
+}
+
+/// Pure merge of a snapshot of an external agent's child processes into the retained list.
+/// Returns `true` when anything changed.
+fn merge_children(
+    existing: &mut Vec<ExternalChild>,
+    incoming: Vec<ExternalChild>,
+    now_ms: i64,
+) -> bool {
+    let mut seen: HashSet<(u32, i64)> = HashSet::with_capacity(incoming.len());
+    let mut sanitized: Vec<ExternalChild> = Vec::with_capacity(incoming.len());
+    for mut c in incoming {
+        if !seen.insert((c.pid, c.started_ms)) {
+            continue;
+        }
+        c.cmdline_redacted = store::redact(&c.cmdline_redacted).text;
+        sanitized.push(c);
+    }
+    let mut changed = false;
+    for e in existing.iter_mut() {
+        if !seen.contains(&(e.pid, e.started_ms)) && e.is_running() {
+            e.ended_ms = Some(now_ms.max(e.started_ms));
+            e.cpu_pct = None;
+            e.rss_bytes = 0;
+            changed = true;
+        }
+    }
+    for c in sanitized {
+        if let Some(e) = existing
+            .iter_mut()
+            .find(|e| e.pid == c.pid && e.started_ms == c.started_ms)
+        {
+            // A process that already ended keeps its end; only live data refreshes.
+            if e.is_running() && *e != c {
+                *e = c;
+                changed = true;
+            }
+        } else {
+            existing.push(c);
+            changed = true;
+        }
+    }
+    if changed {
+        existing.sort_by_key(|c| (c.started_ms, c.pid));
+        while existing.len() > MAX_EXTERNAL_CHILDREN {
+            // Oldest finished first; if all run, the oldest.
+            let ix = existing.iter().position(|c| !c.is_running()).unwrap_or(0);
+            existing.remove(ix);
+        }
     }
     changed
 }

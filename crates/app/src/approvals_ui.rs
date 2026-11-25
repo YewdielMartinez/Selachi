@@ -9,6 +9,9 @@
 //!   **No volver a preguntar en esta ejecución** (`Decision::AlwaysRun`: that run switches to the
 //!   `auto` approval mode; the harness' hard blocklist still denies).
 //! * `apply_changes`: the dry-run plan (files, stat, warnings) and **Aplicar**, the one
+//!   Under them, when the run has a profile, **Permitir siempre en este perfil**
+//!   (`Decision::AlwaysProfile`: the harness adds the command's pattern to the profile's
+//!   `allowed_commands`; the profile name is read from the run record, see `approval_queue`).
 //!   `ActionButton`; plans that cannot apply cleanly or carry a full-risk reason offer only
 //!   **Rechazar**.
 
@@ -22,6 +25,9 @@ use ui_kit::{ActionButton, AgentMark, Button, Card, CardTone, agent_icon};
 
 use crate::approval_queue::{PendingApproval, PlanView};
 use crate::notify::clip;
+
+/// Label of the button that answers `Decision::AlwaysProfile`.
+pub const ALWAYS_PROFILE_LABEL: &str = "Permitir siempre en este perfil";
 
 /// Width of a card.
 pub const CARD_W: f32 = 392.0;
@@ -187,6 +193,7 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
     let req = &p.request;
     let id = req.request_id.clone();
     let apply = p.is_apply();
+    let profile_name = p.profile.clone();
     let mark = AgentMark::from_name(&req.agent);
     let title = card_title(&req.agent, apply);
     let thread_line = match (&ctx.thread_title, req.depth) {
@@ -240,6 +247,8 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
         ctx.on_decide.clone(),
         ctx.on_open_thread.clone(),
     );
+    let decide_profile = ctx.on_decide.clone();
+    let id_profile = id.clone();
     let (id_deny, id_allow, id_always, id_apply, id_run) =
         (id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
     let thread = req.thread_id;
@@ -327,16 +336,34 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
         .child(buttons)
         .when(!apply, |card| {
             card.child(
-                div().flex().flex_row().child(
-                    Button::ghost(
-                        format!("appr-always-run-{id}"),
-                        theme,
-                        "No volver a preguntar en esta ejecución",
-                    )
-                    .on_click(move |_, w, cx| {
-                        decide_run(id_run.clone(), Decision::AlwaysRun, w, cx)
-                    }),
-                ),
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(4.0))
+                    .when_some(profile_name, |row, name| {
+                        row.child(
+                            Button::ghost(
+                                format!("appr-always-profile-{id}"),
+                                theme,
+                                ALWAYS_PROFILE_LABEL,
+                            )
+                            .tooltip(format!("Añade este comando a los permitidos del perfil «{name}»"))
+                            .on_click(move |_, w, cx| {
+                                decide_profile(id_profile.clone(), Decision::AlwaysProfile, w, cx)
+                            }),
+                        )
+                    })
+                    .child(
+                        Button::ghost(
+                            format!("appr-always-run-{id}"),
+                            theme,
+                            "No volver a preguntar en esta ejecución",
+                        )
+                        .on_click(move |_, w, cx| {
+                            decide_run(id_run.clone(), Decision::AlwaysRun, w, cx)
+                        }),
+                    ),
             )
         })
         .child(

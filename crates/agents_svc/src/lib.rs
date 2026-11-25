@@ -18,6 +18,7 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod db;
+pub mod external;
 pub mod ingest;
 pub mod model;
 pub mod opencode;
@@ -28,6 +29,7 @@ pub mod statusline;
 pub mod watch;
 
 pub use db::{Store, UpsertOutcome};
+pub use external::{usage_for_external, UsageEstimate};
 pub use ingest::{IngestConfig, Ingestor, ScanReport, SourceKind};
 pub use model::{Agent, FileTouch, RateLimitSnapshot, TokenCounts, UsageEvent, UsageExtras};
 pub use pricing::{ModelPrice, PricingTable, COST_LABEL};

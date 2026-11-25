@@ -41,6 +41,8 @@ fn friendly(problem: &str) -> FieldError {
         "El comando no puede tener saltos de línea.".to_string()
     } else if known("delegation.max_permission") {
         "Elige solo lectura, preguntar o aceptar ediciones.".to_string()
+    } else if known("delegation.extra_agents") {
+        "Hasta 32 nombres de ejecutable, cada uno en una línea.".to_string()
     } else if known("delegation.approvals") {
         "Elige preguntar, solo comandos permitidos o no preguntar.".to_string()
     } else if known("delegation.max_concurrent") {

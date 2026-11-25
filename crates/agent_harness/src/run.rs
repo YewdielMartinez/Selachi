@@ -22,6 +22,7 @@ use parking_lot::Mutex;
 use crate::agents::{agent_name, AgentResolver, SystemResolver};
 use crate::approval_policy::{ApprovalMode, Gate, OwnedScope};
 use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PROTOCOL_VERSION};
+use crate::events::{ApprovalOutcome, EventLog, Recorder};
 use crate::jobs::JobHooks;
 use crate::output::{cap_chars, diff_stat_of, CostOut, RunResult, RunStatus, UsageOut};
 use crate::policy::{
@@ -525,6 +526,10 @@ impl Harness {
         } else {
             None
         };
+        let mut recorder = Recorder::new(
+            EventLog::open(self.registry.dir(), &run_id),
+            &[record.project_root.as_path(), run_dir.as_path()],
+        );
         let rt = match store.open(thread.id) {
             Ok(rt) => rt,
             Err(e) => return Err(Stop::Failed(format!("cannot open the child thread: {e}"))),
@@ -535,11 +540,14 @@ impl Harness {
                     mode: prep.approvals,
                     allowed: prep.allowed_commands.clone(),
                     scope: OwnedScope::new(&record.project_root, &run_dir),
+                    profile_path: prep.profile_path.clone(),
+                    profile_scope: prep.profile_scope,
                 };
                 self.wait(
                     &rt,
                     &mut record,
                     ctx,
+                    &mut recorder,
                     prep.budget_tokens,
                     timeout,
                     &mut notes,
@@ -587,6 +595,11 @@ impl Harness {
                 Some(format!("the run used {} billable tokens, over --budget-tokens {limit}; the agent was interrupted", usage.billable)),
             ),
         };
+        // the events log: whatever the last observation missed (the thread was closed since), then
+        // the final status
+        recorder.observe(&state);
+        recorder.finish(status.as_str());
+
         let summary = if answer.trim().is_empty() {
             reason.clone().unwrap_or_default()
         } else {
@@ -667,11 +680,13 @@ impl Harness {
     }
 
     /// Wait for the turn to end, answering approvals and enforcing timeout, cancel and token budget.
+    #[allow(clippy::too_many_arguments)]
     fn wait(
         &self,
         rt: &ThreadRuntime,
         record: &mut RunRecord,
         mut ctx: ApprovalCtx,
+        rec: &mut Recorder,
         budget_tokens: Option<u64>,
         timeout: Duration,
         notes: &mut Vec<String>,
@@ -680,6 +695,7 @@ impl Harness {
         let deadline = start + timeout;
         let handled: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
         loop {
+            rec.sync(rt);
             if self.registry.cancel_requested(&record.run_id) {
                 let _ = rt.interrupt();
                 return Outcome::Cancelled;
@@ -711,6 +727,7 @@ impl Harness {
                     rt,
                     record,
                     &mut ctx,
+                    rec,
                     &request_id,
                     &tool,
                     &detail,
@@ -743,12 +760,16 @@ impl Harness {
         rt: &ThreadRuntime,
         record: &mut RunRecord,
         ctx: &mut ApprovalCtx,
+        rec: &mut Recorder,
         request_id: &str,
         tool: &str,
         detail: &str,
         deadline: Instant,
         notes: &mut Vec<String>,
     ) {
+        let shell = crate::approval_policy::shell_command(tool, detail);
+        let shown = shell.clone().unwrap_or_else(|| format!("{tool}: {detail}"));
+        let mode_when_asked = ctx.mode.to_string();
         // The hard blocklist first, in every mode; then the mode decides between answering on its
         // own and sending the request to a Selachi window.
         match ctx.scope.gate(ctx.mode, &ctx.allowed, tool, detail) {
@@ -757,6 +778,12 @@ impl Harness {
                     "approval denied for {}: blocked without asking, {reason}",
                     cap_chars(&redacted(tool), 100)
                 ));
+                rec.approval(
+                    &shown,
+                    ApprovalOutcome::Blocked,
+                    &mode_when_asked,
+                    Some(&reason),
+                );
                 if let Some(l) = record.limits.as_mut() {
                     l.blocked = l.blocked.saturating_add(1);
                 }
@@ -767,11 +794,10 @@ impl Harness {
                 return;
             }
             Gate::Auto => {
-                let shown = crate::approval_policy::shell_command(tool, detail)
-                    .unwrap_or_else(|| format!("{tool}: {detail}"));
                 if let Some(l) = record.limits.as_mut() {
                     l.note_auto_approved(&redacted(&shown));
                 }
+                rec.approval(&shown, ApprovalOutcome::Auto, &mode_when_asked, None);
                 self.save_progress(record);
                 if let Err(e) = rt.approve(request_id, ChatDecision::Allow) {
                     notes.push(format!("could not deliver the approval answer: {e}"));
@@ -811,8 +837,15 @@ impl Harness {
             Decision::Deny => ChatDecision::Deny,
             Decision::Always => ChatDecision::Always,
             // allowed now; the rest of the run is approved by the harness (see below)
-            Decision::AlwaysRun => ChatDecision::Allow,
+            Decision::AlwaysRun | Decision::AlwaysProfile => ChatDecision::Allow,
         };
+        let outcome = match verdict.decision {
+            Decision::Allow | Decision::Always => ApprovalOutcome::Allowed,
+            Decision::Deny => ApprovalOutcome::Denied,
+            Decision::AlwaysRun => ApprovalOutcome::AlwaysRun,
+            Decision::AlwaysProfile => ApprovalOutcome::AlwaysProfile,
+        };
+        let mut event_reason = verdict.reason.clone();
         if verdict.decision == Decision::AlwaysRun && ctx.mode != ApprovalMode::Auto {
             ctx.mode = ApprovalMode::Auto;
             if let Some(l) = record.limits.as_mut() {
@@ -823,6 +856,11 @@ impl Harness {
                 "the user chose \"don't ask again in this run\" in Selachi: the rest of the run is approved automatically (the blocklist still applies)"
                     .to_string(),
             );
+        }
+        if verdict.decision == Decision::AlwaysProfile {
+            let note = self.remember_in_profile(ctx, record, shell.as_deref());
+            event_reason = Some(note.clone());
+            notes.push(note);
         }
         match verdict.decision {
             Decision::Deny => notes.push(format!(
@@ -838,9 +876,68 @@ impl Harness {
                 req.tool
             )),
         }
+        if outcome == ApprovalOutcome::Denied && event_reason.is_none() {
+            event_reason = Some("denied by the user in Selachi".into());
+        }
+        rec.approval(&shown, outcome, &mode_when_asked, event_reason.as_deref());
         if let Err(e) = rt.approve(request_id, chat) {
             notes.push(format!("could not deliver the approval answer: {e}"));
         }
+    }
+
+    /// `always_profile`: save the command's pattern in the run's profile and let the rest of the run
+    /// use it. Returns the sentence for the run's notes (what happened, or why it was only a single
+    /// allow).
+    fn remember_in_profile(
+        &self,
+        ctx: &mut ApprovalCtx,
+        record: &mut RunRecord,
+        command: Option<&str>,
+    ) -> String {
+        const SINGLE: &str = "allowed this once";
+        let (Some(path), Some(scope)) = (ctx.profile_path.clone(), ctx.profile_scope) else {
+            return format!(
+                "the user chose \"always allow in this profile\" but this run has no profile, so it was {SINGLE}; use a profile (`--profile`) to keep such permissions"
+            );
+        };
+        let Some(command) = command else {
+            return format!(
+                "the user chose \"always allow in this profile\" but the request is not a shell command, so it was {SINGLE}"
+            );
+        };
+        let pattern = match crate::always_profile::normalize_pattern(command, &ctx.scope) {
+            Ok(p) => p,
+            Err(why) => {
+                return format!(
+                    "the user chose \"always allow in this profile\" but a pattern for `{}` cannot be saved ({why}), so it was {SINGLE}",
+                    cap_chars(&redacted(command), 80)
+                )
+            }
+        };
+        let saved = match crate::always_profile::add_to_profile(&path, scope, &pattern) {
+            Ok(crate::always_profile::Added::Added) => "added to",
+            Ok(crate::always_profile::Added::AlreadyThere) => "was already in",
+            Err(e) => {
+                return format!(
+                    "the user chose \"always allow in this profile\" but the profile could not be updated ({e}), so it was {SINGLE}"
+                )
+            }
+        };
+        if !ctx.allowed.iter().any(|a| a.eq_ignore_ascii_case(&pattern)) {
+            ctx.allowed.push(pattern.clone());
+        }
+        if ctx.mode < ApprovalMode::Allowlist {
+            ctx.mode = ApprovalMode::Allowlist;
+        }
+        if let Some(l) = record.limits.as_mut() {
+            l.approvals = ctx.mode.to_string();
+            l.allowed_commands = ctx.allowed.clone();
+        }
+        self.save_progress(record);
+        format!(
+            "the user chose \"always allow in this profile\": `{pattern}` {saved} allowed_commands of {}; matching commands are approved without asking from now on (the blocklist still applies)",
+            store::paths::clean_display(&path.to_string_lossy())
+        )
     }
 }
 
@@ -850,6 +947,9 @@ struct ApprovalCtx {
     mode: ApprovalMode,
     allowed: Vec<String>,
     scope: OwnedScope,
+    /// The run's profile file and where it lives (for `always_profile`).
+    profile_path: Option<PathBuf>,
+    profile_scope: Option<crate::profiles::Scope>,
 }
 
 enum Outcome {

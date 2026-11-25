@@ -71,6 +71,22 @@ impl ChatView {
         g
     }
 
+    /// Drops the selection groups of rows the list did not ask for since the last frame (they
+    /// scrolled out of the viewport and its overdraw). A group keeps the shaped lines of its
+    /// text and a copy of the text itself: for a long thread with expanded outputs that was
+    /// hundreds of MB. A group that is focused or holds a selection stays (the user is using it);
+    /// a dropped one is created again, from the model, when its row comes back. Copying a row
+    /// that is off screen never needed a group: it reads the text from `rows`.
+    pub(crate) fn prune_selections(&mut self, window: &gpui::Window) {
+        let seen = std::mem::take(&mut self.frame_rows);
+        if self.selections.is_empty() || seen.is_empty() {
+            return;
+        }
+        self.selections.retain(|(key, _), g| {
+            seen.contains(key) || g.has_selection() || g.focus_handle().is_focused(window)
+        });
+    }
+
     /// `text` as one selectable block (a tool summary, a thought, a command output).
     pub(crate) fn selectable_block(
         &mut self,

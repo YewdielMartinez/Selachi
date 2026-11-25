@@ -26,7 +26,10 @@
 //! ```
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod activity;
+mod activity_ui;
 mod events;
+mod events_log;
 mod fmt;
 mod graph_ui;
 mod inspector;
@@ -38,14 +41,20 @@ mod tree;
 mod tree_ui;
 mod view;
 
+pub use activity::{
+    ActivityEvent, ActivityFeed, ActivityFilter, ActivityKind, ApprovalOutcome, CommandEntry,
+    CommandStatus, ExternalChild, LiveHint, LiveTrack, MAX_EVENTS, MAX_EXTERNAL_CHILDREN,
+    build_feed, chat_events, external_feed, external_live_line, live_hint, live_line, log_events,
+};
 pub use events::AgentMapEvent;
+pub use events_log::{LogBatch, LogEvent, LogReader, parse_line};
 pub use inspector::{
     Available, EXTERNAL_EXPLANATION, RETRY_AGENTS, available, decision_label, external_facts,
     limit_rows, permission_label,
 };
 pub use model::{
-    AgentMapModel, CHAT_DEBOUNCE, MapChanged, NodeDetail, ProfileSeed, PromptInfo, PromptSource,
-    WATCH_DEBOUNCE,
+    ACTIVITY_DEBOUNCE, AgentMapModel, CHAT_DEBOUNCE, InspectorTab, MapChanged, NodeDetail,
+    ProfileSeed, PromptInfo, PromptSource, WATCH_DEBOUNCE,
 };
 pub use registry::{ApprovalEntry, DiffStatInfo, ResultInfo, RunInfo, RunStatus, read_runs};
 pub use source::{ChatStoreSource, SessionSource};

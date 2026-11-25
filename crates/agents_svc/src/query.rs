@@ -103,7 +103,7 @@ fn u(v: i64) -> u64 {
 /// Cost of one aggregate: the agent-reported part (OpenCode) is taken as is, the rest (rows
 /// without a reported cost) is priced from the table. `None` when that rest cannot be priced.
 /// With no reported rows this is exactly `pricing.cost(agent, model, unreported)`.
-fn combine_cost(
+pub(crate) fn combine_cost(
     pricing: &crate::pricing::PricingTable,
     agent: Agent,
     model: &str,

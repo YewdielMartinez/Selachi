@@ -34,8 +34,9 @@ pub use actions::{
 pub use cpu::{logical_cores, CpuSampler};
 pub use error::{Error, RefuseReason, Result};
 pub use external::{
-    find_external_agents, find_external_agents_with, match_agent_exe, parse_agent_cli_args,
-    ExternalAgentProc, ParsedAgentArgs, KNOWN_AGENTS,
+    extra_agent_stems, find_external_agents, find_external_agents_cfg, find_external_agents_with,
+    match_agent_exe, parse_agent_cli_args, ExternalAgentProc, ParsedAgentArgs, KNOWN_AGENTS,
+    MAX_EXTRA_AGENTS,
 };
 pub use job::{resume_process, JobEvent, JobGroup, JobOptions};
 pub use ports::{listening_ports, ports_by_pid, PortInfo, PortState, Proto};

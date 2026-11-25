@@ -135,6 +135,8 @@ pub struct ChatView {
     project_menu_open: bool,
     /// Selection group of each selectable block, by `(row, block)` (see `copy_ui`).
     pub(crate) selections: HashMap<(RowKey, u8), ui_kit::SelectionGroup>,
+    /// Rows the list asked for since the last `render` (see [`Self::prune_selections`]).
+    pub(crate) frame_rows: HashSet<RowKey>,
     pub(crate) hover_row: Option<RowKey>,
     pub(crate) hover_bar: Option<RowKey>,
     pub(crate) menu: Option<crate::copy_ui::CopyMenu>,
@@ -198,6 +200,7 @@ impl ChatView {
             notice: None,
             project_menu_open: false,
             selections: HashMap::new(),
+            frame_rows: HashSet::new(),
             hover_row: None,
             hover_bar: None,
             menu: None,
@@ -357,6 +360,41 @@ impl ChatView {
             self.menu = Some(crate::copy_ui::CopyMenu::Message(key));
         }
         cx.notify();
+    }
+
+    /// Demos and memory benches: reveals row `ix` (as scrolling there would). Returns `false`
+    /// when `ix` is past the last row.
+    pub fn debug_reveal(&mut self, ix: usize, cx: &mut Context<Self>) -> bool {
+        if ix >= self.rows.len() {
+            return false;
+        }
+        self.list.scroll_to_reveal_item(ix);
+        cx.notify();
+        true
+    }
+
+    /// Demos and memory benches: expands every expandable row (as clicking each would).
+    pub fn debug_expand_all(&mut self, cx: &mut Context<Self>) {
+        let keys: Vec<RowKey> = self
+            .rows
+            .iter()
+            .filter(|r| r.kind.is_expandable())
+            .map(|r| r.key.clone())
+            .collect();
+        self.expanded.extend(keys);
+        self.list.reset(self.rows.len());
+        cx.notify();
+    }
+
+    /// Demos and memory benches: attaches files to the composer (as a drop would).
+    pub fn debug_attach(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.composer
+            .update(cx, |c, cx| c.add_attachments(paths, cx));
+    }
+
+    /// Number of live selection groups (memory regression checks).
+    pub fn selection_group_count(&self) -> usize {
+        self.selections.len()
     }
 
     pub fn width_class(&self) -> WidthClass {
@@ -1235,6 +1273,7 @@ impl ChatView {
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_w = f32::from(window.viewport_size().width);
+        self.prune_selections(window);
         self.viewport_w = self.measured.width().unwrap_or(self.window_w);
         let t = self.theme;
         let c = t.colors;

@@ -173,6 +173,11 @@ impl Registry {
         self.dir.join(format!("{run_id}.json"))
     }
 
+    /// `<run_id>.events.jsonl`: the run's events log (see [`crate::events`]).
+    pub fn events_file(&self, run_id: &str) -> PathBuf {
+        crate::events::events_path(&self.dir, run_id)
+    }
+
     fn cancel_file(&self, run_id: &str) -> PathBuf {
         self.dir.join(format!("{run_id}.cancel"))
     }

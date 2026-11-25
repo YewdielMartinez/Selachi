@@ -1,5 +1,6 @@
 //! The compact vertical tree: one virtualized row per visible node.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
@@ -43,6 +44,8 @@ fn tree_row(
     root_totals: Totals,
     this: &Entity<AgentMapView>,
     now_ms: i64,
+    live: Option<&str>,
+    any_live: bool,
 ) -> AnyElement {
     let c = theme.colors;
     let ty = theme.typography;
@@ -116,6 +119,11 @@ fn tree_row(
             }
             sub.extend(model.iter().cloned());
             sub.extend(m.iter().take(3).flatten().cloned());
+            // A running node shows what it is doing instead of its model and metrics.
+            let (sub_text, sub_color) = match live {
+                Some(l) => (l.to_string(), c.accent),
+                None => (sub.join(" · "), c.muted),
+            };
             body = body.child(div().flex().flex_row().child(title)).child(
                 div().flex().flex_row().child(
                     div()
@@ -124,9 +132,9 @@ fn tree_row(
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .text_size(px(ty.ui_size_xs))
-                        .text_color(c.muted)
+                        .text_color(sub_color)
                         .flex_1()
-                        .child(SharedString::from(sub.join(" · "))),
+                        .child(SharedString::from(sub_text)),
                 ),
             );
         }
@@ -140,6 +148,21 @@ fn tree_row(
                     .child(title)
                     .when(external, |d| d.child(external_badge(theme))),
             );
+            if let Some(l) = live {
+                body = body.child(
+                    div().flex().flex_row().child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(ty.ui_size_xs))
+                            .text_color(c.accent)
+                            .child(SharedString::from(l.to_string())),
+                    ),
+                );
+            }
         }
     }
 
@@ -164,7 +187,7 @@ fn tree_row(
         })
         .occlude()
         .w_full()
-        .h(px(layout.height() - 4.0))
+        .h(px(layout.height(any_live) - 4.0))
         .my(px(2.0))
         .pl(px(8.0 + INDENT * row.depth as f32))
         .pr(px(10.0))
@@ -244,18 +267,32 @@ impl AgentMapView {
             .map(|r| forest.totals(r.node))
             .unwrap_or_default();
         let now = store::now_ms();
+        // The status lines of the visible running nodes (read from the model once per render).
+        let live: HashMap<NodeKey, String> = {
+            let m = self.model.read(cx);
+            rows.iter()
+                .filter_map(|r| {
+                    let key = &forest.nodes[r.node].key;
+                    m.live_line(key).map(|l| (key.clone(), l.to_string()))
+                })
+                .collect()
+        };
+        let any_live = !live.is_empty();
         let rows = Arc::new(rows);
         let count = rows.len();
         VirtualList::new(
             "agentmap-tree",
             count,
-            layout.height(),
+            layout.height(any_live),
             move |range, _, _| {
                 range
                     .filter_map(|i| rows.get(i).copied())
                     .map(|row| {
                         let sel = selected.as_ref() == Some(&forest.nodes[row.node].key);
-                        tree_row(&theme, &forest, row, sel, layout, totals, &this, now)
+                        let l = live.get(&forest.nodes[row.node].key).map(String::as_str);
+                        tree_row(
+                            &theme, &forest, row, sel, layout, totals, &this, now, l, any_live,
+                        )
                     })
                     .collect()
             },

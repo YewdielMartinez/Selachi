@@ -229,6 +229,9 @@ pub struct DelegationConfig {
     /// How the commands of a delegated agent are approved: `ask` | `allowlist` | `auto` (see
     /// [`crate::approval_policy`]). A profile or a single run can only lower it.
     pub approvals: ApprovalMode,
+    /// Extra agent executables to flag as "external agents" in the process tree (`["aider", ...]`);
+    /// pass it to `proc_svc::find_external_agents_cfg`. Not used by the harness itself.
+    pub extra_agents: Vec<String>,
 }
 
 impl Default for DelegationConfig {
@@ -245,6 +248,7 @@ impl Default for DelegationConfig {
             weekly_usage_threshold_percent: 90.0,
             approval_timeout_secs: 120,
             approvals: ApprovalMode::Ask,
+            extra_agents: Vec::new(),
         }
     }
 }
@@ -396,6 +400,20 @@ approvals = \"yolo\"
         );
         assert_eq!(c, DelegationConfig::default());
         assert!(w.unwrap().contains("approvals"));
+    }
+
+    #[test]
+    fn extra_agents_are_read_from_the_delegation_section() {
+        assert!(DelegationConfig::default().extra_agents.is_empty());
+        let (c, w) = DelegationConfig::from_toml(
+            "[delegation]
+extra_agents = [\"aider\", \"goose\"]
+",
+        );
+        assert_eq!(
+            (c.extra_agents, w),
+            (vec!["aider".to_string(), "goose".to_string()], None)
+        );
     }
 
     #[test]

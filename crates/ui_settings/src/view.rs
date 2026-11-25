@@ -746,6 +746,10 @@ impl SettingsView {
         let sub = cx.subscribe(&f, move |this, _, ev: &TextFieldEvent, cx| {
             if matches!(ev, TextFieldEvent::Changed) {
                 this.on_field_change(&this_key, cx);
+            } else if matches!(ev, TextFieldEvent::Submit)
+                && this_key == crate::delegation_ui::EXTRA_AGENT_FIELD
+            {
+                this.add_extra_agent(cx);
             }
         });
         self.field_subs.insert(key.to_string(), sub);
@@ -822,6 +826,15 @@ impl SettingsView {
         let editor = cx.new(|cx| crate::profiles_ui::ProfilesEditor::new(theme, data_dir, cx));
         self.profiles = Some(editor.clone());
         editor
+    }
+
+    /// Rereads the profile library if the editor exists (a profile file changed on disk, e.g. the
+    /// harness added a command to `allowed_commands` after «Permitir siempre en este perfil»).
+    /// Nothing happens when the profile section was never opened: it loads on first use anyway.
+    pub fn reload_profiles(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.profiles.clone() {
+            editor.update(cx, |e, cx| e.reload(cx));
+        }
     }
 
     /// Opens a new profile in the editor, seeded (the map's "Duplicar como perfil").

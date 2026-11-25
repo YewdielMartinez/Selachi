@@ -602,3 +602,4 @@ fn a_parent_chat_lists_its_delegations_and_sums_their_cost(cx: &mut TestAppConte
 
 mod copy_tests;
 mod layout_tests;
+mod mem_tests;

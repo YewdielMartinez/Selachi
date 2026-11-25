@@ -15,6 +15,8 @@
 //!   usage is over the threshold (`agents_svc`).
 //! * **Approvals**: the child never approves itself; requests go to a Selachi window over a named
 //!   pipe ([`approvals`], protocol v1) or are denied with a reason.
+//! * **Events log**: `agent-runs/<run_id>.events.jsonl`, one JSON line per message delta / tool / file edit /
+//!   approval / status ([`events`]).
 //! * **MCP**: `selachi-agent mcp` serves the same engine as typed tools over stdio ([`mcp`]).
 //! * **Secrets**: the prompt and everything that comes back go through `store::redact`.
 //!
@@ -34,6 +36,7 @@
 //! weekly_usage_threshold_percent = 90 # 0 = never refuse
 //! approval_timeout_secs = 120
 //! approvals = "ask"                   # ask | allowlist | auto (see approval_policy)
+//! extra_agents = []                   # more agent executables to flag as external, e.g. ["aider"]
 //! ```
 //!
 //! ```no_run
@@ -48,11 +51,13 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agents;
+pub mod always_profile;
 pub mod apply;
 pub mod approval_policy;
 pub mod approvals;
 pub mod cli;
 pub mod control;
+pub mod events;
 pub mod fake;
 pub mod jobs;
 pub mod mcp;

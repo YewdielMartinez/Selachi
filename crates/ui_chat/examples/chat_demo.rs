@@ -11,7 +11,15 @@
 //!   --width-class compact|regular                          class the sidebar list is built for
 //!   --popup model|effort|permission|agent                  open that composer menu (no clicks needed)
 //!   --select text|menu                                    force a text selection (and the copy menu) without input
+//!   --long N                                               a long synthetic thread of about N rows (thinking, explored,
+//!                                                          Markdown, 2 commands with big output, edit, footer per turn)
+//!   --out-bytes B                                          size of each command output with --long (default 50000)
+//!   --scroll-through                                       paint every row once (as scrolling down through the thread would)
+//!   --expand-all                                           expand every row (as clicking each would)
+//!   --images N                                             attach N synthetic 3840x2160 PNGs to the composer
 //! ```
+//!
+//! Memory bench (docs/olas/ola-9.md 9C): `bench/chat-ram.ps1`, which runs `--long N --scroll-through`.
 //!
 //! Scenes: `thread` a finished session; `approval` the same session stopped at a permission
 //! request (click Permitir / Rechazar / Siempre: the fake continues); `streaming` the live
@@ -176,13 +184,103 @@ fn finish(pace: u64) -> Vec<Step> {
     s
 }
 
+/// A cargo-like output of about `bytes` bytes, different for every `(turn, n)`.
+fn big_output(turn: usize, n: usize, bytes: usize) -> String {
+    let mut out = String::with_capacity(bytes + 160);
+    let mut k = 0usize;
+    while out.len() < bytes {
+        out.push_str(&format!(
+            "   Compiling dep-{turn}-{n}-{k} v0.{}.{} (C:\\work\\project\\crates\\dep-{k})  warning: unused variable `x{k}`\n",
+            k % 9,
+            k % 31
+        ));
+        k += 1;
+    }
+    out
+}
+
+/// One synthetic turn of the long thread (9 rows): thinking, explored group, Markdown with a code
+/// block, two commands with big outputs, an edit, closing text and usage.
+fn long_turn(i: usize, out_bytes: usize) -> Vec<Step> {
+    let mut s = Vec::new();
+    if i == 0 {
+        s.push(Step::now(AgentEvent::SessionStarted {
+            session_id: "long".into(),
+            model: Some(MODEL.into()),
+        }));
+    }
+    s.push(Step::now(AgentEvent::Status(AgentStatus::Working)));
+    s.push(Step::now(AgentEvent::Thinking {
+        text: format!(
+            "Paso {i}: reviso el módulo {i} y compruebo cómo interactúa con el resto del parser. "
+        )
+        .repeat(12),
+        delta: false,
+    }));
+    for k in 0..3 {
+        let id = format!("e{i}-{k}");
+        s.push(Step::now(call(
+            &id,
+            ToolKind::Read,
+            &format!("crates/mod{i}/src/f{k}.rs"),
+            json!({"file_path": format!("crates/mod{i}/src/f{k}.rs")}),
+        )));
+        s.push(Step::now(result(&id, true, "212 líneas")));
+    }
+    s.push(Step::now(AgentEvent::Text {
+        text: format!(
+            "## Módulo {i}\n\nEl problema está en `skip_comment`: cierra el comentario en el primer `*/`. **Cambio** propuesto:\n\n```rust\nfn skip_comment_{i}(&mut self) {{\n    let mut depth = 1;\n    while depth > 0 {{\n        match (self.bump(), self.peek()) {{\n            ('/', '*') => depth += 1,\n            ('*', '/') => depth -= 1,\n            _ => {{}}\n        }}\n    }}\n}}\n```\n\n- primero contar la profundidad\n- luego añadir tests\n- por último ejecutar `cargo test`\n\nVer [la documentación](https://example.com/{i}) para más detalles.\n"
+        ),
+        delta: false,
+    }));
+    for n in 0..2 {
+        let id = format!("c{i}-{n}");
+        let cmd = format!("cargo test -p mod{i} -- --nocapture {n}");
+        s.push(Step::now(call(
+            &id,
+            ToolKind::Command,
+            &cmd,
+            json!({"command": cmd}),
+        )));
+        s.push(Step::now(result(&id, true, &big_output(i, n, out_bytes))));
+    }
+    let id = format!("w{i}");
+    s.push(Step::now(call(&id, ToolKind::Edit, &format!("crates/mod{i}/src/lexer.rs"), json!({
+        "file_path": format!("crates/mod{i}/src/lexer.rs"),
+        "old_string": "fn skip_comment(&mut self) {\n    while self.bump() != '*' || self.peek() != '/' {}\n}",
+        "new_string": "fn skip_comment(&mut self) {\n    let mut depth = 1;\n    while depth > 0 {\n        self.bump();\n    }\n}"
+    }))));
+    s.push(Step::now(result(&id, true, "ok")));
+    s.push(Step::now(AgentEvent::Text {
+        text: format!("Listo con el módulo {i}: los tests pasan."),
+        delta: false,
+    }));
+    s.push(Step::now(AgentEvent::Usage {
+        input: 58_000,
+        output: 2_100,
+        cache_create: 0,
+        cache_read: 20_000,
+        cost_usd: Some(0.12),
+        context_window: Some(1_000_000),
+    }));
+    s.push(Step::now(AgentEvent::Status(AgentStatus::Done)));
+    s
+}
+
 /// What the fake agent answers, by the prompt it receives.
 fn script(
     pace: u64,
     stop_at_approval: bool,
+    out_bytes: usize,
 ) -> impl Fn(usize, &str) -> Vec<Step> + Send + Sync + 'static {
     move |_, prompt| {
-        if prompt.starts_with("[working]") {
+        if let Some(i) = prompt
+            .strip_prefix("[long ")
+            .and_then(|r| r.split(']').next())
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            long_turn(i, out_bytes)
+        } else if prompt.starts_with("[working]") {
             vec![
                 Step::now(AgentEvent::SessionStarted {
                     session_id: "w".into(),
@@ -435,6 +533,17 @@ fn main() {
     let compact = arg_value(&args, "--width-class") == Some("compact");
     let popup: Option<String> = arg_value(&args, "--popup").map(str::to_string);
     let select: Option<String> = arg_value(&args, "--select").map(str::to_string);
+    let long_rows: usize = arg_value(&args, "--long")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let out_bytes: usize = arg_value(&args, "--out-bytes")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50_000);
+    let scroll_through = flag("--scroll-through");
+    let expand_all = flag("--expand-all");
+    let images: usize = arg_value(&args, "--images")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
 
     let tmp = std::env::temp_dir().join(format!("selachi-chat-demo-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
@@ -445,7 +554,7 @@ fn main() {
 
     let pace = if scene == "streaming" { 1 } else { 0 };
     let stop_at_approval = scene == "approval";
-    let factory = FakeFactory::new(script(pace, stop_at_approval));
+    let factory = FakeFactory::new(script(pace, stop_at_approval, out_bytes));
     *factory.on_approve.lock().unwrap_or_else(|p| p.into_inner()) = {
         let mut v = vec![Step::now(AgentEvent::Status(AgentStatus::Working))];
         v.extend(finish(1));
@@ -466,7 +575,21 @@ fn main() {
         spec.permission = PermissionMode::AcceptEdits;
         let rec = store.create_thread(spec).expect("create thread");
         let rt = store.open(rec.id).expect("open thread");
-        if scene != "streaming" {
+        if long_rows > 0 {
+            // 9 rows per turn; each turn waits for its answer before the next one starts.
+            let turns = long_rows.div_ceil(9);
+            for i in 0..turns {
+                let _ = rt.send(format!("[long {i}] módulo {i}"), Vec::new());
+                let want = 2 * (i + 1);
+                rt.wait_for(Duration::from_secs(60), |s| {
+                    s.status == ThreadStatus::Done && s.messages.len() >= want
+                });
+            }
+            eprintln!(
+                "chat_demo: --long {long_rows}: {} messages",
+                rt.with_state(|s| s.messages.len())
+            );
+        } else if scene != "streaming" {
             let _ = rt.send(
                 "Refactoriza el parser para que soporte comentarios anidados y añade tests",
                 Vec::new(),
@@ -525,6 +648,18 @@ fn main() {
             }
         }
     }
+
+    // Synthetic 4K screenshots (real, big PNGs).
+    let image_paths: Vec<PathBuf> = (0..images)
+        .map(|i| {
+            let path = tmp.join(format!("shot-{i}.png"));
+            let img = image::RgbaImage::from_fn(3840, 2160, |x, y| {
+                image::Rgba([(x ^ y) as u8, (x / 7 + i as u32) as u8, (y / 5) as u8, 255])
+            });
+            img.save(&path).expect("write png");
+            path
+        })
+        .collect();
 
     Application::new().with_assets(ui_kit::Assets).run(move |cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
@@ -588,6 +723,42 @@ fn main() {
                                 view.update(cx, |v, cx| v.debug_select((0, 20), (4, 12), spec == "menu", cx));
                             }
                         });
+                    })
+                    .detach();
+            }
+            if scroll_through || expand_all || !image_paths.is_empty() {
+                // Memory bench: attach the images, expand every row, paint every row once.
+                let tab = tab.clone();
+                let image_paths = image_paths.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        cx.background_executor().timer(Duration::from_millis(800)).await;
+                        let view = cx
+                            .update(|_, cx| tab.downcast::<ui_chat::ChatTab>().map(|t| t.read(cx).view().clone()))
+                            .ok()
+                            .flatten();
+                        let Some(view) = view else { return };
+                        if !image_paths.is_empty() {
+                            let _ = cx.update(|_, cx| view.update(cx, |v, cx| v.debug_attach(image_paths.clone(), cx)));
+                        }
+                        if expand_all {
+                            let _ = cx.update(|_, cx| view.update(cx, |v, cx| v.debug_expand_all(cx)));
+                        }
+                        if scroll_through {
+                            let mut ix = 0usize;
+                            loop {
+                                cx.background_executor().timer(Duration::from_millis(15)).await;
+                                let more = cx
+                                    .update(|_, cx| view.update(cx, |v, cx| v.debug_reveal(ix, cx)))
+                                    .unwrap_or(false);
+                                if !more {
+                                    break;
+                                }
+                                ix += 2;
+                            }
+                            let groups = cx.update(|_, cx| view.read(cx).selection_group_count()).unwrap_or(0);
+                            eprintln!("chat_demo: scrolled through {ix} rows; {groups} selection groups alive");
+                        }
                     })
                     .detach();
             }

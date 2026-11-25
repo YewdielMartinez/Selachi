@@ -114,7 +114,8 @@ fn seed(store: &ChatStore, root: PathBuf) -> Option<(ThreadId, ThreadId, ThreadI
             deadline_ms: now + 900_000,
             result: Some(result),
             applied_ms: None,
-            profile: None,
+            // the Codex run uses a profile: its card offers "Permitir siempre en este perfil"
+            profile: (t.agent == "codex").then(|| "Tests".to_string()),
             final_prompt: None,
             limits: None,
             launcher: Some("mcp".into()),

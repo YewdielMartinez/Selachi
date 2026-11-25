@@ -1,6 +1,7 @@
 //! The graph (nodes in columns by depth, elbow connectors painted with quads) and the timeline
 //! (a simple Gantt: one bar per delegation over time, which shows the parallelism).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
@@ -34,6 +35,7 @@ fn node_card(
     selected: bool,
     now_ms: i64,
     this: &Entity<AgentMapView>,
+    live: Option<&str>,
 ) -> gpui::Stateful<gpui::Div> {
     let c = theme.colors;
     let ty = theme.typography;
@@ -108,11 +110,13 @@ fn node_card(
                 .text_ellipsis()
                 .whitespace_nowrap()
                 .text_size(px(ty.ui_size_sm))
-                .text_color(c.muted)
-                .child(SharedString::from(
-                    fmt::model_effort(n.model.as_deref(), n.effort.as_deref())
+                .text_color(if live.is_some() { c.accent } else { c.muted })
+                .child(SharedString::from(match live {
+                    // A running node says what it is doing instead of its model.
+                    Some(l) => l.to_string(),
+                    None => fmt::model_effort(n.model.as_deref(), n.effort.as_deref())
                         .unwrap_or_else(|| crate::tree::agent_display(&n.agent)),
-                )),
+                })),
         )
         .child(
             div()
@@ -148,6 +152,19 @@ impl AgentMapView {
         let theme = self.theme;
         let c = theme.colors;
         let layout = graph_layout(&forest, root, &self.collapsed);
+        // Status lines of the running nodes on screen.
+        let live: HashMap<NodeKey, String> = {
+            let m = self.model.read(cx);
+            layout
+                .placed
+                .iter()
+                .filter_map(|p| {
+                    let k = &forest.nodes[p.node].key;
+                    m.live_line(k).map(|l| (k.clone(), l.to_string()))
+                })
+                .collect()
+        };
+        let live_line = |node: usize| live.get(&forest.nodes[node].key).map(String::as_str);
         let cols = layout.cols.max(1) as f32;
         let rows = layout.rows.max(1.0).ceil();
         let width = PAD * 2.0 + cols * NODE_W + (cols - 1.0) * COL_GAP;
@@ -245,13 +262,15 @@ impl AgentMapView {
                 continue;
             }
             let sel = selected.as_ref() == Some(&forest.nodes[p.node].key);
-            inner = inner.child(
-                div()
-                    .absolute()
-                    .left(px(x))
-                    .top(px(y))
-                    .child(node_card(&theme, &forest, p.node, sel, now, &this)),
-            );
+            inner = inner.child(div().absolute().left(px(x)).top(px(y)).child(node_card(
+                &theme,
+                &forest,
+                p.node,
+                sel,
+                now,
+                &this,
+                live_line(p.node),
+            )));
         }
 
         div()

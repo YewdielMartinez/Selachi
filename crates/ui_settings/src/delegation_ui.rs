@@ -24,6 +24,9 @@ pub const DELEGATE_AGENTS: [(&str, &str); 5] = [
     ("agy", "Antigravity"),
 ];
 
+/// Key of the add field of "Otros ejecutables de agente" (its error and text live under it).
+pub(crate) const EXTRA_AGENT_FIELD: &str = "extra_agent_add";
+
 /// The agents currently allowed (an empty list means all of them).
 pub fn effective_allowed(list: &[String]) -> Vec<&'static str> {
     if list.is_empty() {
@@ -92,6 +95,68 @@ pub fn approvals_help() -> String {
     }
     s.push_str("git push, git commit, rm -rf fuera del proyecto y los archivos de credenciales se rechazan siempre; un perfil o una ejecución solo pueden bajarlo.");
     s
+}
+
+/// What the user typed in "Otros ejecutables de agente", checked the way
+/// `proc_svc::extra_agent_stems` (what the map uses) will read it: `Ok` is the executable name to
+/// store, `Err` the Spanish reason it was refused (a built-in agent, a shell or runtime that would
+/// flag every such process, a duplicate, a full list).
+pub fn check_extra_agent(text: &str, existing: &[String]) -> Result<String, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Escribe el nombre del ejecutable, p. ej. aider.".into());
+    }
+    if text.chars().any(char::is_control) {
+        return Err("Una sola línea, sin saltos.".into());
+    }
+    if text.chars().count() > store::config::MAX_EXTRA_AGENT_CHARS {
+        return Err("Demasiado largo.".into());
+    }
+    let have = proc_svc::extra_agent_stems(existing);
+    let Some(stem) = proc_svc::extra_agent_stems(&[text]).into_iter().next() else {
+        let name = typed_stem(text);
+        return Err(if name.is_empty() {
+            "Nombre de ejecutable no válido.".to_string()
+        } else if proc_svc::KNOWN_AGENTS.contains(&name.as_str()) {
+            format!("«{name}» ya se detecta sin configurar nada.")
+        } else {
+            format!(
+                "«{name}» es un shell, un runtime o un proceso del sistema: marcaría todo lo que se ejecute con él."
+            )
+        });
+    };
+    if have.contains(&stem) {
+        return Err("Ya está en la lista.".into());
+    }
+    if have.len() >= proc_svc::MAX_EXTRA_AGENTS {
+        return Err(format!(
+            "Máximo {} ejecutables.",
+            proc_svc::MAX_EXTRA_AGENTS
+        ));
+    }
+    Ok(stem)
+}
+
+/// The executable name of what was typed (`acp:"C:\x\Foo.exe" --acp` -> `foo`), for the messages only.
+fn typed_stem(text: &str) -> String {
+    let t = text.trim();
+    let t = t
+        .strip_prefix("acp:")
+        .or_else(|| t.strip_prefix("ACP:"))
+        .unwrap_or(t)
+        .trim();
+    let first = if let Some(rest) = t.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("")
+    } else {
+        t.split_whitespace().next().unwrap_or("")
+    };
+    let seg = first.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".com", ".ps1"] {
+        if let Some(s) = seg.strip_suffix(ext) {
+            return s.to_string();
+        }
+    }
+    seg
 }
 
 /// Minutes as the field shows them (`15`, `7,5`).
@@ -198,6 +263,7 @@ impl SettingsView {
                 s.edit_cfg(cx, |c| c.delegation.max_depth = n);
             },
         );
+        let extra_agents = self.extra_agents_control(cx);
         let concurrent = self.input(cx, "deleg_concurrent", "3", 80.0, true);
         let timeout = self.input(cx, "deleg_timeout", "15", 80.0, true);
         let budget = self.input(cx, "deleg_budget", "2000000", 140.0, true);
@@ -224,6 +290,15 @@ impl SettingsView {
                     Some("A quiénes se puede delegar. Todos encendidos = sin restricción.".into()),
                     chips,
                     None,
+                )
+                .into_any_element(),
+                row(
+                    &t,
+                    true,
+                    "Otros ejecutables de agente",
+                    Some("Programas que el mapa debe marcar como «lanzado fuera de Selachi» además de claude, codex, opencode, gemini y agy (p. ej. aider). Los shells y runtimes como node o pwsh no se aceptan.".into()),
+                    extra_agents,
+                    self.error_for(EXTRA_AGENT_FIELD).or_else(|| self.error_for("delegation.extra_agents")),
                 )
                 .into_any_element(),
                 row(
@@ -309,6 +384,108 @@ impl SettingsView {
         let register =
             ui::group(&t, Some("Registrar en otros agentes"), register_rows).into_any_element();
         vec![rules, register]
+    }
+
+    /// "Otros ejecutables de agente": the configured names as removable chips and the add field
+    /// (Enter adds). Validation is [`check_extra_agent`], the same reading the map applies.
+    fn extra_agents_control(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let c = t.colors;
+        let ty = t.typography;
+        let list = self.cfg.delegation.extra_agents.clone();
+        let mut wrap = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(8.0));
+        if !list.is_empty() {
+            let mut chips = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(6.0));
+            for (i, item) in list.iter().enumerate() {
+                let this = cx.entity();
+                chips = chips.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .h(px(24.0))
+                        .pl(px(9.0))
+                        .pr(px(4.0))
+                        .rounded(px(theme::Radius::CHIP))
+                        .bg(c.surface_3)
+                        .font_family(ty.mono_family)
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.text)
+                        .child(SharedString::from(item.clone()))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("extra-agent-x-{i}")))
+                                .debug_selector({
+                                    let id = format!("extra-agent-x-{i}");
+                                    move || id.clone()
+                                })
+                                .size(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme::Radius::CHIP))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(c.surface_4))
+                                .on_click(move |_, _, cx| {
+                                    this.update(cx, |s, cx| s.remove_extra_agent(i, cx))
+                                })
+                                .child(ui_kit::icon(ui_kit::Icon::Close, 12.0, c.muted)),
+                        ),
+                );
+            }
+            wrap = wrap.child(chips);
+        }
+        let add = self.input(
+            cx,
+            EXTRA_AGENT_FIELD,
+            "Añadir ejecutable, p. ej. aider (Enter)",
+            260.0,
+            true,
+        );
+        wrap.child(add).into_any_element()
+    }
+
+    /// Enter in the add field.
+    pub(crate) fn add_extra_agent(&mut self, cx: &mut Context<Self>) {
+        let text = self.field_text(EXTRA_AGENT_FIELD, cx);
+        if text.trim().is_empty() {
+            return;
+        }
+        match check_extra_agent(&text, &self.cfg.delegation.extra_agents) {
+            Ok(name) => {
+                self.errors.remove(EXTRA_AGENT_FIELD);
+                self.edit_cfg(cx, |c| c.delegation.extra_agents.push(name));
+                if let Some(f) = self.fields.get(EXTRA_AGENT_FIELD).cloned() {
+                    f.update(cx, |f, cx| f.set_text("", cx));
+                }
+                self.errors.remove(EXTRA_AGENT_FIELD);
+            }
+            Err(why) => {
+                self.errors.insert(EXTRA_AGENT_FIELD.to_string(), why);
+            }
+        }
+        self.sync_invalid(cx);
+        cx.notify();
+    }
+
+    fn remove_extra_agent(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i < self.cfg.delegation.extra_agents.len() {
+            self.edit_cfg(cx, |c| {
+                c.delegation.extra_agents.remove(i);
+            });
+        }
     }
 
     /// One "Registrar en …" row: the button opens a dialog with the exact command.
@@ -551,6 +728,48 @@ mod tests {
         assert_eq!(approvals_value("???"), "ask", "unknown is the careful one");
         let help = approvals_help();
         assert!(help.contains("No preguntar: ") && help.contains("git push"));
+    }
+
+
+    #[test]
+    fn extra_agents_follow_what_the_map_will_read() {
+        // a plain name, a path, an acp command: all become the executable stem
+        assert_eq!(check_extra_agent(" aider ", &[]).unwrap(), "aider");
+        assert_eq!(
+            check_extra_agent(r#"acp:"C:\tools\My-Agent.exe" --acp"#, &[]).unwrap(),
+            "my-agent"
+        );
+        // shells and runtimes would flag every process of that kind
+        for bad in ["node", "pwsh.exe", "python", "bash", "cmd"] {
+            let e = check_extra_agent(bad, &[]).unwrap_err();
+            assert!(e.contains("shell, un runtime"), "{bad}: {e}");
+        }
+        // the five built-in agents are already detected
+        assert!(
+            check_extra_agent("agy", &[])
+                .unwrap_err()
+                .contains("ya se detecta")
+        );
+        assert!(check_extra_agent("  ", &[]).is_err());
+        assert!(check_extra_agent("a\nb", &[]).is_err());
+        // duplicates (also when stored as an acp command) and the cap
+        assert_eq!(
+            check_extra_agent("aider", &v(&["Aider"])).unwrap_err(),
+            "Ya está en la lista."
+        );
+        assert!(check_extra_agent("goose", &v(&["acp:goose --acp"])).is_err());
+        let full: Vec<String> = (0..proc_svc::MAX_EXTRA_AGENTS)
+            .map(|i| format!("tool{i}"))
+            .collect();
+        assert!(
+            check_extra_agent("one-more", &full)
+                .unwrap_err()
+                .starts_with("Máximo")
+        );
+        // whatever is accepted is a valid `[delegation] extra_agents` entry
+        let mut c = store::Config::default();
+        c.delegation.extra_agents = vec![check_extra_agent("aider", &[]).unwrap()];
+        assert!(c.validate().is_empty(), "{:?}", c.validate());
     }
 
     #[test]

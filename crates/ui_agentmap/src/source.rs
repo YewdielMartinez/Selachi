@@ -10,6 +10,7 @@ use chat_core::{
 };
 use futures::channel::mpsc::UnboundedReceiver;
 
+use crate::activity::{ActivityEvent, LiveHint, chat_events, live_hint};
 use crate::registry::ApprovalEntry;
 
 /// Read access to the chat threads of the session.
@@ -23,6 +24,18 @@ pub trait SessionSource: Send + Sync + 'static {
 
     /// The approvals the thread asked for, oldest first.
     fn approvals(&self, id: ThreadId) -> Vec<ApprovalEntry>;
+
+    /// What the child thread did: its assistant text, commands, edits and approvals as feed
+    /// events (source A of the activity feed). `thread_active`: the run is still in flight.
+    /// Empty when the source has nothing (the events log may still have it).
+    fn activity(&self, _id: ThreadId, _thread_active: bool) -> Vec<ActivityEvent> {
+        Vec::new()
+    }
+
+    /// What a running thread is doing right now, for the line under its name in the tree. Cheap.
+    fn live_hint(&self, _id: ThreadId) -> LiveHint {
+        LiveHint::None
+    }
 
     /// Stream of "something changed in a thread" (the store's own). `None` when the source has no
     /// live updates: the host then calls `AgentMapModel::refresh`.
@@ -93,6 +106,20 @@ impl SessionSource for ChatStoreSource {
                 })
                 .collect()
         })
+    }
+
+    fn activity(&self, id: ThreadId, thread_active: bool) -> Vec<ActivityEvent> {
+        let Ok(rt) = self.store.open(id) else {
+            return Vec::new();
+        };
+        rt.with_state(|s| chat_events(&s.messages, thread_active))
+    }
+
+    fn live_hint(&self, id: ThreadId) -> LiveHint {
+        let Ok(rt) = self.store.open(id) else {
+            return LiveHint::None;
+        };
+        rt.with_state(|s| live_hint(&s.messages))
     }
 
     fn updates(&self) -> Option<UnboundedReceiver<ThreadUpdate>> {

@@ -102,6 +102,16 @@ Whatever the delegated agent wants to run that needs a yes goes through Selachi,
   `del /s`, `format`, `diskpart`, `reg add|delete`, and anything that touches credential files (`.env`,
   `.ssh`, `.aws`, `.npmrc`, ...). If the child needs one of those, do it yourself after the run, with the
   user's say-so. Denials show up in the result's `notes`.
+- «Permitir siempre en este perfil»: when the user answers an approval with that button (`always_profile`),
+  Selachi saves the command's pattern (`cargo test -p x` becomes `cargo test *`) in the profile's
+  `allowed_commands` and approves matching commands without asking for the rest of that run and for
+  later runs of the profile. It is the user's decision in the Selachi window: you never trigger it, and
+  without a profile (or for a command that chains, runs a shell or an interpreter) it is a single yes.
+  Do not edit `allowed_commands` yourself.
+- Every run also writes a live events log, `agent-runs/<run_id>.events.jsonl` in Selachi's data folder (one
+  JSON line per message chunk, tool start / end with its output tail, file edit, approval and status, all
+  redacted, capped at 5 MB). It is for the user's activity view; you do not need to read it, use
+  `agent_status` / `agent_result`.
 - Do not try to talk the child into approving something itself, and do not wrap a blocked command in
   `cmd /c` or a script to get it past the check.
 

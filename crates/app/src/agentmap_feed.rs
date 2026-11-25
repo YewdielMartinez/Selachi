@@ -20,8 +20,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
-use proc_svc::{CpuSampler, ExternalAgentProc, OwnerReport, ProcInfo, find_external_agents_with};
-use ui_agentmap::{ExternalProc, NodeKey};
+use proc_svc::{CpuSampler, ExternalAgentProc, OwnerReport, ProcInfo, find_external_agents_cfg};
+use ui_agentmap::{ExternalChild, ExternalProc, NodeKey};
 use ui_procs::SharedTracker;
 
 use crate::chat_host::OWNER_BASE;
@@ -99,6 +99,7 @@ pub fn externals_by_parent(
     reports: &[OwnerReport],
     procs: &[ProcInfo],
     cpu_by_pid: &HashMap<u32, f32>,
+    extra_agents: &[String],
 ) -> Vec<(NodeKey, Vec<ExternalProc>)> {
     let by_pid: HashMap<u32, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
     let all_roots: Vec<(u64, u32)> = reports
@@ -127,7 +128,7 @@ pub fn externals_by_parent(
             .collect();
         let mut found: Vec<ExternalAgentProc> = Vec::new();
         for root in roots {
-            for p in find_external_agents_with(root, procs, cpu_by_pid, &[], &exclude) {
+            for p in find_external_agents_cfg(root, procs, cpu_by_pid, extra_agents, &exclude) {
                 if !found.iter().any(|f| f.pid == p.pid) {
                     found.push(p);
                 }
@@ -270,6 +271,7 @@ mod tests {
             &[report(OWNER_BASE | 5, &procs[0])],
             &procs,
             &HashMap::new(),
+            &[],
         );
         assert_eq!(rows.len(), 1);
         let (key, list) = &rows[0];
@@ -298,6 +300,7 @@ mod tests {
             &[report(7, &procs[0]), report(8, &procs[4])],
             &procs,
             &HashMap::new(),
+            &[],
         );
         assert_eq!(rows.len(), 2);
         let first = rows
@@ -332,12 +335,13 @@ mod tests {
             meta: OwnerMeta::default(),
             processes: Vec::new(),
         };
-        assert!(externals_by_parent(&[empty], &procs, &HashMap::new()).is_empty());
+        assert!(externals_by_parent(&[empty], &procs, &HashMap::new(), &[]).is_empty());
         // claude is its own chat owner: its agy belongs to that owner, not to the terminal
         let rows = externals_by_parent(
             &[report(7, &procs[0]), report(OWNER_BASE | 1, &procs[1])],
             &procs,
             &HashMap::new(),
+            &[],
         );
         let term = rows
             .iter()

@@ -77,6 +77,11 @@ pub(crate) fn apply(
             Ok(p) => view.edit_field(key, cx, |c| c.delegation.weekly_usage_threshold_percent = p),
             Err(m) => set_error(view, key, &m, cx),
         },
+        // typing in the add field only clears its error; Enter adds (see `add_extra_agent`)
+        "extra_agent_add" => {
+            view.errors.remove(key);
+            view.sync_invalid(cx);
+        }
         "external_editor" => view.edit_field(key, cx, |c| c.git.external_editor = trimmed),
         "index_url" => view.edit_field(key, cx, |c| c.plugins.index_url = trimmed),
         k if k.starts_with("profile.") => profile_field(view, k, text, cx),

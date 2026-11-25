@@ -86,6 +86,9 @@ pub struct PendingApproval {
     incoming: Option<Incoming>,
     /// Present when [`ApprovalRequest::tool`] is [`APPLY_TOOL`].
     pub plan: Option<PlanView>,
+    /// Name of the profile the run uses, once known (read from the run's record). «Permitir siempre en
+    /// este perfil» is only offered when there is one.
+    pub profile: Option<String>,
 }
 
 impl PendingApproval {
@@ -179,6 +182,7 @@ impl ApprovalQueue {
             request,
             incoming,
             plan,
+            profile: None,
         });
         cx.emit(ApprovalEvent::Added(id));
         cx.notify();
@@ -198,6 +202,16 @@ impl ApprovalQueue {
         }
         cx.emit(ApprovalEvent::Removed(id.to_string()));
         cx.notify();
+    }
+
+    /// The run's profile became known (the shell reads the run record off the UI thread).
+    pub fn set_profile(&mut self, id: &str, profile: Option<String>, cx: &mut Context<Self>) {
+        if let Some(p) = self.pending.iter_mut().find(|p| p.request.request_id == id)
+            && p.profile != profile
+        {
+            p.profile = profile;
+            cx.notify();
+        }
     }
 
     fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -420,6 +434,25 @@ mod queue_tests {
         assert!(queue.read_with(cx, |q, _| {
             q.pending().iter().all(|p| p.request.request_id != "r3")
         }));
+    }
+
+    /// The run's profile arrives after the card (it is read off the UI thread); a card without one
+    /// stays without «Permitir siempre en este perfil».
+    #[gpui::test]
+    fn the_profile_of_a_run_is_attached_to_its_card(cx: &mut TestAppContext) {
+        let queue = cx.new(|cx| ApprovalQueue::new(None, cx));
+        queue.update(cx, |q, cx| q.add_demo(req("r1", "Bash"), cx));
+        assert_eq!(queue.read_with(cx, |q, _| q.pending()[0].profile.clone()), None);
+        queue.update(cx, |q, cx| {
+            q.set_profile("other", Some("X".into()), cx);
+            q.set_profile("r1", Some("Tests".into()), cx);
+        });
+        assert_eq!(
+            queue.read_with(cx, |q, _| q.pending()[0].profile.clone()),
+            Some("Tests".to_string())
+        );
+        queue.update(cx, |q, cx| q.set_profile("r1", None, cx));
+        assert_eq!(queue.read_with(cx, |q, _| q.pending()[0].profile.clone()), None);
     }
 
     #[gpui::test]

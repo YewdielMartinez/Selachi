@@ -132,6 +132,9 @@ approval_timeout_secs = 120
 # pregunta; una lista fija de comandos peligrosos se rechaza siempre). Un perfil o una ejecución
 # solo pueden bajar este modo, nunca subirlo.
 approvals = "ask"
+# Otros ejecutables de agente que el mapa debe marcar como «lanzados fuera de Selachi», p. ej.
+# ["aider", "goose"] (hasta 32; los shells y runtimes como node o pwsh se ignoran).
+extra_agents = []
 
 [agent_profiles]
 # Perfiles de subagente (`selachi-agent run --profile <nombre>`): `%APPDATA%\Selachi\agents\*.toml`

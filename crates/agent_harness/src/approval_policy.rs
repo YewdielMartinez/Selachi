@@ -375,7 +375,7 @@ fn program_stem(token: &str) -> String {
     name.to_string()
 }
 
-const WRAPPERS: &[&str] = &[
+pub(crate) const WRAPPERS: &[&str] = &[
     "cmd",
     "powershell",
     "pwsh",

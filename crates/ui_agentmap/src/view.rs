@@ -19,9 +19,10 @@ use ui_kit::{
     UniformListScrollHandle, WireFill, WireRect, Wireframe, icon,
 };
 
+use crate::activity_ui::ActivityUi;
 use crate::events::AgentMapEvent;
 use crate::fmt;
-use crate::model::AgentMapModel;
+use crate::model::{AgentMapModel, InspectorTab};
 use crate::tree::{NodeKey, visible_rows};
 
 /// Id of the provider (what `layout.right_panel` stores).
@@ -98,9 +99,12 @@ impl RowLayout {
         }
     }
 
-    pub(crate) fn height(self) -> f32 {
+    /// Row height. While some visible row has a status line (a running node) the one-line layouts
+    /// grow to make room for it under the name; the compact one already has two lines.
+    pub(crate) fn height(self, live: bool) -> f32 {
         match self {
             RowLayout::Compact => 48.0,
+            RowLayout::Lite | RowLayout::Full if live => 46.0,
             RowLayout::Lite | RowLayout::Full => 36.0,
         }
     }
@@ -127,6 +131,8 @@ pub struct AgentMapView {
     pub(crate) timeline_scroll: UniformListScrollHandle,
     pub(crate) graph_scroll: ScrollHandle,
     pub(crate) inspector_scroll: ScrollHandle,
+    /// The Actividad tab (feed list, filter, expanded rows).
+    pub(crate) act: ActivityUi,
     pub(crate) measured: MeasuredWidth,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
@@ -174,6 +180,7 @@ impl AgentMapView {
             timeline_scroll: UniformListScrollHandle::new(),
             graph_scroll: ScrollHandle::new(),
             inspector_scroll: ScrollHandle::new(),
+            act: ActivityUi::new(cx),
             measured: MeasuredWidth::with_breaks(&[COMPACT_BELOW, LITE_BELOW, SPLIT_FROM]),
             focus: cx.focus_handle(),
             _subs: subs,
@@ -211,6 +218,17 @@ impl AgentMapView {
         self.inspector_scroll
             .set_offset(gpui::point(px(0.0), px(0.0)));
         self.model.update(cx, |m, cx| m.select(key, cx));
+    }
+
+    /// The inspector tab of the shown node.
+    pub fn inspector_tab(&self, cx: &App) -> InspectorTab {
+        self.model.read(cx).inspector_tab()
+    }
+
+    pub fn set_inspector_tab(&mut self, tab: InspectorTab, cx: &mut Context<Self>) {
+        self.inspector_scroll
+            .set_offset(gpui::point(px(0.0), px(0.0)));
+        self.model.update(cx, |m, cx| m.set_inspector_tab(tab, cx));
     }
 
     pub(crate) fn toggle_collapsed(&mut self, key: NodeKey, cx: &mut Context<Self>) {

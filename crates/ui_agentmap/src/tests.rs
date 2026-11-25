@@ -17,9 +17,12 @@ use panel_api::{PanelCtx, PanelRegistry, PanelZone, WidthClass};
 use theme::Theme;
 use ui_kit::testing;
 
+use crate::activity::{
+    ActivityEvent, ActivityFilter, ActivityKind, CommandStatus, ExternalChild, LiveHint,
+};
 use crate::events::AgentMapEvent;
 use crate::inspector::{EXTERNAL_EXPLANATION, available, external_facts, limit_rows};
-use crate::model::{AgentMapModel, CHAT_DEBOUNCE, PromptSource};
+use crate::model::{AgentMapModel, CHAT_DEBOUNCE, InspectorTab, PromptSource};
 use crate::registry::ApprovalEntry;
 use crate::source::SessionSource;
 use crate::tree::{ExternalProc, MAX_EXTERNAL_PER_SESSION, NodeKey, NodeKind, NodeStatus};
@@ -65,6 +68,10 @@ struct FakeSource {
     approvals: Mutex<HashMap<i64, Vec<ApprovalEntry>>>,
     reads: AtomicUsize,
     live: Mutex<Option<UnboundedReceiver<ThreadUpdate>>>,
+    /// What the chat says each thread did (source A of the activity feed).
+    acts: Mutex<HashMap<i64, Vec<ActivityEvent>>>,
+    act_reads: AtomicUsize,
+    hint_reads: AtomicUsize,
 }
 
 impl SessionSource for FakeSource {
@@ -84,6 +91,21 @@ impl SessionSource for FakeSource {
             .get(&id.0)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn activity(&self, id: ThreadId, _active: bool) -> Vec<ActivityEvent> {
+        self.act_reads.fetch_add(1, Ordering::SeqCst);
+        self.acts
+            .lock()
+            .unwrap()
+            .get(&id.0)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn live_hint(&self, _id: ThreadId) -> LiveHint {
+        self.hint_reads.fetch_add(1, Ordering::SeqCst);
+        LiveHint::None
     }
 
     fn updates(&self) -> Option<UnboundedReceiver<ThreadUpdate>> {
@@ -986,4 +1008,538 @@ fn external_inspector_facts_and_available_actions() {
     assert_eq!(find_done("Duración"), Some("1 min 05"));
     assert_eq!(find_done("CPU"), None);
     assert_eq!(find_done("RAM"), None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Live activity (9A)
+// ---------------------------------------------------------------------------------------------
+
+fn write_events(dir: &Path, id: i64, text: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join(format!("{id}.events.jsonl")), text).unwrap();
+}
+
+fn append_events(dir: &Path, id: i64, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(format!("{id}.events.jsonl")))
+        .unwrap();
+    f.write_all(text.as_bytes()).unwrap();
+}
+
+const RUNNING_LOG: &str = concat!(
+    r#"{"t":100,"type":"message_delta","text":"Voy a probar."}"#,
+    "\n",
+    r#"{"t":200,"type":"tool_start","id":"c1","kind":"command","command":"cargo test -p store"}"#,
+    "\n",
+    r#"{"t":900,"type":"tool_end","id":"c1","exit_code":0,"duration_ms":700,"output_tail":"ok"}"#,
+    "\n",
+    r#"{"t":1000,"type":"tool_start","id":"c2","kind":"command","command":"cargo clippy"}"#,
+    "\n",
+);
+
+fn feed_len(cx: &mut TestAppContext, m: &Entity<AgentMapModel>, id: i64) -> usize {
+    cx.read_entity(m, |m, _| {
+        m.activity_feed(&NodeKey::Thread(ThreadId(id)))
+            .map_or(0, |f| f.events.len())
+    })
+}
+
+fn acts(rig: &Rig) -> usize {
+    rig.source.act_reads.load(Ordering::SeqCst)
+}
+
+#[gpui::test]
+fn running_nodes_show_a_live_status_line_and_finished_ones_do_not(cx: &mut TestAppContext) {
+    let rig = rig();
+    write_events(&rig.runs(), 3, RUNNING_LOG);
+    let m = model(cx, &rig);
+    m.update(cx, |m, cx| m.attach(cx));
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        assert_eq!(
+            m.live_line(&NodeKey::Thread(ThreadId(3))),
+            Some("ejecutando `cargo clippy`"),
+            "the command that started and did not end"
+        );
+        assert_eq!(
+            m.live_line(&NodeKey::Thread(ThreadId(2))),
+            None,
+            "done: no line"
+        );
+        assert!(m.has_live_lines());
+    });
+    // reading the line did not read any feed
+    assert_eq!(acts(&rig), 0);
+}
+
+#[gpui::test]
+fn the_activity_tab_reads_only_the_selected_node_and_only_on_that_tab(cx: &mut TestAppContext) {
+    let rig = rig();
+    write_events(&rig.runs(), 3, RUNNING_LOG);
+    write_events(
+        &rig.runs(),
+        2,
+        r#"{"t":5,"type":"message_delta","text":"hecho"}"#,
+    );
+    let m = model(cx, &rig);
+    m.update(cx, |m, cx| m.attach(cx));
+    settle(cx);
+
+    // inspector open on the Summary tab: the feed is not read
+    m.update(cx, |m, cx| m.select(Some(NodeKey::Thread(ThreadId(3))), cx));
+    settle(cx);
+    assert_eq!(acts(&rig), 0);
+    assert_eq!(feed_len(cx, &m, 3), 0);
+
+    // Activity tab: the feed of node 3 (log commands + messages) appears, and only that one
+    m.update(cx, |m, cx| m.set_inspector_tab(InspectorTab::Activity, cx));
+    settle(cx);
+    assert!(acts(&rig) >= 1);
+    assert_eq!(feed_len(cx, &m, 3), 3, "message + two commands");
+    assert_eq!(feed_len(cx, &m, 2), 0);
+
+    // another node: the feed of 3 is dropped, 2's is read
+    m.update(cx, |m, cx| m.select(Some(NodeKey::Thread(ThreadId(2))), cx));
+    settle(cx);
+    assert_eq!(feed_len(cx, &m, 3), 0);
+    assert_eq!(feed_len(cx, &m, 2), 1);
+
+    // back to Summary: nothing is watched and appends cost nothing
+    m.update(cx, |m, cx| m.set_inspector_tab(InspectorTab::Summary, cx));
+    settle(cx);
+    let (reads, passes) = (acts(&rig), cx.read_entity(&m, |m, _| m.passes()));
+    append_events(
+        &rig.runs(),
+        2,
+        "{\"t\":6,\"type\":\"message_delta\",\"text\":\"mas\"}\n",
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    settle(cx);
+    assert_eq!(acts(&rig), reads);
+    assert_eq!(feed_len(cx, &m, 2), 0);
+    let _ = passes;
+}
+
+#[gpui::test]
+fn nothing_activity_related_runs_while_the_map_is_hidden(cx: &mut TestAppContext) {
+    let rig = rig();
+    write_events(&rig.runs(), 3, RUNNING_LOG);
+    let m = model(cx, &rig);
+    // hidden: selecting, switching tabs, feeding children and chat updates do no work at all
+    m.update(cx, |m, cx| {
+        m.select(Some(NodeKey::Thread(ThreadId(3))), cx);
+        m.set_inspector_tab(InspectorTab::Activity, cx);
+        m.set_external_children_at(
+            NodeKey::External {
+                pid: 1,
+                started_ms: 1,
+            },
+            vec![],
+            0,
+            cx,
+        );
+    });
+    let _ = rig.updates.unbounded_send(ThreadUpdate {
+        thread_id: ThreadId(3),
+        revision: 1,
+        status: ThreadStatus::Working,
+        changed: Changed {
+            messages: true,
+            ..Changed::default()
+        },
+    });
+    append_events(
+        &rig.runs(),
+        3,
+        "{\"t\":2000,\"type\":\"message_delta\",\"text\":\"x\"}\n",
+    );
+    cx.executor().advance_clock(Duration::from_secs(1));
+    std::thread::sleep(Duration::from_millis(300));
+    settle(cx);
+    assert_eq!(cx.read_entity(&m, |m, _| m.passes()), 0);
+    assert_eq!(acts(&rig), 0);
+    assert_eq!(rig.source.hint_reads.load(Ordering::SeqCst), 0);
+
+    // shown on the Activity tab of the selected node: it reads
+    m.update(cx, |m, cx| m.attach(cx));
+    settle(cx);
+    assert!(cx.read_entity(&m, |m, _| m.passes()) >= 1);
+    assert!(acts(&rig) >= 1);
+    assert!(feed_len(cx, &m, 3) >= 3);
+
+    // hidden again: everything is released, and later appends / updates cost nothing
+    m.update(cx, |m, cx| m.detach(cx));
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        assert!(m.activity_feed(&NodeKey::Thread(ThreadId(3))).is_none());
+        assert!(m.live_line(&NodeKey::Thread(ThreadId(3))).is_none());
+        assert!(!m.is_watching());
+    });
+    let (passes, reads) = (cx.read_entity(&m, |m, _| m.passes()), acts(&rig));
+    append_events(
+        &rig.runs(),
+        3,
+        "{\"t\":3000,\"type\":\"message_delta\",\"text\":\"y\"}\n",
+    );
+    let _ = rig.updates.unbounded_send(ThreadUpdate {
+        thread_id: ThreadId(3),
+        revision: 2,
+        status: ThreadStatus::Working,
+        changed: Changed {
+            messages: true,
+            approvals: true,
+            ..Changed::default()
+        },
+    });
+    cx.executor().advance_clock(Duration::from_secs(1));
+    std::thread::sleep(Duration::from_millis(300));
+    settle(cx);
+    assert_eq!(cx.read_entity(&m, |m, _| m.passes()), passes);
+    assert_eq!(acts(&rig), reads);
+}
+
+#[gpui::test]
+fn an_events_log_append_updates_the_feed_without_polling(cx: &mut TestAppContext) {
+    let rig = rig();
+    write_events(&rig.runs(), 3, RUNNING_LOG);
+    let m = model(cx, &rig);
+    m.update(cx, |m, cx| {
+        m.select(Some(NodeKey::Thread(ThreadId(3))), cx);
+        m.set_inspector_tab(InspectorTab::Activity, cx);
+        m.attach(cx);
+    });
+    settle(cx);
+    assert_eq!(feed_len(cx, &m, 3), 3);
+    let builds_before = builds(cx, &m);
+
+    // the harness finishes the second command and writes half of the next line
+    append_events(
+        &rig.runs(),
+        3,
+        "{\"t\":1500,\"type\":\"tool_end\",\"id\":\"c2\",\"exit_code\":1,\"output_tail\":\"warning\"}\n{\"t\":1600,\"type\":\"file_edit\",\"pa",
+    );
+    let m2 = m.clone();
+    assert!(
+        wait_until(cx, move |cx| {
+            cx.read_entity(&m2, |m, _| {
+                m.activity_feed(&NodeKey::Thread(ThreadId(3))).is_some_and(|f| {
+                    f.events.iter().any(|e| {
+                        matches!(&e.kind, ActivityKind::Command(c) if c.status == CommandStatus::Failed)
+                    })
+                })
+            })
+        }),
+        "the DirWatcher did not wake the activity feed"
+    );
+    assert_eq!(feed_len(cx, &m, 3), 3, "the half line waits");
+    assert_eq!(
+        builds(cx, &m),
+        builds_before,
+        "a log append does not reload the forest"
+    );
+    // the rest of the line arrives
+    append_events(&rig.runs(), 3, "th\":\"src/a.rs\",\"added\":4}\n");
+    let m3 = m.clone();
+    assert!(wait_until(cx, move |cx| feed_len(cx, &m3, 3) == 4));
+}
+
+#[gpui::test]
+fn chat_events_and_the_log_merge_in_the_feed(cx: &mut TestAppContext) {
+    let rig = rig();
+    rig.source.acts.lock().unwrap().insert(
+        3,
+        vec![ActivityEvent::new(
+            "m:1.0",
+            3_050,
+            ActivityKind::Message {
+                text: "texto del chat".into(),
+                streaming: false,
+            },
+        )],
+    );
+    write_events(&rig.runs(), 3, RUNNING_LOG);
+    let m = model(cx, &rig);
+    m.update(cx, |m, cx| {
+        m.select(Some(NodeKey::Thread(ThreadId(3))), cx);
+        m.set_inspector_tab(InspectorTab::Activity, cx);
+        m.attach(cx);
+    });
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        let f = m.activity_feed(&NodeKey::Thread(ThreadId(3))).unwrap();
+        // chat message preferred over the log's delta; the log's commands are added
+        assert_eq!(f.events.len(), 3);
+        assert!(matches!(&f.events[0].kind, ActivityKind::Message { text, .. } if text == "texto del chat"));
+        assert!(f.active);
+    });
+}
+
+#[gpui::test]
+fn a_chat_update_of_a_running_thread_refreshes_the_feed(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    m.update(cx, |m, cx| {
+        m.select(Some(NodeKey::Thread(ThreadId(3))), cx);
+        m.set_inspector_tab(InspectorTab::Activity, cx);
+        m.attach(cx);
+    });
+    settle(cx);
+    assert_eq!(feed_len(cx, &m, 3), 0);
+    rig.source.acts.lock().unwrap().insert(
+        3,
+        vec![ActivityEvent::new(
+            "m:1.0",
+            3_050,
+            ActivityKind::Message {
+                text: "streaming".into(),
+                streaming: true,
+            },
+        )],
+    );
+    let _ = rig.updates.unbounded_send(ThreadUpdate {
+        thread_id: ThreadId(3),
+        revision: 3,
+        status: ThreadStatus::Working,
+        changed: Changed {
+            messages: true,
+            ..Changed::default()
+        },
+    });
+    cx.executor().advance_clock(crate::ACTIVITY_DEBOUNCE * 2);
+    settle(cx);
+    assert_eq!(feed_len(cx, &m, 3), 1);
+    // a thread the map does not follow (done node 2) is ignored
+    let before = cx.read_entity(&m, |m, _| m.passes());
+    let _ = rig.updates.unbounded_send(ThreadUpdate {
+        thread_id: ThreadId(2),
+        revision: 3,
+        status: ThreadStatus::Done,
+        changed: Changed {
+            messages: true,
+            ..Changed::default()
+        },
+    });
+    cx.executor().advance_clock(crate::ACTIVITY_DEBOUNCE * 2);
+    settle(cx);
+    assert_eq!(cx.read_entity(&m, |m, _| m.passes()), before);
+}
+
+fn kid(pid: u32, started: i64, ended: Option<i64>, code: Option<i32>, cmd: &str) -> ExternalChild {
+    ExternalChild {
+        pid,
+        cmdline_redacted: cmd.into(),
+        started_ms: started,
+        ended_ms: ended,
+        exit_code: code,
+        cpu_pct: ended.is_none().then_some(20.0),
+        rss_bytes: if ended.is_none() { 80 << 20 } else { 0 },
+    }
+}
+
+#[gpui::test]
+fn external_agents_show_their_child_processes_as_commands(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let ext = ExternalProc {
+        agent: "agy".into(),
+        pid: 4242,
+        cmdline_redacted: "agy -p check".into(),
+        cwd: None,
+        model: None,
+        effort: None,
+        started_ms: 4_000,
+        ended_ms: None,
+        exit_code: None,
+        cpu_pct: Some(5.0),
+        rss_bytes: 1 << 20,
+    };
+    let key = ext.key();
+    // hidden: children are not stored
+    m.update(cx, |m, cx| {
+        m.set_external_children_at(
+            key.clone(),
+            vec![kid(1, 5_000, None, None, "cargo build")],
+            6_000,
+            cx,
+        )
+    });
+    assert!(cx.read_entity(&m, |m, _| m.external_children(&key).is_empty()));
+
+    m.update(cx, |m, cx| m.attach(cx));
+    settle(cx);
+    m.update(cx, |m, cx| {
+        m.set_external_at(NodeKey::Thread(ThreadId(1)), vec![ext.clone()], 4_500, cx);
+    });
+    settle(cx);
+    m.update(cx, |m, cx| {
+        m.select(Some(key.clone()), cx);
+        m.set_inspector_tab(InspectorTab::Activity, cx);
+        m.set_external_children_at(
+            key.clone(),
+            vec![
+                kid(
+                    11,
+                    5_000,
+                    None,
+                    None,
+                    "cargo build --token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+                ),
+                kid(10, 4_100, Some(4_900), Some(0), "git status"),
+            ],
+            6_000,
+            cx,
+        );
+    });
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        let f = m.activity_feed(&key).expect("feed of the external node");
+        assert!(f.external);
+        assert_eq!(f.events.len(), 2);
+        let line = m.live_line(&key).unwrap();
+        assert!(line.starts_with("ejecutando `cargo build"), "{line}");
+        assert!(!line.contains("abcdefghijklmnopqrstuvwxyz0123456789"));
+        assert!(matches!(&f.events[1].kind, ActivityKind::Command(c) if c.status == CommandStatus::Running && c.cpu_pct == Some(20.0)));
+    });
+    // the Prompt tab does not exist for external nodes
+    m.update(cx, |m, cx| m.set_inspector_tab(InspectorTab::Prompt, cx));
+    assert_eq!(
+        cx.read_entity(&m, |m, _| m.inspector_tab()),
+        InspectorTab::Activity
+    );
+    // a process that vanished is marked finished and kept
+    m.update(cx, |m, cx| {
+        m.set_external_children_at(
+            key.clone(),
+            vec![kid(10, 4_100, Some(4_900), Some(0), "git status")],
+            9_000,
+            cx,
+        )
+    });
+    cx.read_entity(&m, |m, _| {
+        let kids = m.external_children(&key);
+        assert!(kids.iter().all(|c| !c.is_running()));
+        assert_eq!(m.live_line(&key), None);
+    });
+}
+
+#[gpui::test]
+fn the_activity_tab_renders_filters_and_expands_rows(cx: &mut TestAppContext) {
+    let rig = rig();
+    write_events(
+        &rig.runs(),
+        3,
+        &format!(
+            "{RUNNING_LOG}{}{}",
+            "{\"t\":1100,\"type\":\"file_edit\",\"path\":\"src/a.rs\",\"added\":4,\"removed\":1}\n",
+            "{\"t\":1200,\"type\":\"approval\",\"request\":\"r\",\"decision\":\"blocked\",\"reason\":\"lista\",\"command\":\"rm -rf x\"}\n",
+        ),
+    );
+    let m = model(cx, &rig);
+    let (view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| {
+        m.select(Some(NodeKey::Thread(ThreadId(3))), cx);
+        m.set_inspector_tab(InspectorTab::Activity, cx);
+    });
+    vcx.run_until_parked();
+    // rows: message, 2 commands, file, approval
+    assert_eq!(view.read_with(vcx, |v, _| v.act.shown_len()), 5);
+
+    view.update(vcx, |v, cx| {
+        v.set_activity_filter(ActivityFilter::Commands, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        view.read_with(vcx, |v, _| v.act.shown_len()),
+        3,
+        "2 commands + the approval"
+    );
+    view.update(vcx, |v, cx| {
+        v.set_activity_filter(ActivityFilter::Files, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(view.read_with(vcx, |v, _| v.act.shown_len()), 1);
+    view.update(vcx, |v, cx| {
+        v.set_activity_filter(ActivityFilter::Messages, cx)
+    });
+    vcx.run_until_parked();
+    assert_eq!(view.read_with(vcx, |v, _| v.act.shown_len()), 1);
+
+    // the other tabs still render their content
+    for tab in [InspectorTab::Prompt, InspectorTab::Summary] {
+        view.update(vcx, |v, cx| v.set_inspector_tab(tab, cx));
+        vcx.run_until_parked();
+    }
+    assert!(
+        testing::bounds_of(vcx, "agentmap-act-cancel").is_some(),
+        "actions live in Resumen"
+    );
+    assert_eq!(
+        view.read_with(vcx, |v, cx| v.inspector_tab(cx)),
+        InspectorTab::Summary
+    );
+}
+
+#[gpui::test]
+fn external_usage_lands_on_the_node_survives_reloads_and_is_not_kept_hidden(
+    cx: &mut TestAppContext,
+) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let ext = ExternalProc {
+        agent: "codex".into(),
+        pid: 777,
+        cmdline_redacted: "codex exec x".into(),
+        cwd: None,
+        model: None,
+        effort: None,
+        started_ms: 4_000,
+        ended_ms: None,
+        exit_code: None,
+        cpu_pct: None,
+        rss_bytes: 1 << 20,
+    };
+    let key = ext.key();
+    // hidden: nothing is stored
+    m.update(cx, |m, cx| {
+        m.set_external_usage(key.clone(), Some((1_000, Some(0.5))), cx)
+    });
+    assert_eq!(cx.read_entity(&m, |m, _| m.external_usage(&key)), None);
+
+    m.update(cx, |m, cx| m.attach(cx));
+    settle(cx);
+    m.update(cx, |m, cx| {
+        m.set_external_at(NodeKey::Thread(ThreadId(1)), vec![ext.clone()], 4_500, cx);
+    });
+    settle(cx);
+    m.update(cx, |m, cx| {
+        m.set_external_usage(key.clone(), Some((12_345, Some(0.42))), cx)
+    });
+    let node = |cx: &mut TestAppContext| {
+        cx.read_entity(&m, |m, _| {
+            let f = m.forest();
+            let n = &f.nodes[f.index_of(&key).unwrap()];
+            (n.tokens, n.cost_usd)
+        })
+    };
+    assert_eq!(node(cx), (Some(12_345), Some(0.42)));
+    // a reload rebuilds the forest: the usage is applied again
+    m.update(cx, |m, cx| m.refresh(cx));
+    settle(cx);
+    assert_eq!(node(cx), (Some(12_345), Some(0.42)));
+    // tokens without a price: no cost
+    m.update(cx, |m, cx| {
+        m.set_external_usage(key.clone(), Some((5, None)), cx)
+    });
+    assert_eq!(node(cx), (Some(5), None));
+    m.update(cx, |m, cx| m.set_external_usage(key.clone(), None, cx));
+    assert_eq!(node(cx), (None, None));
+    // the last view going away drops everything
+    m.update(cx, |m, cx| {
+        m.set_external_usage(key.clone(), Some((1, None)), cx);
+        m.detach(cx);
+    });
+    assert_eq!(cx.read_entity(&m, |m, _| m.external_usage(&key)), None);
 }

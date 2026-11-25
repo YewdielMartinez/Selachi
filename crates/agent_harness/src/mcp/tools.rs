@@ -462,7 +462,12 @@ pub fn apply_with(
         if let Some(req) = approval_request(h, &plan) {
             let verdict = pipe.decide(&req);
             match verdict.decision {
-                Decision::Allow | Decision::Always | Decision::AlwaysRun if verdict.forwarded => {
+                Decision::Allow
+                | Decision::Always
+                | Decision::AlwaysRun
+                | Decision::AlwaysProfile
+                    if verdict.forwarded =>
+                {
                     return match h.apply(id, Confirmation::Gui) {
                         Ok(report) => ToolOutput::ok(
                             format!(

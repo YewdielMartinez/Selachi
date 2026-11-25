@@ -5,9 +5,15 @@
 //! ```text
 //! cargo run -p ui_agentmap --example agentmap_demo -- [dark|light] [--mode tree|graph|timeline]
 //!     [--select <thread id>] [--zone main|right] [--size WxH] [--external] [--select-external <pid>]
+//!     [--activity] [--tab summary|activity|prompt] [--live]
 //!
 //! `--external` adds three FAKE `agy` processes launched outside the harness under the orchestrator
 //! (two running, one finished); `--select-external 4120` opens the inspector of the first one.
+//!
+//! `--activity` writes FAKE events logs (`agent-runs/3.events.jsonl`, `4.events.jsonl`) so the
+//! running delegations show their status line and the "Actividad" tab has a feed; `--tab activity`
+//! opens that tab. With `--external` the first external agent also gets fake child processes.
+//! `--live` keeps appending fake message lines to `3.events.jsonl` every 1.5 s (push check).
 //! ```
 //!
 //! Thread ids: 1 orchestrator, 2 tests (done), 3 docs (running), 4 security (waiting for an
@@ -28,7 +34,7 @@ use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
 use theme::{Mode, Theme};
 use ui_agentmap::{
     AgentMapEvent, AgentMapModel, AgentMapPanelProvider, AgentMapView, ChatStoreSource,
-    ExternalProc, MapMode, NodeKey,
+    ExternalChild, ExternalProc, InspectorTab, MapMode, NodeKey,
 };
 use ui_kit::{Assets, Card, CardTone};
 
@@ -348,6 +354,122 @@ fn build_fake_data(root: &Path) -> (ChatStore, std::path::PathBuf) {
     (store, runs)
 }
 
+/// One fake line of an events log (`t` = ms since the run started).
+fn ev(t: i64, body: &str) -> String {
+    format!("{{\"t\":{t},{body}}}\n")
+}
+
+/// FAKE events logs: delegation 3 (running: docs) has a long story, 4 (waiting) a pending approval.
+fn write_fake_events(runs: &Path) {
+    let esc = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    };
+    let mut three = String::new();
+    three += &ev(
+        2_000,
+        &format!(
+            r#""type":"message_delta","text":"{}""#,
+            esc(
+                "Voy a documentar los endpoints /oauth/authorize y /oauth/token. Primero reviso cómo están implementados en el servidor."
+            )
+        ),
+    );
+    three += &ev(
+        9_000,
+        &format!(
+            r#""type":"tool_start","id":"c1","kind":"command","command":"{}""#,
+            esc("rg -n \"oauth/(authorize|token)\" src docs")
+        ),
+    );
+    three += &ev(
+        9_400,
+        &format!(
+            r#""type":"tool_end","id":"c1","exit_code":0,"duration_ms":380,"output_tail":"{}""#,
+            esc(
+                "src/auth/routes.rs:42:    .route(\"/oauth/authorize\", get(authorize))\nsrc/auth/routes.rs:43:    .route(\"/oauth/token\", post(token))\ndocs/API.md:118:## OAuth"
+            )
+        ),
+    );
+    three += &ev(
+        15_000,
+        &format!(
+            r#""type":"message_delta","text":"{}""#,
+            esc(
+                "Encontré las dos rutas y su documentación actual está incompleta:\n1. /oauth/authorize no documenta el parámetro state.\n2. /oauth/token no muestra el refresco de token.\n3. Faltan ejemplos con curl.\nVoy a reescribir la sección OAuth de docs/API.md y a comprobar que compila."
+            )
+        ),
+    );
+    three += &ev(
+        30_000,
+        r#""type":"file_edit","path":"docs/API.md","added":64,"removed":2"#,
+    );
+    three += &ev(
+        31_000,
+        r#""type":"approval","request":"r1","decision":"pending","command":"cargo doc --no-deps -p auth""#,
+    );
+    three += &ev(
+        31_400,
+        r#""type":"approval","request":"r1","decision":"auto","mode":"allowlist","reason":"coincide con «cargo doc *» del perfil""#,
+    );
+    three += &ev(
+        32_000,
+        r#""type":"tool_start","id":"c2","kind":"command","command":"cargo doc --no-deps -p auth""#,
+    );
+    three += &ev(
+        44_000,
+        &format!(
+            r#""type":"tool_end","id":"c2","exit_code":101,"duration_ms":12000,"output_tail":"{}""#,
+            esc(
+                "   Compiling auth v0.4.1\nerror[E0425]: cannot find value `state` in this scope\n  --> src/auth/routes.rs:51:23\n   |\n51 |     let s = verify(state, token=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789);\n   |                    ^^^^^ not found in this scope\nerror: could not document `auth`"
+            )
+        ),
+    );
+    three += &ev(
+        50_000,
+        r#""type":"approval","request":"r2","decision":"blocked","reason":"rm -rf está en la lista de bloqueo","command":"rm -rf target""#,
+    );
+    three += &ev(
+        52_000,
+        r#""type":"file_edit","path":"src/auth/routes.rs","added":3,"removed":1"#,
+    );
+    three += &ev(
+        58_000,
+        &format!(
+            r#""type":"message_delta","text":"{}""#,
+            esc("Corregido el parámetro. Lanzo las pruebas para validar los ejemplos…")
+        ),
+    );
+    three += &ev(
+        60_000,
+        r#""type":"tool_start","id":"c3","kind":"command","command":"cargo test -p auth -- --nocapture""#,
+    );
+    std::fs::write(runs.join("3.events.jsonl"), three).expect("events 3");
+
+    let mut four = String::new();
+    four += &ev(
+        3_000,
+        &format!(
+            r#""type":"message_delta","text":"{}""#,
+            esc("Reviso cómo se valida el parámetro state en el callback.")
+        ),
+    );
+    four += &ev(
+        20_000,
+        r#""type":"tool_start","id":"c1","kind":"command","command":"rg -n state src/auth""#,
+    );
+    four += &ev(
+        20_300,
+        r#""type":"tool_end","id":"c1","exit_code":0,"duration_ms":300,"output_tail":"src/auth/callback.rs:18: let state = params.state;""#,
+    );
+    four += &ev(
+        40_000,
+        r#""type":"approval","request":"q1","decision":"pending","command":"curl -s https://idp.example.com/.well-known/openid-configuration""#,
+    );
+    std::fs::write(runs.join("4.events.jsonl"), four).expect("events 4");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mode = if args.iter().any(|a| a == "light") {
@@ -366,6 +488,13 @@ fn main() {
         _ => PanelZone::Main,
     };
     let external = args.iter().any(|a| a == "--external");
+    let activity = args.iter().any(|a| a == "--activity");
+    let live = args.iter().any(|a| a == "--live");
+    let tab = match arg_value(&args, "--tab") {
+        Some("activity") => InspectorTab::Activity,
+        Some("prompt") => InspectorTab::Prompt,
+        _ => InspectorTab::Summary,
+    };
     let select_external: Option<u32> =
         arg_value(&args, "--select-external").and_then(|s| s.parse().ok());
     let (w, h) = arg_value(&args, "--size")
@@ -376,6 +505,30 @@ fn main() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (store, runs) = build_fake_data(dir.path());
     eprintln!("fake data in {}", dir.path().display());
+    if activity {
+        write_fake_events(&runs);
+    }
+    if live {
+        // Push check: a line every 1.5 s into the log of delegation 3 (the OS watcher wakes the map).
+        let path = runs.join("3.events.jsonl");
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for i in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                {
+                    let _ = writeln!(
+                        f,
+                        r#"{{"t":{},"type":"message_delta","text":" paso {i}"}}"#,
+                        now_ms()
+                    );
+                }
+            }
+        });
+    }
 
     Application::new()
         .with_assets(Assets)
@@ -409,6 +562,7 @@ fn main() {
                         v.update(cx, |v, cx| v.set_mode(map_mode, cx));
                     }
                     model.update(cx, |m, cx| {
+                        m.set_inspector_tab(tab, cx);
                         if external {
                             let now = now_ms();
                             let agy = |pid: u32, ago_min: i64, cmd: &str, ended: Option<i64>| {
@@ -454,15 +608,86 @@ fn main() {
                         if let Some(id) = select {
                             m.open_run(ThreadId(id), cx);
                         }
-                        if let Some(pid) = select_external
-                            && let Some(key) = m
-                                .external_procs(&NodeKey::Thread(ThreadId(1)))
-                                .iter()
-                                .find(|e| e.pid == pid)
-                                .map(ExternalProc::key)
-                        {
-                            m.select(Some(key), cx);
-                        }
+                        // The external nodes exist once the first forest load finished: select and
+                        // feed their children then (a load that ends before would drop them).
+                        let model2 = model.clone();
+                        cx.spawn(async move |_, cx| {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(1200))
+                                .await;
+                            let _ = model2.update(cx, |m, cx| {
+                            if let Some(pid) = select_external
+                                && let Some(key) = m
+                                    .external_procs(&NodeKey::Thread(ThreadId(1)))
+                                    .iter()
+                                    .find(|e| e.pid == pid)
+                                    .map(ExternalProc::key)
+                            {
+                                m.select(Some(key), cx);
+                            }
+                            if external && activity {
+                                // FAKE child processes of the first external agent.
+                                let now = now_ms();
+                                let kid = |pid: u32,
+                                           ago_s: i64,
+                                           cmd: &str,
+                                           end_s: Option<i64>,
+                                           code: Option<i32>| {
+                                    ExternalChild {
+                                        pid,
+                                        cmdline_redacted: cmd.into(),
+                                        started_ms: now - ago_s * 1000,
+                                        ended_ms: end_s.map(|e| now - e * 1000),
+                                        exit_code: code,
+                                        cpu_pct: end_s.is_none().then_some(38.5),
+                                        rss_bytes: if end_s.is_some() { 0 } else { 612 << 20 },
+                                    }
+                                };
+                                let agent = m
+                                    .external_procs(&NodeKey::Thread(ThreadId(1)))
+                                    .iter()
+                                    .find(|e| e.pid == 4120)
+                                    .map(ExternalProc::key);
+                                if let Some(agent) = agent {
+                                    m.set_external_children(
+                                        agent,
+                                        vec![
+                                            kid(
+                                                5101,
+                                                280,
+                                                "git status --porcelain",
+                                                Some(279),
+                                                Some(0),
+                                            ),
+                                            kid(
+                                                5140,
+                                                200,
+                                                "rg -n \"state\" src/auth",
+                                                Some(199),
+                                                Some(0),
+                                            ),
+                                            kid(
+                                                5188,
+                                                95,
+                                                "cargo test -p auth --no-run",
+                                                Some(60),
+                                                Some(101),
+                                            ),
+                                            kid(
+                                                5230,
+                                                41,
+                                                "cargo build -p auth --release --features oauth,tls",
+                                                None,
+                                                None,
+                                            ),
+                                        ],
+                                        cx,
+                                    );
+                                }
+                            }
+                            });
+                        })
+                        .detach();
                     });
                     cx.new(move |_| Host {
                         theme,

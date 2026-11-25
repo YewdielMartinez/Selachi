@@ -701,6 +701,48 @@ mod delegation {
     }
 
     #[gpui::test]
+    fn extra_agents_are_added_validated_and_removed(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        w.view
+            .update(vcx, |v, cx| v.set_section(Section::Agents, cx));
+        vcx.run_until_parked();
+        let type_in = |vcx: &mut VisualTestContext, text: &str| {
+            w.view.update(vcx, |v, cx| {
+                let f = v.fields.get("extra_agent_add").cloned().expect("add field");
+                f.update(cx, |f, cx| f.set_text(text, cx));
+                v.add_extra_agent(cx);
+            });
+            vcx.run_until_parked();
+        };
+        // the field is created while the section renders
+        type_in(vcx, "aider");
+        assert_eq!(
+            w.view
+                .read_with(vcx, |v, _| v.config().delegation.extra_agents.clone()),
+            ["aider"]
+        );
+        // a shell is refused with a reason and nothing is stored
+        type_in(vcx, "pwsh.exe");
+        w.view.read_with(vcx, |v, _| {
+            assert_eq!(v.config().delegation.extra_agents, ["aider"]);
+            assert!(v.errors["extra_agent_add"].contains("shell"));
+        });
+        // a duplicate too
+        type_in(vcx, "Aider");
+        w.view.read_with(vcx, |v, _| {
+            assert_eq!(v.config().delegation.extra_agents, ["aider"]);
+        });
+        for _ in 0..3 {
+            vcx.update(|window, _| window.refresh());
+            vcx.run_until_parked();
+        }
+        testing::click_id(vcx, "extra-agent-x-0");
+        assert!(w.view.read_with(vcx, |v, _| {
+            v.config().delegation.extra_agents.is_empty()
+        }));
+    }
+
+    #[gpui::test]
     fn registering_runs_nothing_until_the_user_confirms(cx: &mut TestAppContext) {
         let (w, vcx) = open(cx);
         w.view

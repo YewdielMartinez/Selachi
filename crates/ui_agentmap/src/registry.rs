@@ -214,12 +214,31 @@ fn parse_approvals(v: &Value) -> Vec<ApprovalEntry> {
         .unwrap_or_default()
 }
 
+/// Keys of the harness's `limits` object that the inspector shows, in display order (the rest,
+/// such as `parent_permission` or `tools_enforced`, are bookkeeping).
+const SHOWN_LIMITS: [&str; 6] = [
+    "permission",
+    "depth",
+    "timeout_secs",
+    "budget_tokens",
+    "worktree",
+    "approvals",
+];
+
 fn parse_limits(v: &Value) -> Vec<(String, String)> {
-    let Some(obj) = v.get("effective_limits").and_then(Value::as_object) else {
+    if let Some(obj) = v.get("effective_limits").and_then(Value::as_object) {
+        return obj
+            .iter()
+            .filter_map(|(k, val)| scalar(val).map(|t| (k.clone(), t)))
+            .collect();
+    }
+    // What agent_harness actually writes (`RunRecord.limits`).
+    let Some(obj) = v.get("limits").and_then(Value::as_object) else {
         return Vec::new();
     };
-    obj.iter()
-        .filter_map(|(k, val)| scalar(val).map(|t| (k.clone(), t)))
+    SHOWN_LIMITS
+        .iter()
+        .filter_map(|k| obj.get(*k).and_then(scalar).map(|t| ((*k).to_string(), t)))
         .collect()
 }
 

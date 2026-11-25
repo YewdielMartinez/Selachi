@@ -3,7 +3,9 @@
 //! branch and path line below. It never talks to chat_core: it shows a [`ComposerState`] pushed
 //! by the view and reports what the user did as [`ComposerEvent`]s.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agents_driver::TaskState;
@@ -12,7 +14,8 @@ use chat_core::{ContextUsage, Plan};
 use gpui::{
     AnyElement, App, ClickEvent, ClipboardEntry, Context, Entity, EventEmitter, FontWeight,
     ImageFormat, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, Render,
-    SharedString, Styled as _, Subscription, Window, div, img, prelude::*, px, relative,
+    RenderImage, SharedString, Styled as _, Subscription, Window, div, img, prelude::*, px,
+    relative,
 };
 use theme::{Radius, Theme};
 use ui_kit::{
@@ -31,6 +34,14 @@ use crate::widgets::{file_chip, menu_row};
 
 /// How many files the `@` picker lists.
 const MENTION_ROWS: usize = 8;
+
+/// The thumbnail of an attached image (see [`crate::thumb`]).
+enum Thumb {
+    Loading,
+    Ready(Arc<RenderImage>),
+    /// Not decodable: the chip shows a plain square.
+    Failed,
+}
 
 /// Everything the composer displays, pushed by the owner.
 #[derive(Clone, Debug, PartialEq)]
@@ -156,6 +167,8 @@ pub struct Composer {
     field: Entity<TextArea>,
     model_field: Entity<TextField>,
     attachments: Vec<PathBuf>,
+    /// Downscaled previews of the attached images, by path (dropped with the attachment).
+    thumbs: HashMap<PathBuf, Thumb>,
     popup: Option<Popup>,
     mention: Option<Mention>,
     plan_open: bool,
@@ -211,6 +224,7 @@ impl Composer {
             field,
             model_field,
             attachments: Vec::new(),
+            thumbs: HashMap::new(),
             popup: None,
             mention: None,
             plan_open: false,
@@ -267,6 +281,61 @@ impl Composer {
 
     pub fn attachments(&self) -> &[PathBuf] {
         &self.attachments
+    }
+
+    /// Starts decoding the thumbnails of newly attached images (off the UI thread) and drops
+    /// those of removed attachments, texture included.
+    fn sync_thumbs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let gone: Vec<PathBuf> = self
+            .thumbs
+            .keys()
+            .filter(|p| !self.attachments.contains(p))
+            .cloned()
+            .collect();
+        for p in gone {
+            if let Some(Thumb::Ready(img)) = self.thumbs.remove(&p) {
+                let _ = window.drop_image(img);
+            }
+        }
+        let fresh: Vec<PathBuf> = self
+            .attachments
+            .iter()
+            .filter(|p| is_image_path(p) && !self.thumbs.contains_key(*p))
+            .cloned()
+            .collect();
+        for path in fresh {
+            self.thumbs.insert(path.clone(), Thumb::Loading);
+            cx.spawn(async move |this, cx| {
+                let p = path.clone();
+                let thumb = cx
+                    .background_executor()
+                    .spawn(async move { crate::thumb::load_thumb(&p) })
+                    .await;
+                let _ = this.update(cx, |c, cx| {
+                    // Removed while decoding: nothing to keep.
+                    if c.attachments.contains(&path) {
+                        c.thumbs
+                            .insert(path, thumb.map_or(Thumb::Failed, Thumb::Ready));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Thumbnails alive (memory regression checks).
+    #[cfg(test)]
+    pub(crate) fn thumb_count(&self) -> usize {
+        self.thumbs.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn thumb_ready_count(&self) -> usize {
+        self.thumbs
+            .values()
+            .filter(|t| matches!(t, Thumb::Ready(_)))
+            .count()
     }
 
     pub fn add_attachments(
@@ -1474,6 +1543,7 @@ impl Render for Composer {
         let compact = self.measured.narrow(window);
         let mode = self.button_mode(cx);
         let popup = self.popup.clone();
+        self.sync_thumbs(window, cx);
 
         let chips = (!self.attachments.is_empty()).then(|| {
             div()
@@ -1516,12 +1586,18 @@ impl Render for Composer {
                             .text_size(px(ty.ui_size_sm))
                             .text_color(c.text)
                             .tooltip(Tooltip::text(&t, p.display().to_string()))
-                            .child(
-                                img(p.clone())
+                            .child(match self.thumbs.get(p) {
+                                Some(Thumb::Ready(i)) => img(i.clone())
                                     .size(px(28.0))
                                     .rounded(px(Radius::CHIP))
-                                    .object_fit(ObjectFit::Cover),
-                            )
+                                    .object_fit(ObjectFit::Cover)
+                                    .into_any_element(),
+                                _ => div()
+                                    .size(px(28.0))
+                                    .rounded(px(Radius::CHIP))
+                                    .bg(c.surface_2)
+                                    .into_any_element(),
+                            })
                             .child(
                                 div()
                                     .max_w(px(180.0))

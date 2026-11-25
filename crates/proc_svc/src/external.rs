@@ -496,6 +496,64 @@ fn script_stem(seg: &str) -> String {
     lower
 }
 
+/// Most extra agent names kept from the configuration.
+pub const MAX_EXTRA_AGENTS: usize = 32;
+
+/// Executables that must never be a configured "agent": they are shells, runtimes or system
+/// processes, so listing one would flag every process of that kind as an external agent.
+const NOT_AGENTS: &[&str] = &[
+    "node",
+    "bun",
+    "deno",
+    "python",
+    "python3",
+    "py",
+    "pythonw",
+    "cmd",
+    "powershell",
+    "pwsh",
+    "bash",
+    "sh",
+    "wsl",
+    "conhost",
+    "explorer",
+    "svchost",
+    "git",
+    "cargo",
+    "rustc",
+    "windowsterminal",
+    "selachi",
+    "selachi-agent",
+    "selachi-mcp",
+];
+
+/// What `[delegation] extra_agents = ["aider", "acp:\"C:\\tools\\my-agent.exe\" --acp", ...]` means:
+/// the normalized executable stems (`aider`, `my-agent`), deduplicated, without the built-in agents,
+/// shells / runtimes ([`NOT_AGENTS`]) or empty entries, at most [`MAX_EXTRA_AGENTS`]. Hand the result
+/// (as `&[&str]`) to [`find_external_agents_with`], or use [`find_external_agents_cfg`].
+pub fn extra_agent_stems<S: AsRef<str>>(configured: &[S]) -> Vec<String> {
+    let raw: Vec<&str> = configured.iter().map(AsRef::as_ref).collect();
+    normalize_extra_agents(&raw)
+        .into_iter()
+        .filter(|s| !KNOWN_AGENTS.contains(&s.as_str()) && !NOT_AGENTS.contains(&s.as_str()))
+        .take(MAX_EXTRA_AGENTS)
+        .collect()
+}
+
+/// [`find_external_agents_with`] taking the configured names as they are in `config.toml`
+/// (`[delegation] extra_agents`), sanitized with [`extra_agent_stems`].
+pub fn find_external_agents_cfg<S: AsRef<str>>(
+    root_pid: u32,
+    procs: &[ProcInfo],
+    cpu_by_pid: &HashMap<u32, f32>,
+    configured_extra: &[S],
+    exclude_pids: &HashSet<u32>,
+) -> Vec<ExternalAgentProc> {
+    let stems = extra_agent_stems(configured_extra);
+    let refs: Vec<&str> = stems.iter().map(String::as_str).collect();
+    find_external_agents_with(root_pid, procs, cpu_by_pid, &refs, exclude_pids)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -712,5 +770,33 @@ mod tests {
         assert!(find_external_agents(999, &procs, &HashMap::new()).is_empty());
         // Root itself is never returned even if it is an agent
         assert!(find_external_agents(10, &procs, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn configured_extra_agents_are_sanitized_and_used() {
+        let cfg = [
+            "aider".to_string(),
+            " Aider.EXE ".to_string(),
+            r#"acp:"C:	ools\my-agent.exe" --acp"#.to_string(),
+            "node".to_string(),
+            "powershell.exe".to_string(),
+            "codex".to_string(),
+            "".to_string(),
+        ];
+        assert_eq!(extra_agent_stems(&cfg), ["aider", "my-agent"]);
+        let many: Vec<String> = (0..100).map(|i| format!("agent{i}")).collect();
+        assert_eq!(extra_agent_stems(&many).len(), MAX_EXTRA_AGENTS);
+
+        let procs = vec![
+            proc_entry(10, 1, "cmd.exe", Some("cmd"), 1, 10),
+            proc_entry(20, 10, "aider.exe", Some("aider --model x"), 2, 100),
+            proc_entry(21, 10, "node.exe", Some("node server.js"), 3, 50),
+        ];
+        let none = find_external_agents(10, &procs, &HashMap::new());
+        assert!(none.is_empty());
+        let found = find_external_agents_cfg(10, &procs, &HashMap::new(), &cfg, &HashSet::new());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].agent, "aider");
+        assert_eq!(found[0].pid, 20);
     }
 }

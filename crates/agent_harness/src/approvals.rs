@@ -17,11 +17,16 @@
 //!            "parent_thread_id":7,"agent":"codex","tool":"Bash","detail":"rm -rf build",
 //!            "permission":"ask","depth":1,"timeout_secs":120}
 //! server -> {"type":"approval_response","v":1,"request_id":"req_2","decision":"allow","reason":null}
-//!           decision: "allow" | "deny" | "always" | "always_run"
+//!           decision: "allow" | "deny" | "always" | "always_run" | "always_profile"
 //!             always     = also for the rest of this run (the agent's own "always allow")
 //!             always_run = allow, and answer the rest of this run's requests without asking
 //!                          (approval mode `auto`; the hard blocklist still denies). Additive in
 //!                          protocol 1: a server that never sends it changes nothing.
+//!             always_profile = allow, and remember the command's pattern (`cargo test -p x` ->
+//!                          `cargo test *`) in the `allowed_commands` of the run's profile file
+//!                          («Permitir siempre en este perfil»); later matches are approved without
+//!                          asking. Only when the run has a profile and the pattern is safe; otherwise
+//!                          it is a single `allow` and the run's notes say why. Additive in protocol 1.
 //! server -> {"type":"error","v":1,"reason":"..."}   (any request; treated as a denial)
 //! ```
 //!
@@ -78,6 +83,9 @@ pub enum Decision {
     /// Allow now and switch the rest of this run to the `auto` approval mode: no more questions
     /// (the hard blocklist still denies). Sent by "No volver a preguntar en esta ejecución".
     AlwaysRun,
+    /// Allow now and add the command's pattern to the run's profile (`allowed_commands`). Sent by
+    /// "Permitir siempre en este perfil"; without a profile it counts as a single `Allow`.
+    AlwaysProfile,
 }
 
 /// A request to approve one action of a delegated agent.

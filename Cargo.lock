@@ -49,6 +49,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "toml 0.8.23",
+ "toml_edit 0.22.27",
  "windows 0.61.3",
 ]
 
@@ -6730,6 +6731,7 @@ dependencies = [
  "futures",
  "gpui",
  "panel_api",
+ "proc_svc",
  "store",
  "tempfile",
  "theme",

@@ -10,11 +10,11 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, prelude::*, px,
 };
 use theme::{Radius, Theme};
-use ui_kit::{Button, GhostButton, Icon, IconButton, Pill, SectionLabel};
+use ui_kit::{Button, GhostButton, Icon, IconButton, Pill, SectionLabel, SegmentedControl};
 
 use crate::events::AgentMapEvent;
 use crate::fmt;
-use crate::model::NodeDetail;
+use crate::model::{InspectorTab, NodeDetail};
 use crate::parts::{chip, external_badge, lead_mark, node_status_color, status_color, status_mark};
 use crate::tree::{MapNode, NodeKey, NodeStatus, agent_display};
 use crate::view::{AgentMapView, Pending};
@@ -181,6 +181,7 @@ fn limit_label(key: &str) -> String {
         "budget_tokens" => "Presupuesto de tokens".into(),
         "worktree" => "Worktree".into(),
         "max_concurrent" => "Ejecuciones a la vez".into(),
+        "approvals" => "Aprobación de comandos".into(),
         other => {
             let spaced = other.replace('_', " ");
             let mut chars = spaced.chars();
@@ -203,6 +204,19 @@ fn limit_value(key: &str, value: &str) -> String {
             Ok(0) => "sin límite".into(),
             Ok(n) => format!("{} tokens", fmt::tokens(n)),
             Err(_) => value.to_string(),
+        },
+        "worktree" => {
+            if value == "true" {
+                "Sí".into()
+            } else {
+                "No".into()
+            }
+        }
+        "approvals" => match value {
+            "auto" => "No preguntar".into(),
+            "allowlist" => "Solo comandos permitidos".into(),
+            "ask" => "Preguntar".into(),
+            other => other.to_string(),
         },
         _ => value.to_string(),
     }
@@ -309,7 +323,60 @@ fn button(
     }
 }
 
+/// The tabs an inspector offers: external agents have no prompt of their own.
+pub(crate) fn tabs_for(external: bool) -> &'static [InspectorTab] {
+    if external {
+        &InspectorTab::ALL[..2]
+    } else {
+        &InspectorTab::ALL
+    }
+}
+
 impl AgentMapView {
+    /// `Resumen · Actividad · Prompt`.
+    fn tab_bar(
+        &self,
+        tab: InspectorTab,
+        external: bool,
+        this: &Entity<AgentMapView>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let tabs = tabs_for(external);
+        let this = this.clone();
+        SegmentedControl::new(
+            "agentmap-inspector-tabs",
+            &t,
+            tabs.iter().map(|x| SharedString::from(x.label())),
+        )
+        .selected(tabs.iter().position(|x| *x == tab).unwrap_or(0))
+        .track(t.colors.surface_1)
+        .on_change(move |ix, _, cx| {
+            if let Some(next) = tabs.get(ix).copied() {
+                this.update(cx, |v, cx| v.set_inspector_tab(next, cx));
+            }
+        })
+        .into_any_element()
+    }
+
+    /// A scrolling column that fills the tab area (`Resumen`, `Prompt`).
+    fn scroll_tab(&self, id: &'static str, body: Vec<AnyElement>) -> AnyElement {
+        div()
+            .id(id)
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.inspector_scroll)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.0))
+                    .px(px(14.0))
+                    .pb(px(14.0))
+                    .children(body),
+            )
+            .into_any_element()
+    }
+
     /// The inspector of `key` (node `idx` of the forest).
     pub(crate) fn inspector(
         &mut self,
@@ -321,9 +388,9 @@ impl AgentMapView {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
-        let (forest, detail) = {
+        let (forest, detail, tab) = {
             let m = self.model.read(cx);
-            (m.forest().clone(), m.detail(&key))
+            (m.forest().clone(), m.detail(&key), m.inspector_tab())
         };
         let node = forest.nodes[idx].clone();
         let av = available(&node);
@@ -358,7 +425,16 @@ impl AgentMapView {
             .child(close);
 
         if let Some(ext) = node.external() {
-            return self.external_inspector(&node, ext, top.into_any_element(), av, now, &this);
+            return self.external_inspector(
+                &node,
+                ext,
+                top.into_any_element(),
+                av,
+                now,
+                tab,
+                &this,
+                cx,
+            );
         }
 
         // ---- title and status ----------------------------------------------------------------
@@ -437,6 +513,8 @@ impl AgentMapView {
             let suffix = match exact {
                 Some(true) => "",
                 Some(false) => " (estimado)",
+                // an external agent has no run record: its cost always comes from the price table
+                None if node.is_external() => " (estimado)",
                 None => "",
             };
             facts.push(fact(&t, "Costo", format!("{}{suffix}", fmt::cost(cost))));
@@ -493,8 +571,7 @@ impl AgentMapView {
                 },
             )],
         };
-        let prompt = (!node.is_root() || detail.prompt.is_some())
-            .then(|| section(&t, "Prompt enviado por el orquestador", prompt_body));
+        let prompt = section(&t, "Prompt enviado por el orquestador", prompt_body);
 
         // ---- result and changes --------------------------------------------------------------
         let result = node.run.as_ref().and_then(|r| r.result.as_ref());
@@ -684,40 +761,74 @@ impl AgentMapView {
             ));
         }
 
+        let tabs = self.tab_bar(tab, false, &this);
+        let body: AnyElement = match tab {
+            InspectorTab::Summary => {
+                let mut rows = vec![facts];
+                rows.extend(limits);
+                rows.extend(summary);
+                rows.extend(changes);
+                rows.push(approvals);
+                rows.push(actions.into_any_element());
+                self.scroll_tab("agentmap-inspector-summary", rows)
+            }
+            InspectorTab::Prompt => self.scroll_tab("agentmap-inspector-prompt", vec![prompt]),
+            InspectorTab::Activity => self.activity_panel(&key, &node, cx),
+        };
+        self.inspector_shell(
+            top.into_any_element(),
+            title.into_any_element(),
+            confirm,
+            tabs,
+            body,
+        )
+    }
+
+    /// The frame of every inspector: header (close, title, confirmation, tabs) and the tab body,
+    /// which takes the rest of the height.
+    fn inspector_shell(
+        &self,
+        top: AnyElement,
+        title: AnyElement,
+        confirm: Option<AnyElement>,
+        tabs: AnyElement,
+        body: AnyElement,
+    ) -> AnyElement {
         div()
             .id("agentmap-inspector")
             .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.inspector_scroll)
+            .flex()
+            .flex_col()
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .flex_col()
-                    .gap(px(16.0))
-                    .p(px(14.0))
+                    .gap(px(12.0))
+                    .px(px(14.0))
+                    .pt(px(14.0))
+                    .pb(px(10.0))
                     .child(top)
                     .child(title)
                     .children(confirm)
-                    .child(facts)
-                    .children(limits)
-                    .children(prompt)
-                    .children(summary)
-                    .children(changes)
-                    .child(approvals)
-                    .child(actions),
+                    .child(tabs),
             )
+            .child(div().flex_1().min_h(px(0.0)).child(body))
             .into_any_element()
     }
 
     /// Inspector for an agent CLI launched directly outside the Selachi harness.
+    #[allow(clippy::too_many_arguments)]
     fn external_inspector(
-        &self,
+        &mut self,
         node: &MapNode,
         ext: &crate::tree::ExternalProc,
         top: AnyElement,
         av: Available,
         now: i64,
+        tab: InspectorTab,
         this: &Entity<AgentMapView>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
         let c = t.colors;
@@ -840,26 +951,20 @@ impl AgentMapView {
             ));
         }
 
-        div()
-            .id("agentmap-inspector")
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.inspector_scroll)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(16.0))
-                    .p(px(14.0))
-                    .child(top)
-                    .child(title)
-                    .children(confirm)
-                    .child(notice)
-                    .child(facts)
-                    .child(command)
-                    .child(actions),
-            )
-            .into_any_element()
+        let tabs = self.tab_bar(tab, true, this);
+        let body: AnyElement = match tab {
+            InspectorTab::Activity => self.activity_panel(&node.key, node, cx),
+            _ => self.scroll_tab(
+                "agentmap-inspector-summary",
+                vec![
+                    notice.into_any_element(),
+                    facts,
+                    command,
+                    actions.into_any_element(),
+                ],
+            ),
+        };
+        self.inspector_shell(top, title.into_any_element(), confirm, tabs, body)
     }
 
     /// The inline confirmation of a pending cancel / retry (only when it is about `node`).

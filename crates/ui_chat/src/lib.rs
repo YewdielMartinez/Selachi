@@ -61,6 +61,7 @@ mod row_view;
 pub mod rows;
 mod tab;
 mod thread_list;
+mod thumb;
 mod util;
 mod widgets;
 

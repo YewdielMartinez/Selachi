@@ -15,6 +15,7 @@ Requirements: Windows 10/11, PowerShell 7 (`pwsh`). No other dependencies. Run f
 | `bench/bursts.ps1` | Time-resolved per-thread CPU: prints every sampling interval in which a thread burned CPU (and whether the window was focused). Tells periodic work (timers, scans) from one-off bursts. |
 | `bench/check-baseline.ps1` | Regression gate: seeded data dir (wizard skipped) -> `measure.ps1` -> compares startup and private app MB against `bench/baseline.json`, fails if more than 15 % worse. Used by CI (manual job `perf`) and runnable locally. |
 | `bench/vmregions.ps1` | VMMap-style breakdown of a process' committed memory (private / image / mapped, biggest private regions). Answers "where do the Private Bytes come from?". |
+| `bench/chat-ram.ps1` | Memory regression of long chat sessions: runs the release `chat_demo` example over synthetic threads (`--long 400`, all rows expanded, 4K images attached) and fails if private MB exceeds an absolute or growth threshold (docs/olas/ola-9.md, 9C). |
 | `bench/shot.ps1` | Launches an exe, optionally types keys into it, saves a PNG of its window (visual check after render-path changes). |
 | `bench/patches/gpui-selachi.patch` | Patch for gpui 0.2.2 (demand-driven vsync thread + lazy path textures); see the perf notes below. |
 

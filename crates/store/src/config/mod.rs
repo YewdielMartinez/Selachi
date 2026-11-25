@@ -481,6 +481,7 @@ mod tests {
         assert_eq!(c.delegation.daily_token_budget, 2_000_000);
         assert_eq!(c.delegation.approval_timeout_secs, 120);
         assert_eq!(c.delegation.approvals, "ask");
+        assert!(c.delegation.extra_agents.is_empty());
         assert!(c.updates.check);
         assert_eq!(
             (c.updates.channel.as_str(), c.updates.install.as_str()),
@@ -586,6 +587,29 @@ max_context_kb = 201"
             vec!["codex".to_string()]
         );
         assert!(!back.config.updates.check);
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    }
+
+    #[test]
+    fn extra_agents_round_trip_and_are_validated() {
+        let c = Config::parse("[delegation]\nextra_agents = [\"aider\", \"goose\"]")
+            .unwrap()
+            .config;
+        assert_eq!(c.delegation.extra_agents, ["aider", "goose"]);
+        assert!(Config::parse("[delegation]\nextra_agents = [\"\"]").is_err());
+        assert!(Config::parse("[delegation]\nextra_agents = [\"a\\nb\"]").is_err());
+        let many = vec!["x"; MAX_EXTRA_AGENTS + 1].join("\", \"");
+        assert!(Config::parse(&format!("[delegation]\nextra_agents = [\"{many}\"]")).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut c = Config::default();
+        c.delegation.extra_agents = vec!["aider".into(), "acp:my-agent --acp".into()];
+        c.save_to(&path).unwrap();
+        let back = Config::load_from(&path).unwrap();
+        assert_eq!(
+            back.config.delegation.extra_agents,
+            c.delegation.extra_agents
+        );
         assert!(back.warnings.is_empty(), "{:?}", back.warnings);
     }
 

@@ -21,6 +21,7 @@ store = { version = "0.0.1", path = "../store" }
 theme = { version = "0.1.0", path = "../theme" }
 ui_kit = { version = "0.1.0", path = "../ui_kit" }
 ui_layout = { version = "0.1.0", path = "../ui_layout" }
+proc_svc = { path = "../proc_svc" }
 viewer_svc = { version = "0.1.0", path = "../viewer_svc" }
 toml = "0.8"
 toml_edit = "0.22"

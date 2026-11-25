@@ -34,6 +34,29 @@ pub fn format_duration_ms(ms: i64) -> String {
     }
 }
 
+/// How much of a command output the expanded row shows (and shapes). The model keeps all of it:
+/// "Copiar salida" copies the whole output.
+pub const OUTPUT_SHOW_BYTES: usize = 16 * 1024;
+
+/// The tail of `text` of at most `max` bytes, cut at a line start, and how many bytes were left
+/// out. A text that fits comes back whole with `0`.
+pub fn tail_of(text: &str, max: usize) -> (&str, usize) {
+    if text.len() <= max {
+        return (text, 0);
+    }
+    let mut cut = text.len() - max;
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    // Start at the next line, unless that would drop everything.
+    if let Some(nl) = text[cut..].find('\n')
+        && cut + nl + 1 < text.len()
+    {
+        cut += nl + 1;
+    }
+    (&text[cut..], cut)
+}
+
 /// `$1.23`, `$0.12`, `<$0.01`.
 pub fn format_cost(usd: f64) -> String {
     if usd <= 0.0 {
@@ -150,6 +173,19 @@ fn head_of(gitdir: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tail_of_cuts_at_a_line_start_and_reports_the_rest() {
+        let text = "aaaa\nbbbb\ncccc\ndddd\n";
+        assert_eq!(super::tail_of(text, 100), (text, 0));
+        let (tail, omitted) = super::tail_of(text, 11);
+        assert_eq!(tail, "cccc\ndddd\n");
+        assert_eq!(omitted, 10);
+        // One long line: kept from a char boundary, never empty.
+        let long = "é".repeat(100);
+        let (tail, omitted) = super::tail_of(&long, 10);
+        assert!(!tail.is_empty() && tail.len() <= 10 && omitted + tail.len() == long.len());
+    }
+
     use super::*;
 
     #[test]

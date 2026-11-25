@@ -69,7 +69,16 @@ pub struct Delegation {
     /// approved on their own) or `auto` (nothing is asked, but the fixed blocklist still denies).
     /// A profile or a single run can only lower this, never raise it.
     pub approvals: String,
+    /// More agent executables to flag as "launched outside Selachi" in the process tree
+    /// (`["aider", "acp:my-agent --acp"]`). Read by `agent_harness::DelegationConfig::extra_agents`
+    /// and sanitized by `proc_svc::extra_agent_stems` (shells and runtimes are ignored there).
+    pub extra_agents: Vec<String>,
 }
+
+/// Most entries of `[delegation] extra_agents` (the same cap as `proc_svc::MAX_EXTRA_AGENTS`).
+pub const MAX_EXTRA_AGENTS: usize = 32;
+/// Longest entry of `[delegation] extra_agents`, in characters.
+pub const MAX_EXTRA_AGENT_CHARS: usize = 260;
 
 /// Values of `[delegation] approvals`.
 pub const APPROVAL_MODES: [&str; 3] = ["ask", "allowlist", "auto"];
@@ -87,6 +96,7 @@ impl Default for Delegation {
             weekly_usage_threshold_percent: 90.0,
             approval_timeout_secs: 120,
             approvals: "ask".to_string(),
+            extra_agents: Vec::new(),
         }
     }
 }
@@ -758,6 +768,21 @@ impl Config {
                 "delegation.approvals = {:?} must be \"ask\", \"allowlist\" or \"auto\"",
                 d.approvals
             ));
+        }
+        if d.extra_agents.len() > MAX_EXTRA_AGENTS {
+            problems.push(format!(
+                "delegation.extra_agents has {} entries; at most {MAX_EXTRA_AGENTS}",
+                d.extra_agents.len()
+            ));
+        }
+        if d.extra_agents.iter().any(|a| {
+            a.trim().is_empty()
+                || a.chars().count() > MAX_EXTRA_AGENT_CHARS
+                || a.chars().any(char::is_control)
+        }) {
+            problems.push(
+                "delegation.extra_agents entries must be non-empty single-line names".to_string(),
+            );
         }
         if !(1..=MAX_PROFILE_CONTEXT_KB).contains(&self.agent_profiles.max_context_kb) {
             problems.push(format!(

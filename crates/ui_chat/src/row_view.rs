@@ -32,6 +32,7 @@ impl ChatView {
         let Some(row) = self.rows.get(ix).cloned() else {
             return div().into_any_element();
         };
+        self.frame_rows.insert(row.key.clone());
         let expanded = self.expanded.contains(&row.key);
         let last = ix + 1 == self.rows.len();
         let body = self.row_body(&row, expanded, cx);
@@ -380,13 +381,24 @@ impl ChatView {
                 let thread = self.thread_id();
                 let cwd = self.cwd();
                 let cmd_full = cmd.clone();
-                let out_text = output.clone().unwrap_or_else(|| {
-                    if *status == ToolStatus::Running {
-                        "…".into()
-                    } else {
-                        "(sin salida)".into()
+                // Only the tail is shaped and kept alive by the selection group; "Copiar salida"
+                // reads the whole output from the row.
+                let out_text = match output.as_deref() {
+                    Some(o) => {
+                        let (tail, omitted) =
+                            crate::util::tail_of(o, crate::util::OUTPUT_SHOW_BYTES);
+                        if omitted == 0 {
+                            tail.to_string()
+                        } else {
+                            format!(
+                                "… {} KB anteriores omitidos (Copiar salida los incluye)\n{tail}",
+                                omitted / 1024
+                            )
+                        }
                     }
-                });
+                    None if *status == ToolStatus::Running => "…".into(),
+                    None => "(sin salida)".into(),
+                };
                 let expanded_parts = expanded.then(|| {
                     let g = self.group_for(&key, 0, CopyKind::Command, cx);
                     let mut segs = Segments::new();
