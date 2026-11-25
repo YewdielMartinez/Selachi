@@ -330,3 +330,283 @@ fn smoke_list_json_on_this_machine() {
     assert_eq!(v["delegation"]["max_concurrent"], 3);
     assert!(v["delegation"]["caller_permission"].is_string());
 }
+
+// ---------------------------------------------------------------------------
+// Subagent profiles (PLAN 21.3)
+// ---------------------------------------------------------------------------
+
+fn json_of(out: &str) -> Value {
+    serde_json::from_str(out).unwrap_or_else(|e| panic!("not JSON ({e}): {out}"))
+}
+
+#[test]
+fn profiles_init_list_show_and_overwrite_protection() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let cmd = |args: &[&str]| {
+        let mut c = bin(&data);
+        c.arg("profiles").args(args);
+        run(c)
+    };
+    // nothing is written automatically
+    let (code, out, _) = cmd(&["list", "--json"]);
+    assert_eq!(code, 0);
+    assert!(json_of(&out)["profiles"].as_array().unwrap().is_empty());
+    assert!(!data.join("agents").exists());
+
+    // a dry run previews and writes nothing
+    let (code, out, _) = cmd(&["init", "--dry-run"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("Revisor de seguridad") && out.contains("nothing was written"));
+    assert!(!data.join("agents").exists());
+
+    let (code, out, err) = cmd(&["init"]);
+    assert_eq!(code, 0, "{out}{err}");
+    for f in ["revisor-de-seguridad", "tests", "docs", "investigador"] {
+        assert!(
+            data.join("agents").join(format!("{f}.toml")).is_file(),
+            "{f}"
+        );
+    }
+    // no overwrite without --force
+    let (code, _, err) = cmd(&["init"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("refusing to overwrite") && err.contains("--force"),
+        "{err}"
+    );
+    std::fs::write(
+        data.join("agents").join("tests.toml"),
+        "name = \"Tests\"\nagent = \"codex\"\n",
+    )
+    .unwrap();
+    assert_eq!(cmd(&["init", "--only", "tests", "--force"]).0, 0);
+    assert!(
+        std::fs::read_to_string(data.join("agents").join("tests.toml"))
+            .unwrap()
+            .contains("accept-edits")
+    );
+    assert_eq!(cmd(&["init", "--only", "nope"]).0, 1);
+
+    let (code, out, _) = cmd(&["list", "--json"]);
+    assert_eq!(code, 0);
+    let v = json_of(&out);
+    let names: Vec<&str> = v["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["Docs", "Investigador", "Revisor de seguridad", "Tests"]
+    );
+    let (_, text, _) = cmd(&["list"]);
+    assert!(
+        text.contains("NAME") && text.contains("Revisor de seguridad"),
+        "{text}"
+    );
+
+    let (code, out, _) = cmd(&["show", "revisor de seguridad", "--json"]);
+    assert_eq!(code, 0);
+    let p = json_of(&out);
+    assert_eq!(
+        (p["agent"].as_str(), p["permission"].as_str()),
+        (Some("claude"), Some("read-only"))
+    );
+    assert!(p["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("revisor de seguridad"));
+    let (code, _, err) = cmd(&["show", "missing"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no profile named"), "{err}");
+}
+
+#[test]
+fn profiles_dry_run_prints_the_final_prompt_and_runs_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let repo = init_repo(dir.path(), "proj");
+    let agents = repo.join(".selachi").join("agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("t.toml"),
+        "name = \"Tests\"\nagent = \"claude\"\npermission = \"accept-edits\"\ninstructions = \"Only tests.\"\n",
+    )
+    .unwrap();
+    let dry = |parent: Option<&str>, extra: &[&str]| {
+        let mut c = bin(&data);
+        c.args(["profiles", "dry-run", "tests", "write tests", "--cwd"])
+            .arg(&repo)
+            .arg("--json")
+            .args(extra);
+        if let Some(p) = parent {
+            c.env("SELACHI_PARENT_PERMISSION", p);
+        }
+        run(c)
+    };
+    let (code, out, err) = dry(None, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let v = json_of(&out);
+    assert_eq!(v["dry_run"], true);
+    assert_eq!(
+        v["limits"]["permission"], "read-only",
+        "the parent is read-only: lowered"
+    );
+    assert_eq!(v["limits"]["profile_permission"], "accept-edits");
+    assert!(v["final_prompt"]
+        .as_str()
+        .unwrap()
+        .contains("=== SELACHI PROFILE: Tests ==="));
+    assert!(v["final_prompt"]
+        .as_str()
+        .unwrap()
+        .ends_with("=== TASK ===\nwrite tests"));
+    assert_eq!(
+        json_of(&dry(Some("accept-edits"), &[]).1)["limits"]["permission"],
+        "accept-edits"
+    );
+    // full is refused even in a dry run
+    let (code, out, _) = dry(Some("full"), &["--permission", "full"]);
+    assert_eq!(code, 3, "{out}");
+    assert_eq!(json_of(&out)["code"], "permission_full");
+    // text form
+    let mut c = bin(&data);
+    c.args(["profiles", "dry-run", "tests", "go", "--cwd"])
+        .arg(&repo);
+    let (code, out, _) = run(c);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("EFFECTIVE LIMITS")
+            && out.contains("FINAL PROMPT")
+            && out.contains("nothing was run"),
+        "{out}"
+    );
+    // nothing was created
+    assert!(!data.join("chat.db").exists() && !data.join("agent-runs").exists());
+    // usage errors
+    let mut c = bin(&data);
+    c.args(["profiles", "dry-run", "tests"]);
+    assert_eq!(run(c).0, 2);
+    let mut c = bin(&data);
+    c.args(["profiles", "bogus"]);
+    assert_eq!(run(c).0, 2);
+}
+
+#[test]
+fn profiles_import_claude_is_explicit_previewed_and_never_overwrites() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let src = dir.path().join("claude-agents");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("code-reviewer.md"),
+        "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\nmodel: sonnet\n---\nYou review code.\n",
+    )
+    .unwrap();
+    let imp = |args: &[&str]| {
+        let mut c = bin(&data);
+        c.args(["profiles", "import-claude", "--from"])
+            .arg(&src)
+            .args(args);
+        run(c)
+    };
+    // preview only
+    let (code, out, _) = imp(&["--dry-run"]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("name = \"code-reviewer\"")
+            && out.contains("read-only")
+            && out.contains("nothing was written"),
+        "{out}"
+    );
+    assert!(!data.join("agents").exists());
+    // no terminal and no --yes: it will not write
+    let (code, _, err) = imp(&[]);
+    assert_eq!(code, 1);
+    assert!(err.contains("needs confirmation"), "{err}");
+    assert!(!data.join("agents").exists());
+    // confirmed
+    let (code, out, err) = imp(&["--yes"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(data.join("agents").join("code-reviewer.toml").is_file());
+    // overwrite refused without --force
+    let (code, _, err) = imp(&["--yes"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("refusing to overwrite"), "{err}");
+    assert_eq!(imp(&["--yes", "--force"]).0, 0);
+    // the imported profile is usable
+    let mut c = bin(&data);
+    c.args(["profiles", "show", "code-reviewer", "--json"]);
+    let (code, out, _) = run(c);
+    assert_eq!(code, 0);
+    let p = json_of(&out);
+    assert_eq!(
+        (
+            p["agent"].as_str(),
+            p["permission"].as_str(),
+            p["model"].as_str()
+        ),
+        (Some("claude"), Some("read-only"), Some("sonnet"))
+    );
+    assert_eq!(p["allowed_tools"], serde_json::json!(["Read", "Grep"]));
+}
+
+#[test]
+fn run_with_a_profile_uses_the_fake_agent_and_records_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let repo = init_repo(dir.path(), "proj");
+    let agents = repo.join(".selachi").join("agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("r.toml"),
+        "name = \"Research\"\nagent = \"agy\"\ninstructions = \"Cite files.\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let script = data.join("fake.json");
+    std::fs::write(&script, r#"{"reply": "found it", "usage": [10, 5]}"#).unwrap();
+    let mut c = bin(&data);
+    c.env("SELACHI_AGENT_FAKE", &script)
+        .args(["run", "--profile", "research", "--json", "--cwd"])
+        .arg(&repo)
+        .arg("where is auth?");
+    let (code, out, err) = run(c);
+    assert_eq!(code, 0, "{out}{err}");
+    let v = json_of(&out);
+    assert_eq!(
+        (
+            v["status"].as_str(),
+            v["agent"].as_str(),
+            v["profile"].as_str()
+        ),
+        (Some("done"), Some("agy"), Some("Research"))
+    );
+    let id = v["run_id"].as_str().unwrap();
+    let rec = json_of(
+        &std::fs::read_to_string(data.join("agent-runs").join(format!("{id}.json"))).unwrap(),
+    );
+    assert_eq!(rec["profile"], "Research");
+    assert_eq!(rec["launcher"], "cli");
+    assert!(rec["final_prompt"]
+        .as_str()
+        .unwrap()
+        .contains("Cite files."));
+    assert_eq!(rec["prompt"], "where is auth?");
+    assert_eq!(rec["limits"]["permission"], "read-only");
+    // an unknown profile is a refusal (exit 3), nothing started
+    let mut c = bin(&data);
+    c.env("SELACHI_AGENT_FAKE", &script)
+        .args(["run", "--profile", "nope", "--json", "--cwd"])
+        .arg(&repo)
+        .arg("x");
+    let (code, out, _) = run(c);
+    assert_eq!(code, 3, "{out}");
+    assert_eq!(json_of(&out)["code"], "unknown_profile");
+    // no agent and no profile is a usage error
+    let mut c = bin(&data);
+    c.args(["run", "--json"]);
+    assert_eq!(run(c).0, 2);
+}

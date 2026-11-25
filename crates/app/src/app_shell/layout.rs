@@ -177,7 +177,7 @@ impl AppShell {
 
     /// Saves `config.toml` 400 ms after the last change, one write at a time: the sliders of the
     /// layout panel emit on every move.
-    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn schedule_save(&mut self, cx: &mut Context<Self>) {
         self.cfg_save.echoes.push(self.config.layout.clone());
         if self.cfg_save.echoes.len() > 8 {
             self.cfg_save.echoes.remove(0);
@@ -273,7 +273,11 @@ impl AppShell {
         let panel_config = config.layout.clone();
         let pr_moved = self.config.git.pr_status != config.git.pr_status;
         let updates_moved = self.config.updates != config.updates;
+        let chat_moved = self.config.chat != config.chat;
         self.config = config;
+        if chat_moved {
+            self.apply_copy_settings(cx);
+        }
         if pr_moved {
             self.apply_pr_status(cx);
         }
@@ -337,6 +341,10 @@ impl AppShell {
     /// Rail / menu button of a panel: docks it on the right (a saved layout tweak), or opens it as
     /// an overlay / drawer when the window is narrow (not saved: the intent does not change).
     pub(crate) fn toggle_right_panel(&mut self, id: PanelId, cx: &mut Context<Self>) {
+        // The map reads the chat database: start opening it (a no-op when it is open already).
+        if id.as_str() == ui_agentmap::PANEL_ID {
+            self.chat.update(cx, |c, cx| c.ensure(cx));
+        }
         if self.eff.breakpoint <= Breakpoint::S {
             if self.right_panel_active(&id) {
                 self.drawer.open = None;

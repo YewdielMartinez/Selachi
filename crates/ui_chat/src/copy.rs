@@ -17,11 +17,8 @@ pub enum CopyKind {
     Text,
 }
 
-/// The "Ocultar secretos al copiar" toggles.
-///
-/// TODO(integrator): persist these in `store::Config` (e.g. `[chat] redact_copy_commands` /
-/// `redact_copy_text`) and push them with `ChatHub::set_copy_settings` on load and on hot-reload.
-/// The store has no such field yet, so they live in the hub for the session.
+/// The "Ocultar secretos al copiar" toggles, persisted as `[chat] redact_copy_commands` /
+/// `redact_copy_text` (`store::ChatConfig`); the host pushes them with `ChatHub::set_copy_settings`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CopySettings {
     /// Redact when copying command output (default on).
@@ -104,7 +101,13 @@ fn inline_text(inlines: &[MdInline]) -> String {
     flatten(inlines).text
 }
 
-fn plain_list(items: &[MdListItem], ordered: bool, start: u64, depth: usize, out: &mut Vec<String>) {
+fn plain_list(
+    items: &[MdListItem],
+    ordered: bool,
+    start: u64,
+    depth: usize,
+    out: &mut Vec<String>,
+) {
     for (i, item) in items.iter().enumerate() {
         let indent = "  ".repeat(depth);
         let marker = match item.checked {
@@ -258,7 +261,11 @@ pub fn conversation_markdown(messages: &[Message], settings: &CopySettings) -> P
         if body.is_empty() {
             continue;
         }
-        parts.push(format!("## {}\n\n{}", role_label(m.role), body.join("\n\n")));
+        parts.push(format!(
+            "## {}\n\n{}",
+            role_label(m.role),
+            body.join("\n\n")
+        ));
     }
     Prepared {
         text: parts.join("\n\n"),
@@ -281,7 +288,10 @@ mod tests {
         assert!(!cmd.text.contains(KEY) && cmd.text.contains("ok"));
         let text = prepare(&out, CopyKind::Text, &s);
         assert_eq!(text.hidden, 0);
-        assert!(text.text.contains(KEY), "assistant text is not redacted by default");
+        assert!(
+            text.text.contains(KEY),
+            "assistant text is not redacted by default"
+        );
         let on = s.toggled(CopyKind::Text);
         assert_eq!(prepare(&out, CopyKind::Text, &on).hidden, 1);
         let off = s.toggled(CopyKind::Command);
@@ -299,7 +309,10 @@ mod tests {
     fn plain_text_drops_syntax_and_fences_but_keeps_structure() {
         let md = "# Title\n\nSome **bold** and `code` with [a link](https://x.dev).\n\n- one\n- two\n  - nested\n\n1. first\n2. second\n\n```rust\nfn a() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
         let t = markdown_to_plain(md);
-        assert!(t.starts_with("Title\n\nSome bold and code with a link."), "{t}");
+        assert!(
+            t.starts_with("Title\n\nSome bold and code with a link."),
+            "{t}"
+        );
         assert!(t.contains("- one\n- two\n  - nested"), "{t}");
         assert!(t.contains("1. first\n2. second"), "{t}");
         assert!(t.contains("fn a() {}") && !t.contains("```"), "{t}");
@@ -353,26 +366,50 @@ mod conversation_tests {
     fn the_conversation_has_a_heading_per_role_and_redacts_commands_only() {
         let key = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
         let messages = vec![
-            msg(0, Role::User, vec![Block::Text { text: "corre los tests".into() }]),
+            msg(
+                0,
+                Role::User,
+                vec![Block::Text {
+                    text: "corre los tests".into(),
+                }],
+            ),
             msg(
                 1,
                 Role::Assistant,
                 vec![
-                    Block::Text { text: "Voy:\n\n```sh\ncargo test\n```".into() },
+                    Block::Text {
+                        text: "Voy:\n\n```sh\ncargo test\n```".into(),
+                    },
                     command("cargo test", &format!("GITHUB_TOKEN={key}\n14 passed")),
-                    Block::Text { text: format!("Mi clave es {key}") },
+                    Block::Text {
+                        text: format!("Mi clave es {key}"),
+                    },
                 ],
             ),
         ];
         let p = conversation_markdown(&messages, &CopySettings::default());
-        assert_eq!(p.hidden, 1, "only the command output is redacted by default");
-        assert!(p.text.starts_with("## Usuario\n\ncorre los tests\n\n## Asistente\n\nVoy:"), "{}", p.text);
+        assert_eq!(
+            p.hidden, 1,
+            "only the command output is redacted by default"
+        );
+        assert!(
+            p.text
+                .starts_with("## Usuario\n\ncorre los tests\n\n## Asistente\n\nVoy:"),
+            "{}",
+            p.text
+        );
         assert!(p.text.contains("```\n$ cargo test\n"), "{}", p.text);
         assert!(p.text.contains("14 passed"), "{}", p.text);
-        assert!(p.text.contains(&format!("Mi clave es {key}")), "text stays as written");
+        assert!(
+            p.text.contains(&format!("Mi clave es {key}")),
+            "text stays as written"
+        );
         let both = conversation_markdown(
             &messages,
-            &CopySettings { redact_commands: true, redact_text: true },
+            &CopySettings {
+                redact_commands: true,
+                redact_text: true,
+            },
         );
         assert_eq!(both.hidden, 2);
         assert!(!both.text.contains(key));

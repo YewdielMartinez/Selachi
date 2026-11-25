@@ -31,6 +31,9 @@ pub use block::{AbsLine, Block, BlockId, BlockState, MAX_BLOCKS};
 pub use color::{Palette, Rgb8, indexed_color};
 pub use keys::{KeyInput, encode_key};
 pub use redact::{REDACTED, redact};
-pub use session::{JobAttachment, Session, SessionConfig, SessionEvent, SpawnOptions, TermError};
+pub use session::{
+    DEFAULT_PARENT_PERMISSION, ENV_PARENT_PERMISSION, ENV_PARENT_TAB, JobAttachment, Session,
+    SessionConfig, SessionEvent, SpawnOptions, TermError, parent_env,
+};
 pub use shell::{PWSH_INTEGRATION, default_shell, install_pwsh_integration, pwsh_integration_args};
 pub use snapshot::{CellFlags, CellView, Snapshot};

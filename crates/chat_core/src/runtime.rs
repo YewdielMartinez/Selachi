@@ -601,7 +601,9 @@ fn compose_prompt(text: &str, attachments: &[PathBuf]) -> String {
     if !out.is_empty() {
         out.push_str("\n\n");
     }
-    out.push_str("Archivos adjuntos (léelos con tus herramientas):\n");
+    // Drivers find image attachments by this header (`agents_driver::images`).
+    out.push_str(agents_driver::images::ATTACHMENTS_HEADER);
+    out.push('\n');
     for p in attachments {
         out.push_str(&format!("- {}\n", p.display()));
     }

@@ -35,6 +35,8 @@ pub struct Config {
     /// Subagent profiles (`[agent_profiles]`, PLAN section 21.3). Not `[profiles]`: that is the shell
     /// profile list.
     pub agent_profiles: AgentProfiles,
+    /// Chat mode (`[chat]`, PLAN section 21.1): what "Ocultar secretos al copiar" does.
+    pub chat: ChatConfig,
     /// Automatic updates (`[updates]`, wave 6b.2).
     pub updates: Updates,
 }
@@ -105,6 +107,26 @@ impl Default for AgentProfiles {
             enabled: true,
             project_profiles: true,
             max_context_kb: MAX_PROFILE_CONTEXT_KB,
+        }
+    }
+}
+
+/// `[chat]`: copying text out of the chat (PLAN section 21.1). The toggles of the chat's "..." menu
+/// write these two keys back to `config.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Hide secrets when copying the output of a command (default on).
+    pub redact_copy_commands: bool,
+    /// Hide secrets when copying what the user and the assistant wrote (default off).
+    pub redact_copy_text: bool,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            redact_copy_commands: true,
+            redact_copy_text: false,
         }
     }
 }

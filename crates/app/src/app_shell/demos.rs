@@ -4,6 +4,8 @@
 //! |---|---|
 //! | `delegation` | A parent chat that delegated to Codex and Gemini: nested rows in the sidebar, the "Delegó en…" rows in the chat and the summed cost (needs `SELACHI_CHAT_FAKE=1`; use a throwaway `SELACHI_DATA_DIR`) |
 //! | `approval` | `delegation` plus two pending requests: a tool and an `apply_changes` plan |
+//! | `agentmap` | `delegation` plus the subagent map docked on the right, on the Codex run (needs `SELACHI_CHAT_FAKE=1`) |
+//! | `copy` | A chat with the scripted agent, a text selection and the message's "..." copy menu open (needs `SELACHI_CHAT_FAKE=1`) |
 //! | `delegation-settings` | Settings -> Agentes, scrolled to Delegación |
 //! | `update` | Settings -> General at Actualizaciones and the "Actualización 0.2.0 lista" card |
 //! | `whatsnew` | The "Novedades" screen with sample release notes |
@@ -112,6 +114,13 @@ fn seed(store: &ChatStore, root: PathBuf) -> Option<(ThreadId, ThreadId, ThreadI
             deadline_ms: now + 900_000,
             result: Some(result),
             applied_ms: None,
+            profile: None,
+            final_prompt: None,
+            limits: None,
+            launcher: Some("mcp".into()),
+            effort: None,
+            output_format: None,
+            context_files: Vec::new(),
         }
     };
     let c = ThreadRecordLite {
@@ -157,8 +166,12 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) -> bool {
         match name {
-            "delegation" | "approval" => {
-                self.demo_delegation(name == "approval", window, cx);
+            "delegation" | "approval" | "agentmap" => {
+                self.demo_delegation(name == "approval", name == "agentmap", window, cx);
+                true
+            }
+            "copy" => {
+                self.demo_copy(window, cx);
                 true
             }
             "delegation-settings" => {
@@ -217,7 +230,13 @@ impl AppShell {
         }
     }
 
-    fn demo_delegation(&mut self, with_cards: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn demo_delegation(
+        &mut self,
+        with_cards: bool,
+        with_map: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !crate::chat_host::fake_requested() {
             log::warn!("SELACHI_DEMO=delegation needs SELACHI_CHAT_FAKE=1");
             return;
@@ -255,6 +274,9 @@ impl AppShell {
             this.update_in(cx, |shell, window, cx| {
                 shell.reload_runs(cx);
                 shell.open_chat_thread(parent, window, cx);
+                if with_map {
+                    shell.set_agentmap_root(Some(ui_agentmap::NodeKey::Thread(parent)), cx);
+                }
                 if with_cards {
                     shell.deleg.approvals.update(cx, |q, cx| {
                         q.add_demo(
@@ -280,6 +302,30 @@ impl AppShell {
                             cx,
                         );
                     });
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// `SELACHI_DEMO=copy`: a scripted chat, then (once the answer has streamed) a selection in
+    /// the last assistant text and its copy menu, with no pointer input.
+    fn demo_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::chat_host::fake_requested() {
+            log::warn!("SELACHI_DEMO=copy needs SELACHI_CHAT_FAKE=1");
+            return;
+        }
+        self.run_chat_intent(crate::chat_host::ChatIntent::Demo, window, cx);
+        cx.spawn(async move |this, cx| {
+            // demo only: the scripted answer streams for about 3 s
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(4500))
+                .await;
+            this.update(cx, |shell, cx| {
+                if let Some(tab) = shell.active_chat_tab(cx) {
+                    let view = tab.read(cx).view().clone();
+                    view.update(cx, |v, cx| v.debug_select((0, 20), (4, 12), true, cx));
                 }
             })
             .ok();

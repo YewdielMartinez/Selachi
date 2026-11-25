@@ -194,17 +194,27 @@ impl AppShell {
             self.show_hint(Hint::text("No hay un proyecto abierto que revisar"), cx);
             return;
         };
+        self.open_review_source(ReviewSource::Worktree { root }, window, cx);
+    }
+
+    /// Opens a review tab of `source` (or brings the one that already shows it forward). The
+    /// subagent map uses it with `SinceCheckpoint` over a run's worktree.
+    pub(super) fn open_review_source(
+        &mut self,
+        source: ReviewSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let existing = self.tabs.iter().find_map(|t| {
             let tab = t.handle.downcast::<ReviewTab>()?;
-            matches!(tab.read(cx).source(), ReviewSource::Worktree { root: r } if *r == root)
-                .then(|| t.handle.id())
+            (*tab.read(cx).source() == source).then(|| t.handle.id())
         });
         if let Some(id) = existing {
             self.select_tab(id, window, cx);
             return;
         }
         let theme = self.theme;
-        let entity = cx.new(|cx| ReviewTab::new(ReviewSource::Worktree { root }, theme, cx));
+        let entity = cx.new(|cx| ReviewTab::new(source, theme, cx));
         let handle = TabHandle::new(entity.clone());
         let tab_id = handle.id();
         let events = cx.subscribe_in(
@@ -683,6 +693,7 @@ impl AppShell {
             action_id::ATTENTION_NEXT => self.next_attention(cx),
             action_id::SETTINGS_OPEN => self.open_settings(window, cx),
             action_id::SIDEBAR_TOGGLE => self.toggle_sidebar_collapsed(cx),
+            action_id::AGENTMAP_OPEN => self.open_agentmap_from_palette(cx),
             other => {
                 if let Some(panel) = other.strip_prefix(action_id::PANEL_PREFIX) {
                     self.toggle_right_panel(PanelId::new(panel), cx);
@@ -731,7 +742,7 @@ impl AppShell {
     }
 
     /// Mounts the settings: its view, the `settings` panel provider and the event wiring.
-    fn ensure_settings(
+    pub(super) fn ensure_settings(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,

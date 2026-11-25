@@ -13,7 +13,7 @@ use gpui::{
     TextRun, div, prelude::*, px, relative,
 };
 use theme::{Mode, Radius, Rgba, Theme, rgb};
-use ui_kit::{Gap, Icon, SelectableText, SelectionGroup, Segments, icon};
+use ui_kit::{Gap, Icon, Segments, SelectableText, SelectionGroup, icon};
 use viewer_svc::{
     HighlightKind, Lang, MdAlign, MdBlock, MdInline, MdListItem, MdTable, highlight_text,
     markdown_blocks,
@@ -491,6 +491,8 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
     r.block_start();
     match block {
         MdBlock::Heading { level, inlines } => div()
+            .w_full()
+            .min_w_0()
             .mt(px(if *level <= 2 { 16.0 } else { 10.0 }))
             .mb(px(4.0))
             .text_size(px(heading_size(*level)))
@@ -513,6 +515,8 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             ))
             .into_any_element(),
         MdBlock::Paragraph(inlines) => div()
+            .w_full()
+            .min_w_0()
             .my(px(if r.in_list.get() { 1.0 } else { 4.0 }))
             .text_size(px(BODY_SIZE))
             .line_height(relative(1.6))
@@ -531,6 +535,8 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
                 .map(|(i, item)| list_item(*ordered, *start + i as u64, item, r))
                 .collect();
             div()
+                .w_full()
+                .min_w_0()
                 .my(px(4.0))
                 .flex()
                 .flex_col()
@@ -539,6 +545,9 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
                 .into_any_element()
         }
         MdBlock::Quote(inner) => div()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .my(px(6.0))
             .px(px(14.0))
             .py(px(4.0))
@@ -562,12 +571,17 @@ fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
             .into_any_element(),
         MdBlock::Table(t) => table(t, r),
         MdBlock::Image { alt, .. } => div()
+            .w_full()
+            .min_w_0()
             .my(px(4.0))
             .text_size(px(ty.ui_size_md))
             .text_color(c.outline)
             .child(SharedString::from(format!("[imagen: {alt}]")))
             .into_any_element(),
         MdBlock::Html(h) => div()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .my(px(4.0))
             .font_family(theme.typography.mono_family)
             .text_size(px(ty.ui_size_sm))
@@ -651,6 +665,8 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
             None => cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())),
         });
     div()
+        .w_full()
+        .min_w_0()
         .my(px(6.0))
         .rounded(px(Radius::SM))
         .bg(c.surface_1)
@@ -659,6 +675,8 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .flex_col()
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .h(px(28.0))
                 .px(px(14.0))
                 .pr(px(6.0))
@@ -679,9 +697,12 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         )
         .child(
             div()
+                .id(r.id("md-code-scroll"))
+                .w_full()
+                .min_w_0()
                 .px(px(14.0))
                 .pb(px(12.0))
-                .overflow_hidden()
+                .overflow_x_scroll()
                 .font_family(theme.typography.mono_family)
                 .text_size(px(12.5))
                 .text_color(c.text)
@@ -722,6 +743,8 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
             .into_any_element(),
     };
     div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_row()
         .gap(px(8.0))
@@ -743,7 +766,12 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
 
 fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
     let c = r.theme.colors;
-    let cell = |inlines: &[MdInline], align: MdAlign, header: bool, row: usize, col: usize| -> AnyElement {
+    let cell = |inlines: &[MdInline],
+                align: MdAlign,
+                header: bool,
+                row: usize,
+                col: usize|
+     -> AnyElement {
         // Cells of a row are tab separated, rows are lines.
         if col > 0 {
             r.gap.set(Gap::Tab);
@@ -753,6 +781,7 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
         let d = div()
             .flex_1()
             .min_w_0()
+            .overflow_hidden()
             .px(px(12.0))
             .py(px(7.0))
             .flex()
@@ -773,20 +802,22 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
             .into_any_element()
     };
     let align = |i: usize| t.aligns.get(i).copied().unwrap_or(MdAlign::None);
-    let header = div().flex().flex_row().bg(c.surface_2).children(
+    let header = div().w_full().min_w_0().flex().flex_row().bg(c.surface_2).children(
         t.header
             .iter()
             .enumerate()
             .map(|(i, h)| cell(h, align(i), true, 0, i)),
     );
     let rows = t.rows.iter().enumerate().map(|(ri, row)| {
-        div().flex().flex_row().children(
+        div().w_full().min_w_0().flex().flex_row().children(
             row.iter()
                 .enumerate()
                 .map(|(i, h)| cell(h, align(i), false, ri + 1, i)),
         )
     });
     div()
+        .w_full()
+        .min_w_0()
         .my(px(6.0))
         .rounded(px(Radius::SM))
         .bg(c.surface_1)

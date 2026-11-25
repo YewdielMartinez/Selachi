@@ -247,14 +247,16 @@ impl SettingsView {
                     s.sync_invalid(cx);
                 });
             });
-        let accent_control = div()
+        // Swatches get their own line under the label (like the theme cards) so the row can never
+        // push them past the card; only the hex field sits in the control slot.
+        let accent_control = self.input(cx, "accent_hex", "#00AAFF", 132.0, true);
+        let accent_swatches = div()
+            .w_full()
+            .min_w_0()
             .flex()
             .flex_row()
-            .items_center()
-            .gap(px(14.0))
             .flex_wrap()
-            .child(swatches)
-            .child(self.input(cx, "accent_hex", "#00AAFF", 132.0, true));
+            .child(swatches);
 
         let ui_font = self.input(cx, "ui_font", "DM Sans", 200.0, false);
         let mono_font = self.input(cx, "mono_font", "Geist Mono", 200.0, false);
@@ -399,11 +401,12 @@ impl SettingsView {
                         &t,
                         narrow,
                         "Color de acento",
-                        Some("Cursor, foco, progreso y medidores. El azul de las acciones no cambia.".into()),
+                        Some("Cursor, foco, progreso, medidores y botones de acción.".into()),
                         accent_control,
                         None, // the field shows its own error
                     )
                     .into_any_element(),
+                    ui::plain_row(accent_swatches).into_any_element(),
                 ],
             )
             .into_any_element(),

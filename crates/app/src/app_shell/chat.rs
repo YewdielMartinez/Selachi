@@ -17,6 +17,7 @@ use gpui::{
 };
 use panel_api::TabId;
 use theme::Radius;
+use ui_chat::copy::CopySettings;
 use ui_chat::{ChatEvent, ChatHub, ChatTab};
 use ui_kit::{Button, Card, CardTone, Icon, ListRow};
 use ui_review::{AttentionItem, AttentionKind, FocusTarget};
@@ -27,6 +28,14 @@ use crate::hint::Hint;
 use crate::notify;
 use crate::services::Services;
 use crate::titlebar::TITLEBAR_H;
+
+/// `[chat]` as the hub wants it.
+pub(crate) fn copy_settings_of(chat: &store::ChatConfig) -> CopySettings {
+    CopySettings {
+        redact_commands: chat.redact_copy_commands,
+        redact_text: chat.redact_copy_text,
+    }
+}
 
 /// Most warnings listed in the restore prompt.
 const MAX_RESTORE_LINES: usize = 8;
@@ -63,6 +72,8 @@ impl AppShell {
                         .push(cx.observe(&hub, |this, _, cx| this.refresh(cx)));
                 }
                 self.reload_runs(cx);
+                self.agentmap_chat_ready(cx);
+                self.apply_copy_settings(cx);
                 self.finish_deferred_startup(window, cx);
                 for intent in self.chat.update(cx, |c, _| c.take_pending()) {
                     self.run_chat_intent(intent, window, cx);
@@ -96,7 +107,12 @@ impl AppShell {
     }
 
     /// Runs `intent` now when the hub is ready, else queues it (and starts the hub loading).
-    fn run_chat_intent(&mut self, intent: ChatIntent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn run_chat_intent(
+        &mut self,
+        intent: ChatIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(hub) = self.chat.read(cx).hub() else {
             // `false`: chat is unavailable (the user was told once); nothing to do.
             self.chat.update(cx, |c, cx| c.queue(intent, cx));
@@ -137,6 +153,39 @@ impl AppShell {
         let default = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
         self.chat
             .update(cx, |c, cx| c.sync_projects(projects, default, cx));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // "Ocultar secretos al copiar" (`[chat]` in config.toml)
+    // ------------------------------------------------------------------------------------
+
+    /// Pushes `[chat]` to the hub: at startup, when the hub opens and on every hot reload.
+    pub(super) fn apply_copy_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(hub) = self.chat.read(cx).hub() else {
+            return;
+        };
+        let settings = copy_settings_of(&self.config.chat);
+        hub.update(cx, |h, cx| h.set_copy_settings(settings, cx));
+    }
+
+    /// The user flipped a toggle in a chat menu: keep it in the config and write it back to
+    /// `config.toml` (the writer edits in place, so comments and key order survive).
+    pub(super) fn save_copy_settings(&mut self, s: CopySettings, cx: &mut Context<Self>) {
+        let chat = store::ChatConfig {
+            redact_copy_commands: s.redact_commands,
+            redact_copy_text: s.redact_text,
+        };
+        if self.config.chat == chat {
+            return;
+        }
+        let mut cfg = (*self.config).clone();
+        cfg.chat = chat;
+        self.config = std::sync::Arc::new(cfg);
+        self.schedule_save(cx);
+        if let Some(settings) = self.settings_view() {
+            let cfg = (*self.config).clone();
+            settings.update(cx, |v, cx| v.set_config(cfg, cx));
+        }
     }
 
     // ------------------------------------------------------------------------------------
@@ -222,6 +271,8 @@ impl AppShell {
                 self.open_viewer(abs, None, true, None, window, cx);
             }
             ChatEvent::RestoreCheckpoint { thread, id } => self.request_restore(thread, id, cx),
+            ChatEvent::OpenAgentMap(child) => self.open_agentmap_for_run(child, cx),
+            ChatEvent::CopySettingsChanged(s) => self.save_copy_settings(s, cx),
             ChatEvent::ThreadRemoved(id) => {
                 if let Some((tab, _)) = self.chat_tab_of(id, cx) {
                     self.close_tab(tab, window, cx);

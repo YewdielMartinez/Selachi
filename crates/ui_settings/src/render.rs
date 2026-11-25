@@ -282,25 +282,35 @@ impl Render for SettingsView {
         let title = ui::page_header(&t, self.section.label(), self.section.subtitle());
         let content = div()
             .id("settings-scroll")
+            .flex()
+            .flex_col()
             .flex_1()
             .min_w(px(0.0))
             .h_full()
+            .overflow_hidden()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .child(
-                div().w_full().flex().flex_col().items_center().child(
-                    div()
-                        .w_full()
-                        .max_w(px(MAX_CONTENT_WIDTH))
-                        .flex()
-                        .flex_col()
-                        .gap(px(20.0))
-                        .px(px(if narrow { 16.0 } else { 32.0 }))
-                        .pt(px(if narrow { 12.0 } else { 28.0 }))
-                        .pb(px(40.0))
-                        .child(title)
-                        .children(blocks),
-                ),
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .max_w(px(MAX_CONTENT_WIDTH))
+                            .flex()
+                            .flex_col()
+                            .gap(px(20.0))
+                            .px(px(if narrow { 16.0 } else { 32.0 }))
+                            .pt(px(if narrow { 12.0 } else { 28.0 }))
+                            .pb(px(40.0))
+                            .child(title)
+                            .children(blocks),
+                    ),
             );
         div()
             .key_context(CONTEXT)
@@ -316,6 +326,8 @@ impl Render for SettingsView {
             }))
             .relative()
             .size_full()
+            .min_w_0()
+            .min_h_0()
             .flex()
             .when(narrow, |d| d.flex_col())
             .when(!narrow, |d| d.flex_row())

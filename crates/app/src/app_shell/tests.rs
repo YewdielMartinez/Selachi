@@ -457,4 +457,87 @@ mod window {
             Some(WidthClass::Compact)
         );
     }
+
+    #[gpui::test]
+    fn the_map_costs_nothing_until_it_is_shown_and_again_after_it_is_hidden(
+        cx: &mut TestAppContext,
+    ) {
+        let (rig, vcx) = rig(cx, false);
+        add_tab(&rig, vcx, "uno", None);
+        let model = vcx.update(|_, cx| {
+            let m = cx.global::<Services>().agentmap.clone();
+            let provider = ui_agentmap::AgentMapPanelProvider::new(m.clone());
+            cx.update_global::<PanelRegistry, _>(|r, _| r.register(provider));
+            m
+        });
+        // Hidden: no view, no watcher, no task, no load.
+        vcx.update(|_, cx| {
+            let m = model.read(cx);
+            assert_eq!((m.viewers(), m.builds()), (0, 0));
+            assert!(!m.is_watching());
+        });
+        vcx.update(|_, cx| rig.shell.update(cx, |s, cx| s.show_agentmap(cx)));
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let m = model.read(cx);
+            assert_eq!(m.viewers(), 1, "the docked map attached");
+            assert!(m.is_watching());
+        });
+        // Hidden again: the view goes away and with it every listener.
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                s.toggle_right_panel(PanelId::new(ui_agentmap::PANEL_ID), cx)
+            })
+        });
+        // The panel animates out for a moment, then it is dropped.
+        vcx.executor()
+            .advance_clock(TRANSITION_KEEP + Duration::from_millis(50));
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let m = model.read(cx);
+            assert_eq!(m.viewers(), 0);
+            assert!(!m.is_watching());
+        });
+    }
+
+    #[gpui::test]
+    fn the_chat_toggles_are_written_to_the_config_and_pushed_back_by_a_reload(
+        cx: &mut TestAppContext,
+    ) {
+        let (rig, vcx) = rig(cx, false);
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                assert!(s.config.chat.redact_copy_commands && !s.config.chat.redact_copy_text);
+                s.save_copy_settings(
+                    ui_chat::copy::CopySettings {
+                        redact_commands: false,
+                        redact_text: true,
+                    },
+                    cx,
+                );
+                assert!(!s.config.chat.redact_copy_commands && s.config.chat.redact_copy_text);
+                // A hot reload that brings `[chat]` back to the defaults is adopted.
+                let mut reloaded = (*s.config).clone();
+                reloaded.chat = store::ChatConfig::default();
+                s.adopt_config(Arc::new(reloaded), cx);
+                assert_eq!(s.config.chat, store::ChatConfig::default());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_parents_get_their_real_names_in_the_map(cx: &mut TestAppContext) {
+        let (rig, vcx) = rig(cx, false);
+        let id = add_tab(&rig, vcx, "api", None);
+        let infos = vcx.update(|_, cx| rig.shell.read(cx).infos(cx));
+        let titles = agentmap::titles_of(&infos);
+        assert_eq!(
+            titles.get(&id.as_u64().to_string()).map(String::as_str),
+            Some("api")
+        );
+        assert_eq!(
+            agentmap::tab_key(id),
+            ui_agentmap::NodeKey::Tab(id.as_u64().to_string())
+        );
+    }
 }

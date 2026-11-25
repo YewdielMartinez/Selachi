@@ -15,9 +15,12 @@ use ui_kit::{Button, GhostButton, Icon, IconButton, Pill, SectionLabel};
 use crate::events::AgentMapEvent;
 use crate::fmt;
 use crate::model::NodeDetail;
-use crate::parts::{chip, lead_mark, status_color, status_mark};
+use crate::parts::{chip, external_badge, lead_mark, node_status_color, status_color, status_mark};
 use crate::tree::{MapNode, NodeKey, NodeStatus, agent_display};
 use crate::view::{AgentMapView, Pending};
+
+/// Explanation shown in the inspector of an external (non-harness) agent process.
+pub const EXTERNAL_EXPLANATION: &str = "Lanzado fuera de Selachi: sin prompt, límites ni diff. Usa run_agent del MCP selachi para verlos.";
 
 /// Agents a retry can be sent to: `(id, label)`.
 pub const RETRY_AGENTS: [(&str, &str); 5] = [
@@ -38,10 +41,24 @@ pub struct Available {
     pub cancel: bool,
     pub retry: bool,
     pub duplicate: bool,
+    /// External node only: stop the external process subtree (running only, behind inline confirm).
+    pub stop_external: bool,
+    /// External node only: jump to this process in the Processes panel.
+    pub open_in_processes: bool,
+    /// External node only: copy the redacted command line.
+    pub copy_command: bool,
 }
 
 /// The actions available for `node`.
 pub fn available(node: &MapNode) -> Available {
+    if let Some(ext) = node.external() {
+        return Available {
+            stop_external: node.status.is_active() && ext.pid > 0,
+            open_in_processes: ext.pid > 0,
+            copy_command: !ext.cmdline_redacted.trim().is_empty(),
+            ..Available::default()
+        };
+    }
     let is_thread = matches!(node.key, NodeKey::Thread(_));
     let has_changes = node.files > 0;
     let applied = node.run.as_ref().is_some_and(|r| r.applied_ms.is_some());
@@ -57,7 +74,40 @@ pub fn available(node: &MapNode) -> Available {
         cancel: is_thread && node.status.is_active(),
         retry: is_thread && !node.is_root() && !node.status.is_active() && !node.agent.is_empty(),
         duplicate: is_thread && !node.is_root() && !node.agent.is_empty(),
+        stop_external: false,
+        open_in_processes: false,
+        copy_command: false,
     }
+}
+
+/// `(label, value)` summary rows for an external (non-harness) node in the inspector.
+/// Returns an empty vec for non-external nodes.
+pub fn external_facts(node: &MapNode, now_ms: i64) -> Vec<(String, String)> {
+    let Some(ext) = node.external() else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    if !node.agent.is_empty() {
+        rows.push(("Agente".to_string(), agent_display(&node.agent)));
+    }
+    if let Some(m) = fmt::model_effort(ext.model.as_deref(), ext.effort.as_deref()) {
+        rows.push(("Modelo".to_string(), m));
+    }
+    rows.push(("PID".to_string(), ext.pid.to_string()));
+    rows.push(("Estado".to_string(), ext.status_label()));
+    if let Some(ms) = node.duration_ms(now_ms) {
+        rows.push(("Duración".to_string(), fmt::duration_ms(ms)));
+    }
+    if let Some(pct) = ext.cpu_pct {
+        rows.push(("CPU".to_string(), fmt::cpu(pct)));
+    }
+    if ext.rss_bytes > 0 {
+        rows.push(("RAM".to_string(), fmt::bytes(ext.rss_bytes)));
+    }
+    if let Some(cwd) = &ext.cwd {
+        rows.push(("Carpeta".to_string(), cwd.display().to_string()));
+    }
+    rows
 }
 
 /// Spanish word of a permission as the harness spells it.
@@ -230,9 +280,13 @@ fn button(
         this.update(cx, |v, cx| f(v, cx));
     };
     if ghost {
-        GhostButton::new(id, theme, label).on_click(on).into_any_element()
+        GhostButton::new(id, theme, label)
+            .on_click(on)
+            .into_any_element()
     } else {
-        Button::tonal(id, theme, label).on_click(on).into_any_element()
+        Button::tonal(id, theme, label)
+            .on_click(on)
+            .into_any_element()
     }
 }
 
@@ -283,6 +337,10 @@ impl AgentMapView {
             })
             .when(split, |d| d.child(SectionLabel::new(&t, "Inspector")))
             .child(close);
+
+        if let Some(ext) = node.external() {
+            return self.external_inspector(&node, ext, top, av, now, &this);
+        }
 
         // ---- title and status ----------------------------------------------------------------
         let title = div()
@@ -345,7 +403,11 @@ impl AgentMapView {
             facts.push(fact(&t, "Modelo", m));
         }
         if let Some(tok) = node.tokens.filter(|n| *n > 0) {
-            facts.push(fact(&t, "Tokens", format!("{} facturables", fmt::tokens(tok))));
+            facts.push(fact(
+                &t,
+                "Tokens",
+                format!("{} facturables", fmt::tokens(tok)),
+            ));
         }
         if let Some(cost) = node.cost_usd.filter(|n| *n > 0.0) {
             let exact = node
@@ -384,7 +446,11 @@ impl AgentMapView {
                     note.push_str(&format!(
                         " · incluye {} {} oculto{}",
                         p.redacted,
-                        if p.redacted == 1 { "secreto" } else { "secretos" },
+                        if p.redacted == 1 {
+                            "secreto"
+                        } else {
+                            "secretos"
+                        },
                         if p.redacted == 1 { "" } else { "s" }
                     ));
                 }
@@ -407,40 +473,48 @@ impl AgentMapView {
         let result = node.run.as_ref().and_then(|r| r.result.as_ref());
         let summary = result.and_then(|r| r.summary.clone().or_else(|| r.reason.clone()));
         let summary = summary.map(|s| {
-            let mut body = vec![div()
-                .text_size(px(ty.ui_size_md))
-                .text_color(c.text)
-                .child(SharedString::from(store::redact(&s).text))
-                .into_any_element()];
+            let mut body = vec![
+                div()
+                    .text_size(px(ty.ui_size_md))
+                    .text_color(c.text)
+                    .child(SharedString::from(store::redact(&s).text))
+                    .into_any_element(),
+            ];
             for n in result.map(|r| r.notes.clone()).unwrap_or_default() {
                 body.push(muted(&t, store::redact(&n).text));
             }
             section(&t, "Resultado", body)
         });
 
-        let changes = (node.files > 0 || result.is_some_and(|r| r.diff_stat.is_some())).then(|| {
-            let mut body: Vec<AnyElement> = Vec::new();
-            if let Some(d) = result.and_then(|r| r.diff_stat.as_ref()) {
-                body.push(muted(
-                    &t,
-                    format!(
-                        "{} · +{} −{}",
-                        fmt::files(d.files.max(node.files)),
-                        d.insertions,
-                        d.deletions
-                    ),
-                ));
-                if !d.text.trim().is_empty() {
-                    body.push(mono_block(&t, "agentmap-diffstat", d.text.trim_end(), 140.0));
+        let changes =
+            (node.files > 0 || result.is_some_and(|r| r.diff_stat.is_some())).then(|| {
+                let mut body: Vec<AnyElement> = Vec::new();
+                if let Some(d) = result.and_then(|r| r.diff_stat.as_ref()) {
+                    body.push(muted(
+                        &t,
+                        format!(
+                            "{} · +{} −{}",
+                            fmt::files(d.files.max(node.files)),
+                            d.insertions,
+                            d.deletions
+                        ),
+                    ));
+                    if !d.text.trim().is_empty() {
+                        body.push(mono_block(
+                            &t,
+                            "agentmap-diffstat",
+                            d.text.trim_end(),
+                            140.0,
+                        ));
+                    }
+                } else {
+                    body.push(muted(&t, fmt::files(node.files)));
                 }
-            } else {
-                body.push(muted(&t, fmt::files(node.files)));
-            }
-            if node.run.as_ref().is_some_and(|r| r.applied_ms.is_some()) {
-                body.push(muted(&t, "Los cambios ya se aplicaron al proyecto."));
-            }
-            section(&t, "Cambios", body)
-        });
+                if node.run.as_ref().is_some_and(|r| r.applied_ms.is_some()) {
+                    body.push(muted(&t, "Los cambios ya se aplicaron al proyecto."));
+                }
+                section(&t, "Cambios", body)
+            });
 
         // ---- approvals -----------------------------------------------------------------------
         let approvals = {
@@ -518,9 +592,7 @@ impl AgentMapView {
                 "agentmap-act-worktree",
                 "Abrir worktree",
                 false,
-                Box::new(move |v, cx| {
-                    v.emit_action(AgentMapEvent::OpenWorktree(path.clone()), cx)
-                }),
+                Box::new(move |v, cx| v.emit_action(AgentMapEvent::OpenWorktree(path.clone()), cx)),
             ));
         }
         if av.apply
@@ -598,13 +670,166 @@ impl AgentMapView {
                     .p(px(14.0))
                     .child(top)
                     .child(title)
+                    .children(confirm)
                     .child(facts)
                     .children(limits)
                     .children(prompt)
                     .children(summary)
                     .children(changes)
                     .child(approvals)
+                    .child(actions),
+            )
+            .into_any_element()
+    }
+
+    /// Inspector for an agent CLI launched directly outside the Selachi harness.
+    fn external_inspector(
+        &self,
+        node: &MapNode,
+        ext: &crate::tree::ExternalProc,
+        top: AnyElement,
+        av: Available,
+        now: i64,
+        this: &Entity<AgentMapView>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let c = t.colors;
+        let ty = t.typography;
+
+        let title = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(px(8.0))
+                    .child(div().pt(px(2.0)).child(lead_mark(&t, node, 16.0)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(ty.ui_size_lg))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(c.text)
+                            .child(SharedString::from(node.title.clone())),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.0))
+                    .when_some(status_mark(&t, node.status), |d, s| d.child(s))
+                    .child(
+                        div()
+                            .text_size(px(ty.ui_size_md))
+                            .text_color(node_status_color(&t, node))
+                            .child(SharedString::from(ext.status_label())),
+                    )
+                    .when_some(node.duration_ms(now), |d, ms| {
+                        d.child(
+                            div()
+                                .text_size(px(ty.ui_size_sm))
+                                .text_color(c.muted)
+                                .child(SharedString::from(fmt::duration_ms(ms))),
+                        )
+                    })
+                    .child(external_badge(&t)),
+            );
+
+        let confirm = self.confirm_strip(node, this);
+
+        let notice = div()
+            .p(px(10.0))
+            .rounded(px(Radius::CONTROL))
+            .bg(c.surface_1)
+            .text_size(px(ty.ui_size_sm))
+            .text_color(c.muted)
+            .child(EXTERNAL_EXPLANATION);
+
+        let facts = section(
+            &t,
+            "Resumen",
+            external_facts(node, now)
+                .into_iter()
+                .map(|(l, v)| fact(&t, &l, v))
+                .collect(),
+        );
+
+        let cmd_body = if ext.cmdline_redacted.trim().is_empty() {
+            vec![muted(&t, "Línea de comandos no disponible.")]
+        } else {
+            vec![
+                mono_block(&t, "agentmap-ext-cmd", &ext.cmdline_redacted, 160.0),
+                muted(&t, "Línea de comandos redactada."),
+            ]
+        };
+        let command = section(&t, "Comando", cmd_body);
+
+        let mut actions = div().flex().flex_row().flex_wrap().gap(px(8.0));
+        if av.stop_external {
+            let k = node.key.clone();
+            let pid = ext.pid;
+            actions = actions.child(button(
+                this,
+                &t,
+                "agentmap-act-stop-external",
+                "Detener",
+                false,
+                Box::new(move |v, cx| {
+                    v.pending = Some(Pending::StopExternal {
+                        key: k.clone(),
+                        pid,
+                    });
+                    cx.notify();
+                }),
+            ));
+        }
+        if av.open_in_processes {
+            let pid = ext.pid;
+            actions = actions.child(button(
+                this,
+                &t,
+                "agentmap-act-processes",
+                "Abrir en Procesos",
+                false,
+                Box::new(move |v, cx| v.emit_action(AgentMapEvent::OpenInProcesses(pid), cx)),
+            ));
+        }
+        if av.copy_command {
+            let cmd = ext.cmdline_redacted.clone();
+            actions = actions.child(button(
+                this,
+                &t,
+                "agentmap-act-copy-cmd",
+                "Copiar comando",
+                true,
+                Box::new(move |v, cx| v.emit_action(AgentMapEvent::CopyCommand(cmd.clone()), cx)),
+            ));
+        }
+
+        div()
+            .id("agentmap-inspector")
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.inspector_scroll)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.0))
+                    .p(px(14.0))
+                    .child(top)
+                    .child(title)
                     .children(confirm)
+                    .child(notice)
+                    .child(facts)
+                    .child(command)
                     .child(actions),
             )
             .into_any_element()
@@ -659,8 +884,16 @@ impl AgentMapView {
                     }),
                 );
                 Some(strip(vec![
-                    text("¿Cancelar esta ejecución? El agente se detiene y los cambios parciales quedan en su worktree."),
-                    div().flex().flex_row().gap(px(8.0)).child(go).child(back).into_any_element(),
+                    text(
+                        "¿Cancelar esta ejecución? El agente se detiene y los cambios parciales quedan en su worktree.",
+                    ),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.0))
+                        .child(go)
+                        .child(back)
+                        .into_any_element(),
                 ]))
             }
             Pending::Retry { key, agent } if *key == node.key => {
@@ -717,9 +950,58 @@ impl AgentMapView {
                     }),
                 );
                 Some(strip(vec![
-                    text("Reintentar con el mismo prompt. El agente que elijas lo ejecuta en un worktree nuevo."),
+                    text(
+                        "Reintentar con el mismo prompt. El agente que elijas lo ejecuta en un worktree nuevo.",
+                    ),
                     picks.into_any_element(),
-                    div().flex().flex_row().gap(px(8.0)).child(go).child(back).into_any_element(),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.0))
+                        .child(go)
+                        .child(back)
+                        .into_any_element(),
+                ]))
+            }
+            Pending::StopExternal { key, pid } if *key == node.key => {
+                let pid = *pid;
+                let back = button(
+                    this,
+                    &t,
+                    "agentmap-confirm-stop-external-back",
+                    "Volver",
+                    true,
+                    Box::new(|v, cx| {
+                        v.pending = None;
+                        cx.notify();
+                    }),
+                );
+                let go = button(
+                    this,
+                    &t,
+                    "agentmap-confirm-stop-external",
+                    "Detener subárbol",
+                    false,
+                    Box::new(move |v, cx| {
+                        v.pending = None;
+                        v.emit_action(AgentMapEvent::StopExternal(pid), cx);
+                    }),
+                );
+                Some(strip(vec![
+                    div()
+                        .text_size(px(ty.ui_size_md))
+                        .text_color(c.text)
+                        .child(SharedString::from(format!(
+                            "¿Detener el proceso PID {pid} y sus hijos? Solo se detiene este subárbol; la sesión padre sigue abierta."
+                        )))
+                        .into_any_element(),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.0))
+                        .child(go)
+                        .child(back)
+                        .into_any_element(),
                 ]))
             }
             _ => None,

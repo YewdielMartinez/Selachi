@@ -25,6 +25,7 @@ store = { version = "0.0.1", path = "../store" }
 term_core = { version = "0.1.0", path = "../term_core", features = ["block-events"] }
 theme = { version = "0.1.0", path = "../theme" }
 toml = "0.8"
+ui_agentmap = { version = "0.1.0", path = "../ui_agentmap" }
 ui_chat = { version = "0.1.0", path = "../ui_chat" }
 ui_doctor = { path = "../ui_doctor" }
 ui_git = { path = "../ui_git" }

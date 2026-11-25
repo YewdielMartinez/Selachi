@@ -10,6 +10,7 @@
 //!   --no-sidebar                                           hide the thread list column
 //!   --width-class compact|regular                          class the sidebar list is built for
 //!   --popup model|effort|permission|agent                  open that composer menu (no clicks needed)
+//!   --select text|menu                                    force a text selection (and the copy menu) without input
 //! ```
 //!
 //! Scenes: `thread` a finished session; `approval` the same session stopped at a permission
@@ -433,6 +434,7 @@ fn main() {
     let sidebar = !flag("--no-sidebar") && !matches!(scene.as_str(), "empty" | "failed");
     let compact = arg_value(&args, "--width-class") == Some("compact");
     let popup: Option<String> = arg_value(&args, "--popup").map(str::to_string);
+    let select: Option<String> = arg_value(&args, "--select").map(str::to_string);
 
     let tmp = std::env::temp_dir().join(format!("selachi-chat-demo-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
@@ -573,6 +575,22 @@ fn main() {
                 .detach();
                 host
             });
+            if let Some(spec) = select.clone() {
+                // `--select` forces a selection (and, with `menu`, the copy menu) after the first
+                // frame, without any pointer input.
+                let tab = tab.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        cx.background_executor().timer(Duration::from_millis(700)).await;
+                        let _ = cx.update(|_, cx| {
+                            if let Some(t) = tab.downcast::<ui_chat::ChatTab>() {
+                                let view = t.read(cx).view().clone();
+                                view.update(cx, |v, cx| v.debug_select((0, 20), (4, 12), spec == "menu", cx));
+                            }
+                        });
+                    })
+                    .detach();
+            }
             if let Some(name) = popup.clone() {
                 // Open a composer menu after the first frame (`--popup model|effort|permission|agent`).
                 let tab = tab.clone();

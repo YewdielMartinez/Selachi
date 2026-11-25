@@ -15,9 +15,8 @@ use gpui::{
 use panel_api::{PanelCtx, PanelId, PanelProvider, PanelZone};
 use theme::{Radius, Theme};
 use ui_kit::{
-    WireFill, WireRect, Wireframe,
     EmptyState, Icon, MeasuredWidth, SegmentedControl, Select, SelectEvent, SelectOption,
-    UniformListScrollHandle, icon,
+    UniformListScrollHandle, WireFill, WireRect, Wireframe, icon,
 };
 
 use crate::events::AgentMapEvent;
@@ -27,6 +26,10 @@ use crate::tree::{NodeKey, visible_rows};
 
 /// Id of the provider (what `layout.right_panel` stores).
 pub const PANEL_ID: &str = "agentmap";
+/// Icon of the map everywhere (panel, header, sidebar affordance).
+/// TODO-SVG: `assets/icons/map.svg` (16x16, `currentColor`), designed by the user. Until it exists the
+/// map borrows the agents icon; swap this one constant when the file is added.
+pub const MAP_ICON: Icon = Icon::Agents;
 
 /// Width from which the inspector sits beside the body instead of replacing it.
 pub const SPLIT_FROM: f32 = 760.0;
@@ -35,7 +38,7 @@ pub const INSPECTOR_WIDTH: f32 = 340.0;
 /// Below this the tree rows use two lines.
 pub const COMPACT_BELOW: f32 = 340.0;
 /// Below this the tree drops the files count and the worktree pill.
-pub const LITE_BELOW: f32 = 560.0;
+pub const LITE_BELOW: f32 = 880.0;
 
 /// How the session is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +61,14 @@ impl MapMode {
             MapMode::Timeline => "Línea de tiempo",
         }
     }
+
+    /// The label for a narrow panel (the segmented control must not clip).
+    pub fn short_label(self) -> &'static str {
+        match self {
+            MapMode::Timeline => "Tiempo",
+            other => other.label(),
+        }
+    }
 }
 
 /// An action waiting for the user's confirmation inside the inspector.
@@ -65,6 +76,7 @@ impl MapMode {
 pub(crate) enum Pending {
     Cancel(NodeKey),
     Retry { key: NodeKey, agent: String },
+    StopExternal { key: NodeKey, pid: u32 },
 }
 
 /// Row layout of the tree for a given width.
@@ -98,6 +110,7 @@ fn key_value(k: &NodeKey) -> String {
     match k {
         NodeKey::Thread(t) => format!("t:{}", t.0),
         NodeKey::Tab(s) => format!("b:{s}"),
+        NodeKey::External { pid, started_ms } => format!("e:{pid}:{started_ms}"),
     }
 }
 
@@ -248,7 +261,14 @@ impl AgentMapView {
             })
             .collect();
         let current_value = current
-            .and_then(|i| self.model.read(cx).forest().nodes.get(i).map(|n| key_value(&n.key)))
+            .and_then(|i| {
+                self.model
+                    .read(cx)
+                    .forest()
+                    .nodes
+                    .get(i)
+                    .map(|n| key_value(&n.key))
+            })
             .unwrap_or_default();
         let changed = options != self.root_options;
         if changed {
@@ -280,11 +300,20 @@ impl AgentMapView {
         let many = forest.roots.len() > 1;
         let totals = root.map(|r| forest.totals(r));
         let summary: Option<String> = totals.filter(|_| loaded).map(|t| {
-            let mut parts = vec![match t.runs {
-                0 => "Sin delegaciones".to_string(),
-                1 => "1 delegación".to_string(),
-                n => format!("{n} delegaciones"),
-            }];
+            let mut parts: Vec<String> = Vec::new();
+            if t.runs == 0 && t.external == 0 {
+                parts.push("Sin delegaciones".to_string());
+            } else {
+                if t.runs > 0 {
+                    parts.push(match t.runs {
+                        1 => "1 delegación".to_string(),
+                        n => format!("{n} delegaciones"),
+                    });
+                }
+                if t.external > 0 {
+                    parts.push(format!("{} fuera de Selachi", t.external));
+                }
+            }
             if t.running > 0 {
                 parts.push(format!("{} en marcha", t.running));
             }
@@ -308,7 +337,7 @@ impl AgentMapView {
             &t,
             MapMode::ALL
                 .iter()
-                .map(|m| SharedString::from(m.label())),
+                .map(|m| SharedString::from(if narrow { m.short_label() } else { m.label() })),
         )
         .selected(
             MapMode::ALL
@@ -332,8 +361,7 @@ impl AgentMapView {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    // TODO-SVG: map.svg (a dedicated pixel icon for the subagent map)
-                    .child(icon(Icon::Agents, 16.0, c.muted))
+                    .child(icon(MAP_ICON, 16.0, c.muted))
                     .child(
                         div()
                             .flex_1()
@@ -425,9 +453,7 @@ impl Render for AgentMapView {
                     let rows = visible_rows(&forest, root, &self.collapsed);
                     self.tree_body(forest, rows, selected_key.clone(), main_w, cx)
                 }
-                MapMode::Graph => {
-                    self.graph_body(forest, root, selected_key.clone(), cx)
-                }
+                MapMode::Graph => self.graph_body(forest, root, selected_key.clone(), cx),
                 MapMode::Timeline => {
                     self.timeline_body(forest, root, selected_key.clone(), main_w, cx)
                 }
@@ -523,8 +549,7 @@ impl PanelProvider for AgentMapPanelProvider {
     }
 
     fn icon(&self) -> Icon {
-        // TODO-SVG: map.svg
-        Icon::Agents
+        MAP_ICON
     }
 
     fn allowed_zones(&self) -> &'static [PanelZone] {

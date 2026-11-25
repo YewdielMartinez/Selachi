@@ -4,6 +4,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod adapt;
+mod agentmap_host;
 mod agents;
 mod app_shell;
 mod approval_queue;
@@ -134,6 +135,9 @@ fn register_panels(cx: &mut App) {
     ));
     registry.register(ui_procs::ProcsPanelProvider::new(services.procs.clone()));
     registry.register(chat_host::ThreadsProvider);
+    registry.register(ui_agentmap::AgentMapPanelProvider::new(
+        services.agentmap.clone(),
+    ));
     registry.register(ui_doctor::DoctorPanelProvider::new(
         services.doctor.clone(),
         env!("CARGO_PKG_VERSION"),

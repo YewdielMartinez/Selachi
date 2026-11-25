@@ -268,3 +268,56 @@ fn shell_integration_chains_an_existing_prompt() {
         session.snapshot().text()
     );
 }
+
+#[test]
+fn parent_env_has_tab_and_default_permission() {
+    let env = term_core::parent_env(7_u64, "");
+    assert_eq!(
+        env,
+        vec![
+            ("SELACHI_PARENT_TAB".to_string(), "7".to_string()),
+            ("SELACHI_PARENT_PERMISSION".to_string(), "ask".to_string()),
+        ]
+    );
+    let env = term_core::parent_env("tab-9", " accept-edits ");
+    assert_eq!(env[0].1, "tab-9");
+    assert_eq!(env[1].1, "accept-edits");
+}
+
+#[test]
+fn with_parent_tab_reaches_spawn_options_and_replaces_old_values() {
+    let options = term_core::SpawnOptions::default()
+        .with_env("FOO", "bar")
+        .with_env(term_core::ENV_PARENT_TAB, "old")
+        .with_parent_tab(12_u64, "read-only");
+    let get = |k: &str| {
+        options
+            .env
+            .iter()
+            .filter(|(key, _)| key == k)
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(get("FOO"), ["bar"]);
+    assert_eq!(get("SELACHI_PARENT_TAB"), ["12"]);
+    assert_eq!(get("SELACHI_PARENT_PERMISSION"), ["read-only"]);
+}
+
+#[test]
+fn spawned_shell_sees_parent_tab_env() {
+    let options = term_core::SpawnOptions::default().with_parent_tab(42_u64, "ask");
+    let (session, _rx) =
+        Session::spawn_with_options(config("cmd.exe", &[]), options).expect("spawn cmd");
+    // Interactive `cmd` (not `/c`): the listing stays on screen after the command ends.
+    session.write(&b"set SELACHI_\r"[..]);
+    assert!(
+        wait_for(&session, "SELACHI_PARENT_TAB=42"),
+        "tab env missing:\n{}",
+        session.snapshot().text()
+    );
+    assert!(
+        wait_for(&session, "SELACHI_PARENT_PERMISSION=ask"),
+        "permission env missing:\n{}",
+        session.snapshot().text()
+    );
+}

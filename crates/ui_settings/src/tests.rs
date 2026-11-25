@@ -776,4 +776,67 @@ mod delegation {
         vcx.run_until_parked();
         assert!(testing::bounds_of(vcx, "updates-install-now").is_some());
     }
+
+    #[gpui::test]
+    fn agents_controls_stay_inside_the_card_at_1000px_width(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, TEMPLATE).unwrap();
+        let config = Config::load_from(&path).unwrap().config;
+        let options = SettingsOptions {
+            registry: Some(Arc::new(GrammarRegistry::new(dir.path().join("plugins")))),
+            fetcher: Some(Arc::new(LocalFetcher {
+                archives_dir: dist(),
+            })),
+            agent_exe: Some(PathBuf::from(r"C:\Selachi\selachi-agent.exe")),
+            ..SettingsOptions::new(path, "0.0.1")
+        };
+        let (view, vcx) = testing::open_window(cx, |_, cx| {
+            SettingsView::new(config, Theme::dark(), options, cx)
+        });
+        view.update(vcx, |v, cx| v.set_section(Section::Agents, cx));
+        for (win_w, win_h) in [(800.0_f32, 3600.0_f32), (1000.0, 3600.0), (1600.0, 3600.0)] {
+            vcx.simulate_resize(size(px(win_w), px(win_h)));
+            for _ in 0..3 {
+                vcx.update(|window, _| window.refresh());
+                vcx.run_until_parked();
+            }
+            let scroll_w = win_w - crate::ui::NAV_WIDTH;
+            let col_w = scroll_w.min(crate::ui::MAX_CONTENT_WIDTH);
+            let card_left = crate::ui::NAV_WIDTH + (scroll_w - col_w) / 2.0 + 32.0;
+            let card_right = card_left + (col_w - 64.0);
+            for id in [
+                "statusline-hook",
+                "week-start-trigger",
+                "show-estimates",
+                "deleg-enabled",
+                "deleg-agent-claude",
+                "deleg-agent-codex",
+                "deleg-agent-opencode",
+                "deleg-agent-gemini",
+                "deleg-agent-agy",
+                "deleg-max-permission-trigger",
+                "deleg-max-depth-trigger",
+            ] {
+                let b = testing::bounds_of(vcx, id)
+                    .unwrap_or_else(|| panic!("missing control `{id}` at {win_w}x{win_h}"));
+                let left = f32::from(b.left());
+                let right = f32::from(b.right());
+                assert!(
+                    left >= card_left - 1.0 && right <= card_right + 1.0,
+                    "control `{id}` outside card [{card_left}..{card_right}] at {win_w}px: [{left}..{right}]"
+                );
+            }
+            // At 800 px the five agent chips cannot fit on one line, so they must wrap onto a
+            // second line instead of overflowing the card.
+            if win_w <= 800.0 {
+                let first = testing::bounds_of(vcx, "deleg-agent-claude").unwrap();
+                let last = testing::bounds_of(vcx, "deleg-agent-agy").unwrap();
+                assert!(
+                    f32::from(last.top()) > f32::from(first.top()) + 10.0,
+                    "agent chips should wrap at {win_w}px: first={first:?}, last={last:?}"
+                );
+            }
+        }
+    }
 }

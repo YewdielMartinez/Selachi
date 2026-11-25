@@ -858,9 +858,10 @@ fn approvals_are_forwarded_to_selachi_over_the_pipe() {
     assert_eq!(reqs.len(), 1);
     let q = &reqs[0];
     assert_eq!(q.v, agent_harness::PROTOCOL_VERSION);
+    // The wire id is scoped by run, so two runs asking with the same agent id never collide.
     assert_eq!(
         (q.request_id.as_str(), q.tool.as_str(), q.agent.as_str()),
-        ("req_1", "Bash", "codex")
+        (format!("run{}:req_1", q.run_id).as_str(), "Bash", "codex")
     );
     assert_eq!(Some(q.run_id.clone()), r.run_id);
     assert_eq!(q.thread_id.to_string(), q.run_id);

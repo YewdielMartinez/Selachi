@@ -19,6 +19,7 @@
 mod actions;
 mod cpu;
 mod error;
+mod external;
 mod job;
 mod ports;
 mod runtime;
@@ -32,6 +33,10 @@ pub use actions::{
 };
 pub use cpu::{logical_cores, CpuSampler};
 pub use error::{Error, RefuseReason, Result};
+pub use external::{
+    find_external_agents, find_external_agents_with, match_agent_exe, parse_agent_cli_args,
+    ExternalAgentProc, ParsedAgentArgs, KNOWN_AGENTS,
+};
 pub use job::{resume_process, JobEvent, JobGroup, JobOptions};
 pub use ports::{listening_ports, ports_by_pid, PortInfo, PortState, Proto};
 pub use runtime::{classify, Runtime, RuntimeKind};

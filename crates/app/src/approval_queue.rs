@@ -167,7 +167,10 @@ impl ApprovalQueue {
         if let Some(pos) = self
             .pending
             .iter()
-            .position(|p| p.request.request_id == request.request_id)
+            .position(|p| {
+                // A retry is the same request of the same run; ids are only unique per run.
+                p.request.request_id == request.request_id && p.request.run_id == request.run_id
+            })
         {
             let old = self.pending.remove(pos);
             if let Some(i) = old.incoming {

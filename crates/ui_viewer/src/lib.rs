@@ -37,6 +37,7 @@ mod md_view;
 mod minimap;
 mod minimap_view;
 mod rows;
+mod selection;
 mod snippet;
 mod spans;
 mod state;

@@ -101,7 +101,11 @@ impl Laid {
             let rows = line.wrap_boundaries.len();
             let last_line = li + 1 == n;
             for r in 0..=rows {
-                let rs = if r == 0 { 0 } else { Self::boundary_index(line, r) };
+                let rs = if r == 0 {
+                    0
+                } else {
+                    Self::boundary_index(line, r)
+                };
                 let re = if r < rows {
                     Self::boundary_index(line, r + 1)
                 } else {
@@ -121,12 +125,9 @@ impl Laid {
                     let x0 = line.unwrapped_layout.x_for_index(rs);
                     let left = line.unwrapped_layout.x_for_index(lo - start) - x0;
                     let right = line.unwrapped_layout.x_for_index(hi - start) - x0;
-                    let width = (right - left).max(px(0.0))
-                        + if stub { px(NEWLINE_STUB) } else { px(0.0) };
-                    out.push(Bounds::new(
-                        point(left, top),
-                        size(width, self.line_height),
-                    ));
+                    let width =
+                        (right - left).max(px(0.0)) + if stub { px(NEWLINE_STUB) } else { px(0.0) };
+                    out.push(Bounds::new(point(left, top), size(width, self.line_height)));
                 }
                 top += self.line_height;
             }
@@ -146,6 +147,11 @@ pub struct SelectableText {
     highlights: Option<Vec<(Range<usize>, HighlightStyle)>>,
     links: Rc<[(Range<usize>, SharedString)]>,
     laid: LaidRef,
+    /// What `request_layout` shaped with (runs, font size, line height, wraps), kept so `prepaint`
+    /// can reshape to the final width: taffy caches measures, so the last measure call is not
+    /// always the one the final layout used (a short message could paint unwrapped past its
+    /// bubble).
+    shaping: Option<(Vec<TextRun>, Pixels, Pixels, bool)>,
 }
 
 impl SelectableText {
@@ -158,6 +164,7 @@ impl SelectableText {
             highlights: None,
             links: Rc::from(Vec::new()),
             laid: Rc::new(RefCell::new(None)),
+            shaping: None,
         }
     }
 
@@ -208,7 +215,12 @@ fn compute_runs(
         if ix < range.start {
             runs.push(default_style.to_run(range.start - ix));
         }
-        runs.push(default_style.clone().highlight(highlight).to_run(range.len()));
+        runs.push(
+            default_style
+                .clone()
+                .highlight(highlight)
+                .to_run(range.len()),
+        );
         ix = range.end;
     }
     if ix < text.len() {
@@ -248,10 +260,22 @@ impl Element for SelectableText {
         };
         let text = self.text.clone();
         let laid = self.laid.clone();
+        let wraps = text_style.white_space == WhiteSpace::Normal;
+        self.shaping = Some((runs.clone(), font_size, line_height, wraps));
         let layout_id = window.request_measured_layout(
             Default::default(),
             move |known, available, window, _| {
-                let wrap_width = if text_style.white_space == WhiteSpace::Normal {
+                // Wrapping text can break down to any width when a flex parent asks for
+                // `MinContent` (for `min-width: auto`); returning max-content here forces flex
+                // bubbles wider than their column. Do not overwrite `laid` so cached definite
+                // shaping survives.
+                if wraps
+                    && known.width.is_none()
+                    && matches!(available.width, AvailableSpace::MinContent)
+                {
+                    return size(px(0.0), line_height);
+                }
+                let wrap_width = if wraps {
                     known.width.or(match available.width {
                         AvailableSpace::Definite(x) => Some(x),
                         _ => None,
@@ -261,13 +285,19 @@ impl Element for SelectableText {
                 };
                 if let Some(l) = laid.borrow().as_ref()
                     && l.size.is_some()
-                    && (wrap_width.is_none() || wrap_width == l.wrap_width)
+                    // Exact match only: answering a max-content query (None) with a size shaped
+                    // for a narrower wrap made shrink-to-fit boxes (chat bubbles) too narrow.
+                    && wrap_width == l.wrap_width
                 {
                     return l.size.unwrap_or_default();
                 }
-                let shaped = window
-                    .text_system()
-                    .shape_text(text.clone(), font_size, &runs, wrap_width, None);
+                let shaped = window.text_system().shape_text(
+                    text.clone(),
+                    font_size,
+                    &runs,
+                    wrap_width,
+                    None,
+                );
                 let Ok(shaped) = shaped else {
                     laid.borrow_mut().replace(Laid {
                         lines: Vec::new(),
@@ -309,6 +339,49 @@ impl Element for SelectableText {
         window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
+        if let Some((runs, font_size, line_height, wraps)) = &self.shaping {
+            let needs_reshape = {
+                let laid = self.laid.borrow();
+                match laid.as_ref() {
+                    None => true,
+                    Some(l) if *wraps && bounds.size.width > px(0.0) => {
+                        let too_wide = l.size.is_some_and(|s| s.width > bounds.size.width + px(0.5))
+                            && l.wrap_width != Some(bounds.size.width);
+                        let wrong_wrap = l
+                            .wrap_width
+                            .is_some_and(|w| (w - bounds.size.width).abs() > px(0.5));
+                        too_wide || wrong_wrap
+                    }
+                    Some(_) => false,
+                }
+            };
+            if needs_reshape {
+                let wrap = (*wraps && bounds.size.width > px(0.0)).then_some(bounds.size.width);
+                if let Ok(shaped) = window.text_system().shape_text(
+                    self.text.clone(),
+                    *font_size,
+                    runs,
+                    wrap,
+                    None,
+                ) {
+                    let lines: Vec<WrappedLine> = shaped.into_iter().collect();
+                    let mut total: Size<Pixels> = Size::default();
+                    for line in &lines {
+                        let s = line.size(*line_height);
+                        total.height += s.height;
+                        total.width = total.width.max(s.width).ceil();
+                    }
+                    self.laid.borrow_mut().replace(Laid {
+                        lines,
+                        line_height: *line_height,
+                        wrap_width: wrap,
+                        size: Some(total),
+                        bounds: Some(bounds),
+                        len: self.text.len(),
+                    });
+                }
+            }
+        }
         if let Some(l) = self.laid.borrow_mut().as_mut() {
             l.bounds = Some(bounds);
         }
@@ -344,10 +417,7 @@ impl Element for SelectableText {
         if let Some((range, extend)) = self.group.range_for(self.seg, l.len) {
             let color = self.group.color();
             for r in l.selection_rects(range, extend) {
-                window.paint_quad(fill(
-                    Bounds::new(bounds.origin + r.origin, r.size),
-                    color,
-                ));
+                window.paint_quad(fill(Bounds::new(bounds.origin + r.origin, r.size), color));
             }
         }
         let mut origin = bounds.origin;

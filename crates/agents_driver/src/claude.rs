@@ -617,13 +617,33 @@ fn wait_exit(child: &Mutex<Child>, grace: Duration) -> Option<i32> {
     }
 }
 
+pub(crate) fn user_message_json(text: &str) -> Value {
+    let mut content = vec![json!({ "type": "text", "text": text })];
+    for img in crate::images::extract_attached_images(text) {
+        if matches!(
+            img.mime_type,
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+        ) {
+            content.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.mime_type,
+                    "data": img.base64,
+                }
+            }));
+        }
+    }
+    json!({
+        "type": "user",
+        "message": { "role": "user", "content": content }
+    })
+}
+
 impl AgentDriver for ClaudeDriver {
     fn send(&mut self, text: &str) -> Result<()> {
         self.interrupted.store(false, Ordering::SeqCst);
-        self.write_json(&json!({
-            "type": "user",
-            "message": { "role": "user", "content": [{ "type": "text", "text": text }] }
-        }))?;
+        self.write_json(&user_message_json(text))?;
         self.emit(AgentEvent::Status(AgentStatus::Working));
         Ok(())
     }

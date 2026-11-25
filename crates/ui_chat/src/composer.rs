@@ -3,20 +3,21 @@
 //! branch and path line below. It never talks to chat_core: it shows a [`ComposerState`] pushed
 //! by the view and reports what the user did as [`ComposerEvent`]s.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agents_driver::TaskState;
 use agents_driver::{AgentKind, PermissionMode};
 use chat_core::{ContextUsage, Plan};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement,
-    ParentElement as _, PathPromptOptions, Render, SharedString, Styled as _, Subscription, Window,
-    div, prelude::*, px, relative,
+    AnyElement, App, ClickEvent, ClipboardEntry, Context, Entity, EventEmitter, FontWeight,
+    ImageFormat, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, Render,
+    SharedString, Styled as _, Subscription, Window, div, img, prelude::*, px, relative,
 };
 use theme::{Radius, Theme};
 use ui_kit::{
     Button, DitherMeter, Icon, IconButton, Nav, Pill, Placement, Popover, Spinner, TextArea,
-    TextField, TextFieldEvent, Tooltip, icon,
+    TextField, TextFieldEvent, Tooltip, icon, text_field::act as text_act,
 };
 
 use crate::hub::{ChatHub, FilesReady};
@@ -556,6 +557,236 @@ impl Composer {
         cx.emit(ComposerEvent::ConfirmSwitch { agent, model: None });
         cx.notify();
     }
+
+    /// Checks the clipboard for pasted images (raw image data or copied image files).
+    /// Returns `true` when at least one image was attached so the caller stops paste propagation
+    /// before `TextField::on_paste` runs; returns `false` for plain text so normal paste works.
+    fn paste_images_from_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(item) = cx.read_from_clipboard() {
+            let mut saved = Vec::new();
+            for entry in item.entries() {
+                if let ClipboardEntry::Image(image) = entry
+                    && !image.bytes.is_empty()
+                {
+                    let ext = format_ext(image.format);
+                    match save_pasted_image(&image.bytes, ext) {
+                        Ok(path) => saved.push(path),
+                        Err(e) => log::warn!("composer: failed to save pasted image: {e}"),
+                    }
+                }
+            }
+            if !saved.is_empty() {
+                self.add_attachments(saved, cx);
+                return true;
+            }
+        }
+        #[cfg(all(windows, not(test)))]
+        if let Some(paths) = read_windows_clipboard_images()
+            && !paths.is_empty()
+        {
+            self.add_attachments(paths, cx);
+            return true;
+        }
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Clipboard image helpers
+// ---------------------------------------------------------------------------------------------
+
+static PASTE_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Whether `path` has a common raster image extension.
+pub fn is_image_path(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff"
+    )
+}
+
+fn format_ext(format: ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpg",
+        ImageFormat::Gif => "gif",
+        ImageFormat::Webp => "webp",
+        ImageFormat::Bmp => "bmp",
+        ImageFormat::Tiff => "tiff",
+        ImageFormat::Svg => "svg",
+    }
+}
+
+pub(crate) fn save_pasted_image(bytes: &[u8], ext: &str) -> std::io::Result<PathBuf> {
+    let dir = std::env::temp_dir().join("selachi-paste");
+    std::fs::create_dir_all(&dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let seq = PASTE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("pasted-image-{ts}-{seq}.{ext}"));
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+pub(crate) fn image_paths_from_drop(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .filter(|p| p.is_file() && is_image_path(p))
+        .collect()
+}
+
+/// Converts a Windows `CF_DIB` / `CF_DIBV5` memory block (a BMP without its 14-byte file header)
+/// into PNG bytes.
+pub(crate) fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
+    if dib.len() < 40 {
+        return None;
+    }
+    let header_size = u32::from_le_bytes(dib[0..4].try_into().ok()?);
+    if (header_size as usize) < 40 || (header_size as usize) > dib.len() {
+        return None;
+    }
+    let bit_count = u16::from_le_bytes(dib[14..16].try_into().ok()?);
+    let compression = u32::from_le_bytes(dib[16..20].try_into().ok()?);
+    let clr_used = u32::from_le_bytes(dib[32..36].try_into().ok()?);
+    let color_table_entries = if clr_used > 0 {
+        clr_used
+    } else if bit_count <= 8 {
+        1u32.checked_shl(bit_count as u32).unwrap_or(0)
+    } else {
+        0
+    };
+    let color_table_bytes = color_table_entries.checked_mul(4)?;
+    // BITMAPINFOHEADER (40 bytes) with BI_BITFIELDS (3) is followed by 3 DWORD masks.
+    let masks_bytes: u32 = if header_size == 40 && compression == 3 {
+        12
+    } else {
+        0
+    };
+    let pixel_offset = 14u32
+        .checked_add(header_size)?
+        .checked_add(masks_bytes)?
+        .checked_add(color_table_bytes)?;
+    let file_size = 14u32.checked_add(u32::try_from(dib.len()).ok()?)?;
+
+    let mut bmp = Vec::with_capacity(14 + dib.len());
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&0u32.to_le_bytes());
+    bmp.extend_from_slice(&pixel_offset.to_le_bytes());
+    bmp.extend_from_slice(dib);
+
+    let decoded = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?;
+    let mut png = Vec::new();
+    decoded
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(png)
+}
+
+#[cfg(all(windows, not(test)))]
+fn read_windows_clipboard_images() -> Option<Vec<PathBuf>> {
+    use std::sync::LazyLock;
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+        RegisterClipboardFormatW,
+    };
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+    use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5, CF_HDROP, CF_UNICODETEXT};
+    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = unsafe { CloseClipboard() };
+        }
+    }
+
+    static FMT_PNG: LazyLock<u32> =
+        LazyLock::new(|| unsafe { RegisterClipboardFormatW(windows::core::w!("PNG")) });
+    static FMT_JFIF: LazyLock<u32> =
+        LazyLock::new(|| unsafe { RegisterClipboardFormatW(windows::core::w!("JFIF")) });
+    static FMT_GIF: LazyLock<u32> =
+        LazyLock::new(|| unsafe { RegisterClipboardFormatW(windows::core::w!("GIF")) });
+
+    unsafe { OpenClipboard(None) }.ok()?;
+    let _guard = Guard;
+
+    let read_bytes = |fmt: u32| -> Option<Vec<u8>> {
+        if fmt == 0 || unsafe { IsClipboardFormatAvailable(fmt) }.is_err() {
+            return None;
+        }
+        let handle = unsafe { GetClipboardData(fmt) }.ok()?;
+        let global = HGLOBAL(handle.0);
+        let size = unsafe { GlobalSize(global) };
+        if size == 0 {
+            return None;
+        }
+        let ptr = unsafe { GlobalLock(global) };
+        if ptr.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), size) }.to_vec();
+        let _ = unsafe { GlobalUnlock(global) };
+        Some(bytes)
+    };
+
+    // 1. Copied image files from Explorer (CF_HDROP).
+    if unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32) }.is_ok()
+        && let Ok(handle) = unsafe { GetClipboardData(CF_HDROP.0 as u32) }
+    {
+        let global = HGLOBAL(handle.0);
+        let ptr = unsafe { GlobalLock(global) };
+        if !ptr.is_null() {
+            let hdrop = HDROP(ptr);
+            let count = unsafe { DragQueryFileW(hdrop, 0xFFFF_FFFF, None) };
+            let mut paths = Vec::with_capacity(count as usize);
+            for i in 0..count {
+                let len = unsafe { DragQueryFileW(hdrop, i, None) } as usize;
+                if len == 0 {
+                    continue;
+                }
+                let mut buf = vec![0u16; len + 1];
+                let copied = unsafe { DragQueryFileW(hdrop, i, Some(&mut buf)) } as usize;
+                if copied > 0 {
+                    paths.push(PathBuf::from(String::from_utf16_lossy(&buf[..copied])));
+                }
+            }
+            let _ = unsafe { GlobalUnlock(global) };
+            let imgs = image_paths_from_drop(paths);
+            if !imgs.is_empty() {
+                return Some(imgs);
+            }
+        }
+    }
+
+    // 2. If plain text is on the clipboard, let TextField paste it instead of hijacking
+    //    spreadsheets or rich selections that also publish a fallback bitmap.
+    if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32) }.is_ok() {
+        return None;
+    }
+
+    // 3. Raw encoded image formats or DIB/DIBV5 screenshots (Win+Shift+S, PrintScreen, Paint).
+    for (fmt, ext) in [(*FMT_PNG, "png"), (*FMT_JFIF, "jpg"), (*FMT_GIF, "gif")] {
+        if let Some(bytes) = read_bytes(fmt)
+            && let Ok(path) = save_pasted_image(&bytes, ext)
+        {
+            return Some(vec![path]);
+        }
+    }
+    for fmt in [CF_DIBV5.0 as u32, CF_DIB.0 as u32] {
+        if let Some(dib) = read_bytes(fmt)
+            && let Some(png) = dib_to_png(&dib)
+            && let Ok(path) = save_pasted_image(&png, "png")
+        {
+            return Some(vec![path]);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1250,6 +1481,7 @@ impl Render for Composer {
                 .flex()
                 .flex_row()
                 .flex_wrap()
+                .items_center()
                 .gap(px(6.0))
                 .pb(px(8.0))
                 .children(self.attachments.iter().map(|p| {
@@ -1257,22 +1489,56 @@ impl Render for Composer {
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| p.display().to_string());
-                    file_chip(&t, &name, c.text)
-                        .id(SharedString::from(format!("attach-{}", p.display())))
-                        .tooltip(Tooltip::text(&t, p.display().to_string()))
-                        .child(
-                            IconButton::new(format!("attach-x-{}", p.display()), &t, Icon::Close)
-                                .size(18.0)
-                                .icon_size(10.0)
-                                .tooltip("Quitar")
-                                .on_click({
-                                    let path = p.clone();
-                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        this.attachments.retain(|a| a != &path);
-                                        cx.notify();
-                                    })
-                                }),
-                        )
+                    let close =
+                        IconButton::new(format!("attach-x-{}", p.display()), &t, Icon::Close)
+                            .size(18.0)
+                            .icon_size(10.0)
+                            .tooltip("Quitar")
+                            .on_click({
+                                let path = p.clone();
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.attachments.retain(|a| a != &path);
+                                    cx.notify();
+                                })
+                            });
+                    if is_image_path(p) {
+                        div()
+                            .id(SharedString::from(format!("attach-{}", p.display())))
+                            .h(px(36.0))
+                            .pl(px(4.0))
+                            .pr(px(6.0))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.0))
+                            .rounded(px(Radius::CONTROL))
+                            .bg(c.surface_3)
+                            .text_size(px(ty.ui_size_sm))
+                            .text_color(c.text)
+                            .tooltip(Tooltip::text(&t, p.display().to_string()))
+                            .child(
+                                img(p.clone())
+                                    .size(px(28.0))
+                                    .rounded(px(Radius::CHIP))
+                                    .object_fit(ObjectFit::Cover),
+                            )
+                            .child(
+                                div()
+                                    .max_w(px(180.0))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .child(SharedString::from(name)),
+                            )
+                            .child(close)
+                            .into_any_element()
+                    } else {
+                        file_chip(&t, &name, c.text)
+                            .id(SharedString::from(format!("attach-{}", p.display())))
+                            .tooltip(Tooltip::text(&t, p.display().to_string()))
+                            .child(close)
+                            .into_any_element()
+                    }
                 }))
         });
 
@@ -1315,7 +1581,16 @@ impl Render for Composer {
             .flex_col()
             .gap(px(8.0))
             .children(chips)
-            .child(self.field.clone())
+            .child(
+                div()
+                    .w_full()
+                    .capture_action(cx.listener(|this, _: &text_act::Paste, _, cx| {
+                        if this.paste_images_from_clipboard(cx) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(self.field.clone()),
+            )
             .child(controls)
             .children(self.mention_overlay(cx))
             .child({
@@ -1370,5 +1645,200 @@ impl Render for Composer {
             .children(plan)
             .child(card)
             .children(path_line)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use chat_core::ChatStore;
+    use gpui::{ClipboardItem, Image, TestAppContext};
+
+    use super::*;
+    use crate::fake::{FactoryHandle, FakeFactory};
+
+    fn tiny_png() -> Vec<u8> {
+        let mut buf = Vec::new();
+        let img = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 170, 255, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    fn tiny_dib_2x2_bgr24() -> Vec<u8> {
+        // 40-byte BITMAPINFOHEADER + 2 rows of 2 BGR pixels (6 bytes + 2 bytes row padding each).
+        let mut dib = Vec::with_capacity(40 + 16);
+        dib.extend_from_slice(&40u32.to_le_bytes()); // biSize
+        dib.extend_from_slice(&2i32.to_le_bytes()); // biWidth
+        dib.extend_from_slice(&2i32.to_le_bytes()); // biHeight (bottom-up)
+        dib.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
+        dib.extend_from_slice(&24u16.to_le_bytes()); // biBitCount
+        dib.extend_from_slice(&0u32.to_le_bytes()); // biCompression (BI_RGB)
+        dib.extend_from_slice(&16u32.to_le_bytes()); // biSizeImage
+        dib.extend_from_slice(&0i32.to_le_bytes()); // biXPelsPerMeter
+        dib.extend_from_slice(&0i32.to_le_bytes()); // biYPelsPerMeter
+        dib.extend_from_slice(&0u32.to_le_bytes()); // biClrUsed
+        dib.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+        // 2 rows: BGR = (255, 170, 0) -> RGB = (0, 170, 255), plus 2 padding bytes per row.
+        for _ in 0..2 {
+            dib.extend_from_slice(&[255, 170, 0, 255, 170, 0, 0, 0]);
+        }
+        dib
+    }
+
+    #[test]
+    fn is_image_path_matches_image_extensions_case_insensitively() {
+        for ok in [
+            "a.png",
+            "SHOT.PNG",
+            "photo.jpg",
+            "photo.JPEG",
+            "anim.gif",
+            "pic.webp",
+            "raw.bmp",
+            "scan.tif",
+            "scan.TIFF",
+        ] {
+            assert!(is_image_path(Path::new(ok)), "expected image: {ok}");
+        }
+        for no in ["main.rs", "README.md", "notes.txt", "noext", ""] {
+            assert!(!is_image_path(Path::new(no)), "expected non-image: {no}");
+        }
+    }
+
+    #[test]
+    fn dib_to_png_converts_valid_dib_and_rejects_truncated() {
+        assert!(dib_to_png(&[]).is_none());
+        assert!(dib_to_png(&[0u8; 20]).is_none());
+
+        let dib = tiny_dib_2x2_bgr24();
+        let png = dib_to_png(&dib).expect("valid 24-bit DIB should encode to PNG");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .unwrap()
+            .to_rgb8();
+        assert_eq!(decoded.dimensions(), (2, 2));
+        assert_eq!(decoded.get_pixel(0, 0).0, [0, 170, 255]);
+    }
+
+    #[test]
+    fn image_paths_from_drop_filters_to_existing_image_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("shot.png");
+        let jpg = dir.path().join("pic.JPG");
+        let rs = dir.path().join("lib.rs");
+        let missing = dir.path().join("gone.png");
+        let subdir = dir.path().join("folder.png");
+        std::fs::write(&png, tiny_png()).unwrap();
+        std::fs::write(&jpg, b"jpg").unwrap();
+        std::fs::write(&rs, b"fn f() {}").unwrap();
+        std::fs::create_dir(&subdir).unwrap();
+
+        let kept = image_paths_from_drop(vec![
+            png.clone(),
+            rs,
+            missing,
+            subdir,
+            jpg.clone(),
+        ]);
+        assert_eq!(kept, vec![png, jpg]);
+    }
+
+    fn setup_composer(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        Entity<Composer>,
+        &mut gpui::VisualTestContext,
+        Rc<RefCell<Vec<ComposerEvent>>>,
+    ) {
+        cx.update(crate::init);
+        let dir = tempfile::tempdir().unwrap();
+        let store = ChatStore::builder()
+            .path(dir.path().join("chat.db"))
+            .factory(Arc::new(FactoryHandle(FakeFactory::silent())))
+            .open()
+            .unwrap();
+        let hub = cx.update(|cx| ChatHub::create(store, Theme::dark(), cx));
+        let (c, vcx) = cx.add_window_view(move |_, cx| Composer::new(hub, Theme::dark(), cx));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let log = events.clone();
+        let sub = vcx.update(|_, cx| {
+            cx.subscribe(&c, move |_, ev: &ComposerEvent, _| {
+                log.borrow_mut().push(ev.clone());
+            })
+        });
+        std::mem::forget(sub);
+        vcx.update(|window, cx| c.read(cx).focus(window, cx));
+        (dir, c, vcx, events)
+    }
+
+    #[gpui::test]
+    fn ctrl_v_with_clipboard_image_attaches_and_is_removable(cx: &mut TestAppContext) {
+        use ui_kit::testing::{click_id, press};
+
+        let (_dir, c, vcx, events) = setup_composer(cx);
+        let png = tiny_png();
+        vcx.update(|window, cx| {
+            c.read(cx).focus(window, cx);
+            cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
+                ImageFormat::Png,
+                png.clone(),
+            )));
+        });
+
+        press(vcx, "ctrl-v");
+
+        let attached = c.read_with(vcx, |c, _| c.attachments().to_vec());
+        assert_eq!(attached.len(), 1, "expected 1 pasted image attachment");
+        assert!(is_image_path(&attached[0]));
+        assert_eq!(std::fs::read(&attached[0]).unwrap(), png);
+        assert_eq!(
+            c.read_with(vcx, |c, cx| c.text(cx)),
+            "",
+            "image paste must not insert text"
+        );
+
+        // Sending emits the attached image path, then clears attachments.
+        press(vcx, "enter");
+        assert_eq!(
+            *events.borrow(),
+            vec![ComposerEvent::Send {
+                text: String::new(),
+                attachments: attached.clone(),
+            }]
+        );
+        assert!(c.read_with(vcx, |c, _| c.attachments().is_empty()));
+
+        // Paste again and verify removal via the chip's close button.
+        press(vcx, "ctrl-v");
+        let second = c.read_with(vcx, |c, _| c.attachments().to_vec());
+        assert_eq!(second.len(), 1);
+        vcx.run_until_parked();
+        click_id(vcx, &format!("attach-x-{}", second[0].display()));
+        assert!(c.read_with(vcx, |c, _| c.attachments().is_empty()));
+
+        let _ = std::fs::remove_file(&attached[0]);
+        let _ = std::fs::remove_file(&second[0]);
+    }
+
+    #[gpui::test]
+    fn ctrl_v_with_plain_text_still_pastes_text(cx: &mut TestAppContext) {
+        use ui_kit::testing::press;
+
+        let (_dir, c, vcx, _events) = setup_composer(cx);
+        vcx.update(|window, cx| {
+            c.read(cx).focus(window, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string("hola selachi".into()));
+        });
+
+        press(vcx, "ctrl-v");
+
+        assert_eq!(c.read_with(vcx, |c, cx| c.text(cx)), "hola selachi");
+        assert!(c.read_with(vcx, |c, _| c.attachments().is_empty()));
     }
 }

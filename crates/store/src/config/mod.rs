@@ -490,6 +490,46 @@ mod tests {
         assert_eq!(t.delegation, c.delegation);
         assert_eq!(t.updates, c.updates);
         assert_eq!(t.agent_profiles, c.agent_profiles);
+        assert_eq!(t.chat, c.chat);
+    }
+
+    #[test]
+    fn chat_copy_redaction_defaults_parse_and_save_in_place() {
+        let c = Config::default();
+        assert!(c.chat.redact_copy_commands && !c.chat.redact_copy_text);
+        let p = Config::parse(
+            "[chat]
+redact_copy_text = true",
+        )
+        .unwrap();
+        assert!(p.config.chat.redact_copy_text && p.config.chat.redact_copy_commands);
+        // a wrong type is reported, not silently defaulted
+        assert!(Config::parse(
+            "[chat]
+redact_copy_commands = \"yes\""
+        )
+        .is_err());
+        // the toggles of the chat menu are written back without touching the user's comments
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# mi config
+[chat]
+# secretos
+redact_copy_commands = true # salida
+",
+        )
+        .unwrap();
+        let mut cfg = Config::load_from(&path).unwrap().config;
+        cfg.chat.redact_copy_commands = false;
+        cfg.chat.redact_copy_text = true;
+        cfg.save_to(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# mi config") && text.contains("# secretos"));
+        assert!(text.contains("# salida"));
+        let back = Config::load_from(&path).unwrap().config;
+        assert!(!back.chat.redact_copy_commands && back.chat.redact_copy_text);
     }
 
     #[test]

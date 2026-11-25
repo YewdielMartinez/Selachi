@@ -241,7 +241,19 @@ impl CodexSession {
     }
 
     fn input(text: &str) -> Value {
-        json!([{ "type": "text", "text": text, "text_elements": [] }])
+        let mut items = vec![json!({ "type": "text", "text": text, "text_elements": [] })];
+        for img in crate::images::extract_attached_images(text) {
+            items.push(json!({
+                "type": "localImage",
+                "path": img.path.to_string_lossy(),
+            }));
+        }
+        Value::Array(items)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn input_for_test(text: &str) -> Value {
+        Self::input(text)
     }
 
     fn turn_start(&mut self, text: &str, step: &mut Step) {

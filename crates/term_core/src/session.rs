@@ -88,6 +88,53 @@ impl SpawnOptions {
         self.job = Some(handle as isize);
         self
     }
+
+    /// Adds one extra environment variable for the child (replaces an earlier one with the
+    /// same name).
+    #[must_use]
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        let key = key.into();
+        self.env.retain(|(k, _)| *k != key);
+        self.env.push((key, value.into()));
+        self
+    }
+
+    /// Makes the shell a parent of delegated agents: exports [`ENV_PARENT_TAB`] and
+    /// [`ENV_PARENT_PERMISSION`] (see [`parent_env`]) so that `selachi-agent run` launched from
+    /// this terminal hangs from the tab in the agent map.
+    #[must_use]
+    pub fn with_parent_tab(mut self, tab_id: impl std::fmt::Display, permission: &str) -> Self {
+        self.env
+            .retain(|(k, _)| k != ENV_PARENT_TAB && k != ENV_PARENT_PERMISSION);
+        self.env.extend(parent_env(tab_id, permission));
+        self
+    }
+}
+
+/// Environment variable read by `selachi-agent` (`agent_harness::policy::ENV_PARENT_TAB`): opaque
+/// id of the terminal tab that launched the run.
+pub const ENV_PARENT_TAB: &str = "SELACHI_PARENT_TAB";
+/// Environment variable read by `selachi-agent` (`agent_harness::policy::ENV_PARENT_PERMISSION`):
+/// permission of the calling session (`read-only | ask | accept-edits | full`).
+pub const ENV_PARENT_PERMISSION: &str = "SELACHI_PARENT_PERMISSION";
+/// Permission exported when the tab has no explicit policy.
+pub const DEFAULT_PARENT_PERMISSION: &str = "ask";
+
+/// The `SELACHI_PARENT_TAB` / `SELACHI_PARENT_PERMISSION` pairs for a terminal tab, ready for
+/// [`SpawnOptions::env`]. `tab_id` is rendered with `Display` (the app uses
+/// `TabId::as_u64()`, e.g. `7`); a blank `permission` falls back to
+/// [`DEFAULT_PARENT_PERMISSION`].
+pub fn parent_env(tab_id: impl std::fmt::Display, permission: &str) -> Vec<(String, String)> {
+    let permission = permission.trim();
+    let permission = if permission.is_empty() {
+        DEFAULT_PARENT_PERMISSION
+    } else {
+        permission
+    };
+    vec![
+        (ENV_PARENT_TAB.to_string(), tab_id.to_string()),
+        (ENV_PARENT_PERMISSION.to_string(), permission.to_string()),
+    ]
 }
 
 /// How the shell of a [`Session`] relates to the Job Object passed in [`SpawnOptions::job`].

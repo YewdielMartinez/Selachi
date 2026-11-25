@@ -46,6 +46,8 @@ mod net;
 mod panel;
 mod plugins;
 mod plugins_ui;
+mod profiles;
+mod profiles_ui;
 mod registration;
 mod render;
 mod save;
@@ -72,6 +74,14 @@ pub use plugins::{
     Group, INDEX_TTL, IndexState, Op, PluginRow, PluginState, PluginsEvent, PluginsModel,
     RestartKind, build_rows, download_and_install, fetch_index,
 };
+pub use profiles::{
+    ContextFile as ProfileContextFile, Effective, Entry as ProfileEntry, Issue as ProfileIssue,
+    Limits as ProfileLimits, Profile, Scope as ProfileScope, clamp_permission,
+    context_files as profile_context_files, effective as effective_limits, final_prompt,
+    from_claude_md, from_toml as profile_from_toml, templates as profile_templates,
+    to_toml as profile_to_toml, validate as validate_profile,
+};
+pub use profiles_ui::{ProfilesEditor, ProfilesEvent};
 pub use registration::{CommandRunner, McpTarget, SystemRunner};
 pub use save::{SAVE_DEBOUNCE, SaveGate, merge_external};
 pub use sections::LANGUAGES;
@@ -79,7 +89,8 @@ pub use validate::{
     FieldError, field_errors, first_error, join_args, parse_count, parse_number, split_args,
 };
 pub use view::{
-    Section, SettingsEvent, SettingsOptions, SettingsView, UpdateStatus, init, settings_view,
+    AgentsTab, Section, SettingsEvent, SettingsOptions, SettingsView, UpdateStatus, init,
+    settings_view,
 };
 
 #[cfg(test)]

@@ -173,6 +173,8 @@ pub struct FileViewer {
     data_scroll: UniformListScrollHandle,
     md_scroll: ScrollHandle,
     focus: FocusHandle,
+    /// Text selection of the code and markdown bodies (model coordinates: line / column).
+    sel: ui_kit::SelectionGroup,
     /// Width of the viewer's own zone (the window's before the first paint).
     measured: ui_kit::MeasuredWidth,
 
@@ -276,6 +278,7 @@ impl FileViewer {
             data_scroll: UniformListScrollHandle::new(),
             md_scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
+            sel: ui_kit::SelectionGroup::with_tab_stop(false, cx),
             measured: ui_kit::MeasuredWidth::with_breaks(&[720.0, crate::state::XL_FROM_PX]),
             find: FindState::default(),
             find_open: false,
@@ -485,6 +488,7 @@ impl FileViewer {
             return;
         }
         self.body = body;
+        self.sel.clear();
         self.scroll = UniformListScrollHandle::new();
         self.mini_gen += 1;
         self.ensure_body(cx);
@@ -841,6 +845,7 @@ impl FileViewer {
                     &p.spans,
                     query,
                     current == Some(ix),
+                    Some((&self.sel, ix)),
                 )
             })
             .collect()
@@ -1225,13 +1230,21 @@ impl FileViewer {
             return self.message_view(Icon::Files, "Archivo vacio");
         }
         let t = this.clone();
-        VirtualList::new("viewer-code", total, ROW_H, move |range, _, cx| {
+        self.sel
+            .set_source(std::rc::Rc::new(crate::selection::DocLines::new(
+                doc.clone(),
+            )));
+        let list = VirtualList::new("viewer-code", total, ROW_H, move |range, _, cx| {
             t.read(cx).code_rows(range)
         })
         .track_scroll(self.scroll.clone())
         .size_full()
-        .py(px(6.0))
-        .into_any_element()
+        .py(px(6.0));
+        self.sel
+            .container("viewer-code-sel", &self.theme)
+            .size_full()
+            .child(list)
+            .into_any_element()
     }
 
     fn diff_body(&self) -> AnyElement {
@@ -1296,9 +1309,11 @@ impl FileViewer {
             return self.loading_view();
         };
         let base_dir = self.path.parent().map(Path::to_path_buf);
-        let render = MdRender::new(theme, base_dir, &self.md.highlights);
+        let render =
+            MdRender::new(theme, base_dir, &self.md.highlights).with_group(self.sel.clone());
         let children = md_view::render_blocks(&blocks, &render);
-        div()
+        render.finish();
+        let scroller = div()
             .id("viewer-md")
             .size_full()
             .overflow_y_scroll()
@@ -1313,7 +1328,11 @@ impl FileViewer {
                     .flex()
                     .flex_col()
                     .children(children),
-            )
+            );
+        self.sel
+            .container("viewer-md-sel", &theme)
+            .size_full()
+            .child(scroller)
             .into_any_element()
     }
 
@@ -1678,7 +1697,12 @@ impl Render for FileViewer {
             .on_action(cx.listener(|this, _: &ScrollBottom, _, cx| this.scroll_to_edge(true, cx)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, _| window.focus(&this.focus)),
+                // A press on selectable text keeps the focus the text just took (Ctrl+C / Ctrl+A).
+                cx.listener(|this, _: &MouseDownEvent, window, _| {
+                    if !this.sel.focus_handle().is_focused(window) {
+                        window.focus(&this.focus)
+                    }
+                }),
             )
             .relative()
             .size_full()
@@ -2050,6 +2074,160 @@ mod tests {
         assert!(
             viewer.read_with(cx, |v, _| v.document().is_none()),
             "closing the tab drops the document"
+        );
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, point};
+    use std::fs;
+    use ui_kit::SelPos;
+
+    fn open_window<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        path: &Path,
+    ) -> (Entity<FileViewer>, &'a mut gpui::VisualTestContext) {
+        let p = path.to_path_buf();
+        let (v, vcx) = ui_kit::testing::open_window(cx, move |_, cx| {
+            FileViewer::new(p, ViewerConfig::default(), Theme::dark(), cx)
+        });
+        for _ in 0..20 {
+            vcx.run_until_parked();
+            if !v.read_with(vcx, |v, _| v.is_loading()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        vcx.update(|w, _| w.refresh());
+        vcx.run_until_parked();
+        (v, vcx)
+    }
+
+    fn at(g: &ui_kit::SelectionGroup, line: usize, col: usize) -> Point<Pixels> {
+        let p = g.position_of(SelPos::new(line, col)).expect("line painted");
+        point(p.x, p.y + px(6.0))
+    }
+
+    fn down(vcx: &mut gpui::VisualTestContext, p: Point<Pixels>, mods: Modifiers) {
+        vcx.simulate_event(MouseDownEvent {
+            position: p,
+            modifiers: mods,
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+    }
+
+    fn up(vcx: &mut gpui::VisualTestContext, p: Point<Pixels>) {
+        vcx.simulate_event(MouseUpEvent {
+            position: p,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+    }
+
+    fn scroll_to_line(v: &Entity<FileViewer>, vcx: &mut gpui::VisualTestContext, line: usize) {
+        v.read_with(vcx, |v, _| {
+            v.scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.0), px(-(line as f32) * ROW_H)));
+        });
+        vcx.update(|w, _| w.refresh());
+        vcx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn a_code_selection_is_in_line_and_column_and_survives_scrolling(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let body: String = (1..=2_000).map(|i| format!("line {i}\n")).collect();
+        let path = dir.path().join("big.txt");
+        fs::write(&path, body).unwrap();
+        let (v, vcx) = open_window(cx, &path);
+        let g = v.read_with(vcx, |v, _| v.sel.clone());
+        assert!(g.painted_segments().contains(&4), "first rows are painted");
+
+        // Drag from line 2 col 0 to line 5 col 4.
+        let (a, b) = (at(&g, 1, 0), at(&g, 4, 4));
+        down(vcx, a, Modifiers::none());
+        vcx.simulate_mouse_move(b, MouseButton::Left, Modifiers::none());
+        up(vcx, b);
+        assert_eq!(
+            g.selected_text().as_deref(),
+            Some("line 2\nline 3\nline 4\nline")
+        );
+
+        // Scroll far away: the selected rows are no longer painted, the selection is intact and
+        // Ctrl+C still copies it.
+        scroll_to_line(&v, vcx, 1_200);
+        let painted = g.painted_segments();
+        assert!(
+            !painted.contains(&1) && painted.iter().all(|l| *l > 1_000),
+            "{painted:?}"
+        );
+        assert_eq!(
+            g.selected_text().as_deref(),
+            Some("line 2\nline 3\nline 4\nline")
+        );
+        ui_kit::testing::press(vcx, "ctrl-c");
+        let copied = vcx.read_from_clipboard().and_then(|i| i.text());
+        assert_eq!(copied.as_deref(), Some("line 2\nline 3\nline 4\nline"));
+
+        // Shift+click far below extends the model selection across everything in between.
+        let far = *painted.get(5).unwrap();
+        let p = at(&g, far, 3);
+        down(vcx, p, Modifiers::shift());
+        up(vcx, p);
+        let text = g.selected_text().unwrap();
+        assert!(text.starts_with("line 2\nline 3\n"), "{}", &text[..30]);
+        assert!(text.ends_with("lin"), "{}", &text[text.len() - 12..]);
+        assert_eq!(
+            text.lines().count(),
+            far,
+            "one line per file line from 2 to {}",
+            far + 1
+        );
+
+        // Back on top the rows paint their selection again.
+        scroll_to_line(&v, vcx, 0);
+        assert!(!g.selection_rects(2).is_empty());
+    }
+
+    #[gpui::test]
+    fn the_markdown_view_selects_across_blocks(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        fs::write(
+            &path,
+            "# Title\n\nHello **bold** world.\n\n- a\n- b\n\n```\ncode line\n```\n",
+        )
+        .unwrap();
+        let (v, vcx) = open_window(cx, &path);
+        for _ in 0..200 {
+            vcx.run_until_parked();
+            vcx.update(|w, _| w.refresh());
+            if v.read_with(vcx, |v, _| v.md.blocks.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        vcx.run_until_parked();
+        let g = v.read_with(vcx, |v, _| v.sel.clone());
+        let n = g.painted_segments().len();
+        assert_eq!(n, 5, "title, paragraph, two items, one code line");
+        let (a, b) = (at(&g, 0, 0), at(&g, 4, "code line".len()));
+        down(vcx, a, Modifiers::none());
+        vcx.simulate_mouse_move(b, MouseButton::Left, Modifiers::none());
+        up(vcx, b);
+        assert_eq!(
+            g.selected_text().as_deref(),
+            Some("Title\n\nHello bold world.\n\na\nb\n\ncode line")
         );
     }
 }

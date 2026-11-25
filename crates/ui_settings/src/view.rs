@@ -110,6 +110,15 @@ impl Section {
     }
 }
 
+/// The two pages of Agentes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentsTab {
+    /// CLIs, permissions, usage and Delegación.
+    General,
+    /// Subagent profiles.
+    Profiles,
+}
+
 /// What the host tells the view about updates (the settings row shows it).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UpdateStatus {
@@ -243,6 +252,9 @@ pub struct SettingsView {
     pub(crate) confirm: Option<(String, ConfirmKind)>,
     pub(crate) agents: AgentsState,
     pub(crate) agents_task: Option<Task<()>>,
+    /// Agentes: the detected-CLI page or the profile editor.
+    pub(crate) agents_tab: AgentsTab,
+    pub(crate) profiles: Option<Entity<crate::profiles_ui::ProfilesEditor>>,
     pub(crate) catalog: Vec<KeyAction>,
     pub(crate) capture: Option<Capture>,
     pub(crate) capture_sub: Option<Subscription>,
@@ -355,6 +367,8 @@ impl SettingsView {
             confirm: None,
             agents: AgentsState::Unknown,
             agents_task: None,
+            agents_tab: AgentsTab::General,
+            profiles: None,
             catalog: options.key_catalog.unwrap_or_else(keys::default_catalog),
             capture: None,
             capture_sub: None,
@@ -779,4 +793,48 @@ pub(crate) fn config_field_value(cfg: &Config, key: &str) -> Option<String> {
         "deleg_approval" => cfg.delegation.approval_timeout_secs.to_string(),
         _ => return None,
     })
+}
+
+impl SettingsView {
+    /// Shows Agentes on its page of subagent profiles (or back on the general one).
+    pub fn set_agents_tab(&mut self, tab: AgentsTab, cx: &mut Context<Self>) {
+        self.set_section(Section::Agents, cx);
+        if self.agents_tab != tab {
+            self.agents_tab = tab;
+            cx.notify();
+        }
+    }
+
+    /// The profile editor, created the first time it is needed.
+    pub fn profile_editor(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::profiles_ui::ProfilesEditor> {
+        if let Some(p) = &self.profiles {
+            return p.clone();
+        }
+        let data_dir = self
+            .path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        let theme = self.theme;
+        let editor = cx.new(|cx| crate::profiles_ui::ProfilesEditor::new(theme, data_dir, cx));
+        self.profiles = Some(editor.clone());
+        editor
+    }
+
+    /// Opens a new profile in the editor, seeded (the map's "Duplicar como perfil").
+    pub fn new_profile_from(&mut self, seed: crate::profiles::Profile, cx: &mut Context<Self>) {
+        self.set_agents_tab(AgentsTab::Profiles, cx);
+        let editor = self.profile_editor(cx);
+        editor.update(cx, |e, cx| e.start_new(Some(seed), cx));
+    }
+}
+
+impl SettingsView {
+    /// Scrolls the content column to `y` logical pixels from the top (screenshots, deep links).
+    pub fn scroll_to(&self, y: f32) {
+        self.scroll.set_offset(point(px(0.0), px(-y)));
+    }
 }

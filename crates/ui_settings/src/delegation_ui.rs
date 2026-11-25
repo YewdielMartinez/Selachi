@@ -84,9 +84,16 @@ impl SettingsView {
             s.edit_cfg(cx, |c| c.delegation.enabled = on);
         });
 
-        // Allowed agents: one chip each; all lit = all allowed.
+        // Allowed agents: one chip each; all lit = all allowed. Placed below the label (stacked)
+        // so the chip row has the full card width to wrap and never pushes past the card edge.
         let allowed = effective_allowed(&d.allowed_agents);
-        let mut chips = div().flex().flex_row().flex_wrap().gap(px(6.0));
+        let mut chips = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(6.0));
         for (id, label) in DELEGATE_AGENTS {
             let on = allowed.contains(&id);
             let this = cx.entity();
@@ -166,7 +173,7 @@ impl SettingsView {
                 .into_any_element(),
                 row(
                     &t,
-                    narrow,
+                    true,
                     "Agentes permitidos",
                     Some("A quiénes se puede delegar. Todos encendidos = sin restricción.".into()),
                     chips,

@@ -410,6 +410,13 @@ mod tests {
             deadline_ms: 1_000 + 900_000,
             result: Some(result),
             applied_ms: None,
+            profile: None,
+            final_prompt: None,
+            limits: None,
+            launcher: None,
+            effort: None,
+            output_format: None,
+            context_files: Vec::new(),
         }
     }
 

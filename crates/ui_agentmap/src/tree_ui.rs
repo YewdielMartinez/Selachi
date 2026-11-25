@@ -10,17 +10,21 @@ use theme::{Radius, Theme};
 use ui_kit::{Icon, VirtualList, icon};
 
 use crate::fmt;
-use crate::parts::{lead_mark, metrics, status_mark, worktree_pill};
+use crate::parts::{external_badge, lead_mark, metrics, status_mark, worktree_pill};
 use crate::tree::{Forest, NodeKey, Row, Totals};
 use crate::view::{AgentMapView, RowLayout};
 
 /// Indent per nesting level.
 const INDENT: f32 = 16.0;
+/// Width of the model column (`model · effort`) per layout.
+const MODEL_W_FULL: f32 = 204.0;
+const MODEL_W_LITE: f32 = 150.0;
 
 pub(crate) fn node_id_string(prefix: &str, key: &NodeKey) -> String {
     let tail = match key {
         NodeKey::Thread(t) => t.0.to_string(),
         NodeKey::Tab(s) => format!("tab-{s}"),
+        NodeKey::External { pid, started_ms } => format!("ext-{pid}-{started_ms}"),
     };
     format!("{prefix}-{tail}")
 }
@@ -87,7 +91,9 @@ fn tree_row(
         div().flex_none().size(px(18.0)).into_any_element()
     };
 
+    let external = node.is_external();
     let title = div()
+        .flex_1()
         .min_w(px(0.0))
         .overflow_hidden()
         .text_ellipsis()
@@ -98,29 +104,43 @@ fn tree_row(
         } else {
             FontWeight::NORMAL
         })
-        .text_color(c.text)
+        .text_color(if external { c.muted } else { c.text })
         .child(SharedString::from(node.title.clone()));
 
     let mut body = div().flex_1().min_w(px(0.0)).flex().flex_col();
     match layout {
         RowLayout::Compact => {
-            let sub: Vec<String> = model
-                .iter()
-                .cloned()
-                .chain(m.iter().take(3).flatten().cloned())
-                .collect();
-            body = body.child(title).child(
-                div()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_size(px(ty.ui_size_xs))
-                    .text_color(c.muted)
-                    .child(SharedString::from(sub.join(" · "))),
+            let mut sub: Vec<String> = Vec::new();
+            if external {
+                sub.push("Fuera de Selachi".to_string());
+            }
+            sub.extend(model.iter().cloned());
+            sub.extend(m.iter().take(3).flatten().cloned());
+            body = body.child(div().flex().flex_row().child(title)).child(
+                div().flex().flex_row().child(
+                    div()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(ty.ui_size_xs))
+                        .text_color(c.muted)
+                        .flex_1()
+                        .child(SharedString::from(sub.join(" · "))),
+                ),
             );
         }
-        _ => body = body.child(title),
+        _ => {
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(title)
+                    .when(external, |d| d.child(external_badge(theme))),
+            );
+        }
     }
 
     let cell = |text: Option<String>, w: f32| {
@@ -168,7 +188,13 @@ fn tree_row(
         el = el.child(
             div()
                 .flex_none()
-                .w(px(if layout == RowLayout::Full { 168.0 } else { 128.0 }))
+                // "claude-sonnet-4.5 · muy alto" must fit in the full layout; the narrower one
+                // truncates with an ellipsis instead of clipping mid-glyph.
+                .w(px(if layout == RowLayout::Full {
+                    MODEL_W_FULL
+                } else {
+                    MODEL_W_LITE
+                }))
                 .min_w(px(0.0))
                 .overflow_hidden()
                 .text_ellipsis()
@@ -192,7 +218,9 @@ fn tree_row(
                 .w(px(132.0))
                 .flex()
                 .justify_end()
-                .when_some(node.worktree.as_ref(), |d, p| d.child(worktree_pill(theme, p))),
+                .when_some(node.worktree.as_ref(), |d, p| {
+                    d.child(worktree_pill(theme, p))
+                }),
         );
     }
     el.into_any_element()
@@ -218,15 +246,20 @@ impl AgentMapView {
         let now = store::now_ms();
         let rows = Arc::new(rows);
         let count = rows.len();
-        VirtualList::new("agentmap-tree", count, layout.height(), move |range, _, _| {
-            range
-                .filter_map(|i| rows.get(i).copied())
-                .map(|row| {
-                    let sel = selected.as_ref() == Some(&forest.nodes[row.node].key);
-                    tree_row(&theme, &forest, row, sel, layout, totals, &this, now)
-                })
-                .collect()
-        })
+        VirtualList::new(
+            "agentmap-tree",
+            count,
+            layout.height(),
+            move |range, _, _| {
+                range
+                    .filter_map(|i| rows.get(i).copied())
+                    .map(|row| {
+                        let sel = selected.as_ref() == Some(&forest.nodes[row.node].key);
+                        tree_row(&theme, &forest, row, sel, layout, totals, &this, now)
+                    })
+                    .collect()
+            },
+        )
         .track_scroll(self.tree_scroll.clone())
         .flex_1()
         .into_any_element()

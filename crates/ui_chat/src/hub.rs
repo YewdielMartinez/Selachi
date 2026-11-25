@@ -50,6 +50,10 @@ pub enum ChatEvent {
     RestoreCheckpoint { thread: ThreadId, id: String },
     /// A thread was deleted: close its tab.
     ThreadRemoved(ThreadId),
+    /// "Ver en el mapa" on a "Delegó en…" row: show the subagent map on this delegated thread.
+    OpenAgentMap(ThreadId),
+    /// The user flipped "Ocultar secretos al copiar" in a chat menu: the host saves it to `[chat]`.
+    CopySettingsChanged(CopySettings),
 }
 
 /// The file list of a project finished loading (for the `@` picker).
@@ -83,7 +87,7 @@ pub struct ChatHub {
     /// (even empty) means the agent was asked once: no retry this session.
     models: HashMap<String, Vec<agents_driver::ModelInfo>>,
     probe_models: bool,
-    /// "Ocultar secretos al copiar" (session only until the store has a field; see [`CopySettings`]).
+    /// "Ocultar secretos al copiar" (`[chat]` in config.toml; the host loads it and hears changes).
     copy: CopySettings,
     error: Option<String>,
     _pump: Task<()>,
@@ -216,18 +220,15 @@ impl ChatHub {
         self.copy
     }
 
-    /// Changes the copy toggles and refreshes the open chats.
-    ///
-    /// TODO(integrator): the store has no field for this yet. Call it from the config loader /
-    /// hot-reload (e.g. `[chat] redact_copy_commands` / `redact_copy_text`) and persist the
-    /// `ChatEvent`-less changes the user makes in the chat menus by reading `copy_settings()`.
+    /// Changes the copy toggles and refreshes the open chats. The host calls it from the config
+    /// loader and on hot-reload; a change made in a chat menu comes back as
+    /// [`ChatEvent::CopySettingsChanged`] (this setter itself emits nothing).
     pub fn set_copy_settings(&mut self, settings: CopySettings, cx: &mut Context<Self>) {
         if self.copy != settings {
             self.copy = settings;
             cx.notify();
         }
     }
-
 
     pub fn set_projects(&mut self, projects: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.projects = projects;

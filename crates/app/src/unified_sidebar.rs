@@ -171,12 +171,14 @@ fn tab_row(
     let l = &p.layout.sidebar;
     let subtitle = row_subtitle(info, l.row_model);
     let time = row_time(info, l.row_time, now);
-    let (view_sel, view_close, view_hover, view_key) = (
+    let (view_sel, view_close, view_hover, view_key, view_map) = (
+        p.view.clone(),
         p.view.clone(),
         p.view.clone(),
         p.view.clone(),
         p.view.clone(),
     );
+    let has_children = p.lineage.children.contains_key(&id);
     let show_close = close_visible(selected, p.hovered_row, id);
     let lead = crate::agents::lead_icon(&info.icon, 16.0, if selected { c.text } else { c.muted });
     let bg = pill_bg(t, p.glass, selected);
@@ -258,6 +260,34 @@ fn tab_row(
                             .child(SharedString::from(tm))
                     })),
             )
+            // A parent that delegated: the subagent map of its session (next to the close x).
+            .children((show_close && has_children).then(|| {
+                div()
+                    .absolute()
+                    .right(px(32.0))
+                    .top_0()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div().rounded(px(Radius::CHIP)).bg(close_bg).child(
+                            IconButton::new(
+                                SharedString::from(format!("urow-map-{}", id.as_u64())),
+                                t,
+                                ui_agentmap::MAP_ICON,
+                            )
+                            .glass(p.glass)
+                            .passthrough(true)
+                            .size(22.0)
+                            .icon_size(12.0)
+                            .tooltip("Mapa de subagentes")
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                send(&view_map, cx, SidebarEvent::OpenAgentMap(id));
+                            }),
+                        ),
+                    )
+            }))
             .children(show_close.then(|| {
                 div()
                     .absolute()

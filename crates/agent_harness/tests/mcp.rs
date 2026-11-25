@@ -221,6 +221,7 @@ fn legacy_handshake_and_tool_list() {
         names,
         [
             "list_agents",
+            "list_profiles",
             "run_agent",
             "agent_status",
             "agent_result",
@@ -234,10 +235,7 @@ fn legacy_handshake_and_tool_list() {
         assert!(t["description"].as_str().unwrap().contains("ES:"));
     }
     let run = tools.iter().find(|t| t["name"] == "run_agent").unwrap();
-    assert_eq!(
-        run["inputSchema"]["required"],
-        json!(["agent", "prompt", "cwd"])
-    );
+    assert_eq!(run["inputSchema"]["required"], json!(["prompt", "cwd"]));
     assert_eq!(
         run["inputSchema"]["properties"]["permission"]["enum"],
         json!(["read_only", "ask", "accept_edits"])
@@ -1089,4 +1087,189 @@ fn apply_changes_errors_are_tool_errors() {
         is_err(&a) && text_of(&a).contains("did not use --worktree"),
         "{a}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Subagent profiles (PLAN 21.3)
+// ---------------------------------------------------------------------------
+
+fn write_project_profile(repo: &Path, file: &str, toml: &str) {
+    let d = repo.join(".selachi").join("agents");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join(file), toml).unwrap();
+}
+
+#[test]
+fn list_profiles_tool_and_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(dir.path(), "proj");
+    let data = data_dir(&dir);
+    std::fs::create_dir_all(data.join("agents")).unwrap();
+    std::fs::write(
+        data.join("agents").join("g.toml"),
+        "name = \"Global one\"\ndescription = \"from the global folder\"\nagent = \"codex\"\n",
+    )
+    .unwrap();
+    write_project_profile(
+        &repo,
+        "t.toml",
+        "name = \"Tests\"\ndescription = \"Write tests\"\nagent = \"claude\"\npermission = \"accept-edits\"\nworktree = true\noutput_format = \"diff\"\ninstructions = \"x\"\n",
+    );
+    write_project_profile(&repo, "bad.toml", "name = \"Bad\"\n");
+    let mut m = Mcp::start(&data, Opts::default());
+    m.initialize();
+
+    let tools = m.rpc("tools/list", json!({}));
+    let list = tools["result"]["tools"].as_array().unwrap();
+    let lp = list.iter().find(|t| t["name"] == "list_profiles").unwrap();
+    assert_eq!(lp["annotations"]["readOnlyHint"], true);
+    let run = list.iter().find(|t| t["name"] == "run_agent").unwrap();
+    assert!(run["inputSchema"]["properties"]["profile"].is_object());
+    assert!(
+        !run["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("agent")),
+        "the agent is optional with a profile"
+    );
+
+    // global profiles only
+    let r = m.call("list_profiles", json!({}));
+    assert!(!is_err(&r), "{r}");
+    let names: Vec<&str> = r["structuredContent"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Global one"]);
+
+    // with the project: its profiles too, the effective permission for THIS caller (read-only)
+    let r = m.call("list_profiles", json!({"cwd": repo}));
+    let s = &r["structuredContent"];
+    let tests = s["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "Tests")
+        .unwrap();
+    assert_eq!(tests["permission"], "accept-edits");
+    assert_eq!(tests["effective_permission"], "read-only");
+    assert_eq!(
+        (
+            tests["worktree"].clone(),
+            tests["output_format"].clone(),
+            tests["scope"].clone()
+        ),
+        (json!(true), json!("diff"), json!("project"))
+    );
+    assert_eq!(tests["has_instructions"], true);
+    assert!(
+        tests.get("instructions").is_none(),
+        "the body is not listed"
+    );
+    assert_eq!(s["errors"].as_array().unwrap().len(), 1, "{s}");
+    assert!(text_of(&r).contains("Tests [project]"), "{}", text_of(&r));
+    // a bad cwd is a tool error
+    let e = m.call("list_profiles", json!({"cwd": dir.path().join("nope")}));
+    assert!(is_err(&e), "{e}");
+    let e = m.call("list_profiles", json!({"bogus": 1}));
+    assert!(
+        is_err(&e) && text_of(&e).contains("unknown argument"),
+        "{e}"
+    );
+}
+
+#[test]
+fn list_profiles_reports_the_callers_real_permission() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(dir.path(), "proj");
+    write_project_profile(
+        &repo,
+        "t.toml",
+        "name = \"Tests\"\nagent = \"claude\"\npermission = \"accept-edits\"\n",
+    );
+    let mut m = Mcp::start(
+        &data_dir(&dir),
+        Opts {
+            env: accept_edits_env(),
+            ..Opts::default()
+        },
+    );
+    m.initialize();
+    let r = m.call("list_profiles", json!({"cwd": repo}));
+    assert_eq!(
+        r["structuredContent"]["profiles"][0]["effective_permission"],
+        "accept-edits"
+    );
+    assert_eq!(r["structuredContent"]["caller_permission"], "accept-edits");
+}
+
+#[test]
+fn run_agent_with_a_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_repo(dir.path(), "proj");
+    let data = data_dir(&dir);
+    write_project_profile(
+        &repo,
+        "r.toml",
+        "name = \"Research\"\nagent = \"agy\"\ninstructions = \"Cite files.\"\n",
+    );
+    let mut m = Mcp::start(
+        &data,
+        Opts {
+            script: Some(json!({"reply": "found it", "usage": [10, 5]})),
+            ..Opts::default()
+        },
+    );
+    m.initialize();
+
+    // neither agent nor profile
+    let e = m.call("run_agent", json!({"prompt": "x", "cwd": repo}));
+    assert!(
+        is_err(&e) && text_of(&e).contains("`agent` is required unless `profile` is given"),
+        "{e}"
+    );
+    // the profile supplies the agent; no permission given: the profile's applies
+    let r = m.call(
+        "run_agent",
+        json!({"profile": "research", "prompt": "where is auth?", "cwd": repo}),
+    );
+    assert!(!is_err(&r), "{r}");
+    let s = &r["structuredContent"];
+    assert_eq!(s["status"], "done");
+    assert_eq!(s["agent"], "agy");
+    assert_eq!(s["profile"], "Research");
+    let id = s["run_id"].as_str().unwrap();
+    let rec = Registry::new(&data).load(id).unwrap();
+    assert_eq!(rec.launcher.as_deref(), Some("mcp"));
+    assert_eq!(rec.profile.as_deref(), Some("Research"));
+    assert!(rec.final_prompt.unwrap().contains("Cite files."));
+    assert_eq!(rec.limits.unwrap().permission, "read-only");
+
+    // an unknown profile is a refusal with its stable code
+    let e = m.call(
+        "run_agent",
+        json!({"profile": "ghost", "prompt": "x", "cwd": repo}),
+    );
+    assert!(is_err(&e), "{e}");
+    assert_eq!(e["structuredContent"]["code"], "unknown_profile");
+    assert!(text_of(&e).contains("no profile named"), "{}", text_of(&e));
+
+    // an explicit agent overrides the profile's; async works with a profile too
+    let r = m.call(
+        "run_agent",
+        json!({"profile": "research", "agent": "codex", "prompt": "x", "cwd": repo, "async": true}),
+    );
+    assert!(!is_err(&r), "{r}");
+    assert_eq!(
+        r["structuredContent"]["profile"], "research",
+        "an async start echoes the name as it was asked for"
+    );
+    let id = r["structuredContent"]["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let st = wait_status(&mut m, &id, "done");
+    assert_eq!(st["agent"], "codex");
 }

@@ -146,6 +146,8 @@ pub enum SidebarEvent {
     DropOnSpace(Vec<PathBuf>),
     /// A delegated thread row that has no tab yet: open its thread.
     OpenThread(i64),
+    /// The map icon of a parent row: the subagent map on that tab's session.
+    OpenAgentMap(TabId),
 }
 
 /// Emits `ev` from `view` (what the row callbacks of [`crate::sidebar`] and

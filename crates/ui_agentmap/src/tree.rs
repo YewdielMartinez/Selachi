@@ -13,12 +13,16 @@ use crate::registry::{RunInfo, RunStatus};
 /// Deepest nesting the map walks (the policy allows two hops; this is a safety net against bad data).
 pub const MAX_DEPTH: usize = 8;
 
-/// Identity of a node: a chat thread (a delegated child, or a chat orchestrator) or an opaque
-/// terminal tab that delegated through the CLI / MCP.
+/// Maximum number of external (non-harness) agent nodes retained per parent session.
+pub const MAX_EXTERNAL_PER_SESSION: usize = 200;
+
+/// Identity of a node: a chat thread (a delegated child, or a chat orchestrator), an opaque
+/// terminal tab that delegated through the CLI / MCP, or an external coding-agent CLI process.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NodeKey {
     Thread(ThreadId),
     Tab(String),
+    External { pid: u32, started_ms: i64 },
 }
 
 impl NodeKey {
@@ -26,9 +30,85 @@ impl NodeKey {
     pub fn run_id(&self) -> Option<String> {
         match self {
             NodeKey::Thread(t) => Some(t.0.to_string()),
-            NodeKey::Tab(_) => None,
+            NodeKey::Tab(_) | NodeKey::External { .. } => None,
         }
     }
+
+    /// The OS process id, for external process nodes.
+    pub fn external_pid(&self) -> Option<u32> {
+        match self {
+            NodeKey::External { pid, .. } => Some(*pid),
+            NodeKey::Thread(_) | NodeKey::Tab(_) => None,
+        }
+    }
+}
+
+/// An agent CLI process launched directly outside the Selachi harness (e.g. via bash `agy -p ...`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalProc {
+    /// Canonical agent id (`"agy"`, `"codex"`, `"claude"`, `"gemini"`, `"opencode"`, ...).
+    pub agent: String,
+    /// Process id.
+    pub pid: u32,
+    /// Command line redacted with `store::redact`.
+    pub cmdline_redacted: String,
+    /// Working directory, if known.
+    pub cwd: Option<PathBuf>,
+    /// Model parsed from `--model` / `-m`, if present.
+    pub model: Option<String>,
+    /// Effort parsed from `--effort`, if present.
+    pub effort: Option<String>,
+    /// Process start timestamp in Unix milliseconds.
+    pub started_ms: i64,
+    /// Process end timestamp in Unix milliseconds (`None` while running).
+    pub ended_ms: Option<i64>,
+    /// Exit code if known (`Some(0)` -> Done, `Some(non-zero)` -> Failed).
+    pub exit_code: Option<i32>,
+    /// CPU usage percentage of this process subtree, if sampled.
+    pub cpu_pct: Option<f32>,
+    /// Working set (RSS) in bytes of this process subtree.
+    pub rss_bytes: u64,
+}
+
+impl ExternalProc {
+    /// Unique map key for this process instance (PID + start time prevents PID-reuse collisions).
+    pub fn key(&self) -> NodeKey {
+        NodeKey::External {
+            pid: self.pid,
+            started_ms: self.started_ms,
+        }
+    }
+
+    /// Derived lifecycle status of this external process.
+    pub fn status(&self) -> NodeStatus {
+        match (self.ended_ms, self.exit_code) {
+            (None, None) => NodeStatus::Running,
+            (_, Some(0)) => NodeStatus::Done,
+            (_, Some(_)) => NodeStatus::Failed,
+            (Some(_), None) => NodeStatus::Done,
+        }
+    }
+
+    /// Human Spanish status line, including the exit code when known.
+    pub fn status_label(&self) -> String {
+        match (self.ended_ms, self.exit_code) {
+            (None, None) => "En marcha".to_string(),
+            (_, Some(0)) => "Terminó (código 0)".to_string(),
+            (_, Some(code)) => format!("Falló (código {code})"),
+            (Some(_), None) => "Terminó".to_string(),
+        }
+    }
+}
+
+/// Kind of node in the subagent map.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NodeKind {
+    /// Chat thread (orchestrator or harness delegation).
+    Thread,
+    /// Terminal tab (orchestrator).
+    Tab,
+    /// Agent CLI launched outside the Selachi harness.
+    External(Box<ExternalProc>),
 }
 
 /// What a node is doing, merged from the registry (what the harness knows) and the thread (what
@@ -85,7 +165,10 @@ impl NodeStatus {
     pub fn is_failure(self) -> bool {
         matches!(
             self,
-            NodeStatus::Failed | NodeStatus::TimedOut | NodeStatus::OverBudget | NodeStatus::Refused
+            NodeStatus::Failed
+                | NodeStatus::TimedOut
+                | NodeStatus::OverBudget
+                | NodeStatus::Refused
         )
     }
 }
@@ -142,6 +225,7 @@ pub fn agent_display(name: &str) -> String {
 #[derive(Clone, Debug)]
 pub struct MapNode {
     pub key: NodeKey,
+    pub kind: NodeKind,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
     /// 0 for an orchestrator.
@@ -171,6 +255,17 @@ impl MapNode {
         self.parent.is_none()
     }
 
+    pub fn is_external(&self) -> bool {
+        matches!(self.kind, NodeKind::External(_))
+    }
+
+    pub fn external(&self) -> Option<&ExternalProc> {
+        match &self.kind {
+            NodeKind::External(ext) => Some(ext),
+            NodeKind::Thread | NodeKind::Tab => None,
+        }
+    }
+
     /// Milliseconds it ran (so far, while it is active). `None` without a start time.
     pub fn duration_ms(&self, now_ms: i64) -> Option<i64> {
         let start = self.started_ms?;
@@ -197,6 +292,8 @@ pub struct ForestInput<'a> {
     pub now_ms: i64,
     /// Names the host gives to terminal tabs (`tab id -> title`).
     pub tab_titles: &'a HashMap<String, String>,
+    /// External (non-harness) agent processes grouped by their parent thread/tab.
+    pub external: &'a HashMap<NodeKey, Vec<ExternalProc>>,
 }
 
 /// Every orchestrator of the session with its delegations.
@@ -212,8 +309,10 @@ pub struct Forest {
 /// Counters of a subtree (the header of the map).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Totals {
-    /// Delegations (the root excluded).
+    /// Harness delegations (the root and external processes excluded).
     pub runs: usize,
+    /// External (non-harness) agent processes under the root.
+    pub external: usize,
     pub running: usize,
     pub waiting: usize,
     pub failed: usize,
@@ -243,6 +342,18 @@ fn permission_word(mode: &str) -> String {
     }
 }
 
+fn mark_for_agent(agent: &str, raw_name: Option<&str>) -> AgentMark {
+    if !agent.is_empty() {
+        let from_display = AgentMark::from_name(&agent_display(agent));
+        if from_display != AgentMark::Unknown {
+            return from_display;
+        }
+    }
+    raw_name
+        .map(AgentMark::from_name)
+        .unwrap_or(AgentMark::Unknown)
+}
+
 fn make_node(
     key: NodeKey,
     thread: Option<&ThreadRecord>,
@@ -253,12 +364,13 @@ fn make_node(
         .and_then(|r| r.agent.clone())
         .or_else(|| thread.map(|t| agent_label(&t.agent)));
     let agent = agent_name.as_deref().map(agent_id).unwrap_or_default();
-    let mark = agent_name
-        .as_deref()
-        .map(AgentMark::from_name)
-        .unwrap_or(AgentMark::Unknown);
+    let mark = mark_for_agent(&agent, agent_name.as_deref());
     let result = run.and_then(|r| r.result.as_ref());
     let status = derive_status(run, thread);
+    let kind = match &key {
+        NodeKey::Tab(_) => NodeKind::Tab,
+        NodeKey::Thread(_) | NodeKey::External { .. } => NodeKind::Thread,
+    };
     let title = match (&key, thread) {
         (_, Some(t)) => t.display_title().to_string(),
         (NodeKey::Tab(id), None) => tab_titles.get(id).cloned().unwrap_or_else(|| {
@@ -273,6 +385,7 @@ fn make_node(
             .map(|p| first_line(p, 60))
             .filter(|p| !p.is_empty())
             .unwrap_or_else(|| format!("Hilo {}", id.0)),
+        (NodeKey::External { pid, .. }, None) => format!("Agente · PID {pid}"),
     };
     let files = result
         .map(|r| {
@@ -287,6 +400,7 @@ fn make_node(
     }
     MapNode {
         key,
+        kind,
         parent: None,
         children: Vec::new(),
         depth: 0,
@@ -320,6 +434,57 @@ fn make_node(
         run: run.cloned(),
         thread: thread.cloned(),
     }
+}
+
+fn make_external_node(ext: &ExternalProc) -> MapNode {
+    let agent = agent_id(&ext.agent);
+    let display = if agent.is_empty() {
+        "Agente".to_string()
+    } else {
+        agent_display(&agent)
+    };
+    let mark = mark_for_agent(&agent, Some(&ext.agent));
+    let status = ext.status();
+    MapNode {
+        key: ext.key(),
+        kind: NodeKind::External(Box::new(ext.clone())),
+        parent: None,
+        children: Vec::new(),
+        depth: 0,
+        title: format!("{display} · PID {}", ext.pid),
+        agent,
+        mark,
+        model: ext.model.clone(),
+        effort: ext.effort.clone(),
+        status,
+        started_ms: Some(ext.started_ms),
+        finished_ms: ext.ended_ms,
+        tokens: None,
+        cost_usd: None,
+        files: 0,
+        worktree: None,
+        launcher: None,
+        profile: None,
+        permission: None,
+        run: None,
+        thread: None,
+    }
+}
+
+/// Cap a session's external processes at [`MAX_EXTERNAL_PER_SESSION`], evicting oldest finished
+/// entries first and then oldest running entries.
+pub(crate) fn cap_external(procs: &mut Vec<ExternalProc>) {
+    if procs.len() <= MAX_EXTERNAL_PER_SESSION {
+        return;
+    }
+    // Sort so evictable entries come first: finished before running, oldest first.
+    procs.sort_by_key(|p| {
+        let running = p.ended_ms.is_none() && p.exit_code.is_none();
+        (running, p.ended_ms.unwrap_or(i64::MAX), p.started_ms, p.pid)
+    });
+    let drop_n = procs.len() - MAX_EXTERNAL_PER_SESSION;
+    procs.drain(0..drop_n);
+    procs.sort_by_key(|p| (p.started_ms, p.pid));
 }
 
 /// The parent a delegated thread points at, from its link and its run record.
@@ -357,11 +522,22 @@ impl Builder<'_> {
                 self.by_thread.get(id).copied(),
                 self.by_run.get(id).copied(),
             ),
-            NodeKey::Tab(_) => (None, None),
+            NodeKey::Tab(_) | NodeKey::External { .. } => (None, None),
         };
         self.index.insert(key.clone(), self.nodes.len());
-        self.nodes.push(make_node(key, thread, run, self.tab_titles));
+        self.nodes
+            .push(make_node(key, thread, run, self.tab_titles));
         self.parents.push(parent);
+    }
+
+    fn add_external(&mut self, ext: &ExternalProc, parent: NodeKey) {
+        let key = ext.key();
+        if self.index.contains_key(&key) {
+            return;
+        }
+        self.index.insert(key, self.nodes.len());
+        self.nodes.push(make_external_node(ext));
+        self.parents.push(Some(parent));
     }
 }
 
@@ -404,6 +580,25 @@ pub fn build_forest(input: &ForestInput<'_>) -> Forest {
     for id in &delegated {
         let parent = parent_key(by_thread.get(id).copied(), by_run.get(id).copied(), *id);
         b.add(NodeKey::Thread(*id), Some(parent));
+    }
+    // External (non-harness) agent processes attached under their parent thread or tab.
+    let mut ext_parents: Vec<&NodeKey> = input
+        .external
+        .iter()
+        .filter(|(_, procs)| !procs.is_empty())
+        .map(|(k, _)| k)
+        .collect();
+    ext_parents.sort_by_key(|k| match k {
+        NodeKey::Thread(t) => (0u8, t.0, String::new()),
+        NodeKey::Tab(s) => (1u8, 0, s.clone()),
+        NodeKey::External { pid, started_ms } => (2u8, *started_ms, pid.to_string()),
+    });
+    for parent in ext_parents {
+        let mut procs = input.external[parent].clone();
+        cap_external(&mut procs);
+        for ext in &procs {
+            b.add_external(ext, parent.clone());
+        }
     }
     // Parents that are not delegations themselves are orchestrators (no parent of their own).
     let parent_keys: Vec<NodeKey> = b.parents.iter().flatten().cloned().collect();
@@ -522,7 +717,11 @@ impl Forest {
             .into_iter()
             .flat_map(|n| {
                 let n = &self.nodes[n];
-                [n.started_ms, n.finished_ms, n.thread.as_ref().map(|t| t.updated_ms)]
+                [
+                    n.started_ms,
+                    n.finished_ms,
+                    n.thread.as_ref().map(|t| t.updated_ms),
+                ]
             })
             .flatten()
             .max()
@@ -550,7 +749,11 @@ impl Forest {
         for n in self.subtree(root) {
             let node = &self.nodes[n];
             if n != root {
-                t.runs += 1;
+                if node.is_external() {
+                    t.external += 1;
+                } else {
+                    t.runs += 1;
+                }
                 match node.status {
                     NodeStatus::Running => t.running += 1,
                     NodeStatus::Waiting => t.waiting += 1,
@@ -716,9 +919,11 @@ pub fn timeline(forest: &Forest, root: usize, now_ms: i64) -> Timeline {
         .filter_map(|n| {
             let node = &forest.nodes[n];
             let start = node.started_ms?;
-            let end = node
-                .finished_ms
-                .unwrap_or(if node.status.is_active() { now_ms } else { start });
+            let end = node.finished_ms.unwrap_or(if node.status.is_active() {
+                now_ms
+            } else {
+                start
+            });
             Some(Bar {
                 node: n,
                 start_ms: start,
@@ -807,6 +1012,12 @@ mod tests {
         .unwrap()
     }
 
+    fn empty_ext() -> &'static HashMap<NodeKey, Vec<ExternalProc>> {
+        static EMPTY: std::sync::LazyLock<HashMap<NodeKey, Vec<ExternalProc>>> =
+            std::sync::LazyLock::new(HashMap::new);
+        &EMPTY
+    }
+
     fn input<'a>(
         threads: &'a [ThreadRecord],
         runs: &'a [RunInfo],
@@ -818,6 +1029,7 @@ mod tests {
             wanted: None,
             now_ms: 100_000,
             tab_titles: titles,
+            external: empty_ext(),
         }
     }
 
@@ -825,19 +1037,31 @@ mod tests {
     fn builds_the_tree_from_links_and_the_registry() {
         let titles = HashMap::new();
         let threads = vec![
-            thread(1, "Orquestador", AgentKind::ClaudeCode, ThreadLink::default()),
+            thread(
+                1,
+                "Orquestador",
+                AgentKind::ClaudeCode,
+                ThreadLink::default(),
+            ),
             thread(2, "Revisa tests", AgentKind::Codex, child_link(1)),
             thread(3, "Docs", AgentKind::OpenCode, child_link(1)),
             thread(4, "Nieto", AgentKind::Codex, child_link(2)),
             thread(9, "Chat normal", AgentKind::Codex, ThreadLink::default()),
         ];
-        let runs = vec![run(2, "done", 2_000, Some(9_000)), run(3, "running", 3_000, None)];
+        let runs = vec![
+            run(2, "done", 2_000, Some(9_000)),
+            run(3, "running", 3_000, None),
+        ];
         let f = build_forest(&input(&threads, &runs, &titles));
         assert_eq!(f.roots.len(), 1, "the plain chat is not on the map");
         let root = f.roots[0];
         assert_eq!(f.nodes[root].title, "Orquestador");
         assert_eq!(f.nodes[root].mark, AgentMark::Claude);
-        let kids: Vec<_> = f.nodes[root].children.iter().map(|c| f.nodes[*c].title.clone()).collect();
+        let kids: Vec<_> = f.nodes[root]
+            .children
+            .iter()
+            .map(|c| f.nodes[*c].title.clone())
+            .collect();
         assert_eq!(kids, vec!["Revisa tests", "Docs"]);
         let two = &f.nodes[f.index_of(&NodeKey::Thread(ThreadId(2))).unwrap()];
         assert_eq!(two.status, NodeStatus::Done);
@@ -849,7 +1073,11 @@ mod tests {
         assert_eq!(two.children.len(), 1);
         let three = &f.nodes[f.index_of(&NodeKey::Thread(ThreadId(3))).unwrap()];
         assert_eq!(three.status, NodeStatus::Running);
-        assert_eq!(three.duration_ms(10_000), Some(7_000), "running time follows `now`");
+        assert_eq!(
+            three.duration_ms(10_000),
+            Some(7_000),
+            "running time follows `now`"
+        );
         let t = f.totals(root);
         assert_eq!((t.runs, t.running, t.tokens, t.files), (3, 1, 2400, 4));
         assert_eq!(f.default_root(), Some(root));
@@ -921,7 +1149,12 @@ mod tests {
     #[test]
     fn wanted_root_is_shown_even_without_delegations() {
         let titles = HashMap::new();
-        let threads = vec![thread(1, "Solo", AgentKind::ClaudeCode, ThreadLink::default())];
+        let threads = vec![thread(
+            1,
+            "Solo",
+            AgentKind::ClaudeCode,
+            ThreadLink::default(),
+        )];
         let key = NodeKey::Thread(ThreadId(1));
         let mut inp = input(&threads, &[], &titles);
         inp.wanted = Some(&key);
@@ -936,10 +1169,16 @@ mod tests {
     fn status_transitions() {
         let mut t = thread(2, "x", AgentKind::Codex, child_link(1));
         // registry alone
-        assert_eq!(derive_status(Some(&run(2, "running", 1, None)), None), NodeStatus::Running);
+        assert_eq!(
+            derive_status(Some(&run(2, "running", 1, None)), None),
+            NodeStatus::Running
+        );
         // running + the thread asks for an approval
         t.status = ThreadStatus::WaitingForInput;
-        assert_eq!(derive_status(Some(&run(2, "running", 1, None)), Some(&t)), NodeStatus::Waiting);
+        assert_eq!(
+            derive_status(Some(&run(2, "running", 1, None)), Some(&t)),
+            NodeStatus::Waiting
+        );
         // finished states come from the registry whatever the thread says
         for (word, want) in [
             ("done", NodeStatus::Done),
@@ -949,7 +1188,11 @@ mod tests {
             ("budget_exceeded", NodeStatus::OverBudget),
             ("refused", NodeStatus::Refused),
         ] {
-            assert_eq!(derive_status(Some(&run(2, word, 1, Some(2))), Some(&t)), want, "{word}");
+            assert_eq!(
+                derive_status(Some(&run(2, word, 1, Some(2))), Some(&t)),
+                want,
+                "{word}"
+            );
         }
         // no run: the thread decides
         t.status = ThreadStatus::Working;
@@ -973,7 +1216,11 @@ mod tests {
         ];
         let before = build_forest(&input(&threads, &[run(2, "running", 1_000, None)], &titles));
         assert!(before.has_active(before.roots[0]));
-        let after = build_forest(&input(&threads, &[run(2, "done", 1_000, Some(4_000))], &titles));
+        let after = build_forest(&input(
+            &threads,
+            &[run(2, "done", 1_000, Some(4_000))],
+            &titles,
+        ));
         assert!(!after.has_active(after.roots[0]));
         assert_eq!(after.totals(after.roots[0]).running, 0);
     }
@@ -1026,7 +1273,11 @@ mod tests {
         assert_eq!(find("A1").col, 2);
         assert_eq!(find("A1").row, 0.0);
         assert_eq!(find("B").row, 1.0);
-        assert_eq!(find("A").row, 0.0, "a single child keeps its parent on its row");
+        assert_eq!(
+            find("A").row,
+            0.0,
+            "a single child keeps its parent on its row"
+        );
         assert_eq!(find("O").row, 0.5, "root between its two children");
         assert_eq!(g.rows, 2.0);
     }
@@ -1053,5 +1304,158 @@ mod tests {
         assert_eq!(agent_id("Antigravity"), "agy");
         assert_eq!(agent_display("codex"), "Codex");
         assert_eq!(agent_display("my-agent"), "my-agent");
+    }
+
+    fn ext_proc(
+        agent: &str,
+        pid: u32,
+        started_ms: i64,
+        ended_ms: Option<i64>,
+        exit_code: Option<i32>,
+    ) -> ExternalProc {
+        ExternalProc {
+            agent: agent.into(),
+            pid,
+            cmdline_redacted: format!("{agent} -p task-{pid}"),
+            cwd: Some(PathBuf::from("C:/repo")),
+            model: Some("gemini-3-pro".into()),
+            effort: Some("medium".into()),
+            started_ms,
+            ended_ms,
+            exit_code,
+            cpu_pct: ended_ms.is_none().then_some(8.5),
+            rss_bytes: if ended_ms.is_none() {
+                140 * 1024 * 1024
+            } else {
+                0
+            },
+        }
+    }
+
+    #[test]
+    fn forest_attaches_external_nodes_under_thread_and_tab() {
+        let mut titles = HashMap::new();
+        titles.insert("tab-9".to_string(), "pwsh".to_string());
+        // Thread 1 has NO harness delegations, only external agy children.
+        let threads = vec![thread(
+            1,
+            "Sesión Claude",
+            AgentKind::ClaudeCode,
+            ThreadLink::default(),
+        )];
+        let mut external: HashMap<NodeKey, Vec<ExternalProc>> = HashMap::new();
+        external.insert(
+            NodeKey::Thread(ThreadId(1)),
+            vec![
+                ext_proc("agy", 4100, 10_000, None, None),
+                ext_proc("codex", 4101, 12_000, Some(22_000), Some(1)),
+            ],
+        );
+        external.insert(
+            NodeKey::Tab("tab-9".into()),
+            vec![ext_proc("gemini", 5200, 15_000, Some(20_000), Some(0))],
+        );
+        let f = build_forest(&ForestInput {
+            threads: &threads,
+            runs: &[],
+            wanted: None,
+            now_ms: 30_000,
+            tab_titles: &titles,
+            external: &external,
+        });
+        assert_eq!(f.roots.len(), 2);
+        let t1_root = f.index_of(&NodeKey::Thread(ThreadId(1))).unwrap();
+        assert_eq!(f.nodes[t1_root].children.len(), 2);
+        assert!(f.has_active(t1_root));
+        assert_eq!(f.default_root(), Some(t1_root));
+
+        let agy_idx = f
+            .index_of(&NodeKey::External {
+                pid: 4100,
+                started_ms: 10_000,
+            })
+            .unwrap();
+        let agy = &f.nodes[agy_idx];
+        assert!(agy.is_external());
+        assert_eq!(agy.mark, AgentMark::Antigravity);
+        assert_eq!(agy.status, NodeStatus::Running);
+        assert_eq!(agy.depth, 1);
+        assert_eq!(agy.duration_ms(30_000), Some(20_000));
+
+        let codex_idx = f
+            .index_of(&NodeKey::External {
+                pid: 4101,
+                started_ms: 12_000,
+            })
+            .unwrap();
+        assert_eq!(f.nodes[codex_idx].status, NodeStatus::Failed);
+
+        let totals = f.totals(t1_root);
+        assert_eq!(totals.runs, 0);
+        assert_eq!(totals.external, 2);
+        assert_eq!(totals.running, 1);
+        assert_eq!(totals.failed, 1);
+
+        // Tree, graph, and timeline all include external nodes.
+        let rows = visible_rows(&f, t1_root, &HashSet::new());
+        assert_eq!(rows.len(), 3);
+        let graph = graph_layout(&f, t1_root, &HashSet::new());
+        assert_eq!(graph.placed.len(), 3);
+        assert_eq!(graph.edges.len(), 2);
+        let tl = timeline(&f, t1_root, 30_000);
+        assert_eq!(tl.bars.len(), 2);
+        assert_eq!(tl.peak_parallel, 2);
+    }
+
+    #[test]
+    fn external_nodes_are_capped_at_200_evicting_oldest_finished_first() {
+        let mut procs = Vec::new();
+        // 150 finished + 80 running = 230 total -> must keep all 80 running + 120 newest finished.
+        for i in 0..150u32 {
+            procs.push(ext_proc(
+                "agy",
+                1000 + i,
+                i64::from(i) * 100,
+                Some(i64::from(i) * 100 + 50),
+                Some(0),
+            ));
+        }
+        for i in 0..80u32 {
+            procs.push(ext_proc("agy", 5000 + i, 50_000 + i64::from(i), None, None));
+        }
+        let mut external = HashMap::new();
+        external.insert(NodeKey::Tab("t".into()), procs);
+        let titles = HashMap::new();
+        let f = build_forest(&ForestInput {
+            threads: &[],
+            runs: &[],
+            wanted: None,
+            now_ms: 100_000,
+            tab_titles: &titles,
+            external: &external,
+        });
+        let root = f.index_of(&NodeKey::Tab("t".into())).unwrap();
+        assert_eq!(f.nodes[root].children.len(), MAX_EXTERNAL_PER_SESSION);
+        let running_count = f.nodes[root]
+            .children
+            .iter()
+            .filter(|c| f.nodes[**c].status == NodeStatus::Running)
+            .count();
+        assert_eq!(running_count, 80, "all running processes must be preserved");
+        // Oldest finished (pid 1000..1030) were evicted; pid 1030..1150 remain.
+        assert!(
+            f.index_of(&NodeKey::External {
+                pid: 1000,
+                started_ms: 0
+            })
+            .is_none()
+        );
+        assert!(
+            f.index_of(&NodeKey::External {
+                pid: 1149,
+                started_ms: 14_900
+            })
+            .is_some()
+        );
     }
 }

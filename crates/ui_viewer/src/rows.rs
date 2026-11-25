@@ -6,7 +6,7 @@ use gpui::{
     SharedString, Styled as _, StyledText, div, prelude::*, px,
 };
 use theme::Theme;
-use ui_kit::{Icon, icon};
+use ui_kit::{Icon, SelectableText, SelectionGroup, icon};
 use viewer_svc::{DiffLine, HexLine, HighlightKind, LineKind, NodeKind};
 
 use crate::data_tree::DataRow;
@@ -59,6 +59,7 @@ fn syntax_style(kind: HighlightKind, theme: &Theme) -> HighlightStyle {
 
 /// One source line: gutter number plus colored text; `query` highlights find matches and
 /// `current` marks the line of the current match.
+#[allow(clippy::too_many_arguments)]
 pub fn code_row(
     theme: &Theme,
     line_no: usize,
@@ -67,6 +68,7 @@ pub fn code_row(
     spans: &LineSpans,
     query: Option<&str>,
     current: bool,
+    sel: Option<(&SelectionGroup, usize)>,
 ) -> AnyElement {
     let c = theme.colors;
     let found: Vec<_> = query
@@ -105,9 +107,16 @@ pub fn code_row(
                 .min_w_0()
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .child(
-                    StyledText::new(SharedString::from(text.to_owned())).with_highlights(styles),
-                ),
+                .child(match sel {
+                    Some((group, seg)) => {
+                        SelectableText::new(group, seg, SharedString::from(text.to_owned()))
+                            .with_highlights(styles)
+                            .into_any_element()
+                    }
+                    None => StyledText::new(SharedString::from(text.to_owned()))
+                        .with_highlights(styles)
+                        .into_any_element(),
+                }),
         )
         .into_any_element()
 }

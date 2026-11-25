@@ -1,0 +1,414 @@
+//! The subagent map over FAKE data: a temp chat database with an orchestrator and its delegations
+//! (links included) and fake run records in a temp `agent-runs` folder. Nothing real is read and no
+//! agent runs; events of the inspector are only printed.
+//!
+//! ```text
+//! cargo run -p ui_agentmap --example agentmap_demo -- [dark|light] [--mode tree|graph|timeline]
+//!     [--select <thread id>] [--zone main|right] [--size WxH]
+//! ```
+//!
+//! Thread ids: 1 orchestrator, 2 tests (done), 3 docs (running), 4 security (waiting for an
+//! approval), 5 lint (failed), 6 migration (done, with a child), 7 its review (done), 8 (cancelled).
+
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::path::Path;
+use std::sync::Arc;
+
+use agents_driver::{AgentKind, PermissionMode};
+use chat_core::{ChatDb, ChatStore, ThreadId, ThreadLink, ThreadSpec, ThreadStatus, now_ms};
+use gpui::{
+    App, Application, Bounds, Context, Entity, IntoElement, Render, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
+};
+use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
+use theme::{Mode, Theme};
+use ui_agentmap::{
+    AgentMapEvent, AgentMapModel, AgentMapPanelProvider, AgentMapView, ChatStoreSource, MapMode,
+};
+use ui_kit::{Assets, Card, CardTone};
+
+struct Host {
+    theme: Theme,
+    panel: gpui::AnyView,
+    _keep: Option<tempfile::TempDir>,
+}
+
+impl Render for Host {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        div()
+            .size_full()
+            .bg(t.colors.bg)
+            .text_color(t.colors.text)
+            .font_family(t.typography.ui_family)
+            .p(px(8.0))
+            .child(
+                Card::new(&t)
+                    .tone(CardTone::Raised, &t)
+                    .size_full()
+                    .overflow_hidden()
+                    .child(self.panel.clone()),
+            )
+    }
+}
+
+fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+}
+
+struct Spec {
+    title: &'static str,
+    agent: AgentKind,
+    agent_id: &'static str,
+    model: &'static str,
+    effort: &'static str,
+    parent: Option<i64>,
+    /// Minutes ago it started, and how long it ran (`None`: still running).
+    start_min_ago: f64,
+    ran_min: Option<f64>,
+    status: &'static str,
+    tokens: u64,
+    cost: f64,
+    files: usize,
+    worktree: bool,
+    prompt: &'static str,
+    thread_status: ThreadStatus,
+}
+
+fn specs() -> Vec<Spec> {
+    vec![
+        Spec {
+            title: "Migrar la autenticación a OAuth",
+            agent: AgentKind::ClaudeCode,
+            agent_id: "claude",
+            model: "opus-4.5",
+            effort: "high",
+            parent: None,
+            start_min_ago: 14.0,
+            ran_min: None,
+            status: "",
+            tokens: 0,
+            cost: 0.0,
+            files: 0,
+            worktree: false,
+            prompt: "",
+            thread_status: ThreadStatus::Working,
+        },
+        Spec {
+            title: "Revisar los tests de auth",
+            agent: AgentKind::Codex,
+            agent_id: "codex",
+            model: "gpt-5.1-codex",
+            effort: "high",
+            parent: Some(1),
+            start_min_ago: 12.0,
+            ran_min: Some(3.4),
+            status: "done",
+            tokens: 48_200,
+            cost: 0.42,
+            files: 3,
+            worktree: true,
+            prompt: "Revisa los tests de src/auth y añade los que falten para el flujo de refresco de token. No toques código de producción. api_key=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+            thread_status: ThreadStatus::Done,
+        },
+        Spec {
+            title: "Documentar los endpoints nuevos",
+            agent: AgentKind::Acp {
+                command: "gemini --acp".into(),
+            },
+            agent_id: "gemini",
+            model: "gemini-2.5-pro",
+            effort: "medium",
+            parent: Some(1),
+            start_min_ago: 9.0,
+            ran_min: None,
+            status: "running",
+            tokens: 0,
+            cost: 0.0,
+            files: 0,
+            worktree: true,
+            prompt: "Documenta los endpoints /oauth/authorize y /oauth/token en docs/API.md con ejemplos.",
+            thread_status: ThreadStatus::Working,
+        },
+        Spec {
+            title: "Auditoría de seguridad del callback",
+            agent: AgentKind::OpenCode,
+            agent_id: "opencode",
+            model: "claude-sonnet-4.5",
+            effort: "high",
+            parent: Some(1),
+            start_min_ago: 7.0,
+            ran_min: None,
+            status: "running",
+            tokens: 0,
+            cost: 0.0,
+            files: 0,
+            worktree: false,
+            prompt: "Audita el manejo del parámetro state y de la redirección en el callback OAuth. Solo lectura.",
+            thread_status: ThreadStatus::WaitingForInput,
+        },
+        Spec {
+            title: "Corregir el lint del módulo",
+            agent: AgentKind::Codex,
+            agent_id: "codex",
+            model: "gpt-5.1-codex-mini",
+            effort: "low",
+            parent: Some(1),
+            start_min_ago: 6.0,
+            ran_min: Some(0.7),
+            status: "error",
+            tokens: 6_100,
+            cost: 0.03,
+            files: 0,
+            worktree: false,
+            prompt: "Corrige los avisos de clippy de src/auth.",
+            thread_status: ThreadStatus::Error,
+        },
+        Spec {
+            title: "Escribir la migración de sesiones",
+            agent: AgentKind::Acp {
+                command: "agy acp".into(),
+            },
+            agent_id: "agy",
+            model: "gemini-3-pro",
+            effort: "high",
+            parent: Some(1),
+            start_min_ago: 11.0,
+            ran_min: Some(5.2),
+            status: "done",
+            tokens: 212_000,
+            cost: 1.18,
+            files: 5,
+            worktree: true,
+            prompt: "Escribe la migración SQL que mueve las sesiones antiguas al nuevo esquema.",
+            thread_status: ThreadStatus::Done,
+        },
+        Spec {
+            title: "Revisar la migración",
+            agent: AgentKind::ClaudeCode,
+            agent_id: "claude",
+            model: "sonnet-4.5",
+            effort: "medium",
+            parent: Some(6),
+            start_min_ago: 5.5,
+            ran_min: Some(2.1),
+            status: "done",
+            tokens: 31_400,
+            cost: 0.19,
+            files: 0,
+            worktree: false,
+            prompt: "Revisa la migración de sesiones buscando pérdida de datos.",
+            thread_status: ThreadStatus::Done,
+        },
+        Spec {
+            title: "Probar con Playwright",
+            agent: AgentKind::Codex,
+            agent_id: "codex",
+            model: "gpt-5.1-codex",
+            effort: "medium",
+            parent: Some(1),
+            start_min_ago: 3.0,
+            ran_min: Some(0.5),
+            status: "cancelled",
+            tokens: 2_000,
+            cost: 0.01,
+            files: 0,
+            worktree: false,
+            prompt: "Prueba el flujo de login con Playwright.",
+            thread_status: ThreadStatus::Idle,
+        },
+    ]
+}
+
+fn build_fake_data(root: &Path) -> (ChatStore, std::path::PathBuf) {
+    let project = root.join("proyecto");
+    std::fs::create_dir_all(&project).expect("project");
+    let db_path = root.join("chat.db");
+    let store = ChatStore::open_at(&db_path).expect("chat db");
+    let runs = root.join("agent-runs");
+    std::fs::create_dir_all(&runs).expect("runs");
+    let now = now_ms();
+    let min = |m: f64| (m * 60_000.0) as i64;
+
+    let mut ids = Vec::new();
+    for s in specs() {
+        let mut spec = ThreadSpec::new(&project, s.agent.clone());
+        spec.title = Some(s.title.to_string());
+        spec.model = Some(s.model.to_string());
+        spec.effort = Some(s.effort.to_string());
+        spec.permission = PermissionMode::ReadOnly;
+        spec.link = s.parent.map(|p| ThreadLink {
+            parent_thread_id: Some(ThreadId(ids[(p - 1) as usize])),
+            parent_tab: None,
+            depth: if p == 1 { 1 } else { 2 },
+            delegated_by: Some(if s.agent_id == "gemini" { "cli" } else { "mcp" }.into()),
+        });
+        let rec = store.create_thread(spec).expect("thread");
+        ids.push(rec.id.0);
+    }
+    // statuses and the fake registry
+    let db = ChatDb::open_with(&db_path, false).expect("db");
+    for (i, s) in specs().iter().enumerate() {
+        let id = ids[i];
+        db.set_status(ThreadId(id), s.thread_status)
+            .expect("status");
+        if s.parent.is_none() {
+            continue;
+        }
+        let started = now - min(s.start_min_ago);
+        let finished = s.ran_min.map(|r| started + min(r));
+        let parent = ids[(s.parent.unwrap() - 1) as usize];
+        let worktree = if s.worktree {
+            format!(
+                r#""worktree_path":"C:/Users/demo/proyecto.worktrees/{}-{}","#,
+                s.agent_id, id
+            )
+        } else {
+            String::new()
+        };
+        let result = if s.status == "running" {
+            String::new()
+        } else {
+            let files: Vec<String> = (0..s.files)
+                .map(|f| format!(r#""src/auth/file{f}.rs""#))
+                .collect();
+            format!(
+                r#","result":{{"summary":"{}","files_changed":[{}],"diff_stat":{{"files":{},"insertions":{},"deletions":{},"text":" src/auth/file0.rs | 24 ++++++++++----\n src/auth/file1.rs | 11 +++++\n {} files changed"}},"usage":{{"billable":{}}},"cost":{{"usd":{},"exact":false}},"notes":[]}}"#,
+                match s.status {
+                    "done" => "Terminó sin incidencias.",
+                    "error" => "El agente falló: clippy no pudo compilar el módulo.",
+                    _ => "Cancelado por el usuario.",
+                },
+                files.join(","),
+                s.files,
+                s.files * 8,
+                s.files * 2,
+                s.files,
+                s.tokens,
+                s.cost
+            )
+        };
+        let perm = if s.worktree {
+            "accept-edits"
+        } else {
+            "read-only"
+        };
+        let json = format!(
+            r#"{{"run_id":"{id}","thread_id":{id},"agent":"{}","model":"{}","effort":"{}","permission":"{perm}",
+            "cwd":"C:/Users/demo/proyecto","project_root":"C:/Users/demo/proyecto",{worktree}
+            "prompt":"{}","final_prompt":"=== SELACHI PROFILE: {} ===\nSolo lectura. Cita archivo y línea.\n=== END SELACHI PROFILE ===\n\n=== TASK ===\n{}",
+            "parent_thread_id":{parent},"depth":{},"started_ms":{started},{fin}"status":"{}",
+            "launcher":"{}","profile":"{}","deadline_ms":{},
+            "effective_limits":{{"permission":"{perm}","timeout_secs":900,"budget_tokens":300000,"depth":{}}},
+            "approvals":[{{"tool":"Bash","detail":"cargo test -p auth","decision":"allowed"}},{{"tool":"Edit","detail":"src/auth/mod.rs","decision":"{}"}}]{result}}}"#,
+            s.agent_id,
+            s.model,
+            s.effort,
+            s.prompt.replace('"', "'"),
+            if s.agent_id == "codex" {
+                "Tests"
+            } else {
+                "Revisor"
+            },
+            s.prompt.replace('"', "'"),
+            if parent == ids[0] { 1 } else { 2 },
+            if s.status.is_empty() {
+                "running"
+            } else {
+                s.status
+            },
+            if s.agent_id == "gemini" { "cli" } else { "mcp" },
+            if s.agent_id == "codex" { "Tests" } else { "" },
+            started + min(15.0),
+            if parent == ids[0] { 1 } else { 2 },
+            if s.thread_status == ThreadStatus::WaitingForInput {
+                "pending"
+            } else {
+                "denied"
+            },
+            fin = finished
+                .map(|f| format!(r#""finished_ms":{f},"#))
+                .unwrap_or_default(),
+        );
+        std::fs::write(runs.join(format!("{id}.json")), json).expect("run record");
+    }
+    drop(db);
+    (store, runs)
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mode = if args.iter().any(|a| a == "light") {
+        Mode::Light
+    } else {
+        Mode::Dark
+    };
+    let map_mode = match arg_value(&args, "--mode") {
+        Some("graph") => MapMode::Graph,
+        Some("timeline") => MapMode::Timeline,
+        _ => MapMode::Tree,
+    };
+    let select: Option<i64> = arg_value(&args, "--select").and_then(|s| s.parse().ok());
+    let zone = match arg_value(&args, "--zone") {
+        Some("right") => PanelZone::Right,
+        _ => PanelZone::Main,
+    };
+    let (w, h) = arg_value(&args, "--size")
+        .and_then(|s| s.split_once('x'))
+        .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+        .unwrap_or((1180.0, 700.0));
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (store, runs) = build_fake_data(dir.path());
+    eprintln!("fake data in {}", dir.path().display());
+
+    Application::new()
+        .with_assets(Assets)
+        .run(move |cx: &mut App| {
+            if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
+                eprintln!("fonts: {e}");
+            }
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let theme = Theme::for_mode(mode);
+            let source = Arc::new(ChatStoreSource::new(store));
+            let model: Entity<AgentMapModel> = cx.new(|_| AgentMapModel::new(source, runs));
+            cx.subscribe(&model, |_, ev: &AgentMapEvent, _| println!("event: {ev:?}"))
+                .detach();
+            let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+            let keep = Some(dir);
+            let _ = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    let provider = AgentMapPanelProvider::new(model.clone());
+                    let ctx = PanelCtx::new(zone, WidthClass::from_width(w), theme);
+                    let panel = provider.build(ctx, window, cx);
+                    if let Ok(v) = panel.clone().downcast::<AgentMapView>() {
+                        v.update(cx, |v, cx| v.set_mode(map_mode, cx));
+                    }
+                    model.update(cx, |m, cx| {
+                        if let Some(id) = select {
+                            m.open_run(ThreadId(id), cx);
+                        }
+                    });
+                    cx.new(move |_| Host {
+                        theme,
+                        panel,
+                        _keep: keep,
+                    })
+                },
+            );
+            cx.activate(true);
+        });
+}

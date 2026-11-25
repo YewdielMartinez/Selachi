@@ -129,6 +129,9 @@ impl RenderOnce for SettingRow {
             .when(g.stacked, |d| d.w_full())
             .child(
                 div()
+                    .block()
+                    .w_full()
+                    .min_w_0()
                     .text_size(px(ty.ui_size_md))
                     .font_weight(self.weight)
                     .text_color(c.text)
@@ -137,6 +140,9 @@ impl RenderOnce for SettingRow {
             .when_some(self.description, |d, t| {
                 d.child(
                     div()
+                        .block()
+                        .w_full()
+                        .min_w_0()
                         .text_size(px(ty.ui_size_sm))
                         .line_height(px(17.0))
                         .text_color(c.muted)
@@ -146,14 +152,19 @@ impl RenderOnce for SettingRow {
             .when_some(self.error, |d, e| {
                 d.child(
                     div()
+                        .block()
+                        .w_full()
+                        .min_w_0()
                         .text_size(px(ty.ui_size_sm))
                         .text_color(c.error)
                         .child(e),
                 )
             });
         let control: Div = div()
+            .min_w_0()
+            .max_w_full()
             .when(g.control_fixed, |d| d.flex_none())
-            .when(g.stacked, |d| d.max_w_full())
+            .when(g.stacked, |d| d.w_full())
             .child(self.control);
         div()
             .flex()
@@ -184,5 +195,44 @@ mod tests {
     fn stacked_row_puts_the_control_under_the_text() {
         let g = RowGeometry::new(true);
         assert!(g.stacked && !g.control_fixed);
+    }
+
+    struct RowHost {
+        card_w: f32,
+        long_desc: &'static str,
+    }
+
+    impl gpui::Render for RowHost {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let t = Theme::dark();
+            div()
+                .w(px(self.card_w))
+                .flex()
+                .flex_col()
+                .child(
+                    SettingRow::new(&t, "Hook statusLine de Claude", crate::Toggle::new("sr-ctrl", &t))
+                        .description(self.long_desc),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn long_description_wraps_and_control_stays_within_card(cx: &mut gpui::TestAppContext) {
+        let card_w = 700.0;
+        let (_view, vcx) = crate::testing::open_window(cx, move |_, _| RowHost {
+            card_w,
+            long_desc: "Opcional. Añade un hook statusLine a la configuración de Claude Code para leer el contexto y el coste exactos de cada sesión. Está apagado por defecto y se puede quitar apagándolo.",
+        });
+        let b = crate::testing::bounds_of(vcx, "sr-ctrl").expect("control bounds");
+        let right = f32::from(b.right());
+        assert!(
+            right <= card_w - 16.0 + 1.0,
+            "control overflowed card right edge: right={right} > {}",
+            card_w - 16.0
+        );
     }
 }

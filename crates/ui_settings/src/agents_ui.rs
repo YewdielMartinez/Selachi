@@ -9,7 +9,7 @@ use ui_kit::{GhostButton, Spinner, agent_icon};
 
 use crate::agents::{AgentStatus, AgentsState, rows as agent_rows};
 use crate::ui::{self, PillTone, group_with_action, plain_row, row, status_pill};
-use crate::view::SettingsView;
+use crate::view::{AgentsTab, SettingsView};
 
 const WEEK_DAYS: [(&str, &str, WeekStart); 7] = [
     ("monday", "Lunes", WeekStart::Monday),
@@ -55,6 +55,36 @@ impl SettingsView {
         let c = t.colors;
         let ty = t.typography;
 
+        let tabs = self
+            .segmented(
+                cx,
+                "agents-tab",
+                ["Agentes y delegación", "Perfiles"],
+                usize::from(self.agents_tab == AgentsTab::Profiles),
+                |s, ix, cx| {
+                    s.agents_tab = if ix == 1 {
+                        AgentsTab::Profiles
+                    } else {
+                        AgentsTab::General
+                    };
+                    cx.notify();
+                },
+            )
+            .into_any_element();
+        if self.agents_tab == AgentsTab::Profiles {
+            let editor = self.profile_editor(cx);
+            let project = self.cwd.as_deref().map(crate::profiles::find_project_root);
+            let limits = crate::profiles::Limits::from_delegation(&self.cfg.delegation);
+            let theme = self.theme;
+            editor.update(cx, |e, cx| {
+                e.set_theme(theme, cx);
+                e.set_narrow(narrow, cx);
+                e.set_project(project, cx);
+                e.set_limits(limits, cx);
+            });
+            return vec![tabs, editor.into_any_element()];
+        }
+
         let recheck = GhostButton::new("agents-recheck", &t, "Volver a comprobar")
             .on_click(cx.listener(|s, _, _, cx| s.ensure_agents(true, cx)));
         let mut list: Vec<AnyElement> = Vec::new();
@@ -96,6 +126,7 @@ impl SettingsView {
                             .items_center()
                             .gap(px(12.0))
                             .w_full()
+                            .min_w_0()
                             .px(px(16.0))
                             .py(px(10.0))
                             .child(agent_icon(
@@ -199,6 +230,7 @@ impl SettingsView {
 
         let delegation = self.delegation_groups(narrow, cx);
         let mut out = vec![
+            tabs,
             detected.into_any_element(),
             ui::group(
                 &t,

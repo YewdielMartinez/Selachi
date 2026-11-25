@@ -573,6 +573,19 @@ fn a_parent_chat_lists_its_delegations_and_sums_their_cost(cx: &mut TestAppConte
     assert!(!view.read_with(vcx, |v, _| v.delegation_open(child.id)));
     ui_kit::testing::click_id(vcx, &id);
     assert!(view.read_with(vcx, |v, _| v.delegation_open(child.id)));
+    // "Ver en el mapa" asks the host to show the subagent map on that child
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let _sub = e.hub.update(vcx, |_, cx| {
+        cx.subscribe(&e.hub, move |_, _, ev: &crate::hub::ChatEvent, _| {
+            log.borrow_mut().push(ev.clone())
+        })
+    });
+    ui_kit::testing::click_id(vcx, &format!("deleg-map-{}", child.id.0));
+    assert_eq!(
+        seen.borrow().as_slice(),
+        [crate::hub::ChatEvent::OpenAgentMap(child.id)]
+    );
     // the header cost includes what was delegated, and says so
     let (text, tip) = view
         .read_with(vcx, |v, cx| v.cost_label(cx))
@@ -586,3 +599,6 @@ fn a_parent_chat_lists_its_delegations_and_sums_their_cost(cx: &mut TestAppConte
         0.0
     );
 }
+
+mod copy_tests;
+mod layout_tests;

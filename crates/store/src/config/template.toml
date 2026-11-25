@@ -137,6 +137,14 @@ project_profiles = true
 # Contexto máximo adjuntable por ejecución (`context_files`), en KiB (1-200).
 max_context_kb = 200
 
+[chat]
+# Al copiar texto del chat, oculta los secretos (claves, tokens...) y avisa con
+# "incluye N secretos ocultos". Se cambia también desde el menú ⋯ del chat.
+# Salida de comandos (por defecto sí):
+redact_copy_commands = true
+# Texto del asistente y del usuario (por defecto no):
+redact_copy_text = false
+
 [updates]
 # Buscar actualizaciones (a los 30 s de arrancar y luego cada 24 h, solo por HTTPS contra
 # GitHub Releases). false = no se toca la red.

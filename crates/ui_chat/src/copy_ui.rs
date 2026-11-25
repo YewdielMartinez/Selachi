@@ -19,6 +19,7 @@ use crate::chat_view::ChatView;
 use crate::copy::{
     CopyKind, CopySettings, conversation_markdown, copied_label, markdown_to_plain, prepare,
 };
+use crate::hub::ChatEvent;
 use crate::rows::{ChatRow, RowKey, RowKind};
 use crate::widgets::menu_row;
 
@@ -59,7 +60,9 @@ impl ChatView {
         if let Some(g) = self.selections.get(&(key.clone(), sub)) {
             return g.clone();
         }
-        let g = SelectionGroup::new(cx);
+        // Not a tab stop: dozens of rows would make Tab useless. A click focuses the group, and
+        // from there Ctrl+C / Ctrl+A work.
+        let g = SelectionGroup::with_tab_stop(false, cx);
         let this = cx.entity().downgrade();
         g.on_copy(move |text, _, cx| {
             this.update(cx, |v, cx| v.copy_out(text, kind, cx)).ok();
@@ -82,11 +85,21 @@ impl ChatView {
         let mut segs = Segments::new();
         let seg = segs.push(text.to_owned(), Gap::Block);
         g.set_segments(segs);
-        g.container(("sel-block", id * 8 + sub as usize), &self.theme)
-            .w_full()
-            .min_w_0()
-            .child(SelectableText::new(&g, seg, SharedString::from(text.to_owned())))
-            .into_any_element()
+        g.container(
+            gpui::ElementId::NamedChild(
+                Box::new(gpui::ElementId::named_usize("sel-block", id)),
+                SharedString::from(sub.to_string()),
+            ),
+            &self.theme,
+        )
+        .w_full()
+        .min_w_0()
+        .child(SelectableText::new(
+            &g,
+            seg,
+            SharedString::from(text.to_owned()),
+        ))
+        .into_any_element()
     }
 
     fn settings(&self, cx: &App) -> CopySettings {
@@ -117,11 +130,14 @@ impl ChatView {
     }
 
     fn row_text(&self, key: &RowKey) -> Option<(String, bool)> {
-        self.rows.iter().find(|r| &r.key == key).and_then(|r| match &r.kind {
-            RowKind::Text { body, .. } => Some((body.text().to_string(), true)),
-            RowKind::User { text, .. } => Some((text.clone(), false)),
-            _ => None,
-        })
+        self.rows
+            .iter()
+            .find(|r| &r.key == key)
+            .and_then(|r| match &r.kind {
+                RowKind::Text { body, .. } => Some((body.text().to_string(), true)),
+                RowKind::User { text, .. } => Some((text.clone(), false)),
+                _ => None,
+            })
     }
 
     /// "Copiar" / "Copiar como texto plano" / "Copiar como Markdown" of one message block.
@@ -139,10 +155,14 @@ impl ChatView {
 
     /// "Copiar salida" of a command row.
     pub(crate) fn copy_command_output(&mut self, key: &RowKey, cx: &mut Context<Self>) {
-        let output = self.rows.iter().find(|r| &r.key == key).and_then(|r| match &r.kind {
-            RowKind::Command { output, .. } => output.clone(),
-            _ => None,
-        });
+        let output = self
+            .rows
+            .iter()
+            .find(|r| &r.key == key)
+            .and_then(|r| match &r.kind {
+                RowKind::Command { output, .. } => output.clone(),
+                _ => None,
+            });
         match output {
             Some(o) => self.copy_out(o, CopyKind::Command, cx),
             None => self.show_toast("Este comando no tiene salida".into(), false, cx),
@@ -163,7 +183,11 @@ impl ChatView {
 
     pub(crate) fn toggle_redaction(&mut self, kind: CopyKind, cx: &mut Context<Self>) {
         let next = self.settings(cx).toggled(kind);
-        self.hub.update(cx, |h, cx| h.set_copy_settings(next, cx));
+        self.hub.update(cx, |h, cx| {
+            h.set_copy_settings(next, cx);
+            // The host writes it back to `[chat]` in config.toml.
+            h.emit_event(ChatEvent::CopySettingsChanged(next), cx);
+        });
     }
 
     /// Hover tracking of the rows that have an action bar. Both the row and the bar report, so
@@ -216,7 +240,7 @@ impl ChatView {
         let k_plain = key.clone();
         let k_md = key.clone();
         let k_open = key.clone();
-        let k_hover = key.clone();
+        let k_hover = key;
         let menu_row_id = |name: &'static str| (name, id);
         let menu = Popover::new(format!("msg-pop-{id}"), &t)
             .open(open)
@@ -224,7 +248,6 @@ impl ChatView {
             .width(260.0)
             .padding(6.0)
             .on_dismiss({
-                let this = this.clone();
                 move |_, cx| {
                     this.update(cx, |v, cx| {
                         v.menu = None;
@@ -275,7 +298,9 @@ impl ChatView {
                 &t,
                 None,
                 "Ocultar secretos al copiar",
-                Some("En el texto del chat; las salidas de comandos tienen su propio ajuste".into()),
+                Some(
+                    "En el texto del chat; las salidas de comandos tienen su propio ajuste".into(),
+                ),
                 settings.redact_text,
                 true,
                 cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -392,9 +417,9 @@ impl ChatView {
         let k = key.clone();
         let copy = Button::ghost(format!("copy-out-{id}"), &t, "Copiar salida")
             .tooltip("Copia la salida del comando")
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.copy_command_output(&k, cx)
-            }));
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.copy_command_output(&k, cx)),
+            );
         let redact = Button::ghost(format!("redact-out-{id}"), &t, "Ocultar secretos")
             .when_icon(on)
             .tooltip(if on {
@@ -430,7 +455,11 @@ impl ChatView {
                 .text_size(px(12.5))
                 .text_color(tone)
                 .child(icon(
-                    if toast.hidden { Icon::Alert } else { Icon::Check },
+                    if toast.hidden {
+                        Icon::Alert
+                    } else {
+                        Icon::Check
+                    },
                     16.0,
                     tone,
                 ))

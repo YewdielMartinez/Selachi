@@ -5,7 +5,7 @@
 //! the rows are rebuilt from `ThreadState` when the view is painted. A hidden thread is never
 //! painted, so it reads nothing. Only the rows whose fingerprint changed are re-measured.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -17,7 +17,7 @@ use chat_core::{
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     IntoElement, ListAlignment, ListState, ParentElement as _, PathPromptOptions, Render,
-    SharedString, Styled as _, Subscription, Window, div, list, prelude::*, px, relative,
+    SharedString, Styled as _, Subscription, Task, Window, div, list, prelude::*, px, relative,
 };
 use panel_api::WidthClass;
 use theme::{Radius, Theme};
@@ -327,6 +327,38 @@ impl ChatView {
             .update(cx, |c, cx| c.open_popup_named(name, cx));
     }
 
+    /// Demos and screenshots: selects text in the last assistant text row, from `from` to `to`
+    /// as `(segment, byte offset)` (no mouse needed), and optionally shows its hover action bar
+    /// and its `⋯` menu. Needs one painted frame first (the group exists after painting).
+    pub fn debug_select(
+        &mut self,
+        from: (usize, usize),
+        to: (usize, usize),
+        menu: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self
+            .rows
+            .iter()
+            .rev()
+            .find(|r| matches!(r.kind, crate::rows::RowKind::Text { .. }))
+            .map(|r| r.key.clone())
+        else {
+            return;
+        };
+        if let Some(g) = self.selections.get(&(key.clone(), 0)) {
+            g.set_selection(
+                ui_kit::SelPos::new(from.0, from.1),
+                ui_kit::SelPos::new(to.0, to.1),
+            );
+        }
+        if menu {
+            self.hover_row = Some(key.clone());
+            self.menu = Some(crate::copy_ui::CopyMenu::Message(key));
+        }
+        cx.notify();
+    }
+
     pub fn width_class(&self) -> WidthClass {
         WidthClass::from_width(self.viewport_w)
     }
@@ -369,6 +401,8 @@ impl ChatView {
 
     /// Drops everything that is still listening (the tab was closed).
     pub fn release(&mut self) {
+        self.selections.clear();
+        self.menu = None;
         self.thread_sub = None;
         self.title_edit = None;
         self.title_subs.clear();
@@ -825,6 +859,8 @@ impl ChatView {
                 .into_any_element(),
             (None, Some(r)) => div()
                 .id("chat-title")
+                .min_w_0()
+                .flex_shrink()
                 .max_w(px(520.0))
                 .px(px(8.0))
                 .py(px(3.0))
@@ -863,10 +899,12 @@ impl ChatView {
             (agent_mark(&r.agent), model_label(model.as_deref()))
         });
         let cost = self.cost_label(cx);
+        let menu = rec.is_some().then(|| self.thread_menu(cx));
         let narrow = self.viewport_w < 640.0;
         let inner = div()
             .h(px(52.0))
             .w_full()
+            .min_w_0()
             .flex()
             .flex_row()
             .items_center()
@@ -906,7 +944,8 @@ impl ChatView {
                     .text_color(c.muted)
                     .child(agent_icon(mark, 16.0, c.muted))
                     .child(model)
-            }));
+            }))
+            .children(menu);
         div()
             .w_full()
             .flex_none()
@@ -987,15 +1026,17 @@ impl ChatView {
                     .flex_col()
                     .children(deleg)
                     .children(self.notice_line(cx))
+                    .children(self.toast_line())
                     .child(self.composer.clone()),
             ),
         );
         div()
             .size_full()
+            .min_w_0()
             .flex()
             .flex_col()
             .child(header)
-            .child(div().flex_1().min_h_0().child(body))
+            .child(div().flex_1().w_full().min_w_0().min_h_0().child(body))
             .child(composer)
             .into_any_element()
     }
@@ -1165,6 +1206,7 @@ impl ChatView {
                             .child(worktree),
                     )
                     .children(self.notice_line(cx))
+                    .children(self.toast_line())
                     .child(self.composer.clone())
                     .children(error.map(|e| {
                         div()
@@ -1230,6 +1272,8 @@ impl Render for ChatView {
         };
         div()
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .relative()
             .font_family(ty.ui_family)
             .text_color(c.text)
@@ -1415,14 +1459,34 @@ impl ChatView {
                         }))
                         .child(SharedString::from(meta.join(" · ")))
                         .child(
-                            div().flex().flex_row().child(
-                                Button::ghost(format!("deleg-open-{}", id.0), &t, "Abrir hilo")
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        this.hub.update(cx, |h, cx| {
-                                            h.emit_event(ChatEvent::OpenThread(id), cx)
-                                        });
-                                    })),
-                            ),
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(6.0))
+                                .child(
+                                    Button::ghost(format!("deleg-open-{}", id.0), &t, "Abrir hilo")
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _, cx| {
+                                                this.hub.update(cx, |h, cx| {
+                                                    h.emit_event(ChatEvent::OpenThread(id), cx)
+                                                });
+                                            },
+                                        )),
+                                )
+                                .child(
+                                    Button::ghost(
+                                        format!("deleg-map-{}", id.0),
+                                        &t,
+                                        "Ver en el mapa",
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, _, cx| {
+                                            this.hub.update(cx, |h, cx| {
+                                                h.emit_event(ChatEvent::OpenAgentMap(id), cx)
+                                            });
+                                        },
+                                    )),
+                                ),
                         ),
                 );
             }

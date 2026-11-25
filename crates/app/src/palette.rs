@@ -24,6 +24,7 @@ pub mod id {
     pub const ATTENTION_NEXT: &str = "attention.next";
     pub const SETTINGS_OPEN: &str = "settings.open";
     pub const SIDEBAR_TOGGLE: &str = "sidebar.toggle";
+    pub const AGENTMAP_OPEN: &str = "agentmap.open";
     pub const PANEL_PREFIX: &str = "panel.";
 }
 
@@ -70,6 +71,9 @@ pub fn base_actions() -> Vec<ActionEntry> {
             .shortcut("Ctrl+,")
             .icon(Icon::Settings)
             .keywords("configuración opciones preferencias"),
+        ActionEntry::new(id::AGENTMAP_OPEN, "Mapa de subagentes")
+            .icon(ui_agentmap::MAP_ICON)
+            .keywords("delegaciones árbol grafo agentes harness orquestador"),
         ActionEntry::new(id::SIDEBAR_TOGGLE, "Plegar la barra lateral")
             .shortcut("Ctrl+B")
             .icon(Icon::Layout)

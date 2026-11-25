@@ -309,6 +309,7 @@ pub struct AcpSession {
     // agent capabilities
     can_load: bool,
     can_resume: bool,
+    can_image: bool,
     auth_methods: Vec<String>,
     // session
     session_id: Option<String>,
@@ -352,6 +353,7 @@ impl AcpSession {
             reqs: HashMap::new(),
             can_load: false,
             can_resume: false,
+            can_image: false,
             auth_methods: Vec::new(),
             session_id: None,
             replaying: false,
@@ -442,10 +444,20 @@ impl AcpSession {
             return;
         };
         self.busy = true;
+        let mut prompt = vec![json!({ "type": "text", "text": text })];
+        if self.can_image {
+            for img in crate::images::extract_attached_images(text) {
+                prompt.push(json!({
+                    "type": "image",
+                    "mimeType": img.mime_type,
+                    "data": img.base64,
+                }));
+            }
+        }
         let m = self.request(
             Req::Prompt,
             "session/prompt",
-            json!({ "sessionId": sid, "prompt": [{ "type": "text", "text": text }] }),
+            json!({ "sessionId": sid, "prompt": prompt }),
         );
         step.outgoing.push(m);
     }
@@ -610,6 +622,10 @@ impl AcpSession {
         self.can_resume = caps
             .pointer("/sessionCapabilities/resume")
             .is_some_and(|r| !r.is_null());
+        self.can_image = caps
+            .pointer("/promptCapabilities/image")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         self.auth_methods = result
             .get("authMethods")
             .and_then(Value::as_array)

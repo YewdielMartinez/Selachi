@@ -86,6 +86,8 @@ pub fn file_chip(theme: &Theme, name: &str, color: Rgba) -> Div {
     let ty = theme.typography;
     div()
         .h(px(24.0))
+        .max_w_full()
+        .min_w_0()
         .px(px(8.0))
         .flex()
         .flex_row()
@@ -98,6 +100,7 @@ pub fn file_chip(theme: &Theme, name: &str, color: Rgba) -> Div {
         .child(file_glyph(name, color))
         .child(
             div()
+                .min_w_0()
                 .max_w(px(260.0))
                 .overflow_hidden()
                 .text_ellipsis()
@@ -123,7 +126,9 @@ pub fn tool_line(
     let mut row = div()
         .id(id)
         .h(px(28.0))
+        .w_full()
         .max_w_full()
+        .min_w_0()
         .flex()
         .flex_row()
         .items_center()

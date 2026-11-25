@@ -27,6 +27,7 @@ pub mod claude;
 pub mod coalesce;
 pub mod codex;
 pub mod detect;
+pub mod images;
 #[cfg(windows)]
 mod job;
 pub mod opencode;

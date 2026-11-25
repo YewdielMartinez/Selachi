@@ -1093,7 +1093,7 @@ mod tests {
         assert!(ok[1].info.truncated && ok[1].info.bytes == 3000 - 6);
         assert_eq!(
             ok.len(),
-            2 + 0,
+            2,
             "the third file found the budget used up: {ok:?}"
         );
         assert!(

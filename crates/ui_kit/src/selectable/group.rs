@@ -690,7 +690,7 @@ impl SelectionGroup {
                         mv.0.mouse_move(e, &mv.1, window);
                     }
                 });
-                let g_up = g_paint.clone();
+                let g_up = g_paint;
                 window.on_mouse_event(move |e: &MouseUpEvent, phase, window, cx| {
                     if phase == gpui::DispatchPhase::Capture && e.button == MouseButton::Left {
                         g_up.mouse_up(e, window, cx);

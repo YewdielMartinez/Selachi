@@ -669,7 +669,10 @@ impl AppShell {
         body = body.children(drawers);
 
         let mut key_context = String::from("AppShell");
-        if self.prompts.confirm_close.is_some() || self.prompts.restore.is_some() {
+        if self.prompts.confirm_close.is_some()
+            || self.prompts.restore.is_some()
+            || self.prompts.apply.is_some()
+        {
             key_context.push_str(" CloseConfirm");
         }
         if self.drawer.open.is_some() {
@@ -767,6 +770,7 @@ impl AppShell {
             .on_action(cx.listener(|this, _: &CancelClose, _, cx| {
                 this.prompts.confirm_close = None;
                 this.prompts.restore = None;
+                this.prompts.apply = None;
                 this.refresh(cx);
             }))
             .on_action(cx.listener(|this, _: &Jump1, w, cx| this.jump_tab(0, w, cx)))
@@ -800,6 +804,12 @@ impl AppShell {
                     .restore
                     .as_ref()
                     .map(|r| self.restore_overlay(r, cx)),
+            )
+            .children(
+                self.prompts
+                    .apply
+                    .as_ref()
+                    .map(|p| self.apply_overlay(p, cx)),
             )
             .children(
                 self.prompts

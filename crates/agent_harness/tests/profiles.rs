@@ -93,8 +93,15 @@ fn a_profile_run_sends_the_final_prompt_and_records_everything() {
             && order("OUTPUT FORMAT") < order("=== TASK ==="),
         "the instructions come first, the task last"
     );
-    assert!(!prompt.contains(SECRET), "the secret in the context file must be redacted");
-    assert!(r.notes.iter().any(|n| n.contains("hidden")), "{:?}", r.notes);
+    assert!(
+        !prompt.contains(SECRET),
+        "the secret in the context file must be redacted"
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("hidden")),
+        "{:?}",
+        r.notes
+    );
 
     // how the agent was started
     let (kind, cfg, _) = s.factory.rec.lock().spawns[0].clone();
@@ -104,7 +111,13 @@ fn a_profile_run_sends_the_final_prompt_and_records_everything() {
     assert_eq!(cfg.permission_mode, PermissionMode::ReadOnly);
     assert_eq!(
         cfg.extra_args,
-        ["--allowedTools", "Read", "Grep", "--disallowedTools", "Edit"],
+        [
+            "--allowedTools",
+            "Read",
+            "Grep",
+            "--disallowedTools",
+            "Edit"
+        ],
         "Claude gets the tool lists as flags"
     );
 
@@ -122,11 +135,18 @@ fn a_profile_run_sends_the_final_prompt_and_records_everything() {
     assert_eq!(rec.effort.as_deref(), Some("high"));
     assert_eq!(rec.output_format.as_deref(), Some("json"));
     assert_eq!(rec.context_files, ["docs/guide.md"]);
-    assert_eq!(rec.prompt, "audit the auth module", "`prompt` stays the caller's task");
+    assert_eq!(
+        rec.prompt, "audit the auth module",
+        "`prompt` stays the caller's task"
+    );
     assert_eq!(rec.final_prompt.as_deref(), Some(prompt.as_str()));
     let l = rec.limits.unwrap();
     assert_eq!(
-        (l.permission.as_str(), l.parent_permission.as_str(), l.config_max_permission.as_str()),
+        (
+            l.permission.as_str(),
+            l.parent_permission.as_str(),
+            l.config_max_permission.as_str()
+        ),
         ("read-only", "read-only", "accept-edits")
     );
     assert_eq!(l.profile_permission.as_deref(), Some("read-only"));
@@ -154,7 +174,10 @@ fn a_run_without_a_profile_is_unchanged() {
     assert_eq!(rec.final_prompt.as_deref(), Some("plain task"));
     assert_eq!(rec.launcher.as_deref(), Some("cli"));
     let l = rec.limits.unwrap();
-    assert_eq!((l.permission.as_str(), l.timeout_secs, l.tools_enforced), ("read-only", 900, false));
+    assert_eq!(
+        (l.permission.as_str(), l.timeout_secs, l.tools_enforced),
+        ("read-only", 900, false)
+    );
 }
 
 #[test]
@@ -172,14 +195,21 @@ fn limits_are_the_minimum_of_profile_config_and_caller() {
     let r = h.run(req(&repo, "tests", "write tests"));
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
     assert_eq!(r.permission.as_deref(), Some("read-only"));
-    assert!(r.notes.iter().any(|n| n.contains("lowered to read-only")), "{:?}", r.notes);
+    assert!(
+        r.notes.iter().any(|n| n.contains("lowered to read-only")),
+        "{:?}",
+        r.notes
+    );
     assert_eq!(
         s.factory.rec.lock().spawns[0].1.permission_mode,
         PermissionMode::ReadOnly
     );
     let rec = h.registry().load(r.run_id.as_deref().unwrap()).unwrap();
     let l = rec.limits.unwrap();
-    assert_eq!(l.timeout_secs, 900, "30 m is capped by [delegation] timeout_secs");
+    assert_eq!(
+        l.timeout_secs, 900,
+        "30 m is capped by [delegation] timeout_secs"
+    );
     assert_eq!(l.budget_tokens, Some(1000));
     assert!(l.worktree && rec.worktree_path.is_some());
     assert_eq!(l.profile_permission.as_deref(), Some("accept-edits"));
@@ -196,7 +226,9 @@ fn limits_are_the_minimum_of_profile_config_and_caller() {
     };
     let h = s.harness(caller(Permission::AcceptEdits), low);
     assert_eq!(
-        h.run(req(&repo, "tests", "write tests")).permission.as_deref(),
+        h.run(req(&repo, "tests", "write tests"))
+            .permission
+            .as_deref(),
         Some("ask")
     );
 
@@ -209,7 +241,11 @@ fn limits_are_the_minimum_of_profile_config_and_caller() {
     let r = h.run(narrow);
     assert_eq!(r.permission.as_deref(), Some("read-only"));
     let rec = h.registry().load(r.run_id.as_deref().unwrap()).unwrap();
-    assert_eq!(rec.limits.unwrap().budget_tokens, Some(400), "min(1000, 400)");
+    assert_eq!(
+        rec.limits.unwrap().budget_tokens,
+        Some(400),
+        "min(1000, 400)"
+    );
     project_profile(&repo, "ro.toml", "name = \"RO\"\nagent = \"claude\"\n");
     let mut widen = req(&repo, "ro", "x");
     widen.permission = Permission::AcceptEdits;
@@ -251,7 +287,10 @@ fn profile_precedence_project_over_global_and_agent_override() {
     assert_eq!(s.factory.rec.lock().spawns[2].0, AgentKind::OpenCode);
     // the global one is still reachable from another project
     let other = init_repo(s.dir.path(), "other");
-    assert_eq!(h.run(req(&other, "only global", "x")).status, RunStatus::Done);
+    assert_eq!(
+        h.run(req(&other, "only global", "x")).status,
+        RunStatus::Done
+    );
 
     // [agent_profiles] project_profiles = false ignores the project's profile
     write(
@@ -288,7 +327,11 @@ fn bad_profiles_are_refused_before_anything_starts() {
     refused(&r, RefusalCode::InvalidProfile);
     let r = h.run(req(&repo, "broken", "x"));
     refused(&r, RefusalCode::UnknownProfile);
-    assert!(r.reason.as_deref().unwrap().contains("have errors"), "{:?}", r.reason);
+    assert!(
+        r.reason.as_deref().unwrap().contains("have errors"),
+        "{:?}",
+        r.reason
+    );
     let r = h.run(req(&repo, "nothing-like-it", "x"));
     refused(&r, RefusalCode::UnknownProfile);
     assert!(r.reason.unwrap().contains("available:"));
@@ -300,7 +343,11 @@ fn bad_profiles_are_refused_before_anything_starts() {
     assert_eq!(s.factory.spawns(), 0);
     let chat = s.data_dir().join("chat.db");
     if chat.exists() {
-        assert!(ChatStore::open_at(chat).unwrap().delegated_threads().unwrap().is_empty());
+        assert!(ChatStore::open_at(chat)
+            .unwrap()
+            .delegated_threads()
+            .unwrap()
+            .is_empty());
     }
 
     // profiles turned off
@@ -318,7 +365,10 @@ fn bad_profiles_are_refused_before_anything_starts() {
 fn context_files_are_capped_and_redacted() {
     let s = agent_that_answers("ok");
     let repo = init_repo(s.dir.path(), "proj");
-    write(&repo.join("a.md"), &format!("token {SECRET}\n{}", "a".repeat(2000)));
+    write(
+        &repo.join("a.md"),
+        &format!("token {SECRET}\n{}", "a".repeat(2000)),
+    );
     write(&repo.join("b.md"), &"b".repeat(5000));
     write(&repo.join("c.md"), "never reached");
     project_profile(
@@ -329,24 +379,38 @@ fn context_files_are_capped_and_redacted() {
     // a 3 KiB cap via config.toml
     write(
         &s.data_dir().join("config.toml"),
-        "[agent_profiles]\nmax_context_kb = 2\n",
+        "[agent_profiles]\nmax_context_kb = 3\n",
     );
     let h = s.harness(caller(Permission::ReadOnly), DelegationConfig::default());
     let r = h.run(req(&repo, "ctx", "go"));
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
     let prompt = s.factory.sent().remove(0);
     assert!(!prompt.contains(SECRET));
-    assert!(prompt.contains("«oculto:anthropic»"), "the redaction marker is there");
+    assert!(
+        prompt.contains("«oculto:anthropic»"),
+        "the redaction marker is there"
+    );
     assert!(prompt.contains("=== CONTEXT FILE: a.md ==="));
     assert!(prompt.contains("=== CONTEXT FILE: b.md ==="));
-    assert!(!prompt.contains("never reached"), "the third file found the cap used up");
+    assert!(
+        !prompt.contains("never reached"),
+        "the third file found the cap used up"
+    );
     let b_bytes = prompt.matches('b').count();
     assert!(
         (900..1100).contains(&b_bytes),
         "b.md was cut to what is left of 3 KiB after a.md ({b_bytes} b's)"
     );
-    assert!(r.notes.iter().any(|n| n.contains("truncated")), "{:?}", r.notes);
-    assert!(r.notes.iter().any(|n| n.contains("left out")), "{:?}", r.notes);
+    assert!(
+        r.notes.iter().any(|n| n.contains("truncated")),
+        "{:?}",
+        r.notes
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("left out")),
+        "{:?}",
+        r.notes
+    );
     let rec = h.registry().load(r.run_id.as_deref().unwrap()).unwrap();
     assert_eq!(rec.context_files, ["a.md", "b.md"]);
 }
@@ -364,12 +428,26 @@ fn tool_lists_are_enforced_for_claude_only() {
     let r = h.run(req(&repo, "tools", "x"));
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
     assert!(s.factory.rec.lock().spawns[0].1.extra_args.is_empty());
-    assert!(r.notes.iter().any(|n| n.contains("only enforced for Claude")), "{:?}", r.notes);
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("only enforced for Claude")),
+        "{:?}",
+        r.notes
+    );
     let prompt = s.factory.sent().remove(0);
     assert!(prompt.contains("TOOL POLICY (advisory)") && prompt.contains("Never use: Bash"));
-    let l = h.registry().load(r.run_id.as_deref().unwrap()).unwrap().limits.unwrap();
+    let l = h
+        .registry()
+        .load(r.run_id.as_deref().unwrap())
+        .unwrap()
+        .limits
+        .unwrap();
     assert!(!l.tools_enforced);
-    assert_eq!((l.allowed_tools, l.denied_tools), (vec!["Read".to_string()], vec!["Bash".to_string()]));
+    assert_eq!(
+        (l.allowed_tools, l.denied_tools),
+        (vec!["Read".to_string()], vec!["Bash".to_string()])
+    );
 
     // the same profile pointed at Claude (explicit agent) is enforced
     let mut claude = req(&repo, "tools", "x");
@@ -401,7 +479,11 @@ fn json_output_format_hands_the_schema_to_the_agent() {
     assert_eq!(r.status, RunStatus::Done, "{r:?}");
     let prompt = s.factory.sent().remove(0);
     assert!(prompt.contains("ONLY one JSON document"));
-    assert!(prompt.contains("{\"required\":[\"findings\"],\"type\":\"object\"}") || prompt.contains("\"required\":[\"findings\"]"), "{prompt}");
+    assert!(
+        prompt.contains("{\"required\":[\"findings\"],\"type\":\"object\"}")
+            || prompt.contains("\"required\":[\"findings\"]"),
+        "{prompt}"
+    );
     assert!(
         !r.notes.iter().any(|n| n.contains("output_format")),
         "a JSON reply raises no note: {:?}",
@@ -414,7 +496,10 @@ fn json_output_format_hands_the_schema_to_the_agent() {
         "name = \"NoSchema\"\nagent = \"claude\"\noutput_format = \"json\"\noutput_schema = \"schemas/gone.json\"\n",
     );
     let before = s.factory.spawns();
-    refused(&h.run(req(&repo, "noschema", "x")), RefusalCode::InvalidProfile);
+    refused(
+        &h.run(req(&repo, "noschema", "x")),
+        RefusalCode::InvalidProfile,
+    );
     assert_eq!(s.factory.spawns(), before);
 }
 
@@ -425,7 +510,9 @@ fn prepare_is_a_dry_run_that_starts_nothing() {
     project_profile(&repo, "revisor.toml", REVIEWER);
     write(&repo.join("docs").join("guide.md"), "guide text\n");
     let h = s.harness(caller(Permission::ReadOnly), DelegationConfig::default());
-    let prep = h.prepare(&req(&repo, "revisor", &format!("check {SECRET}"))).unwrap();
+    let prep = h
+        .prepare(&req(&repo, "revisor", &format!("check {SECRET}")))
+        .unwrap();
     assert_eq!(prep.profile.as_deref(), Some("Revisor"));
     assert_eq!(prep.agent, "claude");
     assert!(prep.final_prompt.contains("Be strict.") && prep.final_prompt.contains("guide text"));
@@ -433,7 +520,11 @@ fn prepare_is_a_dry_run_that_starts_nothing() {
     assert!(prep.final_prompt.ends_with(&prep.task_prompt));
     assert!(prep.tools_enforced);
     let text = prep.to_text();
-    assert!(text.contains("EFFECTIVE LIMITS") && text.contains("FINAL PROMPT") && text.contains("guide text"));
+    assert!(
+        text.contains("EFFECTIVE LIMITS")
+            && text.contains("FINAL PROMPT")
+            && text.contains("guide text")
+    );
     let v = prep.to_value();
     assert_eq!(v["limits"]["permission"], "read-only");
     assert_eq!(v["context_files"][0]["path"], "docs/guide.md");
@@ -446,7 +537,10 @@ fn prepare_is_a_dry_run_that_starts_nothing() {
     let mut full = req(&repo, "revisor", "x");
     full.permission = Permission::Full;
     full.permission_explicit = true;
-    assert_eq!(h.prepare(&full).unwrap_err().code, RefusalCode::PermissionFull);
+    assert_eq!(
+        h.prepare(&full).unwrap_err().code,
+        RefusalCode::PermissionFull
+    );
     let deep = Caller {
         depth: 1,
         ..caller(Permission::ReadOnly)

@@ -26,4 +26,10 @@ pub enum AgentMapEvent {
     /// "Duplicar como perfil": the host opens Ajustes -> Agentes -> Perfiles with a new profile
     /// seeded from this run (see `AgentMapModel::profile_seed`).
     DuplicateAsProfile(String),
+    /// Stop an external (non-harness) agent process subtree (user already confirmed inline).
+    StopExternal(u32),
+    /// Open/focus the Processes panel on this PID.
+    OpenInProcesses(u32),
+    /// Copy the redacted command line of an external agent process.
+    CopyCommand(String),
 }

@@ -620,7 +620,7 @@ impl Harness {
             reason,
             code: None,
             notes,
-            profile: prep.profile.clone(),
+            profile: prep.profile,
         };
         record.status = status;
         record.finished_ms = Some(chat_core::now_ms());
@@ -709,13 +709,23 @@ impl Harness {
         let wait = self.cfg.approval_timeout_secs.min(remaining.max(1));
         let req = ApprovalRequest {
             v: PROTOCOL_VERSION,
-            request_id: request_id.to_string(),
+            // Agents number their requests per session (ACP ids start at 0/1), so two runs asking
+            // at once sent the same id and Selachi's queue treated the second as a retry of the
+            // first, denying it ("superseded"). Scope the wire id by run.
+            request_id: format!("run{}:{request_id}", record.run_id),
             run_id: record.run_id.clone(),
             thread_id: record.thread_id,
             parent_thread_id: record.parent_thread_id,
             agent: record.agent.clone(),
-            tool: redacted(tool),
-            detail: cap_chars(&redacted(detail), 4000),
+            // Agents put whole shell commands in the title; Selachi refuses titles over 256 bytes
+            // (100 chars + the truncation note stays under it even with multi-byte text).
+            // Keep a short title and move the full command to the detail.
+            tool: cap_chars(&redacted(tool), 100),
+            detail: if tool.chars().count() > 100 {
+                cap_chars(&format!("{}\n\n{}", redacted(tool), redacted(detail)), 4000)
+            } else {
+                cap_chars(&redacted(detail), 4000)
+            },
             permission: record.permission.clone(),
             depth: record.depth,
             timeout_secs: wait,

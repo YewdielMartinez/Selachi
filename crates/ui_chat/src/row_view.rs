@@ -11,10 +11,11 @@ use gpui::{
     Styled as _, div, prelude::*, px, relative,
 };
 use theme::Radius;
-use ui_kit::{Button, Icon, Spinner, Tooltip, icon};
+use ui_kit::{Button, Gap, Icon, Segments, SelectableText, Spinner, Tooltip, icon};
 
 use crate::chat_view::ChatView;
-use crate::md::render_md;
+use crate::copy::CopyKind;
+use crate::md::render_md_selectable;
 use crate::rows::{ChatRow, RowKey, RowKind, approval_outcome};
 use crate::util::{file_name, format_cost, format_duration_ms, format_tokens};
 use crate::widgets::{file_chip, file_glyph, tool_line, working_bars};
@@ -34,9 +35,26 @@ impl ChatView {
         let expanded = self.expanded.contains(&row.key);
         let last = ix + 1 == self.rows.len();
         let body = self.row_body(&row, expanded, cx);
+        let id = row_id(&row.key);
+        let bar = self.message_bar(&row, id, cx);
+        let hoverable = matches!(row.kind, RowKind::Text { .. } | RowKind::User { .. });
+        let key = row.key.clone();
+        let body = div()
+            .id(("row-hover", id))
+            .relative()
+            .w_full()
+            .min_w_0()
+            .when(hoverable, |d| {
+                d.on_hover(
+                    cx.listener(move |this, on: &bool, _, cx| this.set_hover(&key, false, *on, cx)),
+                )
+            })
+            .child(body)
+            .children(bar);
         let col_max = self.column_max();
         div()
             .w_full()
+            .min_w_0()
             .flex()
             .flex_row()
             .justify_center()
@@ -72,6 +90,7 @@ impl ChatView {
         match &row.kind {
             RowKind::User { text, attachments } => div()
                 .w_full()
+                .min_w_0()
                 .pt(px(14.0))
                 .pb(px(6.0))
                 .flex()
@@ -79,7 +98,10 @@ impl ChatView {
                 .justify_end()
                 .child(
                     div()
+                        .debug_selector(move || format!("user-bubble-{id}"))
                         .max_w(relative(0.82))
+                        .min_w_0()
+                        .overflow_hidden()
                         .px(px(16.0))
                         .py(px(11.0))
                         .rounded(px(Radius::MD))
@@ -91,17 +113,31 @@ impl ChatView {
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
-                        .child(div().w_full().child(SharedString::from(text.clone())))
+                        .child(div().w_full().min_w_0().child(self.selectable_block(
+                            &key,
+                            0,
+                            CopyKind::Text,
+                            text,
+                            id,
+                            cx,
+                        )))
                         .when(!attachments.is_empty(), |d| {
-                            d.child(div().flex().flex_row().flex_wrap().gap(px(6.0)).children(
-                                attachments.iter().map(|p| {
-                                    let name = p
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().to_string())
-                                        .unwrap_or_default();
-                                    file_chip(&t, &name, c.muted)
-                                }),
-                            ))
+                            d.child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .gap(px(6.0))
+                                    .children(attachments.iter().map(|p| {
+                                        let name = p
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().to_string())
+                                            .unwrap_or_default();
+                                        file_chip(&t, &name, c.muted)
+                                    })),
+                            )
                         }),
                 )
                 .into_any_element(),
@@ -110,9 +146,11 @@ impl ChatView {
                 let thread = self.thread_id();
                 div()
                     .w_full()
+                    .min_w_0()
                     .py(px(4.0))
                     .flex()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(8.0))
                     .text_size(px(12.5))
@@ -134,12 +172,16 @@ impl ChatView {
                     )
                     .into_any_element()
             }
-            RowKind::Text { body, .. } => div()
-                .w_full()
-                .py(px(2.0))
-                .font_family(ty.ui_family)
-                .child(render_md(body.parsed(), t, id))
-                .into_any_element(),
+            RowKind::Text { body, .. } => {
+                let group = self.group_for(&key, 0, CopyKind::Text, cx);
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .py(px(2.0))
+                    .font_family(ty.ui_family)
+                    .child(render_md_selectable(body.parsed(), t, id, &group))
+                    .into_any_element()
+            }
             RowKind::Thinking { text, streaming } => {
                 let lead: AnyElement = if *streaming {
                     Spinner::new(c.accent).into_any_element()
@@ -160,14 +202,20 @@ impl ChatView {
                     (!text.trim().is_empty()).then_some(expanded),
                     handler(cx),
                 );
+                let sel_el =
+                    expanded.then(|| self.selectable_block(&key, 0, CopyKind::Text, text, id, cx));
                 div()
                     .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(line)
                     .when(expanded, |d| {
                         d.child(
                             div()
+                                .w_full()
+                                .min_w_0()
+                                .overflow_hidden()
                                 .my(px(4.0))
                                 .px(px(14.0))
                                 .py(px(10.0))
@@ -177,7 +225,7 @@ impl ChatView {
                                 .text_size(px(ty.ui_size_md))
                                 .line_height(relative(1.55))
                                 .text_color(c.muted)
-                                .child(SharedString::from(text.clone())),
+                                .children(sel_el),
                         )
                     })
                     .into_any_element()
@@ -205,12 +253,14 @@ impl ChatView {
                 );
                 div()
                     .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(line)
                     .when(expanded, |d| {
                         d.child(
                             div()
+                                .min_w_0()
                                 .ml(px(24.0))
                                 .mb(px(4.0))
                                 .flex()
@@ -230,6 +280,8 @@ impl ChatView {
                                         ),
                                     };
                                     div()
+                                        .w_full()
+                                        .min_w_0()
                                         .h(px(24.0))
                                         .flex()
                                         .flex_row()
@@ -273,6 +325,7 @@ impl ChatView {
                     ),
                 };
                 let label = div()
+                    .min_w_0()
                     .flex()
                     .flex_row()
                     .items_center()
@@ -289,6 +342,8 @@ impl ChatView {
                     )
                     .child(
                         div()
+                            .min_w_0()
+                            .flex_shrink()
                             .max_w(px(560.0))
                             .px(px(7.0))
                             .py(px(1.0))
@@ -325,38 +380,73 @@ impl ChatView {
                 let thread = self.thread_id();
                 let cwd = self.cwd();
                 let cmd_full = cmd.clone();
+                let out_text = output.clone().unwrap_or_else(|| {
+                    if *status == ToolStatus::Running {
+                        "…".into()
+                    } else {
+                        "(sin salida)".into()
+                    }
+                });
+                let expanded_parts = expanded.then(|| {
+                    let g = self.group_for(&key, 0, CopyKind::Command, cx);
+                    let mut segs = Segments::new();
+                    let seg = segs.push(out_text.clone(), Gap::Block);
+                    g.set_segments(segs);
+                    let out_el = g
+                        .container(("cmd-sel", id), &t)
+                        .w_full()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .id(("cmd-out", id))
+                                .w_full()
+                                .min_w_0()
+                                .max_h(px(220.0))
+                                .overflow_y_scroll()
+                                .px(px(14.0))
+                                .pt(px(10.0))
+                                .pb(px(6.0))
+                                .font_family(ty.mono_family)
+                                .text_size(px(ty.ui_size_sm))
+                                .line_height(relative(1.45))
+                                .text_color(c.muted)
+                                .child(SelectableText::new(
+                                    &g,
+                                    seg,
+                                    SharedString::from(out_text.clone()),
+                                )),
+                        )
+                        .into_any_element();
+                    (out_el, self.command_copy_buttons(&key, id, cx))
+                });
                 div()
                     .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(line)
-                    .when(expanded, |d| {
-                        d.child(
-                            div()
-                                .my(px(4.0))
-                                .ml(px(24.0))
-                                .rounded(px(Radius::SM))
-                                .bg(c.surface_1)
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .id(("cmd-out", id))
-                                        .max_h(px(220.0))
-                                        .overflow_y_scroll()
-                                        .px(px(14.0))
-                                        .pt(px(10.0))
-                                        .pb(px(6.0))
-                                        .font_family(ty.mono_family)
-                                        .text_size(px(ty.ui_size_sm))
-                                        .line_height(relative(1.45))
-                                        .text_color(c.muted)
-                                        .child(SharedString::from(
-                                            output.clone().unwrap_or_else(|| if *status == ToolStatus::Running { "…".into() } else { "(sin salida)".into() }),
-                                        )),
-                                )
-                                .child(
-                                    div().px(px(8.0)).pb(px(8.0)).flex().flex_row().child(
+                    .children(expanded_parts.map(|(out_el, copy_btns)| {
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .my(px(4.0))
+                            .ml(px(24.0))
+                            .rounded(px(Radius::SM))
+                            .bg(c.surface_1)
+                            .flex()
+                            .flex_col()
+                            .child(out_el)
+                            .child(
+                                div()
+                                    .px(px(8.0))
+                                    .pb(px(8.0))
+                                    .flex()
+                                    .flex_row()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .children(copy_btns)
+                                    .child(
                                         Button::ghost(format!("open-term-{id}"), &t, "Abrir en terminal")
                                             .icon(Icon::Terminal)
                                             .tooltip("Muestra el comando con su salida real en una pestaña de terminal")
@@ -371,9 +461,8 @@ impl ChatView {
                                                 }
                                             })),
                                     ),
-                                ),
-                        )
-                    })
+                            )
+                    }))
                     .into_any_element()
             }
             RowKind::Edit {
@@ -413,6 +502,7 @@ impl ChatView {
                         }
                     }));
                 let label = div()
+                    .min_w_0()
                     .flex()
                     .flex_row()
                     .items_center()
@@ -448,14 +538,27 @@ impl ChatView {
                     expandable.then_some(expanded),
                     if expandable { handler(cx) } else { None },
                 );
+                let sel_el = (expanded && expandable).then(|| {
+                    self.selectable_block(
+                        &key,
+                        0,
+                        CopyKind::Command,
+                        summary.as_deref().unwrap_or(""),
+                        id,
+                        cx,
+                    )
+                });
                 div()
                     .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(line)
                     .when(expanded && expandable, |d| {
                         d.child(
                             div()
+                                .min_w_0()
+                                .overflow_hidden()
                                 .my(px(4.0))
                                 .ml(px(24.0))
                                 .px(px(14.0))
@@ -465,7 +568,7 @@ impl ChatView {
                                 .font_family(ty.mono_family)
                                 .text_size(px(ty.ui_size_sm))
                                 .text_color(c.muted)
-                                .child(SharedString::from(summary.clone().unwrap_or_default())),
+                                .children(sel_el),
                         )
                     })
                     .into_any_element()
@@ -507,23 +610,38 @@ impl ChatView {
                     &t,
                     lead,
                     div()
+                        .min_w_0()
                         .max_w(px(640.0))
                         .overflow_hidden()
                         .text_ellipsis()
+                        .whitespace_nowrap()
                         .child(SharedString::from(title.clone()))
                         .into_any_element(),
                     meta,
                     expandable.then_some(expanded),
                     if expandable { handler(cx) } else { None },
                 );
+                let sel_el = (expanded && expandable).then(|| {
+                    self.selectable_block(
+                        &key,
+                        0,
+                        CopyKind::Command,
+                        summary.as_deref().unwrap_or(""),
+                        id,
+                        cx,
+                    )
+                });
                 div()
                     .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(line)
                     .when(expanded && expandable, |d| {
                         d.child(
                             div()
+                                .min_w_0()
+                                .overflow_hidden()
                                 .my(px(4.0))
                                 .ml(px(24.0))
                                 .px(px(14.0))
@@ -532,7 +650,7 @@ impl ChatView {
                                 .bg(c.surface_1)
                                 .text_size(px(12.5))
                                 .text_color(c.muted)
-                                .child(SharedString::from(summary.clone().unwrap_or_default())),
+                                .children(sel_el),
                         )
                     })
                     .into_any_element()
@@ -547,6 +665,8 @@ impl ChatView {
                     let (a, d, s) = (request_id.clone(), request_id.clone(), request_id.clone());
                     div()
                         .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .my(px(8.0))
                         .p(px(14.0))
                         .rounded(px(Radius::MD))
@@ -556,6 +676,7 @@ impl ChatView {
                         .gap(px(10.0))
                         .child(
                             div()
+                                .min_w_0()
                                 .flex()
                                 .flex_row()
                                 .items_center()
@@ -564,11 +685,20 @@ impl ChatView {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(c.text)
                                 .child(icon(Icon::Alert, 16.0, t.colors.warning))
-                                .child(SharedString::from(format!("El agente pide permiso: {tool}"))),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(SharedString::from(format!(
+                                            "El agente pide permiso: {tool}"
+                                        ))),
+                                ),
                         )
                         .when(!detail.trim().is_empty(), |d| {
                             d.child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
                                     .max_h(px(120.0))
                                     .overflow_hidden()
                                     .px(px(12.0))
@@ -585,6 +715,7 @@ impl ChatView {
                             div()
                                 .flex()
                                 .flex_row()
+                                .flex_wrap()
                                 .items_center()
                                 .gap(px(8.0))
                                 .child(Button::action(format!("approve-{id}"), &t, "Permitir").icon(Icon::Check).on_click(cx.listener(
@@ -604,6 +735,7 @@ impl ChatView {
                     let ok = matches!(state, ApprovalState::Allowed | ApprovalState::AlwaysAllowed);
                     div()
                         .w_full()
+                        .min_w_0()
                         .h(px(28.0))
                         .flex()
                         .flex_row()
@@ -637,6 +769,7 @@ impl ChatView {
             }
             RowKind::System { text } => div()
                 .w_full()
+                .min_w_0()
                 .py(px(4.0))
                 .flex()
                 .flex_row()
@@ -695,6 +828,8 @@ impl ChatView {
                 .into_any_element(),
             RowKind::Error { text } => div()
                 .w_full()
+                .min_w_0()
+                .overflow_hidden()
                 .my(px(6.0))
                 .px(px(14.0))
                 .py(px(10.0))
@@ -708,12 +843,14 @@ impl ChatView {
                 .line_height(relative(1.5))
                 .text_color(c.error)
                 .child(div().pt(px(1.0)).child(icon(Icon::Alert, 16.0, c.error)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(SharedString::from(text.clone())),
-                )
+                .child(div().flex_1().min_w_0().child(self.selectable_block(
+                    &key,
+                    0,
+                    CopyKind::Text,
+                    text,
+                    id,
+                    cx,
+                )))
                 .into_any_element(),
         }
     }

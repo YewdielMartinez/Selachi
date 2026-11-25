@@ -77,18 +77,22 @@ use crate::titlebar::TITLEBAR_H;
 use crate::titlebar_view::{TitleBarEvent, TitleBarView};
 use crate::usage_monitor::UsageMonitor;
 
+mod agentmap;
 mod chat;
 mod chrome;
 mod delegation;
 mod demos;
 mod integrations;
 mod layout;
+#[cfg(test)]
+mod profile_parity;
 mod render;
 mod tabs;
 mod updates;
 
 pub use crate::rail::RAIL_W;
 pub use crate::titlebar::TITLEBAR_H as TAB_H;
+pub use delegation::data_dir;
 
 pub const TERM_PAD: f32 = 8.0;
 /// Gap between a zone's card and the next one (also the drag-handle width).
@@ -316,6 +320,8 @@ struct ConfigSave {
 struct Prompts {
     confirm_close: Option<(TabId, SharedString)>,
     restore: Option<RestoreConfirm>,
+    /// "Aplicar cambios" of a subagent run, waiting for an explicit click.
+    apply: Option<agentmap::ApplyPrompt>,
     /// The "Nueva pestaña" menu (Terminal / Chat) and its focus (keys `T`, `C`, Enter, Esc).
     new_tab_menu: bool,
     menu_focus: FocusHandle,
@@ -679,6 +685,10 @@ impl AppShell {
         let mut actions = palette::base_actions();
         if let Some(reg) = cx.try_global::<PanelRegistry>() {
             for p in reg.for_zone(PanelZone::Right) {
+                // The map has its own action (it also picks the session to show).
+                if p.id().as_str() == ui_agentmap::PANEL_ID {
+                    continue;
+                }
                 actions.push(
                     ui_palette::ActionEntry::new(
                         format!("{}{}", action_id::PANEL_PREFIX, p.id().as_str()),
@@ -790,6 +800,7 @@ impl AppShell {
             prompts: Prompts {
                 confirm_close: None,
                 restore: None,
+                apply: None,
                 new_tab_menu: false,
                 menu_focus: cx.focus_handle(),
                 hint: None,
@@ -842,6 +853,8 @@ impl AppShell {
             self.start_onboarding(window, cx);
         }
         self.init_delegation(window, cx);
+        self.init_agentmap(window, cx);
+        self.apply_copy_settings(cx);
         self.init_updates(window, cx);
         self.run_demo(window, cx);
         self.refresh(cx);
@@ -852,6 +865,7 @@ impl AppShell {
     /// window-level sync when needed and repaints the shell itself.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.sync_chrome(cx);
+        self.sync_agentmap_context(cx);
         self.sync_tree_poll(cx);
         self.queue_window_sync(cx);
         cx.notify();

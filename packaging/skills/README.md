@@ -76,7 +76,8 @@ selachi-agent apply <run_id>          # shows the plan and asks; --dry-run only 
 | Tool | Does |
 |---|---|
 | `list_agents` | Installed agents, limits, and the limits that apply to the caller |
-| `run_agent` | Delegate a task (blocking, or `async: true`) |
+| `list_profiles` | Subagent profiles (named specializations) the caller can pass as `profile` |
+| `run_agent` | Delegate a task (blocking, or `async: true`), with an `agent` or a `profile` |
 | `agent_status`, `agent_result`, `cancel_agent` | Follow, collect or stop a run |
 | `get_diff` | What a run changed (redacted) |
 | `apply_changes` | The apply plan; never applies without the user |

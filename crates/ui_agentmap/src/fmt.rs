@@ -74,11 +74,45 @@ pub fn effort(e: &str) -> String {
 
 /// `model · effort` as the tree shows it (either part may be missing).
 pub fn model_effort(model: Option<&str>, eff: Option<&str>) -> Option<String> {
-    match (model.filter(|m| !m.is_empty()), eff.filter(|e| !e.is_empty())) {
+    match (
+        model.filter(|m| !m.is_empty()),
+        eff.filter(|e| !e.is_empty()),
+    ) {
         (Some(m), Some(e)) => Some(format!("{m} · {}", effort(e))),
         (Some(m), None) => Some(m.to_string()),
         (None, Some(e)) => Some(effort(e)),
         (None, None) => None,
+    }
+}
+
+const KIB: u64 = 1024;
+const MIB: u64 = KIB * 1024;
+const GIB: u64 = MIB * 1024;
+
+/// `340 MB`, `1,2 GB`, `12 KB`. Binary units, matching `ui_procs`.
+pub fn bytes(bytes: u64) -> String {
+    if bytes >= GIB {
+        let gb = bytes as f64 / GIB as f64;
+        if gb >= 10.0 {
+            format!("{} GB", gb.round() as u64)
+        } else {
+            format!("{} GB", format!("{gb:.1}").replace('.', ","))
+        }
+    } else if bytes >= MIB {
+        format!("{} MB", bytes / MIB)
+    } else {
+        format!("{} KB", bytes / KIB)
+    }
+}
+
+/// CPU percentage (`0%`, `3,4%`, `12%`).
+pub fn cpu(pct: f32) -> String {
+    if !pct.is_finite() || pct < 0.05 {
+        "0%".to_string()
+    } else if pct < 10.0 {
+        format!("{}%", format!("{pct:.1}").replace('.', ","))
+    } else {
+        format!("{}%", pct.round() as u32)
     }
 }
 
@@ -104,7 +138,16 @@ mod tests {
         assert_eq!(cost(0.0), "$0");
         assert_eq!(cost(0.004), "<$0,01");
         assert_eq!(cost(0.4), "$0,40");
-        assert_eq!(model_effort(Some("gpt-5"), Some("high")).unwrap(), "gpt-5 · alto");
+        assert_eq!(
+            model_effort(Some("gpt-5"), Some("high")).unwrap(),
+            "gpt-5 · alto"
+        );
         assert_eq!(model_effort(None, None), None);
+        assert_eq!(bytes(12 * KIB), "12 KB");
+        assert_eq!(bytes(340 * MIB), "340 MB");
+        assert_eq!(bytes(GIB + GIB / 5), "1,2 GB");
+        assert_eq!(cpu(0.0), "0%");
+        assert_eq!(cpu(3.44), "3,4%");
+        assert_eq!(cpu(12.6), "13%");
     }
 }

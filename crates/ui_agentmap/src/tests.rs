@@ -10,21 +10,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agents_driver::{AgentKind, PermissionMode};
-use chat_core::{
-    Changed, ThreadId, ThreadLink, ThreadRecord, ThreadStatus, ThreadUpdate,
-};
+use chat_core::{Changed, ThreadId, ThreadLink, ThreadRecord, ThreadStatus, ThreadUpdate};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use gpui::{Entity, TestAppContext, VisualTestContext};
-use panel_api::{PanelCtx, PanelProvider, PanelRegistry, PanelZone, WidthClass};
+use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+use panel_api::{PanelCtx, PanelRegistry, PanelZone, WidthClass};
 use theme::Theme;
 use ui_kit::testing;
 
 use crate::events::AgentMapEvent;
-use crate::inspector::{available, limit_rows};
+use crate::inspector::{EXTERNAL_EXPLANATION, available, external_facts, limit_rows};
 use crate::model::{AgentMapModel, CHAT_DEBOUNCE, PromptSource};
 use crate::registry::ApprovalEntry;
 use crate::source::SessionSource;
-use crate::tree::{NodeKey, NodeStatus};
+use crate::tree::{ExternalProc, MAX_EXTERNAL_PER_SESSION, NodeKey, NodeKind, NodeStatus};
 use crate::view::{AgentMapPanelProvider, AgentMapView, MapMode, PANEL_ID};
 
 // ---------------------------------------------------------------------------------------------
@@ -115,7 +113,12 @@ fn rig() -> Rig {
     let (tx, rx) = unbounded();
     let source = Arc::new(FakeSource::default());
     *source.threads.lock().unwrap() = vec![
-        record(1, "Orquestador", AgentKind::ClaudeCode, ThreadLink::default()),
+        record(
+            1,
+            "Orquestador",
+            AgentKind::ClaudeCode,
+            ThreadLink::default(),
+        ),
         record(2, "Revisa tests", AgentKind::Codex, child_of(1)),
         record(3, "Docs", AgentKind::OpenCode, child_of(1)),
     ];
@@ -190,10 +193,10 @@ fn ctx(width: WidthClass) -> PanelCtx {
     PanelCtx::new(PanelZone::Main, width, Theme::dark())
 }
 
-fn open_view(
-    cx: &mut TestAppContext,
+fn open_view<'a>(
+    cx: &'a mut TestAppContext,
     m: &Entity<AgentMapModel>,
-) -> (Entity<AgentMapView>, &mut VisualTestContext) {
+) -> (Entity<AgentMapView>, &'a mut VisualTestContext) {
     let m = m.clone();
     testing::open_window(cx, move |_, cx| {
         AgentMapView::new(ctx(WidthClass::Regular), m, cx)
@@ -260,26 +263,52 @@ fn partial_and_corrupt_registry_files_do_not_break_the_map(cx: &mut TestAppConte
 fn nothing_runs_while_the_map_is_hidden(cx: &mut TestAppContext) {
     let rig = rig();
     let m = model(cx, &rig);
-    // never attached: refresh and set_root do nothing
+    let sample_ext = ExternalProc {
+        agent: "agy".into(),
+        pid: 4242,
+        cmdline_redacted: "agy -p check --effort medium".into(),
+        cwd: Some(PathBuf::from("C:/p")),
+        model: Some("gemini-3-pro".into()),
+        effort: Some("medium".into()),
+        started_ms: 4_000,
+        ended_ms: None,
+        exit_code: None,
+        cpu_pct: Some(5.0),
+        rss_bytes: 120 * 1024 * 1024,
+    };
+    // never attached: refresh, set_root, open_run and set_external do zero background work
     m.update(cx, |m, cx| {
         m.refresh(cx);
         m.set_root(Some(NodeKey::Thread(ThreadId(1))), cx);
         m.open_run(ThreadId(2), cx);
+        m.set_external_at(
+            NodeKey::Thread(ThreadId(1)),
+            vec![sample_ext.clone()],
+            4_500,
+            cx,
+        );
     });
     settle(cx);
     assert_eq!(rig.source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(builds(cx, &m), 0);
     assert!(!cx.read_entity(&m, |m, _| m.is_watching()));
+    assert!(!cx.read_entity(&m, |m, _| m.is_visible()));
 
-    // shown: one load and the listeners
+    // shown: one load and the listeners (and the external proc appears in the built forest)
     m.update(cx, |m, cx| m.attach(cx));
     settle(cx);
     assert_eq!(rig.source.reads.load(Ordering::SeqCst), 1);
     assert!(cx.read_entity(&m, |m, _| m.is_watching()));
+    assert!(cx.read_entity(&m, |m, _| m.is_visible()));
+    cx.read_entity(&m, |m, _| {
+        assert!(m.forest().index_of(&sample_ext.key()).is_some());
+    });
 
-    // hidden again: no watcher, and changes on disk or in the chat cost nothing
+    // hidden again: no watcher, and changes on disk, chat or external snapshots cost nothing
     m.update(cx, |m, cx| m.detach(cx));
     settle(cx);
     assert!(!cx.read_entity(&m, |m, _| m.is_watching()));
+    assert!(!cx.read_entity(&m, |m, _| m.is_visible()));
     write_run(&rig.runs(), 9, r#"{"run_id":"9","parent_thread_id":1}"#);
     let _ = rig.updates.unbounded_send(ThreadUpdate {
         thread_id: ThreadId(3),
@@ -290,10 +319,17 @@ fn nothing_runs_while_the_map_is_hidden(cx: &mut TestAppContext) {
             ..Changed::default()
         },
     });
+    m.update(cx, |m, cx| {
+        m.set_external_at(NodeKey::Thread(ThreadId(1)), vec![], 9_000, cx);
+    });
     cx.executor().advance_clock(CHAT_DEBOUNCE * 2);
     std::thread::sleep(Duration::from_millis(400));
     settle(cx);
-    assert_eq!(rig.source.reads.load(Ordering::SeqCst), 1, "no reload while hidden");
+    assert_eq!(
+        rig.source.reads.load(Ordering::SeqCst),
+        1,
+        "no reload while hidden"
+    );
     assert_eq!(builds(cx, &m), 1);
 }
 
@@ -395,10 +431,15 @@ fn open_run_focuses_the_session_and_selects_the_node(cx: &mut TestAppContext) {
         assert_eq!(m.selected(), Some(&NodeKey::Thread(ThreadId(11))));
     });
     // and set_root picks the other one
-    m.update(cx, |m, cx| m.set_root(Some(NodeKey::Thread(ThreadId(1))), cx));
+    m.update(cx, |m, cx| {
+        m.set_root(Some(NodeKey::Thread(ThreadId(1))), cx)
+    });
     settle(cx);
     cx.read_entity(&m, |m, _| {
-        assert_eq!(m.forest().nodes[m.root_index().unwrap()].title, "Orquestador");
+        assert_eq!(
+            m.forest().nodes[m.root_index().unwrap()].title,
+            "Orquestador"
+        );
     });
 }
 
@@ -432,7 +473,11 @@ fn the_prompt_is_redacted_and_comes_from_the_registry_first(cx: &mut TestAppCont
         let p = d2.prompt.as_ref().unwrap();
         assert_eq!(p.source, PromptSource::Registry);
         assert!(p.text.starts_with("Revisa los tests"));
-        assert!(!p.text.contains("sk-ant-api03"), "secret leaked: {}", p.text);
+        assert!(
+            !p.text.contains("sk-ant-api03"),
+            "secret leaked: {}",
+            p.text
+        );
         assert!(p.redacted >= 1);
         // no final_prompt: the child's first user message
         let d3 = m.detail(&NodeKey::Thread(ThreadId(3))).unwrap();
@@ -453,6 +498,7 @@ fn dropping_the_last_view_detaches_the_model(cx: &mut TestAppContext) {
     assert_eq!(cx.read_entity(&m, |m, _| m.viewers()), 1);
     assert!(cx.read_entity(&m, |m, _| m.is_watching()));
     drop(view);
+    cx.update(|_| {});
     settle(cx);
     assert_eq!(cx.read_entity(&m, |m, _| m.viewers()), 0);
     assert!(!cx.read_entity(&m, |m, _| m.is_watching()));
@@ -582,16 +628,19 @@ fn the_panel_provider_registers_and_builds(cx: &mut TestAppContext) {
     registry.register(AgentMapPanelProvider::new(m.clone()));
     let provider = registry.get(&PanelId::new(PANEL_ID)).unwrap();
     assert_eq!(provider.id().as_str(), PANEL_ID);
-    assert_eq!(provider.allowed_zones(), &[PanelZone::Main, PanelZone::Right]);
+    assert_eq!(
+        provider.allowed_zones(),
+        &[PanelZone::Main, PanelZone::Right]
+    );
     assert_eq!(registry.for_zone(PanelZone::Right).len(), 1);
     assert!(registry.for_zone(PanelZone::Sidebar).is_empty());
     let (_root, vcx) = testing::open_window(cx, |_, _| gpui::Empty);
     vcx.update(|window, app| {
         let view = provider.build(ctx(WidthClass::Compact), window, app);
         assert!(provider.context_changed(&view, &ctx(WidthClass::Regular), window, app));
+        assert_eq!(m.read(app).viewers(), 1);
     });
     vcx.run_until_parked();
-    assert_eq!(cx.read_entity(&m, |m, _| m.viewers()), 1);
 }
 
 use panel_api::PanelId;
@@ -616,6 +665,7 @@ fn actions_follow_the_state_of_the_node() {
         .unwrap()
     };
     let titles = HashMap::new();
+    let external = HashMap::new();
     let nodes_for = |r: RunInfo| {
         let runs = [r];
         let f = build_forest(&ForestInput {
@@ -624,6 +674,7 @@ fn actions_follow_the_state_of_the_node() {
             wanted: None,
             now_ms: 10,
             tab_titles: &titles,
+            external: &external,
         });
         let i = f.index_of(&NodeKey::Thread(ThreadId(2))).unwrap();
         (f.nodes[i].clone(), f.nodes[f.roots[0]].clone())
@@ -653,6 +704,7 @@ fn limits_are_translated_or_deduced() {
     use crate::tree::{ForestInput, build_forest};
     let threads = vec![record(2, "C", AgentKind::Codex, child_of(1))];
     let titles = HashMap::new();
+    let external = HashMap::new();
     let forest = |r: RunInfo| {
         let runs = [r];
         let f = build_forest(&ForestInput {
@@ -661,6 +713,7 @@ fn limits_are_translated_or_deduced() {
             wanted: None,
             now_ms: 10,
             tab_titles: &titles,
+            external: &external,
         });
         f.nodes[f.index_of(&NodeKey::Thread(ThreadId(2))).unwrap()].clone()
     };
@@ -688,4 +741,224 @@ fn limits_are_translated_or_deduced() {
     let rows = limit_rows(&deduced);
     assert!(rows.contains(&("Permiso".to_string(), "Solo lectura".to_string())));
     assert!(rows.contains(&("Tiempo máximo".to_string(), "1 min".to_string())));
+}
+
+// ---------------------------------------------------------------------------------------------
+// External (non-harness) agent processes
+// ---------------------------------------------------------------------------------------------
+
+fn make_ext(pid: u32, started_ms: i64, cmd: &str) -> ExternalProc {
+    ExternalProc {
+        agent: "agy".into(),
+        pid,
+        cmdline_redacted: cmd.into(),
+        cwd: Some(PathBuf::from("C:/p")),
+        model: Some("gemini-3-pro".into()),
+        effort: Some("medium".into()),
+        started_ms,
+        ended_ms: None,
+        exit_code: None,
+        cpu_pct: Some(12.4),
+        rss_bytes: 180 * 1024 * 1024,
+    }
+}
+
+#[gpui::test]
+fn external_procs_stay_after_exit_redact_secrets_cap_at_200_and_prune_with_parent(
+    cx: &mut TestAppContext,
+) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    m.update(cx, |m, cx| m.attach(cx));
+    settle(cx);
+    let parent = NodeKey::Thread(ThreadId(1));
+
+    // Feed a running external agy containing a secret in its command line.
+    let ext = make_ext(
+        7777,
+        5_000,
+        "agy -p check --token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+    );
+    m.update(cx, |m, cx| {
+        m.set_external_at(parent.clone(), vec![ext.clone()], 6_000, cx);
+    });
+    settle(cx);
+    let b1 = builds(cx, &m);
+    cx.read_entity(&m, |m, _| {
+        let f = m.forest();
+        let idx = f.index_of(&ext.key()).expect("external node in forest");
+        let n = &f.nodes[idx];
+        assert!(matches!(n.kind, NodeKind::External(_)));
+        assert_eq!(n.status, NodeStatus::Running);
+        let e = n.external().unwrap();
+        assert!(!e.cmdline_redacted.contains("sk-ant-api03"));
+        assert!(m.profile_seed(&ext.key()).is_none());
+    });
+
+    // Feeding the exact same snapshot does not trigger a redundant rebuild.
+    m.update(cx, |m, cx| {
+        m.set_external_at(parent.clone(), vec![ext.clone()], 7_000, cx);
+    });
+    settle(cx);
+    assert_eq!(builds(cx, &m), b1, "unchanged snapshot must not rebuild");
+
+    // Process disappears from live snapshot: marked finished and retained under parent.
+    m.update(cx, |m, cx| {
+        m.set_external_at(parent.clone(), vec![], 15_000, cx);
+    });
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        let f = m.forest();
+        let n = &f.nodes[f.index_of(&ext.key()).expect("finished node retained")];
+        assert_eq!(n.status, NodeStatus::Done);
+        assert_eq!(n.finished_ms, Some(15_000));
+        let e = n.external().unwrap();
+        assert_eq!(e.rss_bytes, 0);
+        assert_eq!(e.cpu_pct, None);
+    });
+
+    // Cap at 200 per session.
+    let many: Vec<ExternalProc> = (0..220u32)
+        .map(|i| make_ext(8000 + i, 20_000 + i64::from(i), "agy -p work"))
+        .collect();
+    m.update(cx, |m, cx| {
+        m.set_external_at(parent.clone(), many, 25_000, cx);
+    });
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        assert_eq!(m.external_procs(&parent).len(), MAX_EXTERNAL_PER_SESSION);
+    });
+
+    // When the parent thread disappears from the chat store, its external nodes are pruned.
+    rig.source
+        .threads
+        .lock()
+        .unwrap()
+        .retain(|t| t.id != ThreadId(1));
+    m.update(cx, |m, cx| m.refresh(cx));
+    settle(cx);
+    cx.read_entity(&m, |m, _| {
+        assert!(m.external_procs(&parent).is_empty());
+    });
+}
+
+#[gpui::test]
+fn external_node_renders_in_all_views_and_inspector_emits_events(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let log = events(cx, &m);
+    let (view, vcx) = open_view(cx, &m);
+    let ext = make_ext(4321, 4_000, "agy -p \"revisa auth\" --effort medium");
+    let ext_key = ext.key();
+    m.update(vcx, |m, cx| {
+        m.set_external_at(NodeKey::Thread(ThreadId(1)), vec![ext.clone()], 8_000, cx);
+    });
+    vcx.run_until_parked();
+
+    // Renders in Tree, Graph, and Timeline.
+    assert!(testing::bounds_of(vcx, "agentmap-row-ext-4321-4000").is_some());
+    view.update(vcx, |v, cx| v.set_mode(MapMode::Graph, cx));
+    vcx.run_until_parked();
+    assert!(testing::bounds_of(vcx, "agentmap-node-ext-4321-4000").is_some());
+    view.update(vcx, |v, cx| v.set_mode(MapMode::Timeline, cx));
+    vcx.run_until_parked();
+    assert!(testing::bounds_of(vcx, "agentmap-bar-ext-4321-4000").is_some());
+
+    // Select the external node and open its inspector.
+    testing::click_id(vcx, "agentmap-bar-ext-4321-4000");
+    vcx.run_until_parked();
+    assert_eq!(view.read_with(vcx, |v, cx| v.selected(cx)), Some(ext_key));
+
+    // No Retry, Apply, Cancel, or Duplicate for external nodes.
+    assert!(testing::bounds_of(vcx, "agentmap-act-retry").is_none());
+    assert!(testing::bounds_of(vcx, "agentmap-act-apply").is_none());
+    assert!(testing::bounds_of(vcx, "agentmap-act-cancel").is_none());
+    assert!(testing::bounds_of(vcx, "agentmap-act-profile").is_none());
+
+    // OpenInProcesses and CopyCommand emit immediately.
+    testing::click_id(vcx, "agentmap-act-processes");
+    testing::click_id(vcx, "agentmap-act-copy-cmd");
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            AgentMapEvent::OpenInProcesses(4321),
+            AgentMapEvent::CopyCommand("agy -p \"revisa auth\" --effort medium".into()),
+        ]
+    );
+
+    // StopExternal requires inline confirmation first.
+    testing::click_id(vcx, "agentmap-act-stop-external");
+    assert_eq!(log.borrow().len(), 2, "must ask confirmation before stopping");
+    testing::click_id(vcx, "agentmap-confirm-stop-external-back");
+    assert_eq!(log.borrow().len(), 2);
+    testing::click_id(vcx, "agentmap-act-stop-external");
+    testing::click_id(vcx, "agentmap-confirm-stop-external");
+    assert_eq!(log.borrow()[2], AgentMapEvent::StopExternal(4321));
+}
+
+#[test]
+fn external_inspector_facts_and_available_actions() {
+    use crate::tree::{ForestInput, build_forest};
+
+    let mut running_ext = make_ext(9001, 10_000, "agy -p check --effort medium");
+    running_ext.cpu_pct = Some(3.44);
+    let mut exited_ext = make_ext(9002, 10_000, "");
+    exited_ext.ended_ms = Some(75_000);
+    exited_ext.exit_code = Some(2);
+    exited_ext.cpu_pct = None;
+    exited_ext.rss_bytes = 0;
+
+    let mut external = HashMap::new();
+    external.insert(
+        NodeKey::Tab("t1".into()),
+        vec![running_ext.clone(), exited_ext.clone()],
+    );
+    let titles = HashMap::new();
+    let f = build_forest(&ForestInput {
+        threads: &[],
+        runs: &[],
+        wanted: None,
+        now_ms: 40_000,
+        tab_titles: &titles,
+        external: &external,
+    });
+
+    let run_node = &f.nodes[f.index_of(&running_ext.key()).unwrap()];
+    let av = available(run_node);
+    assert!(av.stop_external && av.open_in_processes && av.copy_command);
+    assert!(
+        !av.retry && !av.apply && !av.cancel && !av.diff && !av.open_thread && !av.duplicate
+    );
+
+    let facts = external_facts(run_node, 40_000);
+    let find = |k: &str| facts.iter().find(|(l, _)| l == k).map(|(_, v)| v.as_str());
+    assert_eq!(find("Agente"), Some("Antigravity"));
+    assert_eq!(find("Modelo"), Some("gemini-3-pro · medio"));
+    assert_eq!(find("PID"), Some("9001"));
+    assert_eq!(find("Estado"), Some("En marcha"));
+    assert_eq!(find("Duración"), Some("30 s"));
+    assert_eq!(find("CPU"), Some("3,4%"));
+    assert_eq!(find("RAM"), Some("180 MB"));
+    assert_eq!(find("Carpeta"), Some("C:/p"));
+    assert_eq!(
+        EXTERNAL_EXPLANATION,
+        "Lanzado fuera de Selachi: sin prompt, límites ni diff. Usa run_agent del MCP selachi para verlos."
+    );
+
+    let done_node = &f.nodes[f.index_of(&exited_ext.key()).unwrap()];
+    let av_done = available(done_node);
+    assert!(!av_done.stop_external, "finished process cannot be stopped");
+    assert!(!av_done.copy_command, "empty cmdline cannot be copied");
+    assert!(av_done.open_in_processes);
+    let done_facts = external_facts(done_node, 90_000);
+    let find_done = |k: &str| {
+        done_facts
+            .iter()
+            .find(|(l, _)| l == k)
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find_done("Estado"), Some("Falló (código 2)"));
+    assert_eq!(find_done("Duración"), Some("1 min 05"));
+    assert_eq!(find_done("CPU"), None);
+    assert_eq!(find_done("RAM"), None);
 }

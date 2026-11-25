@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chat_core::ThreadUpdate;
+use chat_core::{ThreadId, ThreadUpdate};
 use futures::StreamExt as _;
 use gpui::{Context, EventEmitter, Task};
 use store::DirWatcher;
@@ -21,7 +21,7 @@ use store::DirWatcher;
 use crate::events::AgentMapEvent;
 use crate::registry::{ApprovalEntry, read_runs};
 use crate::source::SessionSource;
-use crate::tree::{Forest, ForestInput, NodeKey, build_forest};
+use crate::tree::{ExternalProc, Forest, ForestInput, NodeKey, build_forest, cap_external};
 
 /// Debounce of the registry watcher (the harness writes a record in a few steps).
 pub const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -89,6 +89,11 @@ pub struct AgentMapModel {
     /// The orchestrator the host asked for (always present in the forest).
     wanted: Option<NodeKey>,
     tab_titles: HashMap<String, String>,
+    /// External (non-harness) agent processes fed by the host from `proc_svc` snapshots.
+    external: HashMap<NodeKey, Vec<ExternalProc>>,
+    /// Thread ids previously observed from `SessionSource::threads`, so deleted threads prune their
+    /// external processes automatically.
+    seen_threads: HashSet<ThreadId>,
     viewers: usize,
     watcher: Option<DirWatcher>,
     tasks: Vec<Task<()>>,
@@ -120,6 +125,8 @@ impl AgentMapModel {
             forest: Arc::new(Forest::default()),
             wanted: None,
             tab_titles: HashMap::new(),
+            external: HashMap::new(),
+            seen_threads: HashSet::new(),
             viewers: 0,
             watcher: None,
             tasks: Vec::new(),
@@ -158,6 +165,19 @@ impl AgentMapModel {
         self.viewers
     }
 
+    /// True while at least one view is attached (the host can skip feeding snapshots when false).
+    pub fn is_visible(&self) -> bool {
+        self.viewers > 0
+    }
+
+    /// External (non-harness) agent processes currently retained for `parent`.
+    pub fn external_procs(&self, parent: &NodeKey) -> &[ExternalProc] {
+        self.external
+            .get(parent)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// The registry watcher and the chat stream are alive (true only while a view is attached).
     pub fn is_watching(&self) -> bool {
         self.watcher.is_some() || !self.tasks.is_empty()
@@ -193,6 +213,9 @@ impl AgentMapModel {
     /// The data of "Duplicar como perfil" for `key`.
     pub fn profile_seed(&self, key: &NodeKey) -> Option<ProfileSeed> {
         let n = &self.forest.nodes[self.forest.index_of(key)?];
+        if n.is_external() {
+            return None;
+        }
         let prompt = self
             .details
             .get(key)
@@ -270,6 +293,48 @@ impl AgentMapModel {
         }
     }
 
+    /// Feeds the live external (non-harness) agent processes descending from `parent` (obtained by
+    /// the host from `proc_svc` snapshots). The map never polls on its own.
+    ///
+    /// * Previously-running processes that are no longer in `procs` are marked finished (`ended_ms`)
+    ///   and kept in the map until `parent` is gone (or [`Self::clear_external`] is called).
+    /// * Command lines are defensively passed through `store::redact`.
+    /// * Retained entries per parent are capped at [`crate::MAX_EXTERNAL_PER_SESSION`] (200).
+    /// * While no view is attached (`viewers == 0`), triggers no reload, no disk/DB reads and no
+    ///   timers.
+    pub fn set_external(
+        &mut self,
+        parent: NodeKey,
+        procs: Vec<ExternalProc>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_external_at(parent, procs, store::now_ms(), cx);
+    }
+
+    /// Like [`Self::set_external`] with an explicit timestamp (for deterministic tests).
+    pub fn set_external_at(
+        &mut self,
+        parent: NodeKey,
+        procs: Vec<ExternalProc>,
+        now_ms: i64,
+        cx: &mut Context<Self>,
+    ) {
+        if procs.is_empty() && !self.external.contains_key(&parent) {
+            return;
+        }
+        let entry = self.external.entry(parent).or_default();
+        if merge_external(entry, procs, now_ms) {
+            self.refresh(cx);
+        }
+    }
+
+    /// Drops all retained external agent processes for `parent` (call when a tab/session closes).
+    pub fn clear_external(&mut self, parent: &NodeKey, cx: &mut Context<Self>) {
+        if self.external.remove(parent).is_some() {
+            self.refresh(cx);
+        }
+    }
+
     // ----- lifecycle --------------------------------------------------------------------------
 
     /// A view is shown: start listening (first view) and load.
@@ -288,6 +353,17 @@ impl AgentMapModel {
             self.stop_watching();
             cx.notify();
         }
+    }
+
+    /// The host's [`SessionSource`] can answer now (the chat database opens lazily, after the model
+    /// exists): while a view is attached, listen to its update stream and reload. No-op otherwise.
+    pub fn source_ready(&mut self, cx: &mut Context<Self>) {
+        if self.viewers == 0 {
+            return;
+        }
+        self.stop_watching();
+        self.start_watching(cx);
+        self.refresh(cx);
     }
 
     fn stop_watching(&mut self) {
@@ -369,30 +445,58 @@ impl AgentMapModel {
         let dir = self.runs_dir.clone();
         let wanted = self.wanted.clone();
         let titles = self.tab_titles.clone();
+        let external = self.external.clone();
         self.load_task = Some(cx.spawn(async move |this, cx| {
-            let forest = cx
+            let (forest, live_threads) = cx
                 .background_executor()
                 .spawn(async move {
                     let threads = source.threads();
+                    let live_threads: HashSet<ThreadId> = threads.iter().map(|t| t.id).collect();
                     let runs = read_runs(&dir);
-                    build_forest(&ForestInput {
+                    let forest = build_forest(&ForestInput {
                         threads: &threads,
                         runs: &runs,
                         wanted: wanted.as_ref(),
                         now_ms: store::now_ms(),
                         tab_titles: &titles,
-                    })
+                        external: &external,
+                    });
+                    (forest, live_threads)
                 })
                 .await;
-            this.update(cx, |m, cx| m.loaded_forest(forest, cx)).ok();
+            this.update(cx, |m, cx| m.loaded_forest(forest, live_threads, cx))
+                .ok();
         }));
     }
 
-    fn loaded_forest(&mut self, forest: Forest, cx: &mut Context<Self>) {
+    fn loaded_forest(
+        &mut self,
+        forest: Forest,
+        live_threads: HashSet<ThreadId>,
+        cx: &mut Context<Self>,
+    ) {
         self.loading = false;
         self.load_task = None;
         self.loaded = true;
         self.builds += 1;
+        // Prune external nodes belonging to threads that used to exist and are now gone.
+        let disappeared: Vec<ThreadId> = self
+            .seen_threads
+            .iter()
+            .copied()
+            .filter(|id| !live_threads.contains(id))
+            .collect();
+        let mut pruned = false;
+        for id in disappeared {
+            self.seen_threads.remove(&id);
+            if self.external.remove(&NodeKey::Thread(id)).is_some() {
+                pruned = true;
+            }
+        }
+        self.seen_threads.extend(live_threads);
+        if pruned {
+            self.again = true;
+        }
         // Nodes in flight may have new approvals: read their detail again the next time.
         let live: Vec<NodeKey> = forest
             .nodes
@@ -430,9 +534,11 @@ impl AgentMapModel {
 
     /// Reads the prompt and the approvals of a node off the UI thread (once; see [`Self::detail`]).
     pub fn load_detail(&mut self, key: &NodeKey, cx: &mut Context<Self>) {
-        if self.viewers == 0
-            || self.details.contains_key(key)
-            || self.detail_loading.contains(key)
+        if matches!(key, NodeKey::External { .. }) {
+            // External nodes have no registry prompt or chat approvals: everything is on MapNode.
+            return;
+        }
+        if self.viewers == 0 || self.details.contains_key(key) || self.detail_loading.contains(key)
         {
             return;
         }
@@ -440,7 +546,10 @@ impl AgentMapModel {
             return;
         };
         let node = &self.forest.nodes[idx];
-        let run_prompts = node.run.as_ref().map(|r| (r.final_prompt.clone(), r.prompt.clone()));
+        let run_prompts = node
+            .run
+            .as_ref()
+            .map(|r| (r.final_prompt.clone(), r.prompt.clone()));
         let registry_approvals = node
             .run
             .as_ref()
@@ -448,7 +557,7 @@ impl AgentMapModel {
             .unwrap_or_default();
         let thread_id = match key {
             NodeKey::Thread(id) => Some(*id),
-            NodeKey::Tab(_) => None,
+            NodeKey::Tab(_) | NodeKey::External { .. } => None,
         };
         let source = self.source.clone();
         self.detail_loading.insert(key.clone());
@@ -472,7 +581,8 @@ impl AgentMapModel {
                             redacted: r.count,
                         }
                     });
-                    let mut approvals = thread_id.map(|id| source.approvals(id)).unwrap_or_default();
+                    let mut approvals =
+                        thread_id.map(|id| source.approvals(id)).unwrap_or_default();
                     if approvals.is_empty() {
                         approvals = registry_approvals;
                     }
@@ -487,4 +597,58 @@ impl AgentMapModel {
             .ok();
         }));
     }
+}
+
+/// Pure merge of an incoming snapshot of external procs into the retained list for one parent.
+/// Returns `true` when anything changed.
+fn merge_external(
+    existing: &mut Vec<ExternalProc>,
+    incoming: Vec<ExternalProc>,
+    now_ms: i64,
+) -> bool {
+    let mut sanitized: Vec<ExternalProc> = Vec::with_capacity(incoming.len());
+    let mut incoming_keys: HashSet<(u32, i64)> = HashSet::with_capacity(incoming.len());
+    for mut p in incoming {
+        if !incoming_keys.insert((p.pid, p.started_ms)) {
+            continue;
+        }
+        if !p.cmdline_redacted.is_empty() {
+            p.cmdline_redacted = store::redact(&p.cmdline_redacted).text;
+        }
+        sanitized.push(p);
+    }
+
+    let mut changed = false;
+    for e in existing.iter_mut() {
+        if !incoming_keys.contains(&(e.pid, e.started_ms))
+            && e.ended_ms.is_none()
+            && e.exit_code.is_none()
+        {
+            e.ended_ms = Some(now_ms.max(e.started_ms));
+            e.cpu_pct = None;
+            e.rss_bytes = 0;
+            changed = true;
+        }
+    }
+
+    for p in sanitized {
+        if let Some(e) = existing
+            .iter_mut()
+            .find(|e| e.pid == p.pid && e.started_ms == p.started_ms)
+        {
+            if *e != p {
+                *e = p;
+                changed = true;
+            }
+        } else {
+            existing.push(p);
+            changed = true;
+        }
+    }
+
+    if changed {
+        existing.sort_by_key(|p| (p.started_ms, p.pid));
+        cap_external(existing);
+    }
+    changed
 }

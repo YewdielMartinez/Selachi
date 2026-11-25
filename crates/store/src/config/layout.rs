@@ -38,6 +38,8 @@ pub mod panel_ids {
     pub const FILES: &str = "files";
     pub const USAGE: &str = "usage";
     pub const ATTENTION: &str = "attention";
+    /// The subagent map (`ui_agentmap`).
+    pub const AGENTMAP: &str = "agentmap";
     /// Not a docked panel: the "Revisión" tab (diff with line notes).
     pub const REVIEW: &str = "review";
     /// Not a docked panel: the layout popover.
@@ -45,12 +47,13 @@ pub mod panel_ids {
 }
 
 /// Ids of the buttons the titlebar shows by default in the unified layout, in display order.
-pub const DEFAULT_TITLEBAR_BUTTONS: [&str; 7] = [
+pub const DEFAULT_TITLEBAR_BUTTONS: [&str; 8] = [
     panel_ids::GIT,
     panel_ids::FILES,
     panel_ids::PROCS,
     panel_ids::USAGE,
     panel_ids::REVIEW,
+    panel_ids::AGENTMAP,
     panel_ids::ATTENTION,
     panel_ids::LAYOUT,
 ];

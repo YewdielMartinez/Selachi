@@ -38,6 +38,10 @@ pub struct Services {
     /// The chat hub (`chat.db` + threads). Created by the shell the first time chat is used, so a
     /// session without chat never opens the database.
     pub chat: Rc<RefCell<Option<Entity<ui_chat::ChatHub>>>>,
+    /// The subagent map's model (PLAN section 21.2). It holds no watcher and no task until a map view
+    /// is shown. Its chat source is filled when the chat hub opens (`agentmap_source`).
+    pub agentmap: Entity<ui_agentmap::AgentMapModel>,
+    pub agentmap_source: crate::agentmap_host::LazySource,
     /// Events of the file tree, taken once by the shell.
     pub viewer_events: Rc<RefCell<Option<UnboundedReceiver<ViewerEvent>>>>,
     /// Requests of delegated agents from the approvals pipe, taken once by the shell. `None` in
@@ -67,6 +71,13 @@ impl Services {
         let files = FileTreeProvider::new().on_event(move |ev, _| {
             let _ = tx.unbounded_send(ev.clone());
         });
+        let agentmap_source = crate::agentmap_host::LazySource::default();
+        let runs_dir = crate::app_shell::data_dir()
+            .map(|d| d.join("agent-runs"))
+            .unwrap_or_default();
+        let source: std::sync::Arc<dyn ui_agentmap::SessionSource> =
+            std::sync::Arc::new(agentmap_source.clone());
+        let agentmap = cx.new(|_| ui_agentmap::AgentMapModel::new(source, runs_dir));
         Self {
             tracker,
             procs,
@@ -75,6 +86,8 @@ impl Services {
             usage,
             attention,
             files,
+            agentmap,
+            agentmap_source,
             chat: Rc::new(RefCell::new(None)),
             viewer_events: Rc::new(RefCell::new(Some(rx))),
             approvals_rx: Rc::new(RefCell::new(None)),

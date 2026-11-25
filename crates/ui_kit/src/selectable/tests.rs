@@ -14,11 +14,13 @@ use theme::Theme;
 use super::*;
 use crate::testing;
 
+type Block = (&'static str, Gap, Vec<(Range<usize>, &'static str)>);
+
 struct Demo {
     group: SelectionGroup,
     theme: Theme,
     width: f32,
-    blocks: Vec<(&'static str, Gap, Vec<(Range<usize>, &'static str)>)>,
+    blocks: Vec<Block>,
 }
 
 impl Render for Demo {
@@ -46,8 +48,6 @@ impl Render for Demo {
         )
     }
 }
-
-type Block = (&'static str, Gap, Vec<(Range<usize>, &'static str)>);
 
 fn open(
     cx: &mut TestAppContext,
@@ -133,7 +133,10 @@ fn double_click_selects_a_word_and_triple_click_the_paragraph(cx: &mut TestAppCo
     let (group, cx) = open(
         cx,
         400.0,
-        plain(&[("alpha beta_gamma delta", Gap::Block), ("second", Gap::Block)]),
+        plain(&[
+            ("alpha beta_gamma delta", Gap::Block),
+            ("second", Gap::Block),
+        ]),
     );
     let p = at(&group, 0, 8);
     down(cx, p, 2, Modifiers::none());
@@ -141,7 +144,10 @@ fn double_click_selects_a_word_and_triple_click_the_paragraph(cx: &mut TestAppCo
     assert_eq!(group.selected_text().as_deref(), Some("beta_gamma"));
     down(cx, p, 3, Modifiers::none());
     up(cx, p, 3);
-    assert_eq!(group.selected_text().as_deref(), Some("alpha beta_gamma delta"));
+    assert_eq!(
+        group.selected_text().as_deref(),
+        Some("alpha beta_gamma delta")
+    );
 }
 
 #[gpui::test]
@@ -169,13 +175,20 @@ fn ctrl_c_copies_and_ctrl_a_selects_the_whole_group(cx: &mut TestAppContext) {
     let (group, cx) = open(
         cx,
         400.0,
-        plain(&[("first", Gap::Block), ("second", Gap::Block), ("third", Gap::Line)]),
+        plain(&[
+            ("first", Gap::Block),
+            ("second", Gap::Block),
+            ("third", Gap::Line),
+        ]),
     );
     drag(cx, at(&group, 0, 1), at(&group, 0, 4));
     testing::press(cx, "ctrl-c");
     assert_eq!(clipboard(cx).as_deref(), Some("irs"));
     testing::press(cx, "ctrl-a");
-    assert_eq!(group.selected_text().as_deref(), Some("first\n\nsecond\nthird"));
+    assert_eq!(
+        group.selected_text().as_deref(),
+        Some("first\n\nsecond\nthird")
+    );
     testing::press(cx, "ctrl-c");
     assert_eq!(clipboard(cx).as_deref(), Some("first\n\nsecond\nthird"));
 }
@@ -252,7 +265,9 @@ fn a_click_on_a_link_opens_it_but_a_drag_over_it_selects(cx: &mut TestAppContext
 fn on_copy_replaces_the_clipboard_write(cx: &mut TestAppContext) {
     let (group, cx) = open(cx, 400.0, plain(&[("password=hunter2", Gap::Block)]));
     group.on_copy(|text, _, cx| {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.replace("hunter2", "***")))
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            text.replace("hunter2", "***"),
+        ))
     });
     drag(cx, at(&group, 0, 0), at(&group, 0, 16));
     testing::press(cx, "ctrl-c");
@@ -327,7 +342,10 @@ fn the_selection_paints_one_quad_per_visual_row(cx: &mut TestAppContext) {
     let (group, cx) = open(
         cx,
         80.0,
-        plain(&[("aaaa bbbb cccc dddd eeee ffff", Gap::Block), ("tail", Gap::Block)]),
+        plain(&[
+            ("aaaa bbbb cccc dddd eeee ffff", Gap::Block),
+            ("tail", Gap::Block),
+        ]),
     );
     assert!(group.selection_rects(0).is_empty());
     let b = group.bounds_of(0).unwrap();
@@ -344,4 +362,55 @@ fn the_selection_paints_one_quad_per_visual_row(cx: &mut TestAppContext) {
     // Rows below the last glyph of the first segment carry the line-break stub.
     let last = rects.last().unwrap();
     assert!(last.size.width >= px(4.0));
+}
+
+#[gpui::test]
+fn selectable_text_wraps_inside_shrink_to_fit_flex_bubble(cx: &mut TestAppContext) {
+    testing::init(cx);
+    let group = cx.update(SelectionGroup::new);
+    struct Bubble(SelectionGroup, Theme);
+    impl Render for Bubble {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let text = "Esta es una frase larga dentro de una burbuja alineada a la derecha";
+            let mut segs = Segments::new();
+            let ix = segs.push(text, Gap::Block);
+            self.0.set_segments(segs);
+            div().w(px(200.0)).flex().flex_row().justify_end().child(
+                div()
+                    .max_w(gpui::relative(0.82))
+                    .min_w_0()
+                    .px(px(12.0))
+                    .flex()
+                    .flex_col()
+                    .text_size(px(14.0))
+                    .child(
+                        self.0
+                            .container("bubble", &self.1)
+                            .w_full()
+                            .min_w_0()
+                            .child(SelectableText::new(&self.0, ix, text)),
+                    ),
+            )
+        }
+    }
+    let g = group.clone();
+    let (_v, cx) = testing::open_window(cx, move |_, _| Bubble(g, Theme::dark()));
+    let b = group.bounds_of(0).expect("painted");
+    assert!(
+        b.left() >= px(0.0) && b.right() <= px(200.0),
+        "text escaped 200px container: {b:?}"
+    );
+    assert!(b.size.height > px(30.0), "text should wrap: {b:?}");
+    // Select all and verify every visual row stays within bounds.
+    group.select_all();
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    let rects = group.selection_rects(0);
+    assert!(rects.len() >= 3, "expected >=3 wrapped rows: {rects:?}");
+    for r in &rects {
+        assert!(
+            r.right() <= b.right() + px(1.0),
+            "wrapped row {r:?} exceeded text bounds {b:?}"
+        );
+    }
 }

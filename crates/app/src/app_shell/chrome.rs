@@ -484,6 +484,7 @@ impl AppShell {
     ) {
         match event {
             SidebarEvent::Select(id) => self.select_tab(id, window, cx),
+            SidebarEvent::OpenAgentMap(id) => self.open_agentmap_for_tab(id, cx),
             SidebarEvent::Close(id) => self.request_close(id, window, cx),
             SidebarEvent::NewHere => self.new_tab_here(window, cx),
             SidebarEvent::NewIn(root) => self.new_tab_in(root, window, cx),

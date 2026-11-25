@@ -271,9 +271,11 @@ impl RunInfo {
 
     /// Where the run's changes live: the worktree of the record, else the one of the result.
     pub fn worktree(&self) -> Option<&Path> {
-        self.worktree_path
-            .as_deref()
-            .or_else(|| self.result.as_ref().and_then(|r| r.worktree_path.as_deref()))
+        self.worktree_path.as_deref().or_else(|| {
+            self.result
+                .as_ref()
+                .and_then(|r| r.worktree_path.as_deref())
+        })
     }
 }
 
@@ -364,7 +366,10 @@ mod tests {
         w("3.json", "{broken");
         w("2.cancel", "cancel");
         w("4.json.tmp", r#"{"run_id":"4"}"#);
-        let ids: Vec<_> = read_runs(dir.path()).into_iter().map(|r| r.run_id).collect();
+        let ids: Vec<_> = read_runs(dir.path())
+            .into_iter()
+            .map(|r| r.run_id)
+            .collect();
         assert_eq!(ids, vec!["2", "1"]);
         assert!(read_runs(&dir.path().join("nope")).is_empty());
     }

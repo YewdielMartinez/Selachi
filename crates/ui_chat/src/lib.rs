@@ -32,6 +32,8 @@
 //!     ChatEvent::OpenDiff { path, cwd, .. } => viewer.open_with_diff(cwd.join(path)),
 //!     ChatEvent::RestoreCheckpoint { id, .. } => confirm_then_restore(id),
 //!     ChatEvent::ThreadRemoved(id) => shell.close_tab_of_thread(*id),
+//!     ChatEvent::OpenAgentMap(child) => shell.show_agentmap_on(*child),
+//!     ChatEvent::CopySettingsChanged(s) => shell.save_chat_copy_settings(*s), // `[chat]` in config.toml
 //! }).detach();
 //!
 //! // 5. Keep the list's highlight in step with the front tab.
@@ -69,7 +71,7 @@ mod tests;
 
 pub use chat_view::{ChatView, ChatViewEvent, DraftSpec, READING_WIDTH_XL, ViewMode, XL_FROM};
 pub use composer::{
-    ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode,
+    ButtonMode, Composer, ComposerEvent, ComposerState, Popup, Preview, button_mode, is_image_path,
 };
 pub use hub::{ChatEvent, ChatHub, FilesReady, ModelsReady};
 pub use lineage::{

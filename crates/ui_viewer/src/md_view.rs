@@ -1,7 +1,7 @@
 //! Renders `MdBlock`s with DM Sans (code blocks in Geist Mono, highlighted). Tonal surfaces only:
 //! no divider lines (a rule is three pixel squares, a quote is a tonal card).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use gpui::{
     prelude::*, px, relative,
 };
 use theme::{Radius, Theme};
-use ui_kit::{Icon, icon};
+use ui_kit::{Gap, Icon, Segments, SelectableText, SelectionGroup, icon};
 use viewer_svc::{MdAlign, MdBlock, MdInline, MdListItem, MdTable};
 
 use crate::md_inline::{FlatInline, InlineStyle, flatten, is_openable};
@@ -27,6 +27,12 @@ pub struct MdRender<'a> {
     pub highlights: &'a HashMap<usize, Vec<LineSpans>>,
     next_id: Cell<usize>,
     next_code: Cell<usize>,
+    in_list: Cell<bool>,
+    /// Selection of the document, when its text is selectable.
+    group: Option<SelectionGroup>,
+    /// Text of every selectable segment in document order (the group's copy source).
+    segs: RefCell<Segments>,
+    gap: Cell<Gap>,
 }
 
 impl<'a> MdRender<'a> {
@@ -41,6 +47,35 @@ impl<'a> MdRender<'a> {
             highlights,
             next_id: Cell::new(0),
             next_code: Cell::new(0),
+            in_list: Cell::new(false),
+            group: None,
+            segs: RefCell::new(Segments::new()),
+            gap: Cell::new(Gap::Block),
+        }
+    }
+
+    /// Makes every text run selectable through `group` (call [`Self::finish`] after rendering).
+    pub fn with_group(mut self, group: SelectionGroup) -> Self {
+        self.group = Some(group);
+        self
+    }
+
+    /// Hands the text of the rendered segments to the group (copy source for `Ctrl+C`).
+    pub fn finish(&self) {
+        if let Some(g) = &self.group {
+            g.set_segments(self.segs.take());
+        }
+    }
+
+    fn seg(&self, text: &str) -> Option<usize> {
+        self.group.as_ref()?;
+        let gap = self.gap.replace(Gap::Line);
+        Some(self.segs.borrow_mut().push(text.to_owned(), gap))
+    }
+
+    fn block_start(&self) {
+        if !self.in_list.get() {
+            self.gap.set(Gap::Block);
         }
     }
 
@@ -50,7 +85,6 @@ impl<'a> MdRender<'a> {
         i
     }
 }
-
 /// Ordinals are assigned in document order, depth first; the viewer uses this to know which
 /// code blocks to highlight in the background.
 pub fn code_blocks(blocks: &[MdBlock]) -> Vec<(usize, String, String)> {
@@ -117,6 +151,12 @@ fn inline_styles(
 fn inline_el(inlines: &[MdInline], r: &MdRender<'_>) -> AnyElement {
     let flat = flatten(inlines);
     let styles = inline_styles(&flat, &r.theme);
+    if let (Some(group), Some(seg)) = (&r.group, r.seg(&flat.text)) {
+        return SelectableText::new(group, seg, SharedString::from(flat.text.clone()))
+            .with_highlights(styles)
+            .links(flat.links)
+            .into_any_element();
+    }
     let text = StyledText::new(SharedString::from(flat.text)).with_highlights(styles);
     if flat.links.is_empty() {
         return text.into_any_element();
@@ -144,6 +184,7 @@ fn heading_size(level: u8) -> f32 {
 fn render_block(block: &MdBlock, r: &MdRender<'_>) -> AnyElement {
     let theme = r.theme;
     let c = theme.colors;
+    r.block_start();
     match block {
         MdBlock::Heading { level, inlines } => div()
             .mt(px(if *level <= 2 { 22.0 } else { 14.0 }))
@@ -246,7 +287,16 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
             div()
                 .h(px(19.0))
                 .whitespace_nowrap()
-                .child(StyledText::new(SharedString::from(prepared.text)).with_highlights(styled))
+                .child(match (&r.group, r.seg(&prepared.text)) {
+                    (Some(group), Some(seg)) => {
+                        SelectableText::new(group, seg, SharedString::from(prepared.text))
+                            .with_highlights(styled)
+                            .into_any_element()
+                    }
+                    _ => StyledText::new(SharedString::from(prepared.text))
+                        .with_highlights(styled)
+                        .into_any_element(),
+                })
                 .into_any_element()
         })
         .collect();
@@ -310,26 +360,32 @@ fn list_item(ordered: bool, number: u64, item: &MdListItem, r: &MdRender<'_>) ->
             .child(div().size(px(5.0)).rounded_full().bg(c.outline))
             .into_any_element(),
     };
+    let was = r.in_list.replace(true);
+    let body = render_blocks(&item.blocks, r);
+    r.in_list.set(was);
     div()
         .flex()
         .flex_row()
         .gap(px(8.0))
         .pl(px(6.0))
         .child(marker)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .children(render_blocks(&item.blocks, r)),
-        )
+        .child(div().flex_1().min_w_0().flex().flex_col().children(body))
         .into_any_element()
 }
 
 fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
     let c = r.theme.colors;
-    let cell = |inlines: &[MdInline], align: MdAlign, header: bool| -> AnyElement {
+    let cell = |inlines: &[MdInline],
+                align: MdAlign,
+                header: bool,
+                row: usize,
+                col: usize|
+     -> AnyElement {
+        if col > 0 {
+            r.gap.set(Gap::Tab);
+        } else if row > 0 {
+            r.gap.set(Gap::Line);
+        }
         let d = div()
             .flex_1()
             .min_w_0()
@@ -351,13 +407,13 @@ fn table(t: &MdTable, r: &MdRender<'_>) -> AnyElement {
         t.header
             .iter()
             .enumerate()
-            .map(|(i, h)| cell(h, align(i), true)),
+            .map(|(i, h)| cell(h, align(i), true, 0, i)),
     );
-    let rows = t.rows.iter().map(|row| {
+    let rows = t.rows.iter().enumerate().map(|(ri, row)| {
         div().flex().flex_row().children(
             row.iter()
                 .enumerate()
-                .map(|(i, h)| cell(h, align(i), false)),
+                .map(|(i, h)| cell(h, align(i), false, ri + 1, i)),
         )
     });
     div()

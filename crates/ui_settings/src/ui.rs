@@ -24,10 +24,15 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
     div()
         .flex()
         .flex_col()
+        .w_full()
+        .min_w_0()
         .gap(px(4.0))
         .pb(px(8.0))
         .child(
             div()
+                .block()
+                .w_full()
+                .min_w_0()
                 .text_size(px(ty.ui_size_xl))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c.text)
@@ -35,6 +40,9 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
         )
         .child(
             div()
+                .block()
+                .w_full()
+                .min_w_0()
                 .text_size(px(ty.ui_size_md))
                 .text_color(c.muted)
                 .child(SharedString::from(subtitle.to_string())),
@@ -45,7 +53,7 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
 pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
     let c = theme.colors;
     let ty = theme.typography;
-    let mut wrap = div().flex().flex_col().gap(px(8.0)).w_full();
+    let mut wrap = div().flex().flex_col().gap(px(8.0)).w_full().min_w_0();
     if let Some(t) = title {
         wrap = wrap.child(
             div()
@@ -61,6 +69,7 @@ pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
             .flex()
             .flex_col()
             .w_full()
+            .min_w_0()
             .py(px(6.0))
             .rounded(px(Radius::MD))
             .bg(c.surface_1)
@@ -82,15 +91,19 @@ pub fn group_with_action(
         .flex_col()
         .gap(px(8.0))
         .w_full()
+        .min_w_0()
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .justify_between()
+                .w_full()
+                .min_w_0()
                 .px(px(4.0))
                 .child(
                     div()
+                        .min_w_0()
                         .text_size(px(ty.ui_size_xs))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.muted)
@@ -103,6 +116,7 @@ pub fn group_with_action(
                 .flex()
                 .flex_col()
                 .w_full()
+                .min_w_0()
                 .py(px(6.0))
                 .rounded(px(Radius::MD))
                 .bg(c.surface_1)
@@ -121,7 +135,7 @@ pub fn row(
     control: impl IntoElement,
     error: Option<SharedString>,
 ) -> Div {
-    div().w_full().child(
+    div().flex().flex_col().w_full().min_w_0().child(
         SettingRow::new(theme, title, control)
             .description_opt(desc)
             .error(error)
@@ -135,6 +149,7 @@ pub fn plain_row(content: impl IntoElement) -> Div {
         .flex()
         .flex_col()
         .w_full()
+        .min_w_0()
         .px(px(16.0))
         .py(px(12.0))
         .child(content)
@@ -152,6 +167,7 @@ pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone)
     let mut d = div()
         .flex()
         .flex_row()
+        .flex_none()
         .items_center()
         .gap(px(5.0))
         .h(px(22.0))
@@ -190,6 +206,7 @@ pub fn banner(
         .items_center()
         .gap(px(12.0))
         .w_full()
+        .min_w_0()
         .px(px(16.0))
         .py(px(12.0))
         .rounded(px(Radius::MD))
@@ -204,6 +221,9 @@ pub fn banner(
                 .gap(px(2.0))
                 .child(
                     div()
+                        .block()
+                        .w_full()
+                        .min_w_0()
                         .text_size(px(ty.ui_size_md))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.text)
@@ -211,6 +231,9 @@ pub fn banner(
                 )
                 .child(
                     div()
+                        .block()
+                        .w_full()
+                        .min_w_0()
                         .text_size(px(ty.ui_size_sm))
                         .text_color(c.muted)
                         .child(SharedString::from(body.to_string())),
@@ -236,6 +259,9 @@ pub fn value_label(theme: &Theme, text: impl Into<SharedString>) -> Div {
 pub fn note(theme: &Theme, text: impl Into<SharedString>) -> Div {
     let ty = theme.typography;
     div()
+        .block()
+        .w_full()
+        .min_w_0()
         .px(px(4.0))
         .text_size(px(ty.ui_size_sm))
         .text_color(theme.colors.muted)

@@ -82,12 +82,12 @@ pub use meter::DitherMeter;
 pub use motion::{reduced_motion, set_reduced_motion};
 pub use pill::{Pill, PillSize};
 pub use popover::{Cancel as PopoverCancel, Placement, Popover, SHEET_BELOW_WIDTH};
+pub use rows::{FocusCard, RADIO_CONTEXT, RADIO_ROLE, RadioNext, RadioPrev, RadioRow};
+pub use select::{Select, SelectEvent, SelectOption};
 pub use selectable::{
     Gap, SegmentSource, Segments, SelPos, SelectableText, SelectionGroup, clamp_boundary,
     line_range, word_range,
 };
-pub use rows::{FocusCard, RADIO_CONTEXT, RADIO_ROLE, RadioNext, RadioPrev, RadioRow};
-pub use select::{Select, SelectEvent, SelectOption};
 pub use setting_row::{RowGeometry, SETTING_ROW_GAP, SettingRow};
 pub use surface::{Card, CardTone, SectionLabel, glass_hover, glass_selected, glass_tint};
 pub use text_field::{EnterMode, Nav, TextArea, TextBuf, TextField, TextFieldAlt, TextFieldEvent};

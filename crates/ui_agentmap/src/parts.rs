@@ -14,10 +14,21 @@ pub fn status_color(theme: &Theme, status: NodeStatus) -> Rgba {
         NodeStatus::Running => c.accent,
         NodeStatus::Waiting => c.warning,
         NodeStatus::Done => c.success,
-        NodeStatus::Failed | NodeStatus::TimedOut | NodeStatus::OverBudget | NodeStatus::Refused => {
-            c.error
-        }
+        NodeStatus::Failed
+        | NodeStatus::TimedOut
+        | NodeStatus::OverBudget
+        | NodeStatus::Refused => c.error,
         NodeStatus::Cancelled | NodeStatus::Idle => c.muted,
+    }
+}
+
+/// Muted status color for external nodes (same hue at reduced alpha so they read as secondary).
+pub fn node_status_color(theme: &Theme, node: &MapNode) -> Rgba {
+    let base = status_color(theme, node.status);
+    if node.is_external() {
+        Rgba { a: 0.55, ..base }
+    } else {
+        base
     }
 }
 
@@ -25,18 +36,10 @@ pub fn status_color(theme: &Theme, status: NodeStatus) -> Rgba {
 /// (cancelled).
 pub fn status_mark(theme: &Theme, status: NodeStatus) -> Option<AnyElement> {
     let c = theme.colors;
-    let ty = theme.typography;
     if let Some(g) = status.glyph() {
         return Some(StatusGlyph::new(theme, g).into_any_element());
     }
-    (status == NodeStatus::Cancelled).then(|| {
-        div()
-            .flex_none()
-            .text_size(px(ty.ui_size_xs))
-            .text_color(c.muted)
-            .child(status.label())
-            .into_any_element()
-    })
+    (status == NodeStatus::Cancelled).then(|| icon(Icon::Close, 16.0, c.muted).into_any_element())
 }
 
 /// The leading mark of a node: the agent's, or the terminal icon for a terminal tab.
@@ -96,8 +99,36 @@ pub fn chip(theme: &Theme, text: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
-/// `45 k tokens`-style metrics of a node in display order: duration, tokens, cost, files.
+/// Muted badge marking a process launched directly outside the Selachi harness.
+pub fn external_badge(theme: &Theme) -> AnyElement {
+    let c = theme.colors;
+    let ty = theme.typography;
+    div()
+        .flex_none()
+        .h(px(18.0))
+        .px(px(6.0))
+        .flex()
+        .items_center()
+        .rounded(px(Radius::CHIP))
+        .bg(c.surface_2)
+        .text_size(px(ty.ui_size_xs))
+        .text_color(c.muted)
+        .child("Fuera de Selachi")
+        .into_any_element()
+}
+
+/// Metrics of a node in display order:
+/// * Harness nodes: duration, tokens, cost, files.
+/// * External nodes: duration, CPU %, RAM, none.
 pub fn metrics(node: &MapNode, now_ms: i64) -> [Option<String>; 4] {
+    if let Some(ext) = node.external() {
+        return [
+            node.duration_ms(now_ms).map(fmt::duration_ms),
+            ext.cpu_pct.map(fmt::cpu),
+            (ext.rss_bytes > 0).then(|| fmt::bytes(ext.rss_bytes)),
+            None,
+        ];
+    }
     [
         node.duration_ms(now_ms).map(fmt::duration_ms),
         node.tokens.filter(|t| *t > 0).map(fmt::tokens),

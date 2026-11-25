@@ -56,6 +56,7 @@ dependencies = [
 name = "agents_driver"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "log",
  "parking_lot",
@@ -4466,6 +4467,7 @@ version = "0.0.1"
 dependencies = [
  "futures",
  "log",
+ "store",
  "thiserror 2.0.21",
  "windows 0.61.3",
 ]
@@ -5279,6 +5281,7 @@ dependencies = [
  "term_core",
  "theme",
  "toml 0.8.23",
+ "ui_agentmap",
  "ui_chat",
  "ui_doctor",
  "ui_git",
@@ -6602,6 +6605,7 @@ dependencies = [
  "futures",
  "gpui",
  "ignore",
+ "image",
  "log",
  "panel_api",
  "rusqlite",
@@ -6611,6 +6615,7 @@ dependencies = [
  "theme",
  "ui_kit",
  "viewer_svc",
+ "windows 0.61.3",
 ]
 
 [[package]]

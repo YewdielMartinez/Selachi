@@ -39,22 +39,24 @@ mod tree_ui;
 mod view;
 
 pub use events::AgentMapEvent;
-pub use inspector::{Available, RETRY_AGENTS, available, decision_label, limit_rows, permission_label};
+pub use inspector::{
+    Available, EXTERNAL_EXPLANATION, RETRY_AGENTS, available, decision_label, external_facts,
+    limit_rows, permission_label,
+};
 pub use model::{
     AgentMapModel, CHAT_DEBOUNCE, MapChanged, NodeDetail, ProfileSeed, PromptInfo, PromptSource,
     WATCH_DEBOUNCE,
 };
-pub use registry::{
-    ApprovalEntry, DiffStatInfo, ResultInfo, RunInfo, RunStatus, read_runs,
-};
+pub use registry::{ApprovalEntry, DiffStatInfo, ResultInfo, RunInfo, RunStatus, read_runs};
 pub use source::{ChatStoreSource, SessionSource};
 pub use tree::{
-    Bar, Forest, ForestInput, GraphLayout, MapNode, NodeKey, NodeStatus, Placed, Row, Timeline,
-    Totals, agent_display, agent_id, build_forest, derive_status, graph_layout, timeline,
-    visible_rows,
+    Bar, ExternalProc, Forest, ForestInput, GraphLayout, MAX_EXTERNAL_PER_SESSION, MapNode,
+    NodeKey, NodeKind, NodeStatus, Placed, Row, Timeline, Totals, agent_display, agent_id,
+    build_forest, derive_status, graph_layout, timeline, visible_rows,
 };
 pub use view::{
-    AgentMapPanelProvider, AgentMapView, INSPECTOR_WIDTH, MapMode, PANEL_ID, SPLIT_FROM, thumbnail,
+    AgentMapPanelProvider, AgentMapView, INSPECTOR_WIDTH, MAP_ICON, MapMode, PANEL_ID, SPLIT_FROM,
+    thumbnail,
 };
 
 #[cfg(test)]
