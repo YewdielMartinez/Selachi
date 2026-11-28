@@ -35,5 +35,8 @@ pub use session::{
     DEFAULT_PARENT_PERMISSION, ENV_PARENT_PERMISSION, ENV_PARENT_TAB, JobAttachment, Session,
     SessionConfig, SessionEvent, SpawnOptions, TermError, parent_env,
 };
-pub use shell::{PWSH_INTEGRATION, default_shell, install_pwsh_integration, pwsh_integration_args};
-pub use snapshot::{CellFlags, CellView, Snapshot};
+pub use shell::{
+    PWSH_INTEGRATION, default_shell, install_pwsh_integration, program_exists,
+    pwsh_integration_args,
+};
+pub use snapshot::{CellFlags, CellView, Selected, Snapshot};

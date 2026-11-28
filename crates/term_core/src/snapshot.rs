@@ -40,6 +40,42 @@ pub struct CellView {
     pub flags: CellFlags,
 }
 
+/// The selected region in viewport coordinates (`row` 0 is the top row on screen, so rows above or
+/// below the viewport are negative or `>= rows`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Selected {
+    /// First selected cell `(row, col)`.
+    pub start: (i32, usize),
+    /// Last selected cell `(row, col)`, inclusive.
+    pub end: (i32, usize),
+    /// Rectangular selection.
+    pub block: bool,
+}
+
+impl Selected {
+    /// The selected columns of viewport row `row` (`cols` columns wide), if any.
+    pub fn cols_in(&self, row: usize, cols: usize) -> Option<std::ops::Range<usize>> {
+        let r = i32::try_from(row).ok()?;
+        if r < self.start.0 || r > self.end.0 || cols == 0 {
+            return None;
+        }
+        let (from, to) = if self.block {
+            (self.start.1.min(self.end.1), self.start.1.max(self.end.1))
+        } else {
+            (
+                if r == self.start.0 { self.start.1 } else { 0 },
+                if r == self.end.0 {
+                    self.end.1
+                } else {
+                    cols - 1
+                },
+            )
+        };
+        let to = to.min(cols - 1);
+        (from <= to).then_some(from..to + 1)
+    }
+}
+
 /// A copy of the visible viewport.
 ///
 /// Reuse one instance across frames with [`crate::Session::snapshot_into`]: the row buffers keep
@@ -61,6 +97,8 @@ pub struct Snapshot {
     pub display_offset: usize,
     /// Whether application cursor keys mode (DECCKM) is active.
     pub app_cursor: bool,
+    /// The text selection (see [`crate::Session::selection_start`]), if any.
+    pub selection: Option<Selected>,
 }
 
 /// Mixes `x` into the running hash `h` (multiply-rotate; cheap and good enough for cache keys).
@@ -160,6 +198,16 @@ pub(crate) fn build_snapshot_into<L: EventListener>(
     out.rows = rows;
     out.display_offset = offset;
     out.app_cursor = mode.contains(TermMode::APP_CURSOR);
+    out.selection = term
+        .selection
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.to_range(term))
+        .map(|r| Selected {
+            start: (r.start.line.0 + offset as i32, r.start.column.0),
+            end: (r.end.line.0 + offset as i32, r.end.column.0),
+            block: r.is_block,
+        });
 }
 
 impl Snapshot {
@@ -251,5 +299,52 @@ mod tests {
         assert_eq!(snap.line_text(0), "bye");
         assert_eq!(snap.lines[0].capacity(), cap, "row buffer capacity is kept");
         assert_eq!(snap.row_hash.len(), snap.rows);
+    }
+
+    #[test]
+    fn selection_shows_in_the_snapshot_and_follows_the_viewport() {
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let palette = Palette::default();
+        let mut term = term_with("hello world");
+        let mut snap = Snapshot::default();
+        build_snapshot_into(&term, &palette, &mut snap);
+        assert_eq!(snap.selection, None);
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(0), Column(4)), Side::Right);
+        term.selection = Some(sel);
+        build_snapshot_into(&term, &palette, &mut snap);
+        let sel = snap.selection.expect("selection");
+        assert_eq!((sel.start, sel.end), ((0, 0), (0, 4)));
+        assert_eq!(snap.selection.unwrap().cols_in(0, snap.cols), Some(0..5));
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+        // a click without a drag selects nothing
+        term.selection = Some(Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(2)),
+            Side::Left,
+        ));
+        build_snapshot_into(&term, &palette, &mut snap);
+        assert_eq!(snap.selection, None);
+    }
+
+    #[test]
+    fn selected_columns_per_row() {
+        let sel = Selected {
+            start: (1, 3),
+            end: (3, 2),
+            block: false,
+        };
+        assert_eq!(sel.cols_in(0, 10), None);
+        assert_eq!(sel.cols_in(1, 10), Some(3..10));
+        assert_eq!(sel.cols_in(2, 10), Some(0..10));
+        assert_eq!(sel.cols_in(3, 10), Some(0..3));
+        assert_eq!(sel.cols_in(4, 10), None);
+        let block = Selected { block: true, ..sel };
+        assert_eq!(block.cols_in(2, 10), Some(2..4));
     }
 }

@@ -14,16 +14,22 @@ use chat_core::ThreadId;
 use gpui::{Context, Hsla, IntoElement, SharedString, Window, div, prelude::*, px};
 use panel_api::{PanelId, TabId};
 use theme::Radius;
-use ui_agentmap::{AgentMapEvent, AgentMapModel, ExternalProc, NodeKey, PANEL_ID};
+use ui_agentmap::{
+    AgentMapEvent, AgentMapModel, ExternalProc, MapPlacement, NodeKey, PANEL_ID, PrefsChanged,
+};
 use ui_kit::{Button, Card};
 use ui_review::ReviewSource;
 
 use super::AppShell;
 use super::delegation::data_dir;
+use crate::splits::pane_count;
 use crate::agentmap_feed;
 use crate::agentmap_host::{self, ApplyView};
 use crate::hint::Hint;
 use crate::services::Services;
+
+/// `meta` key of the map's preferences (view, grouping, folds, where it lives).
+const MAP_PREFS_KEY: &str = "agentmap.prefs";
 
 /// Most changed files listed in the apply dialog.
 const MAX_APPLY_LINES: usize = 12;
@@ -66,6 +72,15 @@ impl AppShell {
         let Some(model) = self.agentmap_model(cx) else {
             return;
         };
+        // what the user chose last time (placement, grouping, folded groups...)
+        if let Some(json) = self
+            .session
+            .read(cx)
+            .db()
+            .and_then(|db| db.meta_get(MAP_PREFS_KEY).ok().flatten())
+        {
+            model.update(cx, |m, cx| m.set_prefs_json(&json, cx));
+        }
         self._subs.push(cx.subscribe_in(
             &model,
             window,
@@ -73,6 +88,17 @@ impl AppShell {
                 this.on_agentmap_event(ev.clone(), window, cx)
             },
         ));
+        self._subs
+            .push(cx.subscribe(&model, |this, _, ev: &PrefsChanged, cx| {
+                if let Some(db) = this.session.read(cx).db().cloned() {
+                    let json = ev.0.clone();
+                    cx.background_executor()
+                        .spawn(async move {
+                            let _ = db.meta_set(MAP_PREFS_KEY, &json);
+                        })
+                        .detach();
+                }
+            }));
         // A map view attaching / detaching notifies the model: start or stop the sampling of agent
         // CLIs launched outside the harness (idempotent, so the notifications of the feed itself
         // change nothing).
@@ -105,13 +131,18 @@ impl AppShell {
         let cpu = self.agentmap_feed.cpu.clone();
         self.agentmap_feed.task = Some(cx.spawn(async move |this, cx| {
             loop {
+                // `[delegation] extra_agents` is read every round: a settings change applies at once
+                let Ok(extra) = this.update(cx, |s, _| s.config.delegation.extra_agents.clone())
+                else {
+                    break;
+                };
                 let (t, c) = (tracker.clone(), cpu.clone());
-                let rows = cx
+                let sample = cx
                     .background_executor()
-                    .spawn(async move { agentmap_feed::sample(&t, &c) })
+                    .spawn(async move { agentmap_feed::sample(&t, &c, &extra) })
                     .await;
                 if this
-                    .update(cx, |shell, cx| shell.apply_external_rows(rows, cx))
+                    .update(cx, |shell, cx| shell.apply_sample(sample, cx))
                     .is_err()
                 {
                     break;
@@ -121,6 +152,21 @@ impl AppShell {
                     .await;
             }
         }));
+    }
+
+    /// One sample arrived: the agents of every parent, the processes under each of them and (for the
+    /// ones whose usage is ingested) their tokens and estimated cost.
+    pub(super) fn apply_sample(&mut self, sample: agentmap_feed::Sample, cx: &mut Context<Self>) {
+        let agentmap_feed::Sample { rows, children } = sample;
+        self.apply_external_rows(rows, cx);
+        if let Some(model) = self.agentmap_model(cx) {
+            model.update(cx, |m, cx| {
+                for (key, kids) in children {
+                    m.set_external_children(key, kids, cx);
+                }
+            });
+        }
+        self.sync_external_usage(cx);
     }
 
     /// One sample arrived: hand every parent its external agents (an empty list marks the ones that
@@ -153,6 +199,160 @@ impl AppShell {
             self.agentmap_feed.fed.remove(k);
         }
         self.agentmap_feed.fed.extend(live);
+        self.sync_external_seen(&gone, cx);
+    }
+
+    /// The chat rows and the sidebar follow what the feed saw of each parent (see
+    /// [`agentmap_feed::ExternalSeen`]): `gone` are the parents that left the tracker.
+    fn sync_external_seen(&mut self, gone: &[NodeKey], cx: &mut Context<Self>) {
+        let Some(model) = self.agentmap_model(cx) else {
+            return;
+        };
+        let mut changed = false;
+        for k in gone {
+            changed |= self.agentmap_feed.seen.remove(k).is_some();
+        }
+        let fed: Vec<NodeKey> = self.agentmap_feed.fed.iter().cloned().collect();
+        for k in fed {
+            let Some(seen) = agentmap_feed::seen_of(model.read(cx).external_procs(&k)) else {
+                continue;
+            };
+            if self.agentmap_feed.seen.get(&k) != Some(&seen) {
+                self.agentmap_feed.seen.insert(k, seen);
+                changed = true;
+            }
+        }
+        if changed {
+            self.push_external_notes(cx);
+        }
+    }
+
+    /// Hands the chat hub the notes of the chat threads and repaints the sidebar (its map icon).
+    fn push_external_notes(&mut self, cx: &mut Context<Self>) {
+        let notes: HashMap<ThreadId, ui_chat::ExternalNote> = self
+            .agentmap_feed
+            .seen
+            .iter()
+            .filter_map(|(k, s)| match k {
+                NodeKey::Thread(id) => Some((
+                    *id,
+                    ui_chat::ExternalNote {
+                        agents: s.agents.clone(),
+                        count: s.count,
+                    },
+                )),
+                _ => None,
+            })
+            .collect();
+        if let Some(hub) = self.chat.read(cx).hub() {
+            hub.update(cx, |h, cx| h.set_external_notes(notes, cx));
+        }
+        self.refresh(cx);
+    }
+
+    /// The tabs (chat or terminal) whose session launched agents outside Selachi, as far as the map
+    /// has seen: the sidebar shows the map icon on their rows even without harness delegations.
+    pub(super) fn tabs_with_external_agents(&self, cx: &gpui::App) -> HashSet<TabId> {
+        if self.agentmap_feed.seen.is_empty() {
+            return HashSet::new();
+        }
+        let mut out = HashSet::new();
+        for slot in &self.tabs {
+            let id = slot.handle.id();
+            let key = slot
+                .handle
+                .downcast::<ui_chat::ChatTab>()
+                .and_then(|t| t.read(cx).thread_id())
+                .map_or_else(|| tab_key(id), NodeKey::Thread);
+            if self.agentmap_feed.seen.contains_key(&key) {
+                out.insert(id);
+            }
+        }
+        out
+    }
+
+    /// The folder a parent (chat thread or terminal tab) works in: where an external agent without
+    /// its own `--cwd` ran.
+    fn parent_cwd(&self, parent: &NodeKey, cx: &gpui::App) -> Option<PathBuf> {
+        match parent {
+            NodeKey::Thread(id) => {
+                let hub = self.chat.read(cx).hub()?;
+                let hub = hub.read(cx);
+                let t = hub.thread(*id)?;
+                Some(
+                    t.worktree_path
+                        .clone()
+                        .unwrap_or_else(|| t.project_root.clone()),
+                )
+            }
+            NodeKey::Tab(n) => self
+                .infos(cx)
+                .into_iter()
+                .find(|i| i.id.as_u64().to_string() == *n)
+                .and_then(|i| i.cwd.or(i.project_root)),
+            NodeKey::External { .. } => None,
+        }
+    }
+
+    /// Looks up the tokens and estimated cost of the external agents that have none yet (or whose
+    /// end time changed): one read of the usage database per process, on the background executor,
+    /// never per sample. Only runs from the feed, so never while the map is hidden.
+    fn sync_external_usage(&mut self, cx: &mut Context<Self>) {
+        let (Some(model), Some(db)) = (self.agentmap_model(cx), crate::usage_monitor::db_path())
+        else {
+            return;
+        };
+        let now = chat_core::now_ms();
+        let parents: Vec<NodeKey> = self.agentmap_feed.fed.iter().cloned().collect();
+        let mut jobs: Vec<(NodeKey, String, String, i64, i64)> = Vec::new();
+        for parent in parents {
+            let procs = model.read(cx).external_procs(&parent).to_vec();
+            for p in agentmap_feed::usage_todo(&self.agentmap_feed.usage, &procs) {
+                let Some(cwd) = p.cwd.clone().or_else(|| self.parent_cwd(&parent, cx)) else {
+                    continue;
+                };
+                self.agentmap_feed.usage.insert(p.key(), p.ended_ms);
+                jobs.push((
+                    p.key(),
+                    p.agent.clone(),
+                    cwd.to_string_lossy().into_owned(),
+                    p.started_ms,
+                    p.ended_ms.unwrap_or(now),
+                ));
+            }
+        }
+        if jobs.is_empty() {
+            return;
+        }
+        let job = cx.background_executor().spawn(async move {
+            jobs.into_iter()
+                .map(|(key, agent, cwd, start, end)| {
+                    (
+                        key,
+                        agentmap_feed::lookup_usage(&db, &agent, &cwd, start, end),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let found = job.await;
+            this.update(cx, |shell, cx| {
+                if !shell.agentmap_feed.is_running() {
+                    return;
+                }
+                if let Some(model) = shell.agentmap_model(cx) {
+                    model.update(cx, |m, cx| {
+                        for (key, usage) in found {
+                            if usage.is_some() {
+                                m.set_external_usage(key, usage, cx);
+                            }
+                        }
+                    });
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The external process the map shows for `pid` (searched among the parents that were fed).
@@ -215,14 +415,15 @@ impl AppShell {
             return;
         };
         let (tracker, cpu) = (services.tracker, self.agentmap_feed.cpu.clone());
+        let extra = self.config.delegation.extra_agents.clone();
         let job = cx
             .background_executor()
-            .spawn(async move { agentmap_feed::sample(&tracker, &cpu) });
+            .spawn(async move { agentmap_feed::sample(&tracker, &cpu, &extra) });
         cx.spawn(async move |this, cx| {
-            let rows = job.await;
+            let sample = job.await;
             this.update(cx, |shell, cx| {
                 if shell.agentmap_feed.is_running() {
-                    shell.apply_external_rows(rows, cx);
+                    shell.apply_sample(sample, cx);
                 }
             })
             .ok();
@@ -255,9 +456,116 @@ impl AppShell {
 
     /// Docks the map on the right (or opens it as an overlay when the window is narrow) and makes
     /// sure the chat database is opening: the map reads the threads from it.
+    ///
+    /// Where it opens is the user's last choice (`placement` of the map's preferences): the right
+    /// dock, or a tab of the main zone.
     pub(super) fn show_agentmap(&mut self, cx: &mut Context<Self>) {
         self.chat.update(cx, |c, cx| c.ensure(cx));
         self.sync_agentmap_context(cx);
+        if self.agentmap_placement(cx) == MapPlacement::Tab {
+            self.show_agentmap_tab_soon(cx);
+            return;
+        }
+        if !self.right_panel_active(&panel_id()) {
+            self.toggle_right_panel(panel_id(), cx);
+        }
+    }
+
+    fn agentmap_placement(&self, cx: &gpui::App) -> MapPlacement {
+        self.agentmap_model(cx)
+            .map_or(MapPlacement::Dock, |m| m.read(cx).prefs().placement)
+    }
+
+    /// The tab that hosts the map, if there is one.
+    pub(super) fn agentmap_tab_id(&self) -> Option<TabId> {
+        self.tabs
+            .iter()
+            .find(|t| {
+                t.handle
+                    .downcast::<crate::agentmap_tab::AgentMapTab>()
+                    .is_some()
+            })
+            .map(|t| t.handle.id())
+    }
+
+    /// Opening a tab needs the window; most entry points of the map do not have it at hand, so the
+    /// tab is opened right after (the same turn of the event loop).
+    fn show_agentmap_tab_soon(&mut self, cx: &mut Context<Self>) {
+        let handle = self.host.window;
+        cx.spawn(async move |this, cx| {
+            let _ = cx.update_window(handle, |_, window, cx| {
+                this.update(cx, |s, cx| s.open_agentmap_tab(window, cx)).ok();
+            });
+        })
+        .detach();
+    }
+
+    /// Brings the map tab forward, creating it the first time.
+    pub(super) fn open_agentmap_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.agentmap_tab_id() {
+            self.select_tab(id, window, cx);
+            return;
+        }
+        let class = self.main_class();
+        let ctx = self.main_ctx(class, cx);
+        let Some(provider) = cx
+            .try_global::<panel_api::PanelRegistry>()
+            .and_then(|r| r.get(&panel_id()))
+        else {
+            return;
+        };
+        let content = provider.build(ctx, window, cx);
+        let Ok(view) = content.clone().downcast::<ui_agentmap::AgentMapView>() else {
+            return;
+        };
+        let entity = cx.new(|_| crate::agentmap_tab::AgentMapTab::new(view, content));
+        let handle = panel_api::TabHandle::new(entity);
+        let id = handle.id();
+        self.push_tab(handle, Vec::new(), cx);
+        self.show_new_tab(id, window, cx);
+    }
+
+    /// The map only listens while it is on screen: a map tab that is not in a visible pane detaches.
+    pub(super) fn sync_agentmap_tab_visibility(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.agentmap_tab_id() else {
+            return;
+        };
+        let visible = self
+            .splits
+            .panes
+            .panes()
+            .iter()
+            .take(pane_count(self.eff.layout.splits))
+            .any(|p| *p == Some(id));
+        if let Some(tab) = self
+            .slot(id)
+            .and_then(|s| s.handle.downcast::<crate::agentmap_tab::AgentMapTab>())
+        {
+            tab.update(cx, |t, cx| t.set_visible(visible, cx));
+        }
+        // and the feed of agents launched outside Selachi follows (it runs only while a view is on screen)
+        self.sync_agentmap_feed(cx);
+    }
+
+    /// «Abrir en pestaña»: the map leaves the dock for a tab and stays there next time.
+    fn agentmap_to_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(m) = self.agentmap_model(cx) {
+            m.update(cx, |m, cx| m.update_prefs(|p| p.placement = MapPlacement::Tab, cx));
+        }
+        if self.right_panel_active(&panel_id()) {
+            self.toggle_right_panel(panel_id(), cx);
+        }
+        self.open_agentmap_tab(window, cx);
+    }
+
+    /// «Acoplar a la derecha»: the tab closes and the map goes back to the dock.
+    fn agentmap_to_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(m) = self.agentmap_model(cx) {
+            m.update(cx, |m, cx| m.update_prefs(|p| p.placement = MapPlacement::Dock, cx));
+        }
+        if let Some(id) = self.agentmap_tab_id() {
+            self.close_tab(id, window, cx);
+        }
         if !self.right_panel_active(&panel_id()) {
             self.toggle_right_panel(panel_id(), cx);
         }
@@ -265,7 +573,23 @@ impl AppShell {
 
     /// "Ver en el mapa" of a "Delegó en…" row: the map on the session of that delegated thread,
     /// with its inspector open.
+    /// (The row «Lanzó agy fuera de Selachi» of a parent thread sends its own id: that is not a run, so
+    /// the map opens on that session.)
     pub(super) fn open_agentmap_for_run(&mut self, child: ThreadId, cx: &mut Context<Self>) {
+        let is_run = self
+            .chat
+            .read(cx)
+            .hub()
+            .is_some_and(|h| h.read(cx).delegation_run(child).is_some());
+        if !is_run
+            && self
+                .agentmap_feed
+                .seen
+                .contains_key(&NodeKey::Thread(child))
+        {
+            self.set_agentmap_root(Some(NodeKey::Thread(child)), cx);
+            return;
+        }
         if let Some(model) = self.agentmap_model(cx) {
             model.update(cx, |m, cx| m.open_run(child, cx));
         }
@@ -356,6 +680,8 @@ impl AppShell {
             AgentMapEvent::StopExternal(pid) => self.agentmap_stop_external(pid, cx),
             AgentMapEvent::OpenInProcesses(pid) => self.agentmap_open_in_processes(pid, cx),
             AgentMapEvent::CopyCommand(command) => self.agentmap_copy_command(command, cx),
+            AgentMapEvent::OpenInTab => self.agentmap_to_tab(window, cx),
+            AgentMapEvent::DockRight => self.agentmap_to_dock(window, cx),
         }
     }
 
@@ -390,7 +716,7 @@ impl AppShell {
     }
 
     /// The user already confirmed in the inspector: write the cancel marker the runner watches.
-    fn agentmap_cancel(&mut self, run_id: String, cx: &mut Context<Self>) {
+    pub(super) fn agentmap_cancel(&mut self, run_id: String, cx: &mut Context<Self>) {
         let Some(dir) = data_dir() else {
             return;
         };

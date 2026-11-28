@@ -33,6 +33,8 @@
 //! | `file_edit` | `path` (project-relative, `/`), `added`, `removed` (line counts, approximate when the agent's tool input was truncated); written after the `tool_end` of a successful edit, one per file |
 //! | `approval` | `request` (redacted command, or `tool: detail`), `decision` = `allowed` \| `denied` \| `auto` \| `blocked` \| `always_run` \| `always_profile`, `mode` (`ask` \| `allowlist` \| `auto`, the mode in force when it was asked), `reason` (optional: why it was denied / blocked, or a note) |
 //! | `status` | `status`: `working` \| `waiting` \| `done` \| `error` while the agent runs (the chat thread's status), then exactly one final run status: `done` \| `error` \| `cancelled` \| `timed_out` \| `budget_exceeded` |
+//! | `follow_up` | `reason` = `background` \| `denial`, `text`: the automatic message the harness sent after a turn that ended early (a command still running, or a refused request the agent had not been told about) |
+//! | `follow_up` | `reason` = `background` \| `denial`, `text`: the automatic message the harness sent after a turn that ended early (a command still running, or a refused request the agent had not been told about) |
 //! | `truncated` | `limit_bytes`: written once when the file reached 5 MB |
 //!
 //! Every string goes through `store::redact` before it is written. Readers must ignore unknown
@@ -140,6 +142,12 @@ pub enum EventBody {
     },
     Truncated {
         limit_bytes: u64,
+    },
+    /// The harness sent the agent another message after a turn that ended early (`background`: a
+    /// command was still running; `denial`: a request was refused and the agent was told why).
+    FollowUp {
+        reason: String,
+        text: String,
     },
 }
 
@@ -429,6 +437,16 @@ impl Recorder {
             decision,
             mode: mode.to_string(),
             reason: reason.map(|r| cap(&red(r), 500)),
+        });
+        self.commit();
+    }
+
+    /// The harness is about to send an automatic follow-up (`reason` = `background` | `denial`).
+    pub fn follow_up(&mut self, reason: &str, text: &str) {
+        self.flush_text(true);
+        self.push(EventBody::FollowUp {
+            reason: reason.to_string(),
+            text: cap(&red(text), 1000),
         });
         self.commit();
     }

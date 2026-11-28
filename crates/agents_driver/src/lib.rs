@@ -23,6 +23,7 @@
 
 pub mod acp;
 pub mod antigravity;
+pub mod catalog;
 pub mod claude;
 pub mod coalesce;
 pub mod codex;
@@ -32,6 +33,7 @@ pub mod images;
 mod job;
 pub mod opencode;
 pub mod proc;
+pub mod shell_safety;
 mod types;
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
@@ -71,12 +73,21 @@ pub fn spawn_with(
 /// [`AgentEvent::Models`] (Codex `model/list`, ACP `session/new`) for at most `timeout` and shuts it
 /// down. Blocking: call it from a background thread. Claude Code has no such call (its aliases are
 /// documented), so it returns `Unsupported`. The Antigravity CLI is answered by `agy models` (no session
-/// is opened), falling back to the ACP handshake.
+/// is opened), falling back to the ACP handshake. See [`catalog`] for the cached, per-agent view.
 pub fn probe_models(
     kind: AgentKind,
     cwd: impl Into<std::path::PathBuf>,
     timeout: std::time::Duration,
 ) -> Result<Vec<ModelInfo>> {
+    probe_models_with_current(kind, cwd, timeout).map(|(models, _)| models)
+}
+
+/// [`probe_models`] plus the model the agent says it currently uses (its default), when it says.
+pub fn probe_models_with_current(
+    kind: AgentKind,
+    cwd: impl Into<std::path::PathBuf>,
+    timeout: std::time::Duration,
+) -> Result<(Vec<ModelInfo>, Option<String>)> {
     use futures::StreamExt;
     if kind == AgentKind::ClaudeCode {
         return Err(DriverError::Unsupported(
@@ -86,7 +97,7 @@ pub fn probe_models(
     if let AgentKind::Acp { command } = &kind {
         if is_antigravity(command) {
             if let Ok(models) = antigravity::list_models(timeout) {
-                return Ok(models);
+                return Ok((models, None));
             }
         }
     }
@@ -97,8 +108,8 @@ pub fn probe_models(
         .spawn(move || {
             futures::executor::block_on(async move {
                 while let Some(ev) = rx.next().await {
-                    if let AgentEvent::Models { models, .. } = ev {
-                        let _ = tx.send(models);
+                    if let AgentEvent::Models { models, current } = ev {
+                        let _ = tx.send((models, current));
                         break;
                     }
                 }

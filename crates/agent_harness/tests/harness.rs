@@ -65,9 +65,10 @@ fn worktree_run_end_to_end() {
     // the delegating chat thread
     let parent = {
         let store = ChatStore::open_at(s.data_dir().join("chat.db")).unwrap();
-        let t = store
-            .create_thread(ThreadSpec::new(&repo, AgentKind::ClaudeCode))
-            .unwrap();
+        // the parent's own permission counts: the delegation is capped by what the thread has now
+        let mut spec = ThreadSpec::new(&repo, AgentKind::ClaudeCode);
+        spec.permission = PermissionMode::AcceptEdits;
+        let t = store.create_thread(spec).unwrap();
         store.flush().unwrap();
         t
     };

@@ -973,3 +973,155 @@ async fn the_panel_paints_in_every_width_and_zone_and_switches_to_compact(cx: &m
     assert!(!model.read_with(vcx, |m, _| m.is_visible()));
     assert_eq!(src.calls(), 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// `[agents] usage_week_start` and `[agents] show_estimates`
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn the_week_range_starts_on_the_configured_day() {
+    use chrono::{Datelike as _, Duration as ChronoDuration};
+
+    // One event at noon yesterday (local time).
+    let today = Local::now().date_naive();
+    let yesterday = today - ChronoDuration::days(1);
+    let noon = Local
+        .from_local_datetime(&yesterday.and_hms_opt(12, 0, 0).unwrap())
+        .earliest()
+        .unwrap();
+    let store = Store::open_in_memory().unwrap();
+    store
+        .upsert_usage(&event(
+            Agent::Claude,
+            "w1",
+            noon.timestamp_millis(),
+            tok(1_000, 500),
+            Some("main"),
+            "C:/p/selachi",
+        ))
+        .unwrap();
+    let source = crate::source::StoreSource::shared(Arc::new(std::sync::Mutex::new(store)));
+    let week = UsageQuery {
+        range: UsageRange::Week,
+        ..UsageQuery::default()
+    };
+
+    // The week begins today: yesterday is last week.
+    crate::source::UsageSource::set_week_start(&source, today.weekday());
+    let snap = crate::source::UsageSource::load(&source, &week).unwrap();
+    assert_eq!(
+        snap.total_billable(),
+        0,
+        "yesterday is not in a week that began today"
+    );
+
+    // The week began yesterday: the event counts.
+    crate::source::UsageSource::set_week_start(&source, yesterday.weekday());
+    let snap = crate::source::UsageSource::load(&source, &week).unwrap();
+    assert_eq!(snap.total_billable(), 1_500);
+}
+
+struct WeekRecorder(std::sync::Mutex<Vec<chrono::Weekday>>);
+
+impl crate::source::UsageSource for WeekRecorder {
+    fn load(&self, query: &UsageQuery) -> Result<UsageSnapshot, String> {
+        Ok(UsageSnapshot {
+            query: query.clone(),
+            ..UsageSnapshot::default()
+        })
+    }
+    fn set_week_start(&self, week_start: chrono::Weekday) {
+        self.0.lock().unwrap().push(week_start);
+    }
+}
+
+#[gpui::test]
+async fn the_model_hands_the_week_start_to_its_source_and_requeries(cx: &mut TestAppContext) {
+    let rec = Arc::new(WeekRecorder(Default::default()));
+    let r = rec.clone();
+    let model = cx.new(move |_| UsageModel::with_source(r));
+    model.update(cx, |m, cx| {
+        m.set_visible(true, cx);
+        m.set_week_start(chrono::Weekday::Sun, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(*rec.0.lock().unwrap(), vec![chrono::Weekday::Sun]);
+    let q = model.read_with(cx, |m, _| m.queries_started());
+    // the same value again is a no-op
+    model.update(cx, |m, cx| m.set_week_start(chrono::Weekday::Sun, cx));
+    cx.run_until_parked();
+    assert_eq!(model.read_with(cx, |m, _| m.queries_started()), q);
+    // a different day re-queries
+    model.update(cx, |m, cx| m.set_week_start(chrono::Weekday::Wed, cx));
+    cx.run_until_parked();
+    assert_eq!(model.read_with(cx, |m, _| m.queries_started()), q + 1);
+    // a source set afterwards gets the configured day at once
+    let rec2 = Arc::new(WeekRecorder(Default::default()));
+    let r2 = rec2.clone();
+    model.update(cx, |m, cx| m.set_source(r2, cx));
+    assert_eq!(*rec2.0.lock().unwrap(), vec![chrono::Weekday::Wed]);
+}
+
+#[test]
+fn estimated_figures_hide_when_show_estimates_is_off_but_reported_ones_stay() {
+    let estimated = CostInfo {
+        usd: Some(2.0),
+        complete: true,
+        kind: CostKind::Estimated,
+    };
+    let reported = CostInfo {
+        usd: Some(0.8),
+        complete: true,
+        kind: CostKind::Reported("opencode".into()),
+    };
+    let mixed = CostInfo {
+        usd: Some(0.8),
+        complete: true,
+        kind: CostKind::Mixed("opencode".into()),
+    };
+    assert_eq!(
+        cost_label_if(&estimated, true).as_deref(),
+        Some("$2.00 · estimado")
+    );
+    assert_eq!(cost_label_if(&estimated, false), None);
+    assert_eq!(cost_label_if(&mixed, false), None);
+    assert_eq!(
+        cost_label_if(&reported, false).as_deref(),
+        Some("$0.80 · reportado por opencode")
+    );
+    // branch costs are always estimates
+    assert_eq!(
+        branch_cost_if(Some(1.0), true, true).as_deref(),
+        Some("$1.00")
+    );
+    assert_eq!(branch_cost_if(Some(1.0), true, false), None);
+
+    // the agent card tooltip loses its cost line
+    let totals = aggregate_agents(&[usage_row(Agent::Claude, "a", 1, Some(1.0))], &[]);
+    assert!(breakdown_tooltip_if(&totals[0], true).contains("estimado"));
+    assert!(!breakdown_tooltip_if(&totals[0], false).contains("estimado"));
+}
+
+#[gpui::test]
+async fn show_estimates_is_a_model_setting_that_repaints_the_panel(cx: &mut TestAppContext) {
+    let (model, _src) = new_model(cx);
+    assert!(model.read_with(cx, |m, _| m.show_estimates()));
+    let notified = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n = notified.clone();
+    let _sub = cx.update(|cx| {
+        cx.observe(&model, move |_, _| {
+            n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })
+    });
+    model.update(cx, |m, cx| m.set_show_estimates(false, cx));
+    cx.run_until_parked();
+    assert!(!model.read_with(cx, |m, _| m.show_estimates()));
+    assert_eq!(notified.load(std::sync::atomic::Ordering::SeqCst), 1);
+    model.update(cx, |m, cx| m.set_show_estimates(false, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        notified.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "no change, no repaint"
+    );
+}

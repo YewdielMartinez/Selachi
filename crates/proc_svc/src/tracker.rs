@@ -267,6 +267,21 @@ impl Tracker {
         self.owners.remove(&owner).map(|e| e.job)
     }
 
+    /// Takes `owner` out of the tracker so its job can be terminated **without holding the
+    /// tracker's lock** (a graceful stop waits for seconds). Only that owner's job (or, for a
+    /// tree-only owner, its remembered tree) is ever affected: nothing else is reachable through
+    /// the returned handle. Hand it back with [`Tracker::reattach`] when the stop failed, so the
+    /// leftovers stay attributed. `None` for an unknown owner.
+    pub fn detach_for_stop(&mut self, owner: OwnerId) -> Option<DetachedOwner> {
+        let entry = self.owners.remove(&owner)?;
+        Some(DetachedOwner { owner, entry })
+    }
+
+    /// Puts an owner taken by [`Tracker::detach_for_stop`] back.
+    pub fn reattach(&mut self, d: DetachedOwner) {
+        self.owners.insert(d.owner, d.entry);
+    }
+
     /// Registers `pid` as a root of `owner` (the shell / agent process). The
     /// process start time is recorded so a reused pid is not mistaken for it.
     /// The process should already be in the job (see [`Tracker::spawn`]).
@@ -513,6 +528,34 @@ impl Tracker {
             }
         }
         Ok(total)
+    }
+}
+
+/// An owner taken out of a [`Tracker`] to be stopped (see [`Tracker::detach_for_stop`]).
+pub struct DetachedOwner {
+    owner: OwnerId,
+    entry: Entry,
+}
+
+impl DetachedOwner {
+    pub fn owner(&self) -> OwnerId {
+        self.owner
+    }
+
+    pub fn label(&self) -> &str {
+        &self.entry.meta.label
+    }
+
+    /// Live processes of the owner's job right now.
+    pub fn live_members(&self) -> Vec<u32> {
+        self.entry.job.members()
+    }
+
+    /// Terminates what is in the owner's job: the polite request first, the force after
+    /// `opts.grace`. Safety checks (system processes, other users) apply as everywhere.
+    /// Blocking: call it off the UI thread.
+    pub fn terminate(&self, opts: &TerminateOptions) -> Result<TerminateOutcome> {
+        terminate_job_with(&self.entry.job, opts)
     }
 }
 

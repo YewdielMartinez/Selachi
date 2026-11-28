@@ -43,6 +43,11 @@ pub fn is_within(path: &Path, root: &Path) -> bool {
     p.len() >= r.len() && p[..r.len()] == r[..]
 }
 
+/// Both paths are the same folder (separator- and, on Windows, case-insensitive).
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    is_within(a, b) && is_within(b, a)
+}
+
 /// `C:\Users\me\src` -> `~\src` when `home` is `C:\Users\me`; otherwise the plain path.
 pub fn tilde(path: &Path, home: Option<&Path>) -> String {
     if let Some(home) = home {

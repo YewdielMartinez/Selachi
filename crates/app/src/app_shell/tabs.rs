@@ -2,6 +2,8 @@
 //! session (what is saved and how it is restored).
 
 use super::*;
+use crate::paths::same_path;
+use crate::projects::Known;
 use crate::session::SavedTab;
 use crate::terminal_tab::TermRequest;
 
@@ -289,7 +291,7 @@ impl AppShell {
 
     /// "+": a new terminal in the active tab's directory.
     pub fn new_tab_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let cwd = self.active_cwd(cx);
+        let cwd = self.new_terminal_cwd(cx);
         self.open_tab(cwd, window, cx);
     }
 
@@ -337,12 +339,15 @@ impl AppShell {
             t.reveal_active(cx);
         });
         self.after_active_changed(window, cx);
+        // Bringing a tab forward makes its project the selected one.
+        self.sync_selection_to_active(cx);
     }
 
     pub(super) fn focus_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.splits.panes.focused() != pane {
             self.splits.panes.focus_pane(pane);
             self.after_active_changed(window, cx);
+            self.sync_selection_to_active(cx);
         }
     }
 
@@ -365,6 +370,8 @@ impl AppShell {
         if let Some(slot) = self.active_id().and_then(|id| self.slot(id)) {
             slot.handle.focus(window, cx);
         }
+        // a map tab only listens while it is on screen
+        self.sync_agentmap_tab_visibility(cx);
         self.refresh(cx);
     }
 
@@ -470,6 +477,8 @@ impl AppShell {
             let _ = db.mark_project_opened(&root.to_string_lossy());
         }
         self.spaces.folded.remove(&root);
+        // A tab opened in a project makes it the destination of the next ones.
+        self.set_selected(Some(root.clone()), cx);
         self.open_tab(Some(root), window, cx);
     }
 
@@ -482,9 +491,9 @@ impl AppShell {
             let list = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut out: Vec<(PathBuf, String)> = Vec::new();
+                    let mut out: Vec<Known> = Vec::new();
                     for f in db.favorites().unwrap_or_default() {
-                        out.push((PathBuf::from(f.path), f.label));
+                        out.push(Known::new(PathBuf::from(f.path), f.label, true));
                     }
                     let mut recent: Vec<_> = db
                         .projects()
@@ -494,7 +503,10 @@ impl AppShell {
                         .collect();
                     recent.sort_by_key(|p| std::cmp::Reverse(p.last_opened));
                     for p in recent.into_iter().take(crate::spaces::MAX_CLOSED_SPACES) {
-                        out.push((PathBuf::from(p.path), p.name));
+                        let path = PathBuf::from(p.path);
+                        if !out.iter().any(|k| same_path(&k.path, &path)) {
+                            out.push(Known::new(path, p.name, false));
+                        }
                     }
                     out
                 })
@@ -503,6 +515,7 @@ impl AppShell {
                 if shell.spaces.known != list {
                     shell.spaces.known = list;
                     shell.sync_chat_projects(cx);
+                    shell.refresh_missing(cx);
                     shell.refresh(cx);
                 }
             })
@@ -519,18 +532,6 @@ impl AppShell {
     ) {
         for f in crate::drop::split_for_viewer(paths).files {
             self.open_viewer(f, None, false, None, window, cx);
-        }
-    }
-
-    /// A folder dropped on a space row of the sidebar: a new terminal tab in it.
-    pub(crate) fn drop_on_space(
-        &mut self,
-        paths: &[PathBuf],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(dir) = crate::drop::folder_to_open(paths) {
-            self.new_tab_in(dir, window, cx);
         }
     }
 }

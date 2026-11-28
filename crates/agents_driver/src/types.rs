@@ -123,6 +123,10 @@ pub struct ThreadConfig {
     pub resume_session: Option<String>,
     /// Extra CLI args appended verbatim (Claude: after our flags; Codex: after `app-server`).
     pub extra_args: Vec<String>,
+    /// Environment of the agent process, on top of the inherited one: `(name, Some(value))` sets,
+    /// `(name, None)` removes (a stale value inherited from the host must not reach the agent).
+    #[serde(default)]
+    pub env: Vec<(String, Option<String>)>,
 }
 
 impl ThreadConfig {
@@ -134,6 +138,7 @@ impl ThreadConfig {
             permission_mode: PermissionMode::default(),
             resume_session: None,
             extra_args: Vec::new(),
+            env: Vec::new(),
         }
     }
 }
@@ -236,6 +241,25 @@ pub enum AgentEvent {
     Models {
         models: Vec<ModelInfo>,
         current: Option<String>,
+    },
+    /// The driver answered a request of the agent by itself and refused it: the permission mode
+    /// (read-only never runs a command that is not a plain inspection, never edits) or a credentials
+    /// file. Nothing was asked of the user. Shown, logged and counted by the host, so a refusal never
+    /// goes unnoticed.
+    PolicyDenied {
+        /// The agent's label for the request (`bash`, `write_text_file`...).
+        tool: String,
+        /// What was asked: the command line or the path.
+        command: String,
+        /// Spanish sentence that starts with the cause (`solo lectura: ...`).
+        reason: String,
+        /// A hard block (credentials), not just "this mode does not do that".
+        blocked: bool,
+    },
+    /// A turn ended for a reason other than a normal end: the ACP `stopReason` `cancelled` (when we
+    /// did not ask for it), `max_tokens` or `max_turn_requests`. Sent right before `Status(Done)`.
+    TurnEnded {
+        stop_reason: String,
     },
     /// The agent process exited (stream closed).
     Exited {

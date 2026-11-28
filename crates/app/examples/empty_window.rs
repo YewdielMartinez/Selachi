@@ -45,6 +45,20 @@ mod mem;
 mod status_bar {
     pub const STATUS_H: f32 = 0.0;
 }
+// The real shortcuts come from `[keybindings]`; the baseline only needs the default block keys.
+mod keybindings {
+    pub fn block_direction(ks: &gpui::Keystroke, _cx: &gpui::App) -> Option<i32> {
+        let m = ks.modifiers;
+        if !m.control || m.alt || m.shift || m.platform {
+            return None;
+        }
+        match ks.key.as_str() {
+            "up" => Some(-1),
+            "down" => Some(1),
+            _ => None,
+        }
+    }
+}
 #[path = "../src/terminal_element.rs"]
 #[allow(dead_code)]
 mod terminal_element;

@@ -6,6 +6,7 @@
 mod adapt;
 mod agentmap_feed;
 mod agentmap_host;
+mod agentmap_tab;
 mod agents;
 mod app_shell;
 mod approval_queue;
@@ -21,12 +22,14 @@ mod git_monitor;
 mod git_panel;
 mod grouping;
 mod hint;
+mod keybindings;
 mod layout_host;
 mod links;
 mod mem;
 mod notify;
 mod palette;
 mod paths;
+mod projects;
 mod rail;
 mod repaint;
 mod services;
@@ -53,18 +56,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, KeyBinding, Size, TitlebarOptions, WindowBounds, WindowOptions,
-    prelude::*, px, size,
+    App, Application, Bounds, Size, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px,
+    size,
 };
 use panel_api::PanelRegistry;
 use store::{Config, ConfigWatcher, StateDb};
 
-use crate::app_shell::{
-    AppShell, CancelClose, CancelOverlay, CloseTab, ConfigBoot, ConfirmClose, FocusSidebar,
-    FocusTerminal, Jump1, Jump2, Jump3, Jump4, Jump5, Jump6, Jump7, Jump8, Jump9, NewTab,
-    NewTerminalTab, NextAttention, NextTab, NextZone, OpenSettings, PrevTab, PrevZone, SessionBoot,
-    ToggleFullscreen, ToggleLayoutPanel, ToggleSidebar, ToggleTheme,
-};
+use crate::app_shell::{AppShell, ConfigBoot, SessionBoot};
 use crate::git_panel::ContextPanelProvider;
 use crate::services::Services;
 
@@ -163,43 +161,6 @@ fn start_approvals(cx: &mut App) {
     }
 }
 
-fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
-        KeyBinding::new("ctrl-shift-n", NewTerminalTab, None),
-        KeyBinding::new("ctrl-n", NewTab, None),
-        KeyBinding::new("ctrl-b", ToggleSidebar, None),
-        KeyBinding::new("ctrl-,", OpenSettings, None),
-        KeyBinding::new("ctrl-w", CloseTab, None),
-        KeyBinding::new("ctrl-tab", NextTab, None),
-        KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-        KeyBinding::new("ctrl-shift-l", ToggleLayoutPanel, None),
-        KeyBinding::new("f11", ToggleFullscreen, None),
-        KeyBinding::new("ctrl-shift-a", NextAttention, None),
-        KeyBinding::new("ctrl-1", Jump1, None),
-        KeyBinding::new("ctrl-2", Jump2, None),
-        KeyBinding::new("ctrl-3", Jump3, None),
-        KeyBinding::new("ctrl-4", Jump4, None),
-        KeyBinding::new("ctrl-5", Jump5, None),
-        KeyBinding::new("ctrl-6", Jump6, None),
-        KeyBinding::new("ctrl-7", Jump7, None),
-        KeyBinding::new("ctrl-8", Jump8, None),
-        KeyBinding::new("ctrl-9", Jump9, None),
-        // Keyboard between zones: F6 cycles sidebar, terminal and right panel.
-        KeyBinding::new("f6", NextZone, None),
-        KeyBinding::new("shift-f6", PrevZone, None),
-        KeyBinding::new("ctrl-shift-e", FocusSidebar, None),
-        KeyBinding::new("ctrl-shift-`", FocusTerminal, None),
-        // A focused sidebar row closes its tab (asks first when it is running).
-        KeyBinding::new("delete", sidebar_view::CloseFocusedRow, Some("SidebarRow")),
-        // The close prompt: Enter confirms, Esc cancels.
-        KeyBinding::new("enter", ConfirmClose, Some("CloseConfirm")),
-        KeyBinding::new("escape", CancelClose, Some("CloseConfirm")),
-        // Drawers / overlays of the narrow layouts close with Esc.
-        KeyBinding::new("escape", CancelOverlay, Some("Drawer")),
-    ]);
-}
-
 fn main() {
     // `selachi agent ...` and `selachi mcp` are the harness CLI: no window, no GUI state.
     let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -229,9 +190,10 @@ fn main() {
             if let Err(e) = cx.text_system().add_fonts(theme::fonts::embedded()) {
                 log::error!("failed to register embedded fonts: {e}");
             }
+            app_shell::register_installed_fonts(cx);
 
             ui_kit::init(cx);
-            bind_keys(cx);
+            keybindings::bind_static(cx);
             ui_git::init(cx);
             ui_viewer::bind_keys(cx);
             ui_review::init(cx);
@@ -242,7 +204,6 @@ fn main() {
             // The layout popover's content: the real `ui_layout` panel.
             ui_layout::init(cx);
             ui_palette::init(cx);
-            ui_palette::bind_toggle_key(cx);
             layout_host::register_layout_panel_host(cx, layout_host::ui_layout_host);
 
             cx.on_window_closed(|cx| {
@@ -253,7 +214,9 @@ fn main() {
             .detach();
 
             let boot = boot_config(start_dir);
-            let theme = crate::app_shell::theme_for(&boot.config);
+            // Ctrl+K included: the palette's key goes through the same keymap as the rest.
+            keybindings::install(cx, &boot.config.keybindings);
+            let theme = crate::app_shell::theme_for(&boot.config, cx.window_appearance());
             let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
             let opened = cx.open_window(
                 WindowOptions {

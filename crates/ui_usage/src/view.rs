@@ -19,8 +19,8 @@ use ui_kit::{
 use crate::chart::{bar_chart, slot_tone};
 use crate::data::{
     AGENT_ORDER, AgentTotals, LimitState, LimitWindow, UsageRange, UsageSnapshot, agent_mark,
-    agent_name, breakdown_tooltip, cost_label, cost_short, forecast_lines, freshness_label,
-    limit_agents, limit_state, local_now, now_ms, reset_label,
+    agent_name, branch_cost_if, breakdown_tooltip_if, cost_label_if, forecast_lines,
+    freshness_label, limit_agents, limit_state, local_now, now_ms, reset_label,
 };
 use crate::fmt::{compact_tokens, events_label};
 use crate::model::UsageModel;
@@ -234,7 +234,7 @@ fn headline(theme: &Theme, snap: &UsageSnapshot, range: UsageRange) -> AnyElemen
         .into_any_element()
 }
 
-fn agent_card(theme: &Theme, t: &AgentTotals) -> AnyElement {
+fn agent_card(theme: &Theme, t: &AgentTotals, show_estimates: bool) -> AnyElement {
     let c = theme.colors;
     let ty = theme.typography;
     div()
@@ -242,7 +242,10 @@ fn agent_card(theme: &Theme, t: &AgentTotals) -> AnyElement {
             "usage-agent-{}",
             t.agent.as_str()
         )))
-        .tooltip(Tooltip::text(theme, breakdown_tooltip(t)))
+        .tooltip(Tooltip::text(
+            theme,
+            breakdown_tooltip_if(t, show_estimates),
+        ))
         .child(
             card(theme)
                 .child(
@@ -280,7 +283,10 @@ fn agent_card(theme: &Theme, t: &AgentTotals) -> AnyElement {
                             ty.ui_size_sm,
                             format!("tokens facturables · {}", events_label(t.events)),
                         ))
-                        .child(muted_text(theme, ty.ui_size_sm, cost_label(&t.cost))),
+                        .children(
+                            cost_label_if(&t.cost, show_estimates)
+                                .map(|l| muted_text(theme, ty.ui_size_sm, l)),
+                        ),
                 ),
         )
         .into_any_element()
@@ -484,6 +490,7 @@ fn branches_block(
     theme: &Theme,
     snap: &UsageSnapshot,
     expanded: bool,
+    show_estimates: bool,
     toggle: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let ty = theme.typography;
@@ -535,9 +542,12 @@ fn branches_block(
                     compact_tokens(billable),
                     events_label(b.events)
                 ))
-                .meta(cost_short(b.est_cost_usd, b.cost_complete)),
+                .when_some(
+                    branch_cost_if(b.est_cost_usd, b.cost_complete, show_estimates),
+                    |r, cost| r.meta(cost),
+                ),
             );
-        if partial {
+        if partial && show_estimates {
             row = row.tooltip(Tooltip::text(
                 theme,
                 "Coste parcial: falta el precio de algún modelo usado en esta rama (estimado)",
@@ -643,13 +653,14 @@ impl Render for UsagePanel {
         let compact = self.is_compact();
         let wide = !compact && matches!(self.ctx.zone, PanelZone::Main | PanelZone::Bottom);
         let pad = if compact { 12.0 } else { 16.0 };
-        let (range, snap, error, has_source) = {
+        let (range, snap, error, has_source, show_estimates) = {
             let m = self.model.read(cx);
             (
                 m.range(),
                 m.snapshot().cloned(),
                 m.error().cloned(),
                 m.has_source(),
+                m.show_estimates(),
             )
         };
         let model = self.model.clone();
@@ -701,19 +712,31 @@ impl Render for UsagePanel {
                 // The snapshot's range, not the selector's, labels the numbers until the new one lands.
                 left.push(headline(&theme, snap, snap.query.range));
                 if !compact {
-                    left.extend(snap.agents.iter().map(|t| agent_card(&theme, t)));
+                    left.extend(
+                        snap.agents
+                            .iter()
+                            .map(|t| agent_card(&theme, t, show_estimates)),
+                    );
                 }
                 left.extend(limits_block(&theme, snap, now, compact));
                 if !compact {
-                    left.extend(forecast_block(&theme, snap));
+                    // The forecast is always an extrapolation ("estimado").
+                    if show_estimates {
+                        left.extend(forecast_block(&theme, snap));
+                    }
                     let toggle_view = view;
-                    let branches =
-                        branches_block(&theme, snap, self.branches_expanded, move |_, cx| {
+                    let branches = branches_block(
+                        &theme,
+                        snap,
+                        self.branches_expanded,
+                        show_estimates,
+                        move |_, cx| {
                             toggle_view.update(cx, |p, cx| {
                                 p.branches_expanded = !p.branches_expanded;
                                 cx.notify();
                             });
-                        });
+                        },
+                    );
                     right.push(branches);
                     right.extend(chart_block(&theme, snap, wide));
                     if let Some(e) = &error {

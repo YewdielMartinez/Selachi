@@ -6,10 +6,12 @@
 //! only calls it on gpui's background executor.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use agents_svc::{Range, Store};
+use chrono::Weekday;
 
 use crate::data::{
     AGENT_ORDER, CHART_DAYS, DayUsage, LIMIT_AGENTS, LimitWindow, UsageQuery, UsageRange,
@@ -21,6 +23,10 @@ use crate::data::{
 pub trait UsageSource: Send + Sync + 'static {
     /// Runs the whole refresh for `query`. An `Err` keeps the previous snapshot on screen.
     fn load(&self, query: &UsageQuery) -> Result<UsageSnapshot, String>;
+
+    /// The first day of the week for the "Semana" range (`[agents] usage_week_start`). Sources
+    /// without a calendar ignore it.
+    fn set_week_start(&self, _week_start: Weekday) {}
 }
 
 /// How far back the forecast looks to measure the current pace.
@@ -38,6 +44,8 @@ enum Inner {
 /// [`UsageSource`] over an `agents_svc` database.
 pub struct StoreSource {
     inner: Mutex<Inner>,
+    /// `Weekday::num_days_from_monday` of the configured first day of the week.
+    week_start: AtomicU8,
 }
 
 impl StoreSource {
@@ -45,6 +53,7 @@ impl StoreSource {
     pub fn shared(store: Arc<Mutex<Store>>) -> Self {
         Self {
             inner: Mutex::new(Inner::Shared(store)),
+            week_start: AtomicU8::new(0),
         }
     }
 
@@ -56,6 +65,7 @@ impl StoreSource {
                 path: path.into(),
                 store: None,
             }),
+            week_start: AtomicU8::new(0),
         }
     }
 }
@@ -65,19 +75,30 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl UsageSource for StoreSource {
+    fn set_week_start(&self, week_start: Weekday) {
+        self.week_start
+            .store(week_start.num_days_from_monday() as u8, Ordering::Relaxed);
+    }
+
     fn load(&self, query: &UsageQuery) -> Result<UsageSnapshot, String> {
+        let week_start =
+            Weekday::try_from(self.week_start.load(Ordering::Relaxed)).unwrap_or(Weekday::Mon);
         let mut inner = lock(&self.inner);
         match &mut *inner {
             Inner::Shared(store) => {
-                let store = lock(store);
+                let mut store = lock(store);
+                store.set_week_start(week_start);
                 load_from(&store, query)
             }
             Inner::Path { path, store } => {
                 if store.is_none() {
                     *store = Some(Store::open(path).map_err(|e| format!("{e:#}"))?);
                 }
-                match store.as_ref() {
-                    Some(s) => load_from(s, query),
+                match store.as_mut() {
+                    Some(s) => {
+                        s.set_week_start(week_start);
+                        load_from(s, query)
+                    }
                     None => Err("base de datos de uso no disponible".to_string()),
                 }
             }

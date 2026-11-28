@@ -207,15 +207,9 @@ mod window {
         let panel = FakePanel::default();
         let for_registry = panel.clone();
         cx.update(|cx| {
-            cx.bind_keys([
-                KeyBinding::new("f6", NextZone, None),
-                KeyBinding::new("shift-f6", PrevZone, None),
-                KeyBinding::new("ctrl-shift-e", FocusSidebar, None),
-                KeyBinding::new("ctrl-shift-`", FocusTerminal, None),
-                KeyBinding::new("delete", CloseFocusedRow, Some("SidebarRow")),
-                KeyBinding::new("enter", ConfirmClose, Some("CloseConfirm")),
-                KeyBinding::new("escape", CancelClose, Some("CloseConfirm")),
-            ]);
+            // The same bindings the app installs at start.
+            crate::keybindings::bind_static(cx);
+            crate::keybindings::install(cx, &Default::default());
             let mut registry = PanelRegistry::default();
             registry.register(for_registry);
             registry.register(crate::chat_host::ThreadsProvider);
@@ -378,9 +372,11 @@ mod window {
         add_tab(&rig, vcx, "uno", None);
         let b = add_tab(&rig, vcx, "dos", None);
         vcx.run_until_parked();
-        // The sidebar's first tab stop is the first row ("uno").
+        // The sidebar's first tab stop is the "+" of the Espacios header (add a project); the
+        // next one is the first row ("uno").
         testing::press(vcx, "ctrl-shift-e");
         assert_eq!(zone(&rig, vcx), Zone::Sidebar);
+        testing::press(vcx, "tab");
         testing::press(vcx, "delete");
         assert_eq!(tab_count(&rig, vcx), 1);
         let left = vcx.update(|_, cx| rig.shell.read(cx).tab_ids());
@@ -398,6 +394,7 @@ mod window {
         add_tab(&rig, vcx, "dos", None);
         vcx.run_until_parked();
         testing::press(vcx, "ctrl-shift-e");
+        testing::press(vcx, "tab");
         testing::press(vcx, "delete");
         assert_eq!(tab_count(&rig, vcx), 2, "nothing closed yet");
         assert!(vcx.update(|_, cx| rig.shell.read(cx).prompts.confirm_close.is_some()));
@@ -405,6 +402,7 @@ mod window {
         testing::press(vcx, "escape");
         assert_eq!(tab_count(&rig, vcx), 2);
         testing::press(vcx, "ctrl-shift-e");
+        testing::press(vcx, "tab");
         testing::press(vcx, "delete");
         testing::press(vcx, "enter");
         assert_eq!(tab_count(&rig, vcx), 1);
@@ -654,6 +652,117 @@ mod window {
         );
     }
 
+    /// 9D: a terminal whose agent launched other agents outside Selachi gets the map icon in the
+    /// sidebar, with no harness delegation and no map open: only because the feed saw them once.
+    #[gpui::test]
+    fn a_terminal_with_only_external_agents_gets_the_map_icon(cx: &mut TestAppContext) {
+        let (rig, vcx) = rig(cx, false);
+        let id = add_tab(&rig, vcx, "uno", None);
+        let other = add_tab(&rig, vcx, "dos", None);
+        let ext = ui_agentmap::ExternalProc {
+            agent: "agy".into(),
+            pid: 4242,
+            cmdline_redacted: "agy -p x".into(),
+            cwd: None,
+            model: None,
+            effort: None,
+            started_ms: 1,
+            ended_ms: None,
+            exit_code: None,
+            cpu_pct: None,
+            rss_bytes: 1,
+        };
+        let key = agentmap::tab_key(id);
+        let mapped = |vcx: &mut VisualTestContext| {
+            vcx.update(|_, cx| rig.shell.read(cx).compute_lineage(cx).mapped)
+        };
+        assert!(mapped(vcx).is_empty(), "nothing seen yet: no icon");
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                s.apply_external_rows(vec![(key.clone(), vec![ext])], cx)
+            })
+        });
+        assert_eq!(mapped(vcx), std::collections::HashSet::from([id]));
+        assert!(!mapped(vcx).contains(&other), "only that terminal");
+        // the agent ended: the map keeps it, so the icon stays
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                s.apply_external_rows(vec![(key.clone(), vec![])], cx)
+            })
+        });
+        assert_eq!(mapped(vcx), std::collections::HashSet::from([id]));
+        // the terminal went away from the tracker: forgotten
+        vcx.update(|_, cx| {
+            rig.shell
+                .update(cx, |s, cx| s.apply_external_rows(vec![], cx))
+        });
+        assert!(mapped(vcx).is_empty());
+        // and nothing above started the sampling loop
+        vcx.update(|_, cx| assert!(!rig.shell.read(cx).agentmap_feed.is_running()));
+    }
+
+    /// 9D: «Permitir siempre en este perfil» is on the card only when the run has a profile, and it
+    /// answers the request (the harness then saves the pattern).
+    #[gpui::test]
+    fn the_always_in_profile_button_needs_a_profile(cx: &mut TestAppContext) {
+        use agent_harness::{ApprovalRequest, PROTOCOL_VERSION};
+        let (rig, vcx) = rig(cx, false);
+        add_tab(&rig, vcx, "uno", None);
+        let req = |id: &str| ApprovalRequest {
+            v: PROTOCOL_VERSION,
+            request_id: id.into(),
+            // a run id no real registry has: the card must not pick up a profile from the user's data
+            run_id: "987654321".into(),
+            thread_id: 5,
+            parent_thread_id: Some(1),
+            agent: "codex".into(),
+            tool: "Bash".into(),
+            detail: "cargo test -p auth".into(),
+            permission: "ask".into(),
+            depth: 1,
+            timeout_secs: 120,
+        };
+        let queue = vcx.update(|_, cx| rig.shell.read(cx).deleg.approvals.clone());
+        vcx.update(|_, cx| {
+            queue.update(cx, |q, cx| {
+                q.add_demo(req("a"), cx);
+                q.add_demo(req("b"), cx);
+            })
+        });
+        let settle = |vcx: &mut VisualTestContext| {
+            for _ in 0..3 {
+                vcx.update(|window, _| window.refresh());
+                vcx.run_until_parked();
+            }
+        };
+        settle(vcx);
+        assert!(
+            ui_kit::testing::bounds_of(vcx, "appr-always-run-a").is_some(),
+            "the card is painted"
+        );
+        assert!(
+            ui_kit::testing::bounds_of(vcx, "appr-always-profile-a").is_none(),
+            "no profile: no button"
+        );
+        vcx.update(|_, cx| queue.update(cx, |q, cx| q.set_profile("a", Some("Tests".into()), cx)));
+        settle(vcx);
+        assert!(ui_kit::testing::bounds_of(vcx, "appr-always-profile-a").is_some());
+        assert!(
+            ui_kit::testing::bounds_of(vcx, "appr-always-profile-b").is_none(),
+            "the other run has none"
+        );
+        ui_kit::testing::click_id(vcx, "appr-always-profile-a");
+        let left: Vec<String> = vcx.update(|_, cx| {
+            queue
+                .read(cx)
+                .pending()
+                .iter()
+                .map(|p| p.request.request_id.clone())
+                .collect()
+        });
+        assert_eq!(left, ["b"], "the click answered request a");
+    }
+
     #[gpui::test]
     fn the_chat_toggles_are_written_to_the_config_and_pushed_back_by_a_reload(
         cx: &mut TestAppContext,
@@ -680,6 +789,65 @@ mod window {
     }
 
     #[gpui::test]
+    fn agents_and_git_settings_reach_their_consumers_on_a_reload(cx: &mut TestAppContext) {
+        let (rig, vcx) = rig(cx, false);
+        vcx.update(|_, cx| {
+            let git = cx.global::<Services>().git.clone();
+            rig.shell.update(cx, |s, cx| {
+                // The defaults at startup.
+                assert!(s.usage.read(cx).show_estimates());
+                assert_eq!(s.usage.read(cx).week_start(), agents_svc::Weekday::Mon);
+                assert!(git.read(cx).confirm_sensitive());
+
+                let mut reloaded = (*s.config).clone();
+                reloaded.agents.usage_week_start = store::config::WeekStart::Sunday;
+                reloaded.agents.show_estimates = false;
+                reloaded.git.confirm_sensitive = false;
+                s.adopt_config(Arc::new(reloaded), cx);
+
+                assert_eq!(s.usage.read(cx).week_start(), agents_svc::Weekday::Sun);
+                assert!(!s.usage.read(cx).show_estimates());
+                assert!(!git.read(cx).confirm_sensitive());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn new_chats_start_with_the_configured_permission_and_follow_a_reload(cx: &mut TestAppContext) {
+        use agents_driver::PermissionMode;
+        let (rig, vcx) = rig(cx, false);
+        add_tab(&rig, vcx, "uno", None);
+        // The setting is already ReadOnly when the chat hub opens.
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                let mut c = (*s.config).clone();
+                c.agents.permission_default = store::config::PermissionDefault::ReadOnly;
+                s.adopt_config(Arc::new(c), cx);
+            });
+        });
+        vcx.update(|window, cx| {
+            rig.shell
+                .update(cx, |shell, cx| shell.new_chat_tab(None, window, cx));
+        });
+        vcx.run_until_parked();
+        let host = vcx.update(|_, cx| rig.shell.read(cx).chat.clone());
+        let hub = vcx.update(|_, cx| host.read(cx).hub()).expect("hub");
+        let default =
+            |vcx: &mut VisualTestContext| vcx.update(|_, cx| hub.read(cx).default_permission());
+        assert_eq!(default(vcx), PermissionMode::ReadOnly);
+
+        // A live change reaches the open hub; «Acceso completo» is never a starting point.
+        vcx.update(|_, cx| {
+            rig.shell.update(cx, |s, cx| {
+                let mut c = (*s.config).clone();
+                c.agents.permission_default = store::config::PermissionDefault::Full;
+                s.adopt_config(Arc::new(c), cx);
+            });
+        });
+        assert_eq!(default(vcx), PermissionMode::AcceptEdits);
+    }
+
+    #[gpui::test]
     fn terminal_parents_get_their_real_names_in_the_map(cx: &mut TestAppContext) {
         let (rig, vcx) = rig(cx, false);
         let id = add_tab(&rig, vcx, "api", None);
@@ -694,4 +862,9 @@ mod window {
             ui_agentmap::NodeKey::Tab(id.as_u64().to_string())
         );
     }
+
+    mod keys;
+    mod projects;
+    mod settings;
+    mod settings_layout;
 }

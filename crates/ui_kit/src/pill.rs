@@ -188,7 +188,8 @@ impl RenderOnce for Pill {
                             .child(l),
                     )
                 } else {
-                    d.child(l)
+                    // A pill is as wide as its label: the label never wraps.
+                    d.child(div().whitespace_nowrap().child(l))
                 }
             })
             .children(self.children);

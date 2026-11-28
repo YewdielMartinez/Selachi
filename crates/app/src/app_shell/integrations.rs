@@ -91,6 +91,7 @@ impl AppShell {
         self.status
             .update(cx, |s, cx| s.set_pr_model(services.git.clone(), cx));
         self.apply_pr_status(cx);
+        self.apply_git_confirm(cx);
         // File tree: events come through a channel because the provider is built before the shell.
         if let Some(mut rx) = services.viewer_events.borrow_mut().take() {
             self.tasks.viewer = Some(cx.spawn_in(window, async move |this, cx| {
@@ -138,6 +139,16 @@ impl AppShell {
                 g.set_pr_client(None, cx);
             }
         });
+    }
+
+    /// `[git] confirm_sensitive`: pushes the setting to the git model (startup and every config
+    /// change). Destructive operations keep their confirmation either way.
+    pub(super) fn apply_git_confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(git) = cx.try_global::<Services>().map(|s| s.git.clone()) else {
+            return;
+        };
+        let confirm = self.config.git.confirm_sensitive;
+        git.update(cx, |g, _| g.set_confirm_sensitive(confirm));
     }
 
     /// The window gained focus: the PR / CI state refreshes when it is older than five minutes.
@@ -595,6 +606,7 @@ impl AppShell {
     pub(super) fn run_hint_action(&mut self, action: HintAction, cx: &mut Context<Self>) {
         match action {
             HintAction::Cd(dir) => self.type_in_active(&palette::cd_line(&dir), true, cx),
+            HintAction::StopThreadProcs(owner) => self.stop_thread_procs(owner, cx),
         }
         self.dismiss_hint(cx);
     }
@@ -663,6 +675,11 @@ impl AppShell {
             }
             E::Action(id) => self.run_action(id.as_ref(), window, cx),
             E::Closed => {
+                // The palette closes right after an action that opened a menu or a dialog: those
+                // keep the focus they just took.
+                if self.projects.overlay_open() || self.prompts.new_tab_menu {
+                    return;
+                }
                 // Focus went back to what had it; make sure that is the terminal.
                 if let Some(slot) = self.active_id().and_then(|id| self.slot(id)) {
                     slot.handle.focus(window, cx);
@@ -676,9 +693,10 @@ impl AppShell {
             action_id::TAB_NEW => self.open_new_tab_menu(window, cx),
             action_id::TAB_NEW_TERMINAL => self.new_tab_here(window, cx),
             action_id::CHAT_NEW => {
-                let project = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
+                let project = self.new_chat_project(cx);
                 self.new_chat_tab(project, window, cx);
             }
+            action_id::PROJECT_ADD => self.open_add_project_menu(None, window, cx),
             action_id::TAB_CLOSE => {
                 if let Some(t) = self.active_id() {
                     self.request_close(t, window, cx);
@@ -840,9 +858,9 @@ impl AppShell {
         match event {
             E::Finished { config, .. } => {
                 self.end_onboarding(window, cx);
-                // The wizard already saved config.toml; adopt it (a "System" theme is dark here).
+                // The wizard already saved config.toml; adopt it ("Sistema" follows the OS).
                 self.adopt_config(Arc::new(config.clone()), cx);
-                self.set_theme(theme_for(&config), cx);
+                self.set_theme(theme_for(&config, cx.window_appearance()), cx);
                 if let Some(settings) = self.settings_view() {
                     settings.update(cx, |s, cx| s.set_config(config, cx));
                 }

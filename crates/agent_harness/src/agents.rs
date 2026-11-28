@@ -2,9 +2,9 @@
 //! and `selachi-agent list`.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use agents_driver::{AgentKind, ModelInfo};
+use agents_driver::catalog::{self, CatalogModel};
+use agents_driver::AgentKind;
 use serde::Serialize;
 
 use crate::policy::{Caller, DelegationConfig, Refusal, RefusalCode};
@@ -13,8 +13,8 @@ use crate::usage::{LimitRow, UsageProbe};
 /// Agents the harness knows by name.
 pub const KNOWN_AGENTS: [&str; 5] = ["claude", "codex", "opencode", "gemini", "agy"];
 
-/// Aliases the Claude Code CLI documents for `--model` (it cannot list models).
-pub const CLAUDE_ALIASES: [&str; 3] = ["sonnet", "opus", "haiku"];
+/// Aliases the Claude Code CLI documents for `--model` when `claude --help` cannot be read.
+pub const CLAUDE_ALIASES: [&str; 3] = catalog::CLAUDE_ALIASES;
 
 /// Flag that switches the Gemini CLI into ACP mode. Version dependent (older builds used
 /// `--experimental-acp`); override the whole command with `acp:<command line>`.
@@ -111,11 +111,18 @@ pub struct AgentRow {
     pub logged_in: Option<bool>,
     /// The harness may delegate to it (`[delegation] allowed_agents`).
     pub delegable: bool,
-    /// Only with `--models`: what the agent itself reported (a handshake, no prompt).
-    pub models: Option<Vec<ModelInfo>>,
-    /// Model names the CLI accepts when it cannot list them (Claude Code).
-    pub model_aliases: Vec<String>,
-    /// Why `--models` failed for this agent.
+    /// Only with `--models`: what the agent itself reported (id, label, efforts, default, available),
+    /// from the catalog (cached, refreshed with `--refresh`).
+    pub models: Option<Vec<CatalogModel>>,
+    /// Efforts that apply to every model of this agent when the models carry none (Claude).
+    pub model_efforts: Vec<String>,
+    /// The agent also accepts model names it does not list (Claude full names).
+    pub models_open: bool,
+    /// Where the list came from (`agy models`, `codex model/list`...).
+    pub models_source: Option<String>,
+    /// Unix ms of the fetch behind `models`.
+    pub models_fetched_ms: Option<i64>,
+    /// Why the last refresh failed (the models, if any, are the previous ones).
     pub models_error: Option<String>,
     /// Current usage windows from the providers' own numbers.
     pub limits: Vec<LimitRow>,
@@ -146,14 +153,27 @@ pub struct AgentList {
     pub delegation: DelegationInfo,
 }
 
-/// Build the listing. `with_models` starts each installed agent for a model handshake (no prompt is
-/// ever sent) and can take several seconds.
+/// How `list_agents` gets the models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelsMode {
+    /// Do not list models.
+    #[default]
+    Off,
+    /// The catalog: the cached list when it is younger than its TTL, else ask the agent.
+    Cached,
+    /// Ask every installed agent again.
+    Refresh,
+}
+
+/// Build the listing. With models, each installed agent whose cached list is missing or stale is
+/// asked (its own CLI, no prompt is ever sent; can take several seconds), the others answer from
+/// `models-catalog.json`.
 pub fn list_agents(
     cfg: &DelegationConfig,
     caller: &Caller,
     usage: &dyn UsageProbe,
     data_dir: &Path,
-    with_models: bool,
+    with_models: ModelsMode,
 ) -> AgentList {
     let now = chat_core::now_ms();
     let limits = usage.limits(now);
@@ -174,11 +194,10 @@ pub fn list_agents(
                         .iter()
                         .any(|a| a.eq_ignore_ascii_case(name))),
             models: None,
-            model_aliases: if name == "claude" {
-                CLAUDE_ALIASES.iter().map(|s| s.to_string()).collect()
-            } else {
-                Vec::new()
-            },
+            model_efforts: Vec::new(),
+            models_open: false,
+            models_source: None,
+            models_fetched_ms: None,
             models_error: None,
             limits: limits
                 .iter()
@@ -187,19 +206,21 @@ pub fn list_agents(
                 .collect(),
         });
     }
-    if with_models {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let probes: Vec<_> = detected
+    if with_models != ModelsMode::Off {
+        let probes: Vec<_> = KNOWN_AGENTS
             .iter()
-            .filter(|d| !matches!(d.kind, AgentKind::ClaudeCode))
-            .map(|d| {
-                let kind = d.kind.clone();
-                let name = agent_name(&d.kind);
-                let cwd = cwd.clone();
+            .filter(|n| detected.iter().any(|d| agent_name(&d.kind) == **n))
+            .map(|name| {
+                let (name, dir) = (name.to_string(), data_dir.to_path_buf());
+                let n2 = name.clone();
                 (
                     name,
                     std::thread::spawn(move || {
-                        agents_driver::probe_models(kind, cwd, Duration::from_secs(25))
+                        if with_models == ModelsMode::Refresh {
+                            catalog::refresh(&dir, &n2, catalog::FETCH_TIMEOUT)
+                        } else {
+                            catalog::ensure(&dir, &n2, catalog::DEFAULT_TTL, catalog::FETCH_TIMEOUT)
+                        }
                     }),
                 )
             })
@@ -209,8 +230,16 @@ pub fn list_agents(
                 continue;
             };
             match handle.join() {
-                Ok(Ok(models)) => row.models = Some(models),
-                Ok(Err(e)) => row.models_error = Some(e.to_string()),
+                Ok(m) => {
+                    row.models_error = m.error.clone();
+                    row.model_efforts = m.efforts.clone();
+                    row.models_open = m.open;
+                    if m.fetched_ms > 0 {
+                        row.models_source = Some(m.source.clone());
+                        row.models_fetched_ms = Some(m.fetched_ms);
+                    }
+                    row.models = Some(m.models);
+                }
                 Err(_) => row.models_error = Some("the probe panicked".into()),
             }
         }
@@ -265,27 +294,42 @@ impl AgentList {
                     " · delegation not allowed"
                 }
             );
-            if !a.model_aliases.is_empty() {
-                let _ = writeln!(
-                    s,
-                    "          models: {} (aliases)",
-                    a.model_aliases.join(", ")
-                );
-            }
             if let Some(models) = &a.models {
-                let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+                let ids: Vec<String> = models
+                    .iter()
+                    .map(|m| {
+                        let mut t = m.id.clone();
+                        if !m.efforts.is_empty() {
+                            t.push_str(&format!(" [{}]", m.efforts.join("|")));
+                        }
+                        if m.default {
+                            t.push_str(" (default)");
+                        }
+                        t
+                    })
+                    .collect();
                 let _ = writeln!(
                     s,
-                    "          models: {}",
+                    "          models{}: {}",
+                    a.models_source
+                        .as_deref()
+                        .map(|x| format!(" ({x})"))
+                        .unwrap_or_default(),
                     if ids.is_empty() {
                         "(none reported)".into()
                     } else {
                         ids.join(", ")
                     }
                 );
+                if !a.model_efforts.is_empty() {
+                    let _ = writeln!(s, "          efforts: {}", a.model_efforts.join(", "));
+                }
+                if a.models_open {
+                    let _ = writeln!(s, "          other model names are accepted as they are");
+                }
             }
             if let Some(e) = &a.models_error {
-                let _ = writeln!(s, "          models: unavailable ({e})");
+                let _ = writeln!(s, "          models: refresh failed ({e})");
             }
             for l in &a.limits {
                 let _ = writeln!(

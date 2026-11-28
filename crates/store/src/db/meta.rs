@@ -16,6 +16,10 @@ pub const UPDATE_FROM: &str = "update.installed_from";
 /// `meta` key: JSON with the release notes of the update being installed (so "Novedades" works offline).
 pub const UPDATE_NOTES: &str = "update.pending_notes";
 
+/// `meta` key: the project that new terminals and chats open in (its folder, display form).
+/// Absent = no project selected (they open in the active tab's folder).
+pub const SELECTED_PROJECT: &str = "projects.selected";
+
 impl StateDb {
     /// The value stored under `key`, if any.
     pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
@@ -67,6 +71,25 @@ mod tests {
         db.meta_remove("a").unwrap();
         db.meta_remove("a").unwrap();
         assert_eq!(db.meta_get("a").unwrap(), None);
+    }
+
+    #[test]
+    fn the_selected_project_survives_a_reopen_and_a_removed_favorite_does_not_touch_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        {
+            let db = crate::StateDb::open(&path).unwrap();
+            db.add_favorite(r"C:\dev\Tron", "").unwrap();
+            db.meta_set(super::SELECTED_PROJECT, r"C:\dev\Tron")
+                .unwrap();
+            db.remove_favorite(r"c:\DEV\tron").unwrap();
+            assert!(db.favorites().unwrap().is_empty());
+        }
+        let db = crate::StateDb::open(&path).unwrap();
+        assert_eq!(
+            db.meta_get(super::SELECTED_PROJECT).unwrap().as_deref(),
+            Some(r"C:\dev\Tron")
+        );
     }
 
     #[test]

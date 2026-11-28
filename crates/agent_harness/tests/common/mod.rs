@@ -250,7 +250,25 @@ impl Setup {
         broker: Arc<dyn agent_harness::ApprovalBroker>,
         limits: Vec<agent_harness::LimitRow>,
     ) -> Harness {
+        self.harness_models(
+            caller,
+            cfg,
+            broker,
+            limits,
+            Arc::new(agent_harness::NoModels),
+        )
+    }
+
+    pub fn harness_models(
+        &self,
+        caller: Caller,
+        cfg: DelegationConfig,
+        broker: Arc<dyn agent_harness::ApprovalBroker>,
+        limits: Vec<agent_harness::LimitRow>,
+        models: Arc<dyn agent_harness::ModelSource>,
+    ) -> Harness {
         Harness::builder()
+            .models(models)
             .data_dir(self.data_dir())
             .config(cfg)
             .caller(caller)

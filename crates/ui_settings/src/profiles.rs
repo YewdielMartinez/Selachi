@@ -105,6 +105,11 @@ pub struct Profile {
     pub output_format: String,
     /// JSON Schema file (relative to the profile file's folder); only with `output_format = "json"`.
     pub output_schema: Option<String>,
+    /// `wait_for_background` as the file says it (`None` = not written: the harness default, true).
+    /// Not in the form; kept on round trips.
+    pub wait_for_background: Option<bool>,
+    /// `agent_preamble` as the file says it (`None` = not written: true). Kept on round trips.
+    pub agent_preamble: Option<bool>,
 }
 
 impl Default for Profile {
@@ -127,6 +132,8 @@ impl Default for Profile {
             context_files: Vec::new(),
             output_format: "text".into(),
             output_schema: None,
+            wait_for_background: None,
+            agent_preamble: None,
         }
     }
 }
@@ -224,6 +231,12 @@ pub fn to_toml(p: &Profile) -> String {
     if let Some(s) = p.output_schema.as_deref().filter(|s| !s.trim().is_empty()) {
         out.push_str(&format!("output_schema = {}\n", quoted(s.trim())));
     }
+    if let Some(b) = p.wait_for_background {
+        out.push_str(&format!("wait_for_background = {b}\n"));
+    }
+    if let Some(b) = p.agent_preamble {
+        out.push_str(&format!("agent_preamble = {b}\n"));
+    }
     if !p.instructions.trim().is_empty() {
         out.push_str(&format!(
             "instructions = {}\n",
@@ -238,6 +251,14 @@ fn str_field(t: &toml::Table, key: &str) -> Result<Option<String>, String> {
         None => Ok(None),
         Some(toml::Value::String(s)) => Ok(Some(s.clone())),
         Some(_) => Err(format!("`{key}` debe ser texto")),
+    }
+}
+
+fn bool_field(t: &toml::Table, key: &str) -> Result<Option<bool>, String> {
+    match t.get(key) {
+        None => Ok(None),
+        Some(toml::Value::Boolean(b)) => Ok(Some(*b)),
+        Some(_) => Err(format!("`{key}` debe ser true o false")),
     }
 }
 
@@ -285,7 +306,7 @@ pub fn parse_duration_text(s: &str) -> Option<u64> {
 }
 
 /// Keys a profile file may have (the harness parses with `deny_unknown_fields`).
-pub const KNOWN_KEYS: [&str; 17] = [
+pub const KNOWN_KEYS: [&str; 19] = [
     "name",
     "description",
     "agent",
@@ -303,6 +324,8 @@ pub const KNOWN_KEYS: [&str; 17] = [
     "context_files",
     "output_format",
     "output_schema",
+    "wait_for_background",
+    "agent_preamble",
 ];
 
 /// Reads a profile from the text of a `.toml` file.
@@ -345,6 +368,8 @@ pub fn from_toml(text: &str) -> Result<Profile, String> {
         context_files: list_field(&t, "context_files")?,
         output_format: str_field(&t, "output_format")?.unwrap_or(d.output_format),
         output_schema: str_field(&t, "output_schema")?.filter(|s| !s.trim().is_empty()),
+        wait_for_background: bool_field(&t, "wait_for_background")?,
+        agent_preamble: bool_field(&t, "agent_preamble")?,
     })
 }
 
@@ -1169,6 +1194,8 @@ mod tests {
             context_files: vec!["docs/PLAN.md".into(), "src/a b.rs".into()],
             output_format: "json".into(),
             output_schema: Some("schemas/out.json".into()),
+            wait_for_background: Some(false),
+            agent_preamble: Some(false),
         }
     }
 

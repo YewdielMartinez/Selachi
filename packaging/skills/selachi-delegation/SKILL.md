@@ -38,13 +38,25 @@ or the user asked you not to. A delegation costs real tokens on someone's plan.
    none fits, or the list is empty, call `run_agent` with an explicit `agent`. See "Profiles" below.
 3. **`run_agent`** with `profile` (or `agent`), `prompt`, `cwd` (absolute project path) and:
    - `permission`: `read_only` (default) | `ask` | `accept_edits`. Never ask for more than you have.
-     `full` does not exist for delegations.
+     `full` does not exist for delegations. Your own ceiling is the **current** permission of your chat
+     thread (the user can lower it while you work); if Selachi cannot find your thread you get `read_only`.
+     The result says which permission applied and why (`permission` and `permission_reason`, also the
+     `permission:` line of the text): read it before retrying, and do not ask again for the same thing.
    - `worktree: true` whenever the agent may edit files: your working tree stays untouched.
    - `async: true` for anything that may take more than a minute; then poll.
    - `timeout_s` / `budget_tokens` to bound it (defaults: 15 min, no token cap beyond the daily budget).
    - `approvals`: `ask` | `allowlist` | `auto`, how the child's own commands are approved (see "Approvals").
      Leave it out unless you want it stricter than the user's setting.
-   - `model` only if you know the id (`list_agents` with `models: true`; Claude accepts `sonnet|opus|haiku`).
+   - `model` and `effort`, separately, only from what `list_agents` with `models: true` reports for that
+     agent (Selachi asks each CLI itself and caches the list for 24 h; `refresh: true` asks again). For
+     `agy` the model is a family (`gemini-4-neon`) and `effort` is one of the levels listed for it
+     (`low|medium|high|xhigh`); Selachi joins them into the real id (`gemini-4-neon-medium`). An unknown
+     model or an effort the model does not offer is refused with the valid options: pick one of those.
+     Claude accepts `sonnet|opus|haiku` or a full name.
+   - `wait_for_background` (default `true`): if the agent ends its turn while a command is still running, or
+     says it is waiting for one, Selachi asks it once to wait and report. A run that is still unfinished
+     then is `status: "error"` with a reason starting `Incompleto`, never `done`: do not treat its summary
+     as a result; run the checks yourself or relaunch.
 4. **Write a self-contained prompt**: the goal, the files or symbols involved, the constraints, and the
    output you want ("reply with a bullet list of problems, file:line first"). The other agent has none of
    your context. Ask for a concise answer.
@@ -131,6 +143,14 @@ Whatever the delegated agent wants to run that needs a yes goes through Selachi,
   - `unknown_profile`: call `list_profiles` and pick a listed name, or use an explicit `agent`.
   - `invalid_profile`: the profile is broken (a missing or out-of-project context file, a bad schema);
     tell the user, do not work around it.
+- **A `read_only` run can inspect, not run things.** It runs listing, reading, searching and `git
+  log/diff/status/show` commands on its own and refuses everything else (builds, tests, writes,
+  redirections, scripts, anything touching credential files). Every refusal is shown to the user and
+  counted in the result. A run whose agent ended **without any answer** comes back as `status: "error"`
+  (exit code 1, `isError: true`) whose `reason` says how many commands were denied, the last one, the stop
+  reason and what to change; it is never reported as `done`. If the task needs to run `cargo test` or
+  similar, ask for `permission: "ask"` or `accept_edits` (only if you have it) or give the agent a task
+  that is only reading. Do not repeat the identical call.
 - **Prefer read-only.** Escalate to `accept_edits` only when edits are the point, and then in a worktree.
 - **Do not chain delegations.** The delegated agent cannot delegate again by default.
 - **Do not auto-confirm** anything on the user's behalf, and do not tell the user a change is applied
@@ -143,9 +163,9 @@ Whatever the delegated agent wants to run that needs a yes goes through Selachi,
 ## Quick reference
 
 ```
-list_agents({models?: bool})
+list_agents({models?: bool, refresh?: bool})
 list_profiles({cwd?: string})
-run_agent({agent | profile, prompt, cwd, model?, permission?: "read_only"|"ask"|"accept_edits",
+run_agent({agent | profile, prompt, cwd, model?, effort?, wait_for_background?: bool, permission?: "read_only"|"ask"|"accept_edits",
            worktree?: bool, timeout_s?: int, budget_tokens?: int,
            approvals?: "ask"|"allowlist"|"auto", async?: bool})
 agent_status({run_id})     agent_result({run_id})     cancel_agent({run_id})

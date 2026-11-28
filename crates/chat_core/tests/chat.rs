@@ -1084,3 +1084,59 @@ fn schema_v3_migrates_an_existing_v2_database() {
         (None, 0, None)
     );
 }
+
+#[test]
+fn the_agent_process_of_a_chat_thread_knows_its_thread_permission_and_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = done_script();
+    let store = store_at(dir.path(), &factory, None);
+    let mut sp = spec(dir.path(), AgentKind::ClaudeCode);
+    sp.permission = PermissionMode::Full;
+    let rec = store.create_thread(sp).unwrap();
+    let rt = store.open(rec.id).unwrap();
+    rt.send("hi", vec![]).unwrap();
+    assert!(rt.wait_for(T, |s| s.status == ThreadStatus::Done));
+    let env = factory.rec.lock().spawns[0].1.env.clone();
+    let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    assert_eq!(
+        get("SELACHI_PARENT_THREAD"),
+        Some(Some(rec.id.0.to_string()))
+    );
+    assert_eq!(
+        get("SELACHI_PARENT_PERMISSION"),
+        Some(Some("accept-edits".into())),
+        "full is not delegable"
+    );
+    assert_eq!(get("SELACHI_DELEGATION_DEPTH"), Some(Some("0".into())));
+    assert_eq!(get("SELACHI_PARENT_TAB"), Some(None));
+    rt.close();
+}
+
+#[test]
+fn a_policy_denial_reaches_the_state_and_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = FakeFactory::new(|_, _| {
+        vec![
+            AgentEvent::Status(AgentStatus::Working),
+            AgentEvent::PolicyDenied {
+                tool: "bash".into(),
+                command: "Remove-Item x".into(),
+                reason: "solo lectura: no".into(),
+                blocked: false,
+            },
+            AgentEvent::Status(AgentStatus::Done),
+        ]
+    });
+    let store = store_at(dir.path(), &factory, None);
+    let rec = store
+        .create_thread(spec(dir.path(), AgentKind::ClaudeCode))
+        .unwrap();
+    let rt = store.open(rec.id).unwrap();
+    rt.send("go", vec![]).unwrap();
+    assert!(rt.wait_for(T, |s| s.status == ThreadStatus::Done));
+    rt.with_state(|s| {
+        assert_eq!(s.policy_denied_total, 1);
+        assert_eq!(s.policy_denials[0].command, "Remove-Item x");
+    });
+    rt.close();
+}

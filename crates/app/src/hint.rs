@@ -15,6 +15,8 @@ use ui_kit::{Button, Icon, IconButton};
 pub enum HintAction {
     /// Type `Set-Location` into the active terminal.
     Cd(PathBuf),
+    /// Stop the processes a closed chat thread left running (tracker owner id).
+    StopThreadProcs(u64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

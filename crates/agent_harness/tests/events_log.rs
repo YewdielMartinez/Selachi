@@ -142,6 +142,7 @@ fn a_run_leaves_an_ordered_redacted_events_log() {
             EventBody::Approval { .. } => "approval",
             EventBody::Status { .. } => "status",
             EventBody::Truncated { .. } => "truncated",
+            EventBody::FollowUp { .. } => "follow_up",
         })
         .collect();
     assert_eq!(kinds.first(), Some(&"status"), "{kinds:?}");
@@ -237,7 +238,11 @@ fn a_run_leaves_an_ordered_redacted_events_log() {
 #[test]
 fn blocked_and_auto_approvals_are_logged_with_their_mode() {
     let cmds: &'static [&'static str] = &["git push origin main", "cargo build"];
-    let s = setup(move |_, _, _| {
+    let s = setup(move |_, n, _| {
+        if n > 0 {
+            // the harness's follow-up after the refusal: the agent reports
+            return vec![working(), text("Listo; el push fue rechazado."), done()];
+        }
         vec![
             working(),
             AgentEvent::ApprovalRequest {

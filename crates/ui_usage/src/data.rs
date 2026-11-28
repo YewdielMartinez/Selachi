@@ -277,6 +277,20 @@ pub fn cost_label(cost: &CostInfo) -> String {
     }
 }
 
+/// [`cost_label`] unless it is an estimate and `[agents] show_estimates` is off (`None` = draw
+/// nothing). A cost the agent reported itself is exact and always shows.
+pub fn cost_label_if(cost: &CostInfo, show_estimates: bool) -> Option<String> {
+    match (&cost.kind, show_estimates) {
+        (CostKind::Reported(_), _) | (_, true) => Some(cost_label(cost)),
+        _ => None,
+    }
+}
+
+/// Per-branch costs are always estimates (the local price table): `None` when they are hidden.
+pub fn branch_cost_if(usd: Option<f64>, complete: bool, show_estimates: bool) -> Option<String> {
+    show_estimates.then(|| cost_short(usd, complete))
+}
+
 /// Short cost for a list row meta: `$4.10`, `≥ $4.10`, `—`.
 pub fn cost_short(usd: Option<f64>, complete: bool) -> String {
     use crate::fmt::format_cost;
@@ -290,9 +304,17 @@ pub fn cost_short(usd: Option<f64>, complete: bool) -> String {
 /// The multi-line tooltip of an agent card: the billable breakdown and the cache reads that do
 /// not count.
 pub fn breakdown_tooltip(t: &AgentTotals) -> String {
+    breakdown_tooltip_if(t, true)
+}
+
+/// [`breakdown_tooltip`] without the estimated cost line when `show_estimates` is off.
+pub fn breakdown_tooltip_if(t: &AgentTotals, show_estimates: bool) -> String {
     use crate::fmt::full_tokens;
-    format!(
-        "{name}\nFacturables {total} = entrada {inp} + salida {out} + caché creada {cc}\nLecturas de caché {cr} (no cuentan)\n{events} eventos\n{cost}",
+    let mut out = format!(
+        "{name}
+Facturables {total} = entrada {inp} + salida {out} + caché creada {cc}
+Lecturas de caché {cr} (no cuentan)
+{events} eventos",
         name = agent_name(t.agent),
         total = full_tokens(t.billable()),
         inp = full_tokens(t.input),
@@ -300,8 +322,12 @@ pub fn breakdown_tooltip(t: &AgentTotals) -> String {
         cc = full_tokens(t.cache_create),
         cr = full_tokens(t.cache_read),
         events = crate::fmt::events_label(t.events),
-        cost = cost_label(&t.cost),
-    )
+    );
+    if let Some(cost) = cost_label_if(&t.cost, show_estimates) {
+        out.push('\n');
+        out.push_str(&cost);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------------

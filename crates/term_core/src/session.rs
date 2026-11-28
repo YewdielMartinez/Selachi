@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term, TermMode};
 #[cfg(not(windows))]
@@ -577,6 +579,50 @@ impl Session {
     /// Scrolls the viewport back to the live bottom.
     pub fn scroll_to_bottom(&self) {
         self.term.lock().scroll_display(Scroll::Bottom);
+    }
+
+    /// The grid point under viewport cell `(row, col)`, clamped to the screen.
+    fn viewport_point(term: &Term<Listener>, row: usize, col: usize) -> Point {
+        let row = row.min(term.screen_lines().saturating_sub(1));
+        let col = col.min(term.columns().saturating_sub(1));
+        Point::new(
+            Line(row as i32 - term.grid().display_offset() as i32),
+            Column(col),
+        )
+    }
+
+    /// Starts a selection at viewport cell `(row, col)`; `right` is the right half of the cell.
+    /// It follows the text when the output scrolls. Replaces the previous selection.
+    pub fn selection_start(&self, row: usize, col: usize, right: bool) {
+        let mut term = self.term.lock();
+        let point = Self::viewport_point(&term, row, col);
+        let side = if right { Side::Right } else { Side::Left };
+        term.selection = Some(Selection::new(SelectionType::Simple, point, side));
+    }
+
+    /// Extends the selection to viewport cell `(row, col)` (no-op without a selection).
+    pub fn selection_update(&self, row: usize, col: usize, right: bool) {
+        let mut term = self.term.lock();
+        let point = Self::viewport_point(&term, row, col);
+        let side = if right { Side::Right } else { Side::Left };
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+        }
+    }
+
+    /// Drops the selection.
+    pub fn selection_clear(&self) {
+        self.term.lock().selection = None;
+    }
+
+    /// The selected text (`None` when nothing, or only an empty range, is selected).
+    pub fn selection_text(&self) -> Option<String> {
+        let term = self.term.lock();
+        term.selection
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .and_then(|_| term.selection_to_string())
+            .filter(|t| !t.is_empty())
     }
 
     /// Process id of the shell, if known (on Windows always set after a successful spawn).

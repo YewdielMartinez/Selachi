@@ -259,6 +259,17 @@ impl AppShell {
             } else {
                 Vec::new()
             },
+            selected: if unified {
+                self.projects.selected.clone()
+            } else {
+                None
+            },
+            dest: self.dest(),
+            missing: if unified {
+                self.projects.missing.clone()
+            } else {
+                HashSet::new()
+            },
             folded: if unified {
                 self.spaces.folded.clone()
             } else {
@@ -485,9 +496,16 @@ impl AppShell {
         match event {
             SidebarEvent::Select(id) => self.select_tab(id, window, cx),
             SidebarEvent::OpenAgentMap(id) => self.open_agentmap_for_tab(id, cx),
+            SidebarEvent::ChildMenu { thread, parent, at } => {
+                self.open_child_menu(thread, parent, at, window, cx)
+            }
             SidebarEvent::Close(id) => self.request_close(id, window, cx),
             SidebarEvent::NewHere => self.new_tab_here(window, cx),
-            SidebarEvent::NewIn(root) => self.new_tab_in(root, window, cx),
+            SidebarEvent::SelectSpace(root) => self.select_project(root, cx),
+            SidebarEvent::AddProjectMenu(at) => self.open_add_project_menu(Some(at), window, cx),
+            SidebarEvent::SpaceMenu { root, at, full } => {
+                self.open_space_menu(root, at, full, window, cx)
+            }
             SidebarEvent::ToggleSpace(key) => self.toggle_space(key, cx),
             SidebarEvent::NewMenu => self.open_new_tab_menu(window, cx),
             SidebarEvent::Palette => self.toggle_palette(window, cx),
@@ -498,7 +516,7 @@ impl AppShell {
             SidebarEvent::Rail(action) => self.run_rail_action(action, window, cx),
             SidebarEvent::ToggleCollapsed => self.toggle_sidebar_collapsed(cx),
             SidebarEvent::ExpandOverlay => self.toggle_overlay(Overlay::Left, cx),
-            SidebarEvent::DropOnSpace(paths) => self.drop_on_space(&paths, window, cx),
+            SidebarEvent::DropOnSpace(paths) => self.drop_on_sidebar(&paths, cx),
             SidebarEvent::OpenThread(id) => {
                 self.open_chat_thread(chat_core::ThreadId(id), window, cx)
             }

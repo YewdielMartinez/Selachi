@@ -32,4 +32,8 @@ pub enum AgentMapEvent {
     OpenInProcesses(u32),
     /// Copy the redacted command line of an external agent process.
     CopyCommand(String),
+    /// «Abrir en pestaña»: move the map from the right dock to a tab of the main zone.
+    OpenInTab,
+    /// «Acoplar a la derecha»: move the map from its tab back to the right dock.
+    DockRight,
 }

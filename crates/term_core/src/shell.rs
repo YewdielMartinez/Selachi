@@ -13,6 +13,30 @@ fn on_path(exe: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Does `program` name something that can be started: an existing file (absolute or relative path,
+/// with or without its extension) or an executable found on `PATH` (`pwsh`, `wsl.exe`, ...).
+pub fn program_exists(program: &str) -> bool {
+    let program = program.trim().trim_matches('"');
+    if program.is_empty() {
+        return false;
+    }
+    const EXTS: [&str; 5] = ["", ".exe", ".cmd", ".bat", ".com"];
+    let found_in = |base: &Path| {
+        EXTS.iter().any(|ext| {
+            let mut name = base.as_os_str().to_os_string();
+            name.push(ext);
+            Path::new(&name).is_file()
+        })
+    };
+    let path = Path::new(program);
+    if path.components().count() > 1 || path.is_absolute() {
+        return found_in(path);
+    }
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| found_in(&dir.join(program))))
+        .unwrap_or(false)
+}
+
 /// Directory where Selachi keeps the integration scripts (`%LOCALAPPDATA%\Selachi\shell`).
 fn integration_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
@@ -75,6 +99,21 @@ pub fn default_shell() -> (String, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_exists_finds_files_and_path_entries_only() {
+        let exe = std::env::current_exe().unwrap();
+        assert!(program_exists(&exe.display().to_string()));
+        // without the extension, like typing `cmd`
+        assert!(program_exists(
+            &exe.with_extension("").display().to_string()
+        ));
+        assert!(!program_exists(r"C:\no\such\dir\ghost.exe"));
+        assert!(!program_exists("selachi-no-such-shell-xyz"));
+        assert!(!program_exists("  "));
+        #[cfg(windows)]
+        assert!(program_exists("cmd.exe") && program_exists("cmd"));
+    }
 
     #[test]
     fn args_quote_the_script_path() {

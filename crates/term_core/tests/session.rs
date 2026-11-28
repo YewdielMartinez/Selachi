@@ -321,3 +321,28 @@ fn spawned_shell_sees_parent_tab_env() {
         session.snapshot().text()
     );
 }
+
+#[test]
+fn selection_text_returns_what_was_selected() {
+    let (session, _rx) =
+        Session::spawn(config("cmd.exe", &["/c", "echo", "selachi-pick"])).expect("spawn cmd");
+    assert!(wait_for(&session, "selachi-pick"));
+    let snap = session.snapshot();
+    let row = (0..snap.rows)
+        .find(|r| snap.line_text(*r).contains("selachi-pick"))
+        .expect("row");
+    let col = snap.line_text(row).find("selachi-pick").expect("col");
+    assert_eq!(session.selection_text(), None, "nothing selected yet");
+    session.selection_start(row, col, false);
+    assert_eq!(session.selection_text(), None, "a click selects nothing");
+    session.selection_update(row, col + "selachi".len() - 1, true);
+    assert_eq!(session.selection_text().as_deref(), Some("selachi"));
+    let snap = session.snapshot();
+    assert_eq!(
+        snap.selection.and_then(|s| s.cols_in(row, snap.cols)),
+        Some(col..col + 7)
+    );
+    session.selection_clear();
+    assert_eq!(session.selection_text(), None);
+    assert!(session.snapshot().selection.is_none());
+}

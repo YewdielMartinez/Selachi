@@ -723,3 +723,112 @@ linea dos"
     assert!(matches!(gate(&model, vcx), Gate::Confirm { .. }));
     assert_eq!(commit_count(dir.path()), 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// `[git] confirm_sensitive`
+// ---------------------------------------------------------------------------------------------
+
+#[gpui::test]
+async fn confirm_sensitive_off_commits_without_a_card_and_on_still_asks(cx: &mut TestAppContext) {
+    let dir = temp_repo();
+    std::fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
+    git(dir.path(), &["add", "a.txt"]);
+    let model = model_for(cx, dir.path());
+    model.update(cx, |m, cx| m.set_visible(true, cx));
+    cx.run_until_parked();
+    let op = GitOp::Action(GitAction::Commit {
+        message: "feat: relaxed".into(),
+    });
+
+    // On (the default): the card opens and nothing runs.
+    model.update(cx, |m, cx| m.request(op.clone(), cx));
+    cx.run_until_parked();
+    assert!(matches!(
+        model.read_with(cx, |m, _| m.gate().clone()),
+        Gate::Confirm { .. }
+    ));
+    assert_eq!(commit_count(dir.path()), 1);
+    model.update(cx, |m, cx| m.dismiss(cx));
+
+    // Off: the commit runs at once.
+    model.update(cx, |m, _| m.set_confirm_sensitive(false));
+    model.update(cx, |m, cx| m.request(op, cx));
+    cx.run_until_parked();
+    assert_eq!(commit_count(dir.path()), 2, "no card: the commit ran");
+    let g = model.read_with(cx, |m, _| m.gate().clone());
+    assert!(
+        matches!(g, Gate::Done { ref outcome, .. } if outcome.ok),
+        "the result banner still shows: {g:?}"
+    );
+}
+
+#[gpui::test]
+async fn confirm_sensitive_off_in_terminal_mode_still_runs_visibly(cx: &mut TestAppContext) {
+    let dir = temp_repo();
+    std::fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
+    git(dir.path(), &["add", "a.txt"]);
+    let model = model_for(cx, dir.path());
+    model.update(cx, |m, cx| {
+        m.set_exec_mode(ExecMode::Terminal);
+        m.set_confirm_sensitive(false);
+        m.set_visible(true, cx);
+    });
+    let seen = events(cx, &model);
+    cx.run_until_parked();
+    model.update(cx, |m, cx| {
+        m.request(
+            GitOp::Action(GitAction::Commit {
+                message: "feat: visible".into(),
+            }),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    let got = seen.borrow().clone();
+    let [GitPanelEvent::RunInTerminal { argv, .. }] = got.as_slice() else {
+        panic!("{got:?}")
+    };
+    assert_eq!(argv, &["git", "commit", "-m", "feat: visible"]);
+}
+
+#[gpui::test]
+async fn confirm_sensitive_off_never_skips_the_card_of_a_destructive_operation(
+    cx: &mut TestAppContext,
+) {
+    let dir = temp_repo();
+    let model = model_for(cx, dir.path());
+    model.update(cx, |m, cx| {
+        m.set_confirm_sensitive(false);
+        m.set_visible(true, cx);
+    });
+    cx.run_until_parked();
+    for op in [
+        GitOp::RestoreCheckpoint { id: "none".into() },
+        GitOp::RemoveWorktree {
+            path: dir.path().join("nope"),
+            force: true,
+        },
+        GitOp::Action(GitAction::Checkout {
+            target: "HEAD".into(),
+        }),
+    ] {
+        model.update(cx, |m, cx| m.request(op.clone(), cx));
+        // never straight to running: it is preflighting or showing the card
+        let g = model.read_with(cx, |m, _| m.gate().clone());
+        assert!(
+            matches!(g, Gate::Preflighting { .. }),
+            "{op:?} must go through the preflight: {g:?}"
+        );
+        cx.run_until_parked();
+        let g = model.read_with(cx, |m, _| m.gate().clone());
+        assert!(
+            matches!(g, Gate::Confirm { .. } | Gate::Done { .. }),
+            "{op:?}: {g:?}"
+        );
+        assert!(
+            !matches!(g, Gate::Running { .. }),
+            "{op:?} must not run unconfirmed"
+        );
+        model.update(cx, |m, cx| m.dismiss(cx));
+    }
+}

@@ -29,6 +29,9 @@
 //! allowed_commands = ["cargo *", "git diff *"]  # optional: shell commands approved on their own (approvals = "allowlist")
 //! context_files = ["docs/testing.md"]  # optional, inside the project, <= 200 KiB in total, redacted
 //! output_format = "json"               # optional: text (default) | json | diff
+//! wait_for_background = true           # optional (default true): a turn that ends while a command is still running
+//!                                      # gets one automatic follow-up; if it still is not finished the run is an error
+//! agent_preamble = true                # optional (default true): the built-in rules for agents that need them (agy)
 //! output_schema = "schemas/out.json"   # optional, json only: a JSON Schema, relative to this file's folder
 //! ```
 //!
@@ -147,6 +150,12 @@ pub struct ProfileFile {
     pub output_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<String>,
+    /// `false` = report a turn that ends with a command still running as done (default `true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_for_background: Option<bool>,
+    /// `false` = do not add the built-in per-agent rules to the prompt (default `true`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_preamble: Option<bool>,
 }
 
 /// A validated profile.
@@ -173,6 +182,10 @@ pub struct Profile {
     pub output_format: OutputFormat,
     /// Path of the JSON Schema, relative to the profile file's folder.
     pub output_schema: Option<String>,
+    /// A turn that ends while a command is still running is followed up, never reported as done.
+    pub wait_for_background: bool,
+    /// The built-in rules for the agent (`agy`: no background commands, report what changed) are added.
+    pub agent_preamble: bool,
     pub scope: Scope,
     /// The file it was read from.
     pub path: PathBuf,
@@ -452,6 +465,8 @@ impl ProfileFile {
                 .collect(),
             output_format,
             output_schema,
+            wait_for_background: self.wait_for_background.unwrap_or(true),
+            agent_preamble: self.agent_preamble.unwrap_or(true),
             scope,
             path: path.to_path_buf(),
             shadows_global: false,
@@ -521,6 +536,8 @@ impl Profile {
             "context_files": self.context_files,
             "output_format": self.output_format.as_str(),
             "output_schema": self.output_schema,
+            "wait_for_background": self.wait_for_background,
+            "agent_preamble": self.agent_preamble,
             "has_instructions": !self.instructions.is_empty(),
             "scope": self.scope.as_str(),
             "path": store::paths::clean_display(&self.path.to_string_lossy()),
@@ -798,6 +815,12 @@ pub fn emit_toml(p: &ProfileFile, header: Option<&str>) -> String {
     }
     if let Some(f) = &p.output_schema {
         out.push_str(&format!("output_schema = {}\n", s(f)));
+    }
+    if let Some(b) = p.wait_for_background {
+        out.push_str(&format!("wait_for_background = {b}\n"));
+    }
+    if let Some(b) = p.agent_preamble {
+        out.push_str(&format!("agent_preamble = {b}\n"));
     }
     let ins = p.instructions.trim_end();
     if !ins.is_empty() {

@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 
 use futures::StreamExt;
 use gpui::{
-    App, Bounds, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Hsla,
-    KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
-    Render, ScrollWheelEvent, SharedString, Task, UTF16Selection, Window, div, font, prelude::*,
-    px,
+    App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    Hsla, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Render, ScrollWheelEvent, SharedString, Task, UTF16Selection, Window,
+    div, font, prelude::*, px,
 };
+use store::config::{Config, CursorStyle, Profile};
 use term_core::{
     Block, JobAttachment, KeyInput, Palette, Rgb8, Session, SessionConfig, SessionEvent,
     SpawnOptions, encode_key,
@@ -64,8 +65,151 @@ pub struct TermEnv(pub Vec<(String, String)>);
 
 impl gpui::Global for TermEnv {}
 
-/// Scrollback lines kept per session.
-const SCROLLBACK: usize = 10_000;
+/// The `[terminal]` settings and the shell `[[profiles]]` of `config.toml`. The shell installs it as
+/// a global and refreshes it on every config reload. New tabs read the shell, the profile and the
+/// scrollback when they are built; the cursor, copy-on-select and Ctrl+V are read live, every time
+/// they matter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TermSettings {
+    /// `terminal.default_profile`: name of the profile new tabs open (empty = automatic).
+    pub default_profile: String,
+    pub profiles: Vec<Profile>,
+    /// `terminal.scrollback`, as written (clamped by [`TermSettings::scrollback_lines`]).
+    pub scrollback: u32,
+    pub cursor_style: CursorStyle,
+    pub copy_on_select: bool,
+    pub paste_ctrl_v: bool,
+}
+
+impl Default for TermSettings {
+    fn default() -> Self {
+        Self::from_config(&Config::default())
+    }
+}
+
+impl gpui::Global for TermSettings {}
+
+/// Most scrollback lines `config.toml` accepts (`Config::validate`).
+pub const MAX_SCROLLBACK: usize = 1_000_000;
+
+impl TermSettings {
+    pub fn from_config(config: &Config) -> Self {
+        let t = &config.terminal;
+        Self {
+            default_profile: t.default_profile.clone(),
+            profiles: config.profiles.clone(),
+            scrollback: t.scrollback,
+            cursor_style: t.cursor_style,
+            copy_on_select: t.copy_on_select,
+            paste_ctrl_v: t.paste_ctrl_v,
+        }
+    }
+
+    /// Scrollback lines a new session keeps, within what the config accepts.
+    pub fn scrollback_lines(&self) -> usize {
+        (self.scrollback as usize).min(MAX_SCROLLBACK)
+    }
+
+    /// The settings in force: the shell's global, or the defaults (examples, tests).
+    pub fn current(cx: &App) -> Self {
+        cx.try_global::<Self>().cloned().unwrap_or_default()
+    }
+}
+
+/// What a new tab runs.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ShellPlan {
+    pub program: String,
+    pub args: Vec<String>,
+    /// The profile's starting folder (only used when the tab has no folder of its own).
+    pub cwd: Option<PathBuf>,
+    /// The profile's environment variables (they win over the app's).
+    pub env: Vec<(String, String)>,
+    /// Shown over the terminal: the profile could not be used.
+    pub hint: Option<String>,
+    /// Started instead when the profile's program fails to spawn.
+    pub fallback: Option<(String, Vec<String>)>,
+}
+
+/// Is `program` a PowerShell (it then gets the shell integration of the automatic shell)?
+fn is_powershell(program: &str) -> bool {
+    let name = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .trim_matches('"')
+        .to_ascii_lowercase();
+    matches!(name.trim_end_matches(".exe"), "pwsh" | "powershell")
+}
+
+/// Picks the shell of a new tab: `SELACHI_SHELL` (a developer override) first, then the profile
+/// named by `terminal.default_profile`, else the automatic shell. A profile whose program does
+/// not exist falls back to the automatic shell with a hint, so a tab is never dead.
+pub(crate) fn resolve_shell(
+    settings: &TermSettings,
+    override_program: Option<String>,
+    exists: impl Fn(&str) -> bool,
+    automatic: impl Fn() -> (String, Vec<String>),
+) -> ShellPlan {
+    let plain = |(program, args): (String, Vec<String>), hint: Option<String>| ShellPlan {
+        program,
+        args,
+        cwd: None,
+        env: Vec::new(),
+        hint,
+        fallback: None,
+    };
+    // `SELACHI_SHELL=powershell.exe` picks another PowerShell (same shell integration). Useful
+    // because the Microsoft Store `pwsh.exe` (an app execution alias) runs in the package's own
+    // job and cannot be put into a process job: its children are then not tracked.
+    if let Some(program) = override_program {
+        return plain((program, automatic().1), None);
+    }
+    let wanted = settings.default_profile.trim();
+    let profile = (!wanted.is_empty())
+        .then(|| {
+            settings
+                .profiles
+                .iter()
+                .find(|p| p.name.trim().eq_ignore_ascii_case(wanted))
+        })
+        .flatten();
+    let Some(profile) = profile else {
+        return plain(automatic(), None);
+    };
+    let (auto_program, auto_args) = automatic();
+    if !exists(&profile.program) {
+        let hint = format!(
+            "El perfil «{}» usa «{}», que no existe: se abrió {} en su lugar.",
+            profile.name.trim(),
+            profile.program.trim(),
+            auto_program.strip_suffix(".exe").unwrap_or(&auto_program),
+        );
+        return plain((auto_program, auto_args), Some(hint));
+    }
+    let args = if profile.args.is_empty() && is_powershell(&profile.program) {
+        auto_args.clone()
+    } else {
+        profile.args.clone()
+    };
+    ShellPlan {
+        program: profile.program.trim().trim_matches('"').to_string(),
+        args,
+        cwd: profile
+            .cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(PathBuf::from),
+        env: profile
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        hint: None,
+        fallback: Some((auto_program, auto_args)),
+    }
+}
 
 /// Size of one terminal cell in logical pixels, snapped to the device pixel grid.
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +287,8 @@ pub struct TerminalView {
     pub(crate) display_offset: Cell<usize>,
     /// Last painted cursor cell, used to place the IME candidate window.
     pub(crate) cursor_bounds: Cell<Option<Bounds<Pixels>>>,
+    /// The part of that cell the cursor covers (its shape follows `terminal.cursor_style`).
+    pub(crate) cursor_shape: Cell<Option<Bounds<Pixels>>>,
     /// Snapshot buffer and shaped-row cache, reused between frames.
     pub(crate) paint_state: RefCell<PaintState>,
     metrics: Cell<Option<CellMetrics>>,
@@ -174,6 +320,16 @@ pub struct TerminalView {
     tab_id: Option<u64>,
     /// Command blocks: gutter, folding, the hover bar and Ctrl+click paths.
     pub(crate) block_ui: BlockUi,
+    /// The profile's environment variables (over the app's).
+    profile_env: Vec<(String, String)>,
+    /// What runs when the profile's program fails to start.
+    fallback: Option<(String, Vec<String>)>,
+    /// A note over the terminal (the profile could not be used); dropped on the first key.
+    hint: Option<SharedString>,
+    /// The left button is down and extending a text selection.
+    selecting: bool,
+    /// Something is selected (so typing clears it).
+    has_selection: bool,
 }
 
 impl TerminalView {
@@ -253,13 +409,23 @@ impl TerminalView {
             .floor()
             .clamp(3.0, 300.0) as u16;
 
-        let (mut program, args) = term_core::default_shell();
-        // `SELACHI_SHELL=powershell.exe` picks another PowerShell (same shell integration). Useful
-        // because the Microsoft Store `pwsh.exe` (an app execution alias) runs in the package's own
-        // job and cannot be put into a process job: its children are then not tracked.
-        if let Some(p) = std::env::var_os("SELACHI_SHELL").and_then(|p| p.into_string().ok()) {
-            program = p;
-        }
+        let settings = TermSettings::current(cx);
+        let ShellPlan {
+            program,
+            args,
+            cwd: profile_cwd,
+            env: profile_env,
+            hint,
+            fallback,
+        } = resolve_shell(
+            &settings,
+            std::env::var_os("SELACHI_SHELL").and_then(|p| p.into_string().ok()),
+            term_core::program_exists,
+            term_core::default_shell,
+        );
+        // A folder the tab was opened in (the active tab's, a restored one) wins over the
+        // profile's starting folder.
+        let cwd = cwd.or_else(|| profile_cwd.filter(|c| c.is_dir()));
         let shell_name: SharedString = program
             .strip_suffix(".exe")
             .unwrap_or(&program)
@@ -274,7 +440,7 @@ impl TerminalView {
             cell_width: f32::from(metrics.width) as u16,
             cell_height: f32::from(metrics.height) as u16,
             palette: palette_from(&theme.terminal),
-            scrollback: SCROLLBACK,
+            scrollback: settings.scrollback_lines(),
         };
 
         let mut view = Self {
@@ -284,6 +450,7 @@ impl TerminalView {
             app_cursor: Cell::new(false),
             display_offset: Cell::new(0),
             cursor_bounds: Cell::new(None),
+            cursor_shape: Cell::new(None),
             paint_state: RefCell::default(),
             metrics: Cell::new(Some(metrics)),
             shell_name,
@@ -302,6 +469,11 @@ impl TerminalView {
             job,
             tab_id,
             block_ui: BlockUi::default(),
+            profile_env,
+            fallback,
+            hint: hint.map(Into::into),
+            selecting: false,
+            has_selection: false,
         };
 
         if defer {
@@ -337,10 +509,15 @@ impl TerminalView {
     fn start_session(&mut self, cfg: SessionConfig, cx: &mut Context<Self>) {
         let program = cfg.program.clone();
         let (cols, rows) = (cfg.cols, cfg.rows);
-        let env = cx
+        let mut env = cx
             .try_global::<TermEnv>()
             .map(|e| e.0.clone())
             .unwrap_or_default();
+        // The profile's variables win over the app's.
+        for (k, v) in &self.profile_env {
+            env.retain(|(name, _)| name != k);
+            env.push((k.clone(), v.clone()));
+        }
         log::debug!(
             "spawning with job {:?}",
             self.job.as_ref().map(|j| (j.owner, j.handle))
@@ -426,6 +603,37 @@ impl TerminalView {
             }
             Err(e) => {
                 log::error!("failed to spawn shell: {e}");
+                // A profile that exists but does not start (a broken alias, no rights): the
+                // automatic shell opens instead, so the tab is never dead.
+                if let Some((fallback, args)) = view.fallback.take() {
+                    view.hint = Some(
+                        format!("No se pudo iniciar «{program}»: se abrió {fallback} en su lugar.")
+                            .into(),
+                    );
+                    view.shell_name = fallback
+                        .strip_suffix(".exe")
+                        .unwrap_or(&fallback)
+                        .to_string()
+                        .into();
+                    view.profile_env.clear();
+                    let cfg = SessionConfig {
+                        program: fallback,
+                        args,
+                        cwd: view.cwd.clone(),
+                        cols,
+                        rows,
+                        cell_width: view.metrics.get().map_or(8, |m| f32::from(m.width) as u16),
+                        cell_height: view
+                            .metrics
+                            .get()
+                            .map_or(16, |m| f32::from(m.height) as u16),
+                        palette: palette_from(&view.theme.terminal),
+                        scrollback: TermSettings::current(cx).scrollback_lines(),
+                    };
+                    view.start_session(cfg, cx);
+                    cx.notify();
+                    return;
+                }
                 view.spawn_error = Some(format!("No se pudo iniciar {program}: {e}").into());
                 cx.notify();
             }
@@ -453,6 +661,11 @@ impl TerminalView {
     /// Applies a new theme: the terminal palette is swapped in the session (re-resolved on the
     /// next snapshot) and the view repaints; the row cache is invalidated by its epoch.
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        // A new font, size or line height changes the cell: it is measured again on the next paint
+        // and the element resizes the PTY grid to the new cell count.
+        if self.theme.typography != theme.typography {
+            self.metrics.set(None);
+        }
         self.theme = theme;
         if let Some(session) = &self.session {
             session.set_palette(palette_from(&theme.terminal));
@@ -555,6 +768,7 @@ impl TerminalView {
             session.scroll_to_bottom();
             session.write(bytes);
         }
+        self.clear_selection(cx);
         if self.display_offset.get() > 0 {
             self.display_offset.set(0);
             cx.notify();
@@ -571,32 +785,122 @@ impl TerminalView {
         self.send(text.into_bytes(), cx);
     }
 
-    /// Ctrl+Shift+C. TODO: no selection model yet, so there is nothing to copy.
-    fn copy(&mut self, _cx: &mut Context<Self>) {
-        log::debug!("copy requested: selection is not implemented yet");
+    /// Ctrl+Shift+C: copies the selection (nothing happens without one).
+    fn copy(&mut self, cx: &mut Context<Self>) {
+        if let Some(text) = self.selection_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// The selected text, if any.
+    pub(crate) fn selection_text(&self) -> Option<String> {
+        self.session.as_ref().and_then(Session::selection_text)
+    }
+
+    /// Drops the selection (typing, a click elsewhere).
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if self.has_selection {
+            self.has_selection = false;
+            if let Some(session) = &self.session {
+                session.selection_clear();
+            }
+            cx.notify();
+        }
+    }
+
+    /// The cell under `position` as `(terminal row, column, right half of the cell)`; `None` over
+    /// a fold summary or outside the grid.
+    fn selection_cell(&self, position: gpui::Point<Pixels>) -> Option<(usize, usize, bool)> {
+        let ui = &self.block_ui;
+        let (cw, ch) = ui.cell.get();
+        let origin = ui.origin.get();
+        if cw <= 0.0 || ch <= 0.0 {
+            return None;
+        }
+        let x = f32::from(position.x) - f32::from(origin.x);
+        let y = f32::from(position.y) - f32::from(origin.y);
+        if y < 0.0 {
+            return None;
+        }
+        let vis = (y / ch) as usize;
+        let row = ui.rows.borrow().get(vis)?.term_row?;
+        let col = if x < 0.0 { 0 } else { (x / cw) as usize };
+        let right = x >= 0.0 && (x / cw).fract() >= 0.5;
+        Some((row, col, right))
+    }
+
+    /// Left button down on the grid: a new selection starts here.
+    pub(crate) fn begin_selection(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.selecting = false;
+        let Some((row, col, right)) = self.selection_cell(position) else {
+            self.clear_selection(cx);
+            return;
+        };
+        if let Some(session) = &self.session {
+            session.selection_start(row, col, right);
+            self.selecting = true;
+            self.has_selection = true;
+            cx.notify();
+        }
+    }
+
+    /// The pointer moved with the button down: the selection grows to the cell under it.
+    pub(crate) fn extend_selection(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.selecting {
+            return;
+        }
+        if let Some((row, col, right)) = self.selection_cell(position)
+            && let Some(session) = &self.session
+        {
+            session.selection_update(row, col, right);
+            cx.notify();
+        }
+    }
+
+    /// Left button up: the selection is final; with `terminal.copy_on_select` it is copied now.
+    pub(crate) fn end_selection(&mut self, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.selecting) {
+            return;
+        }
+        let text = self.selection_text();
+        self.has_selection = text.is_some();
+        if let Some(text) = text
+            && TermSettings::current(cx).copy_on_select
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &event.keystroke;
         let m = ks.modifiers;
-
-        // Ctrl+Up / Ctrl+Down: previous / next command block (the shell gets them without blocks).
-        if m.control && !m.alt && !m.shift && !m.platform {
-            let dir = match ks.key.as_str() {
-                "up" => -1,
-                "down" => 1,
-                _ => 0,
-            };
-            if dir != 0 && self.jump_block(dir, cx) {
-                cx.stop_propagation();
-                return;
-            }
+        if self.hint.take().is_some() {
+            cx.notify();
         }
 
-        // Clipboard shortcuts. Ctrl+V pastes too, like Windows Terminal; Ctrl+Shift+C copies.
+        // Previous / next command block (Ctrl+Up / Ctrl+Down by default; the shell gets the keys
+        // when there are no blocks).
+        // The chords are the ones of Teclado (`block.prev` / `block.next`).
+        if let Some(dir) = crate::keybindings::block_direction(ks, cx)
+            && self.jump_block(dir, cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
+
+        // Clipboard shortcuts. Ctrl+V pastes too, like Windows Terminal (`terminal.paste_ctrl_v`;
+        // off, the program gets ^V); Ctrl+Shift+V always pastes; Ctrl+Shift+C copies.
         if m.control && !m.alt && !m.platform {
             match (ks.key.as_str(), m.shift) {
-                ("v", _) => {
+                ("v", shift) if shift || TermSettings::current(cx).paste_ctrl_v => {
                     self.paste(cx);
                     cx.stop_propagation();
                     return;
@@ -743,7 +1047,7 @@ impl Render for TerminalView {
         } else if self.exited {
             Some("[proceso terminado]".into())
         } else {
-            None
+            self.hint.clone()
         };
 
         div()
@@ -758,9 +1062,15 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .when(self.block_ui.link.is_some(), |d| d.cursor_pointer())
-            .on_mouse_move(
-                cx.listener(|this, e: &MouseMoveEvent, _, cx| this.on_pointer_move(e, cx)),
-            )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                this.on_pointer_move(e, cx);
+                if e.pressed_button == Some(MouseButton::Left) {
+                    this.extend_selection(e.position, cx);
+                } else {
+                    // The button was released outside the view: the drag is over.
+                    this.end_selection(cx);
+                }
+            }))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered {
                     this.on_pointer_leave(cx);
@@ -773,8 +1083,18 @@ impl Render for TerminalView {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus_handle);
-                    this.click_special(e, cx);
+                    if !this.click_special(e, cx) {
+                        this.begin_selection(e.position, cx);
+                    }
                 }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_selection(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_selection(cx)),
             )
             .child(
                 div()
@@ -844,3 +1164,7 @@ mod tests {
         assert!(env_of(&o, "SELACHI_PARENT_TAB").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_view/settings_tests.rs"]
+mod settings_tests;

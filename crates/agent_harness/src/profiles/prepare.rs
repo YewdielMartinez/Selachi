@@ -72,8 +72,14 @@ pub struct Prepared {
     pub profile_path: Option<PathBuf>,
     /// Agent as given by the request or the profile (not yet resolved).
     pub agent: String,
+    /// The checked model (an Antigravity family id such as `gemini-4-neon`), `None` = the agent's default.
     pub model: Option<String>,
+    /// The checked effort, `None` = the agent's default.
     pub effort: Option<String>,
+    /// The agent's own id for the pair (`gemini-4-neon-medium`), for the record.
+    pub real_model_id: Option<String>,
+    /// Follow up a turn that ends with a command still running (see `turns`).
+    pub wait_for_background: bool,
     pub permission: Permission,
     pub worktree: bool,
     pub timeout: Duration,
@@ -107,6 +113,8 @@ impl Prepared {
             "agent": self.agent,
             "model": self.model,
             "effort": self.effort,
+            "real_model_id": self.real_model_id,
+            "wait_for_background": self.wait_for_background,
             "output_format": self.output_format.map(|f| f.as_str()),
             "limits": self.limits,
             "context_files": self.context_files.iter().map(|c| json!({
@@ -596,6 +604,12 @@ impl Harness {
     /// Decide everything about a run without starting anything: profile, effective limits (policy
     /// rules included), final prompt. See the module docs.
     pub fn prepare(&self, req: &RunRequest) -> Result<Prepared, Refusal> {
+        self.prepare_as(req, &self.caller)
+    }
+
+    /// [`prepare`](Self::prepare) for a caller other than the process's own (the harness lowers the
+    /// caller's permission to what its parent thread has now).
+    pub fn prepare_as(&self, req: &RunRequest, caller: &Caller) -> Result<Prepared, Refusal> {
         if req.prompt.trim().is_empty() {
             return Err(refusal(RefusalCode::BadRequest, "the prompt is empty"));
         }
@@ -627,13 +641,13 @@ impl Harness {
             }
         };
         let mut notes: Vec<String> = Vec::new();
-        let eff = combine(req, profile.as_ref(), &self.cfg, &self.caller, &mut notes);
+        let eff = combine(req, profile.as_ref(), &self.cfg, caller, &mut notes);
 
         // the static rules, on the effective permission
         let policy_name = canonical_name(&agent).unwrap_or(agent.as_str()).to_string();
         let permission = Policy {
             cfg: &self.cfg,
-            caller: &self.caller,
+            caller,
         }
         .check(&policy_name, eff.permission)?;
 
@@ -641,11 +655,36 @@ impl Harness {
         let (settings, _) = super::load_settings(&self.data_dir);
         let max_context = ((settings.max_context_kb as usize) * 1024).min(MAX_CONTEXT_BYTES);
 
+        let canon = canonical_name(&agent);
+        let preamble = canon
+            .and_then(crate::turns::agent_preamble)
+            .filter(|_| profile.as_ref().is_none_or(|p| p.agent_preamble));
+        let wait_for_background = req
+            .wait_for_background
+            .or_else(|| profile.as_ref().map(|p| p.wait_for_background))
+            .unwrap_or(true);
+        let with_preamble = |body: String, task: &str| -> String {
+            match preamble {
+                None => body,
+                Some(pre) if body == task => format!(
+                    "{pre}
+
+=== TASK ===
+{task}"
+                ),
+                Some(pre) => format!(
+                    "{pre}
+
+{body}"
+                ),
+            }
+        };
+
         let (final_raw, context, effort, model, tools_enforced, output_format) = match &profile {
             None => (
-                req.prompt.clone(),
+                with_preamble(req.prompt.clone(), &req.prompt),
                 Vec::new(),
-                None,
+                req.effort.clone(),
                 req.model.clone(),
                 false,
                 None,
@@ -677,15 +716,29 @@ impl Harness {
                     &req.prompt,
                 );
                 (
-                    final_raw,
+                    with_preamble(final_raw, &req.prompt),
                     context.into_iter().map(|c| c.info).collect::<Vec<_>>(),
-                    p.effort.clone(),
+                    req.effort.clone().or_else(|| p.effort.clone()),
                     req.model.clone().or_else(|| p.model.clone()),
                     enforced,
                     Some(p.output_format),
                 )
             }
         };
+
+        // the model and the effort, asked separately, are checked against what the agent itself
+        // lists (a refusal names the valid ones); Antigravity families map to its real ids
+        let chosen = match canon {
+            Some(name) => {
+                self.select_model(name, model.as_deref(), effort.as_deref(), &mut notes)?
+            }
+            None => crate::models::ChosenModel {
+                model: model.clone(),
+                effort: effort.clone(),
+                real_id: model.clone(),
+            },
+        };
+        let (model, effort) = (chosen.model, chosen.effort);
 
         // input is redacted before it is stored or sent
         let redaction = store::redact(&final_raw);
@@ -731,7 +784,7 @@ impl Harness {
         }
         let limits = RunLimits {
             permission: permission.to_string(),
-            parent_permission: self.caller.permission.to_string(),
+            parent_permission: caller.permission.to_string(),
             config_max_permission: self
                 .cfg
                 .max_permission
@@ -740,7 +793,7 @@ impl Harness {
             profile_permission: profile
                 .as_ref()
                 .map(|p| p.permission.unwrap_or(Permission::ReadOnly).to_string()),
-            depth: self.caller.depth.saturating_add(1),
+            depth: caller.depth.saturating_add(1),
             max_depth: self.cfg.max_depth,
             timeout_secs: eff.timeout.as_secs(),
             budget_tokens: eff.budget_tokens,
@@ -764,6 +817,8 @@ impl Harness {
             agent,
             model,
             effort,
+            real_model_id: chosen.real_id,
+            wait_for_background,
             permission,
             worktree: eff.worktree,
             timeout: eff.timeout,

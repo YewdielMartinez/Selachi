@@ -113,8 +113,8 @@ pub fn tag(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
         .child(text.into())
 }
 
-/// A 22 px quiet square with a text glyph (`+`, `−`, `×`). TODO-SVG: stage / unstage / remove
-/// pixel icons (see the crate docs).
+/// A 22 px quiet square with a pixel icon picked by `glyph` (`+` stage, `−` unstage, `×` close,
+/// `↻` refresh).
 pub fn mini_button(
     id: impl Into<SharedString>,
     theme: &Theme,
@@ -138,7 +138,13 @@ pub fn mini_button(
         .hover(move |s| s.bg(c.surface_3).text_color(c.text))
         .tooltip(Tooltip::text(theme, tip))
         .on_click(move |e, w, cx| on_click(e, w, cx))
-        .child(glyph)
+        .child(match glyph {
+            "+" => icon(Icon::Stage, 16.0, c.muted).into_any_element(),
+            "−" => icon(Icon::Unstage, 16.0, c.muted).into_any_element(),
+            "×" => icon(Icon::Close, 10.0, c.muted).into_any_element(),
+            "↻" => icon(Icon::Update, 16.0, c.muted).into_any_element(),
+            other => div().child(other).into_any_element(),
+        })
 }
 
 /// Section header: collapse chevron, title, count and an optional action on the right.

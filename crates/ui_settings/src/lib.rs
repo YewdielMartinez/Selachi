@@ -60,8 +60,9 @@ mod view;
 pub use agents::{AgentRow, AgentStatus, AgentsState};
 pub use delegation_ui::{DELEGATE_AGENTS, effective_allowed, minutes_text, toggled_allowed};
 pub use keys::{
-    ChordError, KeyAction, chord_from_keystroke, default_catalog, display_chord, effective,
-    find_conflict, normalize_chord, set_binding, swap_bindings,
+    ChordError, Clash, KeyAction, chord_from_keystroke, clash_note, default_catalog, display_chord,
+    effective, find_conflict, is_bindable, normalize_chord, plan, set_binding, swap_bindings,
+    to_gpui,
 };
 #[cfg(any(test, feature = "dev-file-urls"))]
 pub use net::LocalFetcher;
@@ -93,5 +94,9 @@ pub use view::{
     settings_view,
 };
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod layout_checks;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod tests;

@@ -154,6 +154,47 @@ fn text_fields_apply_through_fields_apply(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn delegation_ranges_follow_the_store_and_errors_land_on_their_row(cx: &mut TestAppContext) {
+    let f = fixture(cx, TEMPLATE);
+    f.view.update(cx, |v, cx| {
+        // Tiempo máximo: the store takes 10 s to 24 h; the field is in minutes.
+        let before = v.config().delegation.timeout_secs;
+        crate::fields::apply(v, "deleg_timeout", "0,1", cx); // 6 s
+        assert!(v.errors.contains_key("deleg_timeout"));
+        assert_eq!(v.config().delegation.timeout_secs, before);
+        crate::fields::apply(v, "deleg_timeout", "0,2", cx); // 12 s
+        assert!(!v.errors.contains_key("deleg_timeout"));
+        assert_eq!(v.config().delegation.timeout_secs, 12);
+        crate::fields::apply(v, "deleg_timeout", "1441", cx); // over 24 h
+        assert_eq!(v.errors["deleg_timeout"], crate::validate::TIMEOUT_HELP);
+        assert_eq!(v.config().delegation.timeout_secs, 12);
+        // Aprobación: 5 s to 3600 s.
+        crate::fields::apply(v, "deleg_approval", "4", cx);
+        assert!(v.errors.contains_key("deleg_approval"));
+        crate::fields::apply(v, "deleg_approval", "3601", cx);
+        assert!(v.errors.contains_key("deleg_approval"));
+        assert_eq!(v.config().delegation.approval_timeout_secs, 120);
+        crate::fields::apply(v, "deleg_approval", "5", cx);
+        assert!(!v.errors.contains_key("deleg_approval"));
+        assert_eq!(v.config().delegation.approval_timeout_secs, 5);
+        // A store rejection from a control is shown on the row of its field.
+        v.edit_cfg(cx, |c| c.delegation.max_concurrent = 0);
+        assert!(v.errors.contains_key("deleg_concurrent"));
+        assert!(!v.errors.contains_key("delegation.max_concurrent"));
+        // Accent: only a full #RRGGBB is accepted on commit.
+        crate::fields::apply(v, "accent_hex", "00AAFF", cx);
+        assert!(v.errors.contains_key("accent_hex"));
+        assert_eq!(v.config().appearance.accent, "#00AAFF");
+        crate::fields::apply(v, "accent_hex", "#11aa22", cx);
+        assert_eq!(v.config().appearance.accent, "#11AA22");
+    });
+    settle(cx);
+    let saved = Config::parse(&disk(&f)).unwrap().config;
+    assert_eq!(saved.delegation.timeout_secs, 12);
+    assert_eq!(saved.delegation.approval_timeout_secs, 5);
+}
+
+#[gpui::test]
 fn profiles_can_be_added_edited_and_removed(cx: &mut TestAppContext) {
     let f = fixture(cx, TEMPLATE);
     f.view.update(cx, |v, cx| {
@@ -499,9 +540,8 @@ mod ui {
     #[gpui::test]
     fn tab_walks_the_section_list_and_then_the_controls(cx: &mut TestAppContext) {
         let (w, vcx) = open(cx);
-        // General: 10 section pills, then the language select, then the first toggle.
-        let stops = Section::ALL.len() + 1;
-        for _ in 0..stops {
+        // General: the 10 section pills, then the first control (Restaurar la sesión).
+        for _ in 0..Section::ALL.len() {
             testing::press(vcx, "tab");
         }
         assert_eq!(
@@ -516,15 +556,29 @@ mod ui {
             !before,
             "Enter on the first toggle"
         );
-        // Shift+Tab goes back to the select; Enter opens it instead of toggling anything.
-        testing::press(vcx, "shift-tab enter");
-        let open = w.view.read_with(vcx, |v, cx| {
-            v.selects["general-lang"].entity.read(cx).is_open()
+    }
+
+    #[gpui::test]
+    fn controls_that_cannot_work_yet_are_hidden_and_keep_their_config(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        vcx.run_until_parked();
+        // General: no language or channel drop-down (only one language and one channel exist).
+        w.view.read_with(vcx, |v, _| {
+            assert!(!v.selects.contains_key("general-lang"));
+            assert!(!v.selects.contains_key("updates-channel"));
         });
-        assert!(
-            open,
-            "shift-tab came back to the language select and Enter opened it"
-        );
+        assert!(testing::bounds_of(vcx, "updates-check").is_some());
+        // Agentes: no statusLine hook toggle.
+        w.view
+            .update(vcx, |v, cx| v.set_section(Section::Agents, cx));
+        vcx.run_until_parked();
+        assert!(testing::bounds_of(vcx, "statusline-hook").is_none());
+        assert!(testing::bounds_of(vcx, "show-estimates").is_some());
+        // The config keys themselves stay.
+        w.view.read_with(vcx, |v, _| {
+            assert_eq!(v.config().general.language, "es");
+            assert_eq!(v.config().updates.channel, "stable");
+        });
     }
 
     #[gpui::test]
@@ -539,30 +593,93 @@ mod ui {
     }
 
     #[gpui::test]
-    fn typing_into_a_text_field_updates_the_config(cx: &mut TestAppContext) {
+    fn numeric_fields_apply_on_enter_or_blur_not_per_keystroke(cx: &mut TestAppContext) {
         let (w, vcx) = open(cx);
         w.view
             .update(vcx, |v, cx| v.set_section(Section::Terminal, cx));
         vcx.run_until_parked();
         let field = w.view.read_with(vcx, |v, _| v.fields["scrollback"].clone());
+        let before = w.view.read_with(vcx, |v, _| v.config().terminal.scrollback);
         vcx.update(|window, cx| field.read(cx).focus(window));
         testing::press(vcx, "ctrl-a");
         testing::type_text(vcx, "20 000");
         assert_eq!(
             w.view.read_with(vcx, |v, _| v.config().terminal.scrollback),
-            20_000
+            before,
+            "typing alone applies nothing"
+        );
+        testing::press(vcx, "enter");
+        assert_eq!(
+            w.view.read_with(vcx, |v, _| v.config().terminal.scrollback),
+            20_000,
+            "Enter commits"
         );
         // Invalid text is not applied and the field shows the error.
         testing::press(vcx, "ctrl-a");
         testing::type_text(vcx, "muchas");
+        testing::press(vcx, "enter");
         assert_eq!(
             w.view.read_with(vcx, |v, _| v.config().terminal.scrollback),
             20_000
         );
         vcx.run_until_parked();
         assert!(
-            field.read_with(vcx, |f, _| f.error().is_some()),
+            field.read_with(vcx, |f, _| f.is_invalid()),
             "the field is flagged"
+        );
+        assert!(
+            w.view.read_with(vcx, |v, _| v.errors.contains_key("scrollback")),
+            "its row prints the message (the field only paints the border)"
+        );
+        // A valid value waits for the field to lose focus.
+        testing::press(vcx, "ctrl-a");
+        testing::type_text(vcx, "30 000");
+        assert_eq!(
+            w.view.read_with(vcx, |v, _| v.config().terminal.scrollback),
+            20_000
+        );
+        vcx.update(|window, cx| w.view.read(cx).focus_handle_ref().focus(window));
+        vcx.run_until_parked();
+        assert_eq!(
+            w.view.read_with(vcx, |v, _| v.config().terminal.scrollback),
+            30_000,
+            "losing focus commits"
+        );
+    }
+
+    #[gpui::test]
+    fn the_plugin_index_url_is_applied_on_enter_only(cx: &mut TestAppContext) {
+        let (w, vcx) = open(cx);
+        w.view
+            .update(vcx, |v, cx| v.set_section(Section::Plugins, cx));
+        vcx.run_until_parked();
+        let field = w.view.read_with(vcx, |v, _| v.fields["index_url"].clone());
+        let url = "https://example.com/grammars.toml";
+        vcx.update(|window, cx| field.read(cx).focus(window));
+        testing::press(vcx, "ctrl-a");
+        testing::type_text(vcx, url);
+        assert_ne!(
+            w.view
+                .read_with(vcx, |v, _| v.config().plugins.index_url.clone()),
+            url,
+            "no URL is adopted (or fetched) per keystroke"
+        );
+        assert_ne!(
+            w.view
+                .read_with(vcx, |v, cx| v.plugins().read(cx).index_url().to_string()),
+            url
+        );
+        testing::press(vcx, "enter");
+        assert_eq!(
+            w.view
+                .read_with(vcx, |v, _| v.config().plugins.index_url.clone()),
+            url
+        );
+        assert_eq!(
+            w.view
+                .read_with(vcx, |v, cx| v.plugins().read(cx).index_url().to_string()),
+            url,
+            "the index follows the committed URL"
         );
     }
 
@@ -848,7 +965,6 @@ mod delegation {
             let card_left = crate::ui::NAV_WIDTH + (scroll_w - col_w) / 2.0 + 32.0;
             let card_right = card_left + (col_w - 64.0);
             for id in [
-                "statusline-hook",
                 "week-start-trigger",
                 "show-estimates",
                 "deleg-enabled",
@@ -878,6 +994,37 @@ mod delegation {
                 assert!(
                     f32::from(last.top()) > f32::from(first.top()) + 10.0,
                     "agent chips should wrap at {win_w}px: first={first:?}, last={last:?}"
+                );
+            }
+        }
+    }
+
+    /// Layout of a text column + control must not depend on how often a parent measured it: a
+    /// field keeps the width its row gives it (it used to collapse to its 28 px of padding).
+    #[gpui::test]
+    fn text_fields_keep_the_width_of_their_row(cx: &mut TestAppContext) {
+        let (win, vcx) = open(cx);
+        win.view
+            .update(vcx, |v, cx| v.set_section(Section::Agents, cx));
+        for win_w in [800.0_f32, 1000.0, 1600.0] {
+            vcx.simulate_resize(size(px(win_w), px(3600.0)));
+            for _ in 0..3 {
+                vcx.update(|window, _| window.refresh());
+                vcx.run_until_parked();
+            }
+            for (key, want) in [
+                ("deleg_concurrent", 80.0_f32),
+                ("deleg_timeout", 80.0),
+                ("deleg_budget", 140.0),
+            ] {
+                let id = win
+                    .view
+                    .read_with(vcx, |v, _| v.fields[key].entity_id().as_u64());
+                let b = testing::bounds_of(vcx, &format!("text-field-{id}")).unwrap();
+                assert!(
+                    (f32::from(b.size.width) - want).abs() < 1.0,
+                    "`{key}` is {:?} wide at {win_w}px, want {want}",
+                    b.size.width
                 );
             }
         }

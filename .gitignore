@@ -36,3 +36,6 @@ desktop.ini
 .agents
 # Plugins de gramáticas compilados (se publican en releases, no en git)
 /packaging/grammars/dist/
+
+# Landing (repositorio aparte: github.com/YewdielMartinez/selachi-landing)
+/selachi-landing/

@@ -268,18 +268,38 @@ impl AppShell {
     pub(super) fn adopt_config(&mut self, config: Arc<Config>, cx: &mut Context<Self>) {
         let layout_moved = layout_changed(&self.config, &config);
         let theme_moved = self.config.appearance.mode != config.appearance.mode
-            || self.config.appearance.accent != config.appearance.accent;
+            || self.config.appearance.accent != config.appearance.accent
+            || self.config.appearance.ui_font != config.appearance.ui_font
+            || self.config.appearance.mono_font != config.appearance.mono_font
+            || self.config.appearance.mono_size != config.appearance.mono_size
+            || self.config.appearance.line_height != config.appearance.line_height;
+        let term_settings = TermSettings::from_config(&config);
+        let term_moved = cx.try_global::<TermSettings>() != Some(&term_settings);
         let completion_moved = self.config.terminal.completion != config.terminal.completion;
         let panel_config = config.layout.clone();
         let pr_moved = self.config.git.pr_status != config.git.pr_status;
+        let git_confirm_moved = self.config.git.confirm_sensitive != config.git.confirm_sensitive;
         let updates_moved = self.config.updates != config.updates;
-        let chat_moved = self.config.chat != config.chat;
+        let keys_moved = self.config.keybindings != config.keybindings;
+        let chat_moved = self.config.chat != config.chat
+            || self.config.agents.permission_default != config.agents.permission_default;
+        let usage_moved = self.config.agents.usage_week_start != config.agents.usage_week_start
+            || self.config.agents.show_estimates != config.agents.show_estimates;
         self.config = config;
+        if usage_moved {
+            // `[agents] usage_week_start` / `show_estimates`: monitor, status bar, sidebar and panel.
+            let agents = self.config.agents.clone();
+            self.usage
+                .update(cx, |u, cx| u.apply_agents_config(&agents, cx));
+        }
         if chat_moved {
             self.apply_copy_settings(cx);
         }
         if pr_moved {
             self.apply_pr_status(cx);
+        }
+        if git_confirm_moved {
+            self.apply_git_confirm(cx);
         }
         if updates_moved {
             self.on_updates_config_changed(cx);
@@ -287,8 +307,22 @@ impl AppShell {
         if completion_moved {
             cx.set_global(TermEnv(self.config.completion_env()));
         }
+        if term_moved {
+            // Cursor, copy on select and Ctrl+V act on the open terminals right away (they read
+            // the global when they paint or handle input): repaint them. The shell, its profile
+            // and the scrollback are read by the tabs opened from now on.
+            cx.set_global(term_settings);
+            for slot in &self.tabs {
+                slot.handle.theme_changed(self.theme, cx);
+            }
+        }
         if theme_moved {
-            self.set_theme(theme_for(&self.config), cx);
+            self.set_theme(theme_for(&self.config, cx.window_appearance()), cx);
+        }
+        if keys_moved {
+            // Rebinds live: the new chords work and the old ones go quiet, no restart.
+            crate::keybindings::install(cx, &self.config.keybindings);
+            self.refresh_palette_actions(cx);
         }
         if layout_moved {
             self.recompute_layout(true, cx);

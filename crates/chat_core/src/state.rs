@@ -485,6 +485,18 @@ pub struct ApprovalWrite {
     pub decided_ms: Option<i64>,
 }
 
+/// Most refusals kept per turn (all of them are counted in [`ThreadState::policy_denied_total`]).
+pub const MAX_POLICY_DENIALS: usize = 50;
+
+/// A request the driver refused on its own (read-only mode, credentials), nothing asked of the user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyDenial {
+    pub tool: String,
+    pub command: String,
+    pub reason: String,
+    pub blocked: bool,
+}
+
 /// A record the runtime must persist (batched by the writer thread).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Persist {
@@ -566,6 +578,13 @@ pub struct ThreadState {
     pub model: Option<String>,
     /// Message of the last `Status(Error)` (cleared when a new turn starts).
     pub error: Option<String>,
+    /// Requests the driver refused by itself during the current turn (the last
+    /// [`MAX_POLICY_DENIALS`]); cleared when a new user turn starts.
+    pub policy_denials: Vec<PolicyDenial>,
+    /// How many were refused in the current turn (also the ones no longer in `policy_denials`).
+    pub policy_denied_total: u32,
+    /// Unusual stop reason of the current turn (`max_tokens`, `cancelled`...), if any.
+    pub stop_reason: Option<String>,
     /// Bumped on every transition that changed something.
     pub revision: u64,
 
@@ -599,6 +618,9 @@ impl ThreadState {
             session_id: None,
             model,
             error: None,
+            policy_denials: Vec::new(),
+            policy_denied_total: 0,
+            stop_reason: None,
             revision: 0,
             agent,
             pricing,
@@ -750,6 +772,9 @@ impl ThreadState {
     ) -> Effects {
         let mut fx = self.finalize_open(now_ms);
         self.error = None;
+        self.policy_denials.clear();
+        self.policy_denied_total = 0;
+        self.stop_reason = None;
         let seq = self.messages.len() as u32;
         self.messages.push(Message {
             seq,
@@ -1039,6 +1064,57 @@ impl ThreadState {
                     fx.merge(self.set_status(ThreadStatus::Error, Some(msg)));
                 }
             },
+            AgentEvent::PolicyDenied {
+                tool,
+                command,
+                reason,
+                blocked,
+            } => {
+                let i = self.ensure_open(now_ms);
+                self.stream = None;
+                self.policy_denied_total = self.policy_denied_total.saturating_add(1);
+                if self.policy_denials.len() >= MAX_POLICY_DENIALS {
+                    self.policy_denials.remove(0);
+                }
+                self.policy_denials.push(PolicyDenial {
+                    tool: tool.clone(),
+                    command: truncate_chars(&command, 2000),
+                    reason: reason.clone(),
+                    blocked,
+                });
+                let detail = truncate_chars(
+                    &format!(
+                        "{command}
+{reason}"
+                    ),
+                    2000,
+                );
+                let request_id = format!(
+                    "denied-{}-{}",
+                    self.messages[i].seq, self.policy_denied_total
+                );
+                fx.persist.push(Persist::Approval(ApprovalWrite {
+                    request_id: request_id.clone(),
+                    tool: tool.clone(),
+                    detail: redact_text(&detail),
+                    decision: Some("denied".into()),
+                    decided_ms: Some(now_ms),
+                }));
+                self.messages[i].blocks.push(Block::Approval(ApprovalRow {
+                    request_id,
+                    tool,
+                    detail,
+                    state: ApprovalState::Denied,
+                    received_ms: now_ms,
+                    decided_ms: Some(now_ms),
+                }));
+                fx.changed.messages = true;
+                fx.changed.approvals = true;
+            }
+            AgentEvent::TurnEnded { stop_reason } => {
+                self.stop_reason = Some(stop_reason);
+                fx.changed.status = true;
+            }
             // The model catalogue is for the picker, not for the transcript.
             AgentEvent::Models { .. } => {}
             AgentEvent::Exited { code } => {
@@ -1981,5 +2057,127 @@ mod tests {
         r.input = Value::Null;
         r.title = "d.rs, e.rs".into();
         assert_eq!(touched_paths(&r), ["d.rs", "e.rs"]);
+    }
+
+    #[test]
+    fn a_policy_denial_is_a_denied_row_and_is_counted() {
+        let mut s = st(
+            AgentKind::Acp {
+                command: "agy acp".into(),
+            },
+            None,
+        );
+        s.apply(AgentEvent::Status(AgentStatus::Working), 1);
+        let fx = s.apply(
+            AgentEvent::PolicyDenied {
+                tool: "bash".into(),
+                command: "Remove-Item x".into(),
+                reason: "solo lectura: no".into(),
+                blocked: false,
+            },
+            2,
+        );
+        assert_eq!(s.policy_denied_total, 1);
+        assert_eq!(s.policy_denials.len(), 1);
+        assert_eq!(s.policy_denials[0].command, "Remove-Item x");
+        let a = s.open_message().unwrap();
+        let Block::Approval(row) = &a.blocks[0] else {
+            panic!("{:?}", a.blocks)
+        };
+        assert_eq!(row.state, ApprovalState::Denied);
+        assert!(row.detail.contains("Remove-Item x") && row.detail.contains("solo lectura"));
+        assert!(
+            s.pending_approvals().is_empty(),
+            "a refusal is not waiting for anybody"
+        );
+        assert!(fx
+            .persist
+            .iter()
+            .any(|p| matches!(p, Persist::Approval(w) if w.decision.as_deref() == Some("denied"))));
+        assert!(fx.changed.messages);
+        // the second one gets its own row id
+        s.apply(
+            AgentEvent::PolicyDenied {
+                tool: "bash".into(),
+                command: "rm y".into(),
+                reason: "solo lectura: no".into(),
+                blocked: true,
+            },
+            3,
+        );
+        assert_eq!(s.policy_denied_total, 2);
+        let ids: Vec<&str> = s
+            .open_message()
+            .unwrap()
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Approval(a) => Some(a.request_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+        assert!(s.policy_denials[1].blocked);
+    }
+
+    #[test]
+    fn denials_and_stop_reason_belong_to_the_turn() {
+        let mut s = st(
+            AgentKind::Acp {
+                command: "agy acp".into(),
+            },
+            None,
+        );
+        s.apply(AgentEvent::Status(AgentStatus::Working), 1);
+        s.apply(
+            AgentEvent::PolicyDenied {
+                tool: "bash".into(),
+                command: "x".into(),
+                reason: "solo lectura".into(),
+                blocked: false,
+            },
+            2,
+        );
+        s.apply(
+            AgentEvent::TurnEnded {
+                stop_reason: "max_tokens".into(),
+            },
+            3,
+        );
+        s.apply(AgentEvent::Status(AgentStatus::Done), 4);
+        assert_eq!(s.stop_reason.as_deref(), Some("max_tokens"));
+        assert_eq!(s.policy_denied_total, 1);
+        s.begin_user_message("again", Vec::new(), None, 5);
+        assert_eq!(s.stop_reason, None);
+        assert_eq!(s.policy_denied_total, 0);
+        assert!(s.policy_denials.is_empty());
+    }
+
+    #[test]
+    fn only_the_last_denials_are_kept_but_all_are_counted() {
+        let mut s = st(
+            AgentKind::Acp {
+                command: "agy acp".into(),
+            },
+            None,
+        );
+        for i in 0..(MAX_POLICY_DENIALS + 10) {
+            s.apply(
+                AgentEvent::PolicyDenied {
+                    tool: "bash".into(),
+                    command: format!("cmd {i}"),
+                    reason: "solo lectura".into(),
+                    blocked: false,
+                },
+                i as i64,
+            );
+        }
+        assert_eq!(s.policy_denied_total as usize, MAX_POLICY_DENIALS + 10);
+        assert_eq!(s.policy_denials.len(), MAX_POLICY_DENIALS);
+        assert_eq!(
+            s.policy_denials.last().unwrap().command,
+            format!("cmd {}", MAX_POLICY_DENIALS + 9)
+        );
     }
 }

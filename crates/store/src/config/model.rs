@@ -582,7 +582,9 @@ impl Default for Agents {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GitConfig {
-    /// Ask before force-push, hard reset, branch delete and similar.
+    /// Ask before commit, push, pull, publish and switch. `false` skips only those; destructive or
+    /// irreversible operations (force-push, hard reset, discard, branch delete, worktree removal,
+    /// checkpoint restore) always ask.
     pub confirm_sensitive: bool,
     /// Command that opens a file in the user's editor (empty = the system default).
     pub external_editor: String,

@@ -67,9 +67,9 @@ pub use sources::{
     SnippetsSource, TabsSource, TasksSource,
 };
 pub use view::{
-    CommandPalette, Confirm, ConfirmAlt, DEBOUNCE, Dismiss, NextScope, OpenContext, PageDown,
-    PageUp, PrevScope, SelectNext, SelectPrev, Timings, TogglePalette, bind_toggle_key,
-    command_palette, init,
+    CommandPalette, Confirm, ConfirmAlt, DEBOUNCE, DEFAULT_TOGGLE_KEY, Dismiss, NextScope,
+    OpenContext, PageDown, PageUp, PrevScope, SelectNext, SelectPrev, Timings, TogglePalette,
+    bind_toggle_key, command_palette, init, toggle_binding,
 };
 
 use std::sync::Arc;

@@ -348,7 +348,9 @@ pub fn approval_card(p: &PendingApproval, ctx: &CardCtx) -> AnyElement {
                                 theme,
                                 ALWAYS_PROFILE_LABEL,
                             )
-                            .tooltip(format!("Añade este comando a los permitidos del perfil «{name}»"))
+                            .tooltip(format!(
+                                "Añade este comando a los permitidos del perfil «{name}»"
+                            ))
                             .on_click(move |_, w, cx| {
                                 decide_profile(id_profile.clone(), Decision::AlwaysProfile, w, cx)
                             }),

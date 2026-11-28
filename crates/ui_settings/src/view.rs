@@ -26,7 +26,7 @@ use crate::net::{Fetcher, HttpFetcher};
 use crate::plugins::{PluginsEvent, PluginsModel};
 use crate::registration::{CommandRunner, McpTarget, RegPhase, SystemRunner};
 use crate::save::{SAVE_DEBOUNCE, SaveGate, merge_external};
-use crate::validate::{FieldError, first_error};
+use crate::validate::{self, FieldError, first_error};
 
 actions!(ui_settings, [FocusNextField, FocusPrevField]);
 
@@ -92,20 +92,19 @@ impl Section {
         }
     }
 
-    /// Icon of the list item. Placeholders until the dedicated pixel icons exist (TODO-SVG:
-    /// appearance, keyboard, plugin, about; see the crate report).
+    /// Icon of the list item.
     pub fn icon(self) -> Icon {
         match self {
             Section::General => Icon::Settings,
-            Section::Appearance => Icon::Files, // TODO-SVG appearance.svg
+            Section::Appearance => Icon::Appearance,
             Section::Design => Icon::Layout,
             Section::Terminal => Icon::Terminal,
             Section::Agents => Icon::Agents,
             Section::Git => Icon::GitBranch,
             Section::Processes => Icon::Procs,
-            Section::Plugins => Icon::Snippet, // TODO-SVG plugin.svg
-            Section::Keyboard => Icon::Task,   // TODO-SVG keyboard.svg
-            Section::About => Icon::Doctor,    // TODO-SVG info.svg
+            Section::Plugins => Icon::Plugin,
+            Section::Keyboard => Icon::Keyboard,
+            Section::About => Icon::Info,
         }
     }
 }
@@ -378,7 +377,10 @@ impl SettingsView {
             register: None,
             register_results: HashMap::new(),
             update_status: UpdateStatus::default(),
-            measured: ui_kit::MeasuredWidth::new(crate::ui::NARROW_BELOW),
+            measured: ui_kit::MeasuredWidth::with_breaks(&[
+                crate::ui::NARROW_BELOW,
+                crate::ui::STACK_BELOW,
+            ]),
             focus: cx.focus_handle(),
             _subs: subs,
         }
@@ -563,12 +565,13 @@ impl SettingsView {
     /// [`edit`](Self::edit) for controls that cannot produce an invalid value.
     pub(crate) fn edit_cfg(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Config)) {
         if let Err(e) = self.edit(cx, f) {
-            self.errors.insert(e.field, e.message);
+            self.errors.insert(validate::row_key(&e.field), e.message);
             cx.notify();
         }
     }
 
-    /// [`edit`](Self::edit) for a text field: the error (or its absence) is tied to `key`.
+    /// [`edit`](Self::edit) for a text field: a valid value clears the error of `key`; a store
+    /// error is shown on the row of the field it names (`key` itself when it is that field).
     pub(crate) fn edit_field(
         &mut self,
         key: &str,
@@ -580,7 +583,7 @@ impl SettingsView {
                 self.errors.remove(key);
             }
             Err(e) => {
-                self.errors.insert(key.to_string(), e.message);
+                self.errors.insert(validate::row_key(&e.field), e.message);
             }
         }
         self.sync_invalid(cx);
@@ -744,12 +747,17 @@ impl SettingsView {
         });
         let this_key = key.to_string();
         let sub = cx.subscribe(&f, move |this, _, ev: &TextFieldEvent, cx| {
-            if matches!(ev, TextFieldEvent::Changed) {
-                this.on_field_change(&this_key, cx);
-            } else if matches!(ev, TextFieldEvent::Submit)
-                && this_key == crate::delegation_ui::EXTRA_AGENT_FIELD
-            {
-                this.add_extra_agent(cx);
+            let late = crate::fields::commits_on_leave(&this_key);
+            match ev {
+                // Numbers, URLs and colours apply on Enter or when the field loses focus.
+                TextFieldEvent::Changed if !late => this.on_field_change(&this_key, cx),
+                TextFieldEvent::Submit | TextFieldEvent::Blur if late => {
+                    this.on_field_change(&this_key, cx)
+                }
+                TextFieldEvent::Submit if this_key == crate::delegation_ui::EXTRA_AGENT_FIELD => {
+                    this.add_extra_agent(cx)
+                }
+                _ => {}
             }
         });
         self.field_subs.insert(key.to_string(), sub);
@@ -761,7 +769,7 @@ impl SettingsView {
     pub(crate) fn sync_invalid(&mut self, cx: &mut Context<Self>) {
         for (k, f) in &self.fields {
             let message = self.errors.get(k).cloned();
-            f.update(cx, |f, cx| f.set_error(message, cx));
+            f.update(cx, |f, cx| apply_error(f, k, message, cx));
         }
     }
 
@@ -776,6 +784,28 @@ impl SettingsView {
     fn on_field_change(&mut self, key: &str, cx: &mut Context<Self>) {
         let text = self.field_text(key, cx);
         crate::fields::apply(self, key, &text, cx);
+    }
+}
+
+/// Fields whose row already prints their error (under the row's text): the field itself only
+/// paints the red border, so the message is not shown twice.
+fn row_shows_error(key: &str) -> bool {
+    key.starts_with("deleg_") || matches!(key, "scrollback" | "accept_word_key")
+}
+
+/// Shows `message` on a field: as a line under it, or (when its row prints it) as a red border.
+pub(crate) fn apply_error(
+    field: &mut TextField,
+    key: &str,
+    message: Option<String>,
+    cx: &mut Context<TextField>,
+) {
+    if row_shows_error(key) {
+        field.set_invalid(message.is_some(), cx);
+        field.set_error(None::<String>, cx);
+    } else {
+        field.set_invalid(false, cx);
+        field.set_error(message, cx);
     }
 }
 
@@ -846,6 +876,25 @@ impl SettingsView {
 }
 
 impl SettingsView {
+    /// Screenshot helper (`SELACHI_DEMO_INVALID=1`): types text that is not a number into every
+    /// numeric / colour field that is on screen and applies it, so their errors show.
+    pub fn demo_invalid_values(&mut self, cx: &mut Context<Self>) {
+        for key in [
+            "deleg_concurrent",
+            "deleg_timeout",
+            "deleg_budget",
+            "deleg_weekly",
+            "deleg_approval",
+            "scrollback",
+            "accent_hex",
+        ] {
+            if let Some(f) = self.fields.get(key).cloned() {
+                f.update(cx, |f, cx| f.set_text("abc", cx));
+                self.on_field_change(key, cx);
+            }
+        }
+    }
+
     /// Scrolls the content column to `y` logical pixels from the top (screenshots, deep links).
     pub fn scroll_to(&self, y: f32) {
         self.scroll.set_offset(point(px(0.0), px(-y)));

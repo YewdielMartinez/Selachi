@@ -406,6 +406,21 @@ pub fn agent_label(k: &AgentKind) -> String {
     }
 }
 
+/// The permission a NEW thread starts with, from `[agents] permission_default`.
+///
+/// `Full` is never a starting point: «Acceso completo» skips every approval, so it has to be picked
+/// in the thread itself (the permission menu of the composer). A configured `Full` starts new
+/// threads in `AcceptEdits`, the most permissive mode that still asks before running commands.
+/// Threads that already exist keep the permission they were created with.
+pub fn permission_for_new_thread(default: store::config::PermissionDefault) -> PermissionMode {
+    use store::config::PermissionDefault as D;
+    match default {
+        D::Ask => PermissionMode::Ask,
+        D::AcceptEdits | D::Full => PermissionMode::AcceptEdits,
+        D::ReadOnly => PermissionMode::ReadOnly,
+    }
+}
+
 /// Whether a turn started in `mode` should be preceded by a git checkpoint (A10):
 /// Full and AcceptEdits yes; ReadOnly (nothing can change) and Ask (every write is approved
 /// one by one) no.
@@ -479,5 +494,20 @@ mod tests {
         assert!(should_checkpoint(PermissionMode::AcceptEdits));
         assert!(!should_checkpoint(PermissionMode::ReadOnly));
         assert!(!should_checkpoint(PermissionMode::Ask));
+    }
+
+    #[test]
+    fn a_new_thread_never_starts_in_full_access() {
+        use store::config::PermissionDefault as D;
+        assert_eq!(permission_for_new_thread(D::Ask), PermissionMode::Ask);
+        assert_eq!(
+            permission_for_new_thread(D::AcceptEdits),
+            PermissionMode::AcceptEdits
+        );
+        assert_eq!(
+            permission_for_new_thread(D::ReadOnly),
+            PermissionMode::ReadOnly
+        );
+        assert_ne!(permission_for_new_thread(D::Full), PermissionMode::Full);
     }
 }

@@ -67,6 +67,8 @@ fn allowed(action: &str) -> &'static [&'static str] {
             "--json",
             "--agent",
             "--model",
+            "--effort",
+            "--wait-for-background",
             "--permission",
             "--worktree",
             "--timeout",
@@ -426,6 +428,8 @@ pub fn execute(cmd: ProfilesCmd) -> Result<i32, String> {
             let mut req = RunRequest::new(run.agent.clone().unwrap_or_default(), prompt, cwd);
             req.profile = run.profile.clone();
             req.model = run.model.clone();
+            req.effort = run.effort.clone();
+            req.wait_for_background = run.wait_for_background;
             req.permission = run.permission;
             req.permission_explicit = run.permission_explicit;
             req.worktree = run.worktree;

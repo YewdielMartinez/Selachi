@@ -28,6 +28,8 @@ pub mod range;
 pub mod statusline;
 pub mod watch;
 
+/// Re-exported so hosts can name the first day of the week without their own `chrono`.
+pub use chrono::{self, Weekday};
 pub use db::{Store, UpsertOutcome};
 pub use external::{usage_for_external, UsageEstimate};
 pub use ingest::{IngestConfig, Ingestor, ScanReport, SourceKind};

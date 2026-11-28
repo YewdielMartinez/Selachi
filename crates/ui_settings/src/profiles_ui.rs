@@ -103,6 +103,10 @@ pub struct ProfilesEditor {
     files: Option<Rc<Vec<String>>>,
     files_for: Option<PathBuf>,
     suggestions: Vec<String>,
+    /// The models each agent itself reported (`models-catalog.json`, read off the UI thread).
+    catalog: agents_driver::catalog::Catalog,
+    /// The agent whose list is being asked for right now («Actualizar lista»).
+    models_busy: Option<String>,
     tasks: Vec<Task<()>>,
     _subs: Vec<Subscription>,
 }
@@ -112,6 +116,28 @@ impl EventEmitter<ProfilesEvent> for ProfilesEditor {}
 fn field(theme: Theme, placeholder: &str, cx: &mut Context<ProfilesEditor>) -> Entity<TextField> {
     let placeholder = placeholder.to_string();
     cx.new(|cx| TextField::new(theme, cx).placeholder(placeholder))
+}
+
+/// The catalog name of a profile's agent (`None` for `acp:<command>`).
+fn catalog_agent(agent: &str) -> Option<&'static str> {
+    agents_driver::catalog::AGENTS
+        .iter()
+        .copied()
+        .find(|a| a.eq_ignore_ascii_case(agent.trim()))
+}
+
+/// «consultada hace 5 min» for the age of a fetched list.
+fn age_text(fetched_ms: i64) -> String {
+    if fetched_ms <= 0 {
+        return "nunca consultada".into();
+    }
+    let s = agents_driver::catalog::now_ms().saturating_sub(fetched_ms) / 1000;
+    match s {
+        0..=89 => "consultada ahora".into(),
+        90..=5399 => format!("consultada hace {} min", s / 60),
+        5400..=172_799 => format!("consultada hace {} h", s / 3600),
+        _ => format!("consultada hace {} días", s / 86_400),
+    }
 }
 
 impl ProfilesEditor {
@@ -209,6 +235,8 @@ impl ProfilesEditor {
             files: None,
             files_for: None,
             suggestions: Vec::new(),
+            catalog: agents_driver::catalog::Catalog::default(),
+            models_busy: None,
             tasks: Vec::new(),
             _subs: subs,
         }
@@ -310,6 +338,7 @@ impl ProfilesEditor {
     /// Reads the profile folders off the UI thread (nothing is polled: the host calls this, and the
     /// editor itself after every write).
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.load_catalog(cx);
         let global = profiles::global_dir(&self.data_dir);
         let project = self.project_root.as_deref().map(profiles::project_dir);
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -326,6 +355,52 @@ impl ProfilesEditor {
             this.update(cx, |s, cx| {
                 s.entries = entries;
                 s.loaded = true;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Reads the cached model catalog (a file read: it never starts an agent).
+    fn load_catalog(&mut self, cx: &mut Context<Self>) {
+        let dir = self.data_dir.clone();
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let catalog = cx
+                .background_executor()
+                .spawn(async move { agents_driver::catalog::load(&dir) })
+                .await;
+            this.update(cx, |s, cx| {
+                s.catalog = catalog;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// «Actualizar lista»: asks the agent itself for its models (a background task, started only by
+    /// this click) and stores the answer in the shared catalog.
+    fn refresh_models(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if self.models_busy.is_some() {
+            return;
+        }
+        self.models_busy = Some(agent.to_string());
+        cx.notify();
+        let (dir, name) = (self.data_dir.clone(), agent.to_string());
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let catalog = cx
+                .background_executor()
+                .spawn(async move {
+                    agents_driver::catalog::refresh(
+                        &dir,
+                        &name,
+                        agents_driver::catalog::FETCH_TIMEOUT,
+                    );
+                    agents_driver::catalog::load(&dir)
+                })
+                .await;
+            this.update(cx, |s, cx| {
+                s.catalog = catalog;
+                s.models_busy = None;
                 cx.notify();
             })
             .ok();
@@ -1310,16 +1385,35 @@ impl ProfilesEditor {
         });
         let is_acp = d.profile.agent.starts_with("acp");
 
-        let effort_opts: Vec<(String, String, bool)> =
+        // models and efforts come from what the agent itself reported; without a list the fixed
+        // levels and a free-text model apply
+        let cat_agent = catalog_agent(&d.profile.agent);
+        let listed = cat_agent
+            .and_then(|a| self.catalog.get(a))
+            .filter(|m| !m.models.is_empty())
+            .cloned();
+        let form_model = form.model.clone().unwrap_or_default();
+        let offered: Vec<String> = match &listed {
+            Some(m) => m.effort_options(Some(form_model.as_str()).filter(|m| !m.is_empty())),
+            None => profiles::EFFORTS.iter().map(|e| (*e).to_string()).collect(),
+        };
+        let mut effort_opts: Vec<(String, String, bool)> =
             std::iter::once(("".to_string(), "Por defecto".to_string(), false))
-                .chain(profiles::EFFORTS.iter().map(|e| {
-                    (
-                        (*e).to_string(),
-                        profiles::effort_label(e).to_string(),
-                        false,
-                    )
-                }))
+                .chain(
+                    offered
+                        .iter()
+                        .map(|e| (e.clone(), profiles::effort_label(e).to_string(), false)),
+                )
                 .collect();
+        if let Some(cur) = d.profile.effort.as_deref().filter(|c| !c.is_empty())
+            && !offered.iter().any(|o| o == cur)
+        {
+            effort_opts.push((
+                cur.to_string(),
+                format!("{} (el modelo no lo ofrece)", profiles::effort_label(cur)),
+                false,
+            ));
+        }
         let effort_sel = self.select(
             cx,
             "profile-effort",
@@ -1330,6 +1424,108 @@ impl ProfilesEditor {
                 s.edit(cx, |d| d.profile.effort = v);
             },
         );
+
+        // ---- model: a Select over the agent's own list (or free text without one) + refresh ----
+        let model_control: AnyElement = match &listed {
+            Some(m) => {
+                let mut opts: Vec<(String, String, bool)> =
+                    vec![("".into(), "Por defecto del agente".into(), false)];
+                for e in m.models.iter().filter(|e| e.available) {
+                    let label = if e.label == e.id || e.label.is_empty() {
+                        e.id.clone()
+                    } else {
+                        format!("{} · {}", e.label, e.id)
+                    };
+                    let label = if e.default {
+                        format!("{label} (por defecto)")
+                    } else {
+                        label
+                    };
+                    opts.push((e.id.clone(), label, false));
+                }
+                if !form_model.is_empty() && m.find(&form_model).is_none() {
+                    opts.push((
+                        form_model.clone(),
+                        format!("{form_model} (no listado)"),
+                        false,
+                    ));
+                }
+                let current = m
+                    .find(&form_model)
+                    .map(|(e, _)| e.id.clone())
+                    .unwrap_or_else(|| form_model.clone());
+                self.select(cx, "profile-model", opts, &current, |s, v, cx| {
+                    let v = v.to_string();
+                    s.inputs.model.update(cx, |f, cx| f.set_text(&v, cx));
+                    // an effort the new model does not offer is dropped
+                    let offered = s
+                        .draft
+                        .as_ref()
+                        .and_then(|d| catalog_agent(&d.profile.agent))
+                        .and_then(|a| s.catalog.get(a))
+                        .map(|m| m.effort_options(Some(v.as_str()).filter(|x| !x.is_empty())));
+                    s.edit(cx, |d| {
+                        if let (Some(o), Some(e)) = (&offered, d.profile.effort.clone())
+                            && !o.contains(&e)
+                        {
+                            d.profile.effort = None;
+                        }
+                    });
+                })
+            }
+            None => self.input(&self.inputs.model.clone(), 240.0),
+        };
+        let models_note: String = match (cat_agent, &listed) {
+            (None, _) => "Este agente no publica su lista de modelos: escribe el nombre.".into(),
+            (Some(_), Some(m)) => format!(
+                "Lista del propio agente ({}), {}.{}",
+                m.source,
+                age_text(m.fetched_ms),
+                m.error
+                    .as_deref()
+                    .map(|e| format!(" Última actualización fallida: {e}"))
+                    .unwrap_or_default()
+            ),
+            (Some(a), None) => match self.catalog.get(a).and_then(|m| m.error.as_deref()) {
+                Some(e) => format!("No se pudo leer la lista: {e}"),
+                None => "Sin lista todavía: pulsa «Actualizar lista» para preguntársela al agente."
+                    .into(),
+            },
+        };
+        let model_row: AnyElement = {
+            let busy = self.models_busy.is_some();
+            let refresh: Option<AnyElement> = cat_agent.map(|a| {
+                let a = a.to_string();
+                self.btn(
+                    cx,
+                    "profile-models-refresh",
+                    if busy {
+                        "Actualizando…"
+                    } else {
+                        "Actualizar lista"
+                    },
+                    true,
+                    move |s, cx| s.refresh_models(&a, cx),
+                )
+            });
+            let control = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(8.0))
+                .child(model_control)
+                .children(refresh)
+                .into_any_element();
+            row(
+                &t,
+                narrow,
+                "Modelo",
+                Some(models_note.into()),
+                control,
+                None,
+            )
+            .into_any_element()
+        };
 
         let max = self.limits.max_permission.clone();
         let perm_opts: Vec<(String, String, bool)> = profiles::PERMISSIONS
@@ -1467,15 +1663,7 @@ impl ProfilesEditor {
             );
         }
         identity_rows.extend([
-            row(
-                &t,
-                narrow,
-                "Modelo",
-                None,
-                self.input(&self.inputs.model.clone(), 240.0),
-                None,
-            )
-            .into_any_element(),
+            model_row,
             row(&t, narrow, "Esfuerzo", None, effort_sel, issue("effort")).into_any_element(),
             row(
                 &t,

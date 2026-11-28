@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use crate::agents::list_agents;
+use crate::agents::{list_agents, ModelsMode};
 use crate::apply::{ApplyPlan, Confirmation, Risk};
 use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PROTOCOL_VERSION};
 use crate::output::{cap_chars, diff_stat_of, RunResult, RunStatus};
@@ -86,7 +86,14 @@ pub fn call(ctx: &Ctx, name: &str, args: Value, state: &CallState) -> Option<Too
     let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
     let b = |k: &str| args.get(k).and_then(Value::as_bool).unwrap_or(false);
     Some(match name {
-        "list_agents" => list(&h, b("models")),
+        "list_agents" => list(
+            &h,
+            match (b("models"), b("refresh")) {
+                (false, _) => ModelsMode::Off,
+                (true, false) => ModelsMode::Cached,
+                (true, true) => ModelsMode::Refresh,
+            },
+        ),
         "list_profiles" => list_profiles(&h, s("cwd").as_deref()),
         "run_agent" => run_agent(&h, &args, state),
         "agent_status" => status(&h, &s("run_id").unwrap_or_default()),
@@ -102,7 +109,7 @@ fn to_value<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-fn list(h: &Harness, models: bool) -> ToolOutput {
+fn list(h: &Harness, models: ModelsMode) -> ToolOutput {
     let list = list_agents(
         h.config(),
         h.caller(),
@@ -250,6 +257,8 @@ fn run_agent(h: &Harness, args: &Value, state: &CallState) -> ToolOutput {
         prompt: get("prompt").unwrap_or_default(),
         cwd: PathBuf::from(get("cwd").unwrap_or_default()),
         model: get("model").filter(|m| !m.trim().is_empty()),
+        effort: get("effort").filter(|m| !m.trim().is_empty()),
+        wait_for_background: args.get("wait_for_background").and_then(Value::as_bool),
         // not given: the profile's permission applies (read-only without a profile)
         permission: get("permission"),
         worktree: args

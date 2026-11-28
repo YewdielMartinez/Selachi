@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chat_core::{
-    ApprovalDecision as ChatDecision, ChatError, ChatStore, DriverFactory, ThreadId, ThreadLink,
-    ThreadRuntime, ThreadSpec, ThreadStatus,
+    ApprovalDecision as ChatDecision, ChatError, ChatStore, DriverFactory, PolicyDenial, ThreadId,
+    ThreadLink, ThreadRuntime, ThreadSpec, ThreadStatus, ToolStatus,
 };
 use chrono::{Local, TimeZone};
 use parking_lot::Mutex;
@@ -24,6 +24,7 @@ use crate::approval_policy::{ApprovalMode, Gate, OwnedScope};
 use crate::approvals::{ApprovalBroker, ApprovalRequest, Decision, PipeBroker, PROTOCOL_VERSION};
 use crate::events::{ApprovalOutcome, EventLog, Recorder};
 use crate::jobs::JobHooks;
+use crate::models::{DiskModels, ModelSource};
 use crate::output::{cap_chars, diff_stat_of, CostOut, RunResult, RunStatus, UsageOut};
 use crate::policy::{
     Caller, DelegationConfig, Permission, Refusal, RefusalCode, ENV_DELEGATION_DEPTH,
@@ -32,6 +33,7 @@ use crate::policy::{
 use crate::profiles::prepare::{claude_tool_args, ExtraArgs, ExtraArgsFactory};
 use crate::registry::{Registry, RunRecord, MAX_FINAL_PROMPT_CHARS};
 use crate::slots;
+use crate::turns::{self, Denial, FollowKind, Next, Planner};
 use crate::usage::{AgentsSvcProbe, UsageProbe};
 
 /// Longest summary kept in the result (characters).
@@ -48,6 +50,11 @@ pub struct RunRequest {
     /// Project directory (default: the current directory).
     pub cwd: PathBuf,
     pub model: Option<String>,
+    /// Reasoning effort (`low | medium | high | xhigh | max`), separate from the model: the harness
+    /// maps the pair to the agent's own id (Antigravity `gemini-4-neon` + `medium` =
+    /// `gemini-4-neon-medium`) and refuses what the agent does not offer. With a profile, this
+    /// overrides the profile's.
+    pub effort: Option<String>,
     /// Default read-only.
     pub permission: Permission,
     /// The caller asked for `permission` itself. With a `profile`, an explicit permission can only
@@ -65,6 +72,10 @@ pub struct RunRequest {
     /// Approval mode asked for (`--approvals`, MCP `approvals`). It can only lower the mode of
     /// `[delegation]` and of the profile, never raise it.
     pub approvals: Option<ApprovalMode>,
+    /// A turn that ends while a command is still running (or says it is waiting for one) gets one
+    /// automatic follow-up, and is an error when it is still unfinished, never `done`.
+    /// `None` = the profile's setting, else `true`. `Some(false)` can only be asked on purpose.
+    pub wait_for_background: Option<bool>,
 }
 
 impl RunRequest {
@@ -78,6 +89,7 @@ impl RunRequest {
             prompt: prompt.into(),
             cwd: cwd.into(),
             model: None,
+            effort: None,
             permission: Permission::ReadOnly,
             permission_explicit: false,
             profile: None,
@@ -85,6 +97,7 @@ impl RunRequest {
             timeout: None,
             budget_tokens: None,
             approvals: None,
+            wait_for_background: None,
         }
     }
 }
@@ -98,6 +111,7 @@ pub struct HarnessBuilder {
     factory: Option<Arc<dyn DriverFactory>>,
     resolver: Option<Arc<dyn AgentResolver>>,
     usage: Option<Arc<dyn UsageProbe>>,
+    models: Option<Arc<dyn ModelSource>>,
     broker: Option<Arc<dyn ApprovalBroker>>,
     export_env: bool,
     on_started: Option<StartedHook>,
@@ -136,6 +150,12 @@ impl HarnessBuilder {
         self.usage = Some(usage);
         self
     }
+    /// Where the models of each agent come from (default: the catalog in the data folder, asked to the
+    /// agent itself; tests pass fixed lists or [`crate::models::NoModels`]).
+    pub fn models(mut self, models: Arc<dyn ModelSource>) -> Self {
+        self.models = Some(models);
+        self
+    }
     /// Where the child's approvals go (default: the Selachi GUI's named pipe, deny when it is not there).
     pub fn broker(mut self, broker: Arc<dyn ApprovalBroker>) -> Self {
         self.broker = Some(broker);
@@ -167,6 +187,9 @@ impl HarnessBuilder {
             None => DelegationConfig::load(&data_dir),
         };
         Ok(Harness {
+            models: self
+                .models
+                .unwrap_or_else(|| Arc::new(DiskModels::new(&data_dir))),
             registry: Registry::new(&data_dir),
             usage: self
                 .usage
@@ -199,6 +222,7 @@ pub struct Harness {
     pub(crate) registry: Registry,
     pub(crate) resolver: Arc<dyn AgentResolver>,
     pub(crate) usage: Arc<dyn UsageProbe>,
+    pub(crate) models: Arc<dyn ModelSource>,
     pub(crate) broker: Arc<dyn ApprovalBroker>,
     pub(crate) hooks: Arc<JobHooks>,
     export_env: bool,
@@ -365,13 +389,82 @@ impl Harness {
         Ok(())
     }
 
+    /// The calling session as it is **now**. The environment of a chat thread's agent is fixed when
+    /// the process starts, so a permission lowered afterwards (the pill) is read from `chat.db`: the
+    /// caller gets the minimum of both, and a parent thread that cannot be found fails closed to
+    /// read-only. A caller without a parent thread (a terminal, a script) is what the environment
+    /// says. The strings are notes for the result.
+    fn caller_now(&self) -> (Caller, Vec<String>, Option<String>) {
+        let mut c = self.caller.clone();
+        let mut notes = Vec::new();
+        let Some(p) = c.parent_thread else {
+            return (c, notes, None);
+        };
+        let parent = self
+            .store()
+            .ok()
+            .and_then(|s| s.get_thread(ThreadId(p)).ok().flatten());
+        let mut lowered = None;
+        match parent {
+            Some(rec) => {
+                let now = Permission::from_driver(rec.permission).min(Permission::AcceptEdits);
+                if now < c.permission {
+                    let why = format!(
+                        "el hilo padre {p} tiene ahora el permiso {now} (la sesión empezó con {}); la delegación queda limitada a {now}",
+                        c.permission
+                    );
+                    notes.push(why.clone());
+                    lowered = Some(why);
+                    c.permission = now;
+                }
+            }
+            None => {
+                notes.push(format!("{ENV_PARENT_THREAD}={p} is not a thread of this chat database; the run was not linked to a parent; its permission is limited to read-only (unknown parent)"));
+                c.parent_thread = None;
+                c.permission = Permission::ReadOnly;
+            }
+        }
+        (c, notes, lowered)
+    }
+
+    /// Reads the driver's refusals so far (events log + the list the agent is told about).
+    fn note_denials(rt: &ThreadRuntime, ctx: &mut ApprovalCtx, rec: &mut Recorder) {
+        let (total, kept) = rt.with_state(|s| (s.policy_denied_total, s.policy_denials.clone()));
+        Self::log_denials(total, &kept, ctx, rec);
+    }
+
+    /// Records the refusals the driver made on its own that the events log has not seen yet.
+    fn log_denials(total: u32, kept: &[PolicyDenial], ctx: &mut ApprovalCtx, rec: &mut Recorder) {
+        if total <= ctx.denials_logged {
+            return;
+        }
+        let new = (total - ctx.denials_logged) as usize;
+        let skip = kept.len().saturating_sub(new);
+        for d in &kept[skip..] {
+            let outcome = if d.blocked {
+                ApprovalOutcome::Blocked
+            } else {
+                ApprovalOutcome::Denied
+            };
+            rec.approval(&d.command, outcome, &ctx.mode.to_string(), Some(&d.reason));
+            ctx.turn_denials.push(Denial {
+                command: redacted(&d.command),
+                reason: redacted(&d.reason),
+            });
+        }
+        ctx.denials_logged = total;
+    }
+
     fn run_inner(&self, req: RunRequest) -> Result<RunResult, Stop> {
         let now = chat_core::now_ms();
+
+        // 0. the caller as it is now (the parent thread's current permission)
+        let (caller, mut caller_notes, parent_lowered) = self.caller_now();
 
         // 1. the profile (if any), the effective limits (the minimum of profile, config and caller),
         //    the static rules (enabled, allowed agent, permission <= parent, never Full, depth) and
         //    the final prompt, redacted
-        let prep = self.prepare(&req)?;
+        let prep = self.prepare_as(&req, &caller)?;
         let cwd = prep.project_root.clone();
         let permission = prep.permission;
 
@@ -403,6 +496,8 @@ impl Harness {
         // 5. the prompt was redacted in `prepare`; its notes (lowered permission, redactions) travel on
         let prompt = prep.final_prompt.clone();
         let mut notes: Vec<String> = prep.notes.clone();
+        notes.append(&mut caller_notes);
+        let permission_reason = permission_reason(&req, &prep, &caller, parent_lowered.as_deref());
 
         // 6. child thread (+ worktree)
         if prep.worktree && !matches!(git_svc::Repo::discover(&cwd), Ok(Some(_))) {
@@ -415,18 +510,11 @@ impl Harness {
             )
             .into());
         }
-        let depth = self.caller.depth.saturating_add(1);
+        let depth = caller.depth.saturating_add(1);
         let store = self.store().map_err(Stop::Failed)?;
         // A parent id that is not a thread of this database (stale or mistyped variable) must not
-        // sink the run: link it to nothing and say so.
-        let parent_thread = match self.caller.parent_thread {
-            Some(p) if matches!(store.get_thread(ThreadId(p)), Ok(Some(_))) => Some(p),
-            Some(p) => {
-                notes.push(format!("{ENV_PARENT_THREAD}={p} is not a thread of this chat database; the run was not linked to a parent"));
-                None
-            }
-            None => None,
-        };
+        // sink the run: `caller_now` already linked it to nothing, limited it to read-only and said so.
+        let parent_thread = caller.parent_thread;
         let mut spec = ThreadSpec::new(&cwd, kind.clone());
         spec.title = Some(thread_title(&agent, &prep.task_prompt));
         spec.model = prep.model.clone();
@@ -438,9 +526,9 @@ impl Harness {
         spec.use_worktree = prep.worktree;
         spec.link = Some(ThreadLink {
             parent_thread_id: parent_thread.map(ThreadId),
-            parent_tab: self.caller.parent_tab.clone(),
+            parent_tab: caller.parent_tab.clone(),
             depth,
-            delegated_by: Some(self.caller.channel.clone()),
+            delegated_by: Some(caller.channel.clone()),
         });
         let thread = match store.create_thread(spec) {
             Ok(t) => t,
@@ -493,7 +581,7 @@ impl Harness {
             profile: prep.profile.clone(),
             final_prompt: Some(cap_chars(&prompt, MAX_FINAL_PROMPT_CHARS)),
             limits: Some(prep.limits.clone()),
-            launcher: Some(self.caller.channel.clone()),
+            launcher: Some(caller.channel),
             effort: prep.effort.clone(),
             output_format: prep.output_format.map(|f| f.as_str().to_string()),
             context_files: prep.context_files.iter().map(|c| c.path.clone()).collect(),
@@ -534,26 +622,81 @@ impl Harness {
             Ok(rt) => rt,
             Err(e) => return Err(Stop::Failed(format!("cannot open the child thread: {e}"))),
         };
-        let outcome = match rt.send(prompt, Vec::new()) {
-            Ok(()) => {
-                let ctx = ApprovalCtx {
-                    mode: prep.approvals,
-                    allowed: prep.allowed_commands.clone(),
-                    scope: OwnedScope::new(&record.project_root, &run_dir),
-                    profile_path: prep.profile_path.clone(),
-                    profile_scope: prep.profile_scope,
-                };
-                self.wait(
-                    &rt,
-                    &mut record,
-                    ctx,
-                    &mut recorder,
-                    prep.budget_tokens,
-                    timeout,
-                    &mut notes,
-                )
-            }
+        let mut ctx = ApprovalCtx {
+            mode: prep.approvals,
+            allowed: prep.allowed_commands.clone(),
+            scope: OwnedScope::new(&record.project_root, &run_dir),
+            profile_path: prep.profile_path.clone(),
+            profile_scope: prep.profile_scope,
+            denials_logged: 0,
+            refused: 0,
+            last_refused: None,
+            turn_denials: Vec::new(),
+        };
+        let run_start = Instant::now();
+        let mut outcome = match rt.send(prompt, Vec::new()) {
+            Ok(()) => self.wait(
+                &rt,
+                &mut record,
+                &mut ctx,
+                &mut recorder,
+                prep.budget_tokens,
+                timeout,
+                &mut notes,
+            ),
             Err(e) => Outcome::Failed(format!("cannot send the prompt: {e}")),
+        };
+
+        // 8b. A turn that ends is not always a task that is done: an agent that backgrounded its
+        // command, or whose request was refused and never learned why, ends its turn early. Ask it
+        // once per cause to carry on (`turns`), then judge the last turn.
+        let mut planner = Planner::new(prep.wait_for_background);
+        let mut turn_start = 0usize;
+        let mut prior_answer = String::new();
+        let last_obs = loop {
+            Self::note_denials(&rt, &mut ctx, &mut recorder);
+            let obs = rt.with_state(|s| turns::observe(s, turn_start, &ctx.turn_denials));
+            if !matches!(outcome, Outcome::Done) {
+                break obs;
+            }
+            let Next::FollowUp { kind, text } = planner.after_turn(&obs) else {
+                break obs;
+            };
+            let left = timeout.saturating_sub(run_start.elapsed());
+            if left.is_zero() {
+                outcome = Outcome::TimedOut;
+                break obs;
+            }
+            if !obs.answer.trim().is_empty() {
+                prior_answer = obs.answer.clone();
+            }
+            notes.push(match kind {
+                FollowKind::Background => "el agente terminó el turno con un comando sin terminar; se le pidió esperar y responder con el resultado final".to_string(),
+                FollowKind::Denial => format!(
+                    "el agente terminó el turno tras {} rechazo(s); se le dijo por qué y se le pidió continuar sin ese comando",
+                    obs.denials.len()
+                ),
+            });
+            recorder.sync(&rt);
+            recorder.follow_up(kind.as_str(), &text);
+            turn_start = rt.with_state(|s| s.messages.len());
+            ctx.begin_turn();
+            outcome = match rt.send(text, Vec::new()) {
+                Ok(()) => {
+                    // the user message is in the state (and the thread Working) before we wait
+                    rt.wait_for(Duration::from_secs(10), |s| s.messages.len() > turn_start);
+                    self.wait(
+                        &rt,
+                        &mut record,
+                        &mut ctx,
+                        &mut recorder,
+                        prep.budget_tokens,
+                        left,
+                        &mut notes,
+                    )
+                }
+                Err(e) => Outcome::Failed(format!("cannot send the follow-up: {e}")),
+            };
         };
 
         // 9. stop the agent (kills its tree; the Job Object catches stragglers) and collect
@@ -581,11 +724,12 @@ impl Harness {
             }
             .into(),
         };
-        let answer = state
-            .last_assistant()
-            .map(|m| m.plain_text())
-            .unwrap_or_default();
-        let (status, reason) = match &outcome {
+        let answer = if last_obs.answer.trim().is_empty() {
+            prior_answer
+        } else {
+            last_obs.answer.clone()
+        };
+        let (mut status, mut reason) = match &outcome {
             Outcome::Done => (RunStatus::Done, None),
             Outcome::Failed(msg) => (RunStatus::Error, Some(redacted(state.error.as_deref().unwrap_or(msg)))),
             Outcome::Cancelled => (RunStatus::Cancelled, Some("cancelled with `selachi-agent cancel`".to_string())),
@@ -595,12 +739,75 @@ impl Harness {
                 Some(format!("the run used {} billable tokens, over --budget-tokens {limit}; the agent was interrupted", usage.billable)),
             ),
         };
-        // the events log: whatever the last observation missed (the thread was closed since), then
-        // the final status
+        // the events log: whatever the last observation missed (the thread was closed since), the
+        // refusals the driver made on its own, then the final status
         recorder.observe(&state);
+        recorder.commit();
+        Self::log_denials(
+            state.policy_denied_total,
+            &state.policy_denials,
+            &mut ctx,
+            &mut recorder,
+        );
+        // An agent that ended its last turn waiting for a command (or with one still running) did not
+        // finish: an error that says so, never `done`.
+        let mut incomplete = false;
+        if status == RunStatus::Done {
+            if let Some(problem) = turns::final_problem(prep.wait_for_background, &last_obs) {
+                status = RunStatus::Error;
+                reason = Some(problem);
+                incomplete = true;
+            }
+        }
+        // An agent that ended its turn without saying anything did not do the task, whatever the
+        // protocol says: it is an error with what happened and how to fix it, never a silent success.
+        if status == RunStatus::Done && answer.trim().is_empty() {
+            status = RunStatus::Error;
+            reason = Some(empty_answer_error(&EmptyAnswer {
+                denied: state.policy_denied_total,
+                last_denied: state.policy_denials.last(),
+                refused: ctx.refused,
+                last_refused: ctx.last_refused.as_deref(),
+                stop_reason: state.stop_reason.as_deref(),
+                permission,
+                thread_id: thread.id.0,
+            }));
+        }
         recorder.finish(status.as_str());
+        if state.policy_denied_total > 0 {
+            if let Some(last) = state.policy_denials.last() {
+                notes.push(denied_note(state.policy_denied_total, last));
+            }
+        }
+        if let Some(sr) = &state.stop_reason {
+            notes.push(format!(
+                "el agente terminó el turno con el motivo de parada `{sr}`"
+            ));
+        }
+        let unfinished = state
+            .last_assistant()
+            .map(|m| {
+                m.tool_runs()
+                    .filter(|t| t.status == ToolStatus::Cancelled)
+                    .count()
+            })
+            .unwrap_or(0);
+        if unfinished > 0 {
+            notes.push(format!(
+                "{unfinished} herramienta(s) quedaron sin resultado cuando el agente terminó el turno"
+            ));
+        }
 
-        let summary = if answer.trim().is_empty() {
+        let summary = if incomplete {
+            format!(
+                "{}
+
+Último mensaje del agente:
+{}",
+                reason.clone().unwrap_or_default(),
+                cap_chars(&redacted(&answer), MAX_SUMMARY_CHARS / 2)
+            )
+        } else if answer.trim().is_empty() {
             reason.clone().unwrap_or_default()
         } else {
             cap_chars(&redacted(&answer), MAX_SUMMARY_CHARS)
@@ -660,6 +867,7 @@ impl Harness {
             code: None,
             notes,
             profile: prep.profile,
+            permission_reason: Some(permission_reason),
         };
         record.status = status;
         record.finished_ms = Some(chat_core::now_ms());
@@ -685,7 +893,7 @@ impl Harness {
         &self,
         rt: &ThreadRuntime,
         record: &mut RunRecord,
-        mut ctx: ApprovalCtx,
+        ctx: &mut ApprovalCtx,
         rec: &mut Recorder,
         budget_tokens: Option<u64>,
         timeout: Duration,
@@ -696,6 +904,9 @@ impl Harness {
         let handled: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
         loop {
             rec.sync(rt);
+            let (total, kept) =
+                rt.with_state(|s| (s.policy_denied_total, s.policy_denials.clone()));
+            Self::log_denials(total, &kept, ctx, rec);
             if self.registry.cancel_requested(&record.run_id) {
                 let _ = rt.interrupt();
                 return Outcome::Cancelled;
@@ -710,6 +921,14 @@ impl Harness {
                     let _ = rt.interrupt();
                     return Outcome::OverBudget(limit);
                 }
+            }
+            let silent = rt.with_state(turns::trailing_silent_failures);
+            if silent >= turns::MAX_SILENT_FAILURES {
+                let _ = rt.interrupt();
+                return Outcome::Failed(format!(
+                    "Detenido: las últimas {silent} llamadas de herramienta del agente fallaron sin ningún mensaje (cada lectura o edición respondió solo con su ruta).                      Suele pasar después de un comando rechazado o con una ruta que el agente no puede usar; abre el hilo {} para ver qué intentaba.",
+                    record.thread_id
+                ));
             }
             let pending: Vec<(String, String, String)> = {
                 let seen = handled.lock();
@@ -726,7 +945,7 @@ impl Harness {
                 self.answer_approval(
                     rt,
                     record,
-                    &mut ctx,
+                    ctx,
                     rec,
                     &request_id,
                     &tool,
@@ -787,6 +1006,12 @@ impl Harness {
                 if let Some(l) = record.limits.as_mut() {
                     l.blocked = l.blocked.saturating_add(1);
                 }
+                ctx.refused += 1;
+                ctx.last_refused = Some(redacted(&shown));
+                ctx.turn_denials.push(Denial {
+                    command: redacted(&shown),
+                    reason: redacted(&reason),
+                });
                 self.save_progress(record);
                 if let Err(e) = rt.approve(request_id, ChatDecision::Deny) {
                     notes.push(format!("could not deliver the approval answer: {e}"));
@@ -876,8 +1101,20 @@ impl Harness {
                 req.tool
             )),
         }
-        if outcome == ApprovalOutcome::Denied && event_reason.is_none() {
-            event_reason = Some("denied by the user in Selachi".into());
+        if outcome == ApprovalOutcome::Denied {
+            ctx.refused += 1;
+            ctx.last_refused = Some(redacted(&shown));
+            if event_reason.is_none() {
+                event_reason = Some("denied by the user in Selachi".into());
+            }
+            ctx.turn_denials.push(Denial {
+                command: redacted(&shown),
+                reason: verdict
+                    .reason
+                    .as_deref()
+                    .map(redacted)
+                    .unwrap_or_else(|| "el usuario lo rechazó en Selachi".to_string()),
+            });
         }
         rec.approval(&shown, outcome, &mode_when_asked, event_reason.as_deref());
         if let Err(e) = rt.approve(request_id, chat) {
@@ -950,6 +1187,109 @@ struct ApprovalCtx {
     /// The run's profile file and where it lives (for `always_profile`).
     profile_path: Option<PathBuf>,
     profile_scope: Option<crate::profiles::Scope>,
+    /// Refusals of the driver (read-only mode, credentials) already written to the events log.
+    denials_logged: u32,
+    /// Requests the harness itself refused (blocklist) or the user denied in Selachi.
+    refused: u32,
+    last_refused: Option<String>,
+    /// Requests refused during the current turn (what the agent is told if it ends the turn early).
+    turn_denials: Vec<Denial>,
+}
+
+impl ApprovalCtx {
+    /// A new turn starts: the driver's refusal counters restart with it.
+    fn begin_turn(&mut self) {
+        self.denials_logged = 0;
+        self.turn_denials.clear();
+    }
+}
+
+/// What `empty_answer_error` needs to explain a run that said nothing.
+struct EmptyAnswer<'a> {
+    denied: u32,
+    last_denied: Option<&'a PolicyDenial>,
+    refused: u32,
+    last_refused: Option<&'a str>,
+    stop_reason: Option<&'a str>,
+    permission: Permission,
+    thread_id: i64,
+}
+
+fn short_cmd(c: &str) -> String {
+    let one: String = c.split_whitespace().collect::<Vec<_>>().join(" ");
+    cap_chars(&redacted(&one), 160)
+        .replace("\n[...truncated; see the thread for the full answer]", "…")
+}
+
+fn denied_note(n: u32, last: &PolicyDenial) -> String {
+    let who = if n == 1 {
+        "1 comando fue denegado".to_string()
+    } else {
+        format!("{n} comandos fueron denegados")
+    };
+    format!(
+        "{who} automáticamente, sin preguntar; el último: `{}` ({})",
+        short_cmd(&last.command),
+        redacted(&last.reason)
+    )
+}
+
+/// Spanish explanation of a run whose agent ended its turn without any answer text.
+fn empty_answer_error(e: &EmptyAnswer<'_>) -> String {
+    let mut s = String::from("El agente terminó el turno sin ninguna respuesta.");
+    if let (true, Some(last)) = (e.denied > 0, e.last_denied) {
+        s.push(' ');
+        s.push_str(&denied_note(e.denied, last));
+        s.push('.');
+    }
+    if e.refused > 0 {
+        s.push_str(&format!(
+            " {} petición(es) fueron rechazadas por la lista de bloqueo o por el usuario en Selachi{}.",
+            e.refused,
+            e.last_refused
+                .map(|l| format!(" (la última: `{}`)", short_cmd(l)))
+                .unwrap_or_default()
+        ));
+    }
+    if let Some(sr) = e.stop_reason {
+        s.push_str(&format!(" Motivo de parada del agente: `{sr}`."));
+    }
+    if e.denied > 0 && e.permission == Permission::ReadOnly {
+        s.push_str(" Cómo arreglarlo: en solo lectura solo se ejecutan comandos de consulta (listar, leer, buscar, git log/diff/status); \
+            relanza con permission=ask o accept_edits (si la sesión que llama lo permite; un perfil también puede subirlo) o pide una tarea que no necesite ejecutar comandos.");
+    } else if e.refused > 0 {
+        s.push_str(" Cómo arreglarlo: revisa el modo de aprobación (approvals = ask | allowlist | auto, `allowed_commands` del perfil) y responde las peticiones en la cola de atención de Selachi.");
+    } else if e.denied == 0 {
+        s.push_str(&format!(
+            " Puede que el modelo no pudiera responder (límite de uso, sesión del agente caída o un error que no llegó): abre el hilo {} en Selachi para ver qué ocurrió.",
+            e.thread_id
+        ));
+    }
+    s
+}
+
+/// Why `prep.permission` is what it is, for the caller that must not retry blindly.
+fn permission_reason(
+    req: &RunRequest,
+    prep: &crate::profiles::prepare::Prepared,
+    caller: &Caller,
+    parent_lowered: Option<&str>,
+) -> String {
+    if let Some(why) = parent_lowered {
+        if prep.permission == caller.permission {
+            return why.to_string();
+        }
+    }
+    if let Some(p) = &prep.profile {
+        return format!("lo fija el perfil «{p}» (nunca por encima de la sesión que llama ni de [delegation] max_permission)");
+    }
+    if !req.permission_explicit {
+        return "valor por defecto de run_agent; pide permission=ask o accept_edits para más, si la sesión que llama lo permite".to_string();
+    }
+    if caller.permission == Permission::ReadOnly && prep.permission == Permission::ReadOnly {
+        return "pedido; además la sesión que llama tiene permiso de solo lectura, el máximo para sus delegaciones".to_string();
+    }
+    "pedido por el llamador (como máximo el permiso de la sesión que llama y [delegation] max_permission)".to_string()
 }
 
 enum Outcome {

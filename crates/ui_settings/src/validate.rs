@@ -20,6 +20,52 @@ pub fn first_error(config: &Config) -> Option<FieldError> {
     field_errors(config).into_iter().next()
 }
 
+/// `[delegation] timeout_secs` as `Config::validate()` accepts it (10 s to 24 h).
+pub const TIMEOUT_SECS: std::ops::RangeInclusive<u64> = 10..=86_400;
+/// Message and help text of the "Tiempo máximo" field.
+pub const TIMEOUT_HELP: &str = "Entre 10 s (0,17 min) y 24 h (1440 min).";
+/// `[delegation] approval_timeout_secs` as `Config::validate()` accepts it (5 s to 1 h).
+pub const APPROVAL_SECS: std::ops::RangeInclusive<u64> = 5..=3_600;
+/// Message and help text of "Tiempo para responder una aprobación".
+pub const APPROVAL_HELP: &str = "Entre 5 s y 3600 s (1 hora).";
+
+/// Minutes typed in "Tiempo máximo" as the seconds the store takes, when it accepts them.
+pub fn timeout_secs_from_minutes(minutes: f64) -> Option<u64> {
+    let secs = (minutes * 60.0).round();
+    let (lo, hi) = (*TIMEOUT_SECS.start() as f64, *TIMEOUT_SECS.end() as f64);
+    (lo..=hi).contains(&secs).then_some(secs as u64)
+}
+
+/// Seconds typed in "Tiempo para responder una aprobación", when the store accepts them.
+pub fn approval_secs(secs: u32) -> Option<u64> {
+    let secs = u64::from(secs);
+    APPROVAL_SECS.contains(&secs).then_some(secs)
+}
+
+/// The row (control key) that shows an edit error of the store field path `field`. Text fields
+/// are keyed by their own name (`deleg_timeout`), so a path maps to its row; unknown paths keep
+/// their name.
+pub fn row_key(field: &str) -> String {
+    if let Some(i) = field.strip_prefix("profiles.") {
+        return format!("profile.{i}");
+    }
+    match field {
+        "appearance.accent" => "accent_hex",
+        "terminal.scrollback" => "scrollback",
+        "terminal.completion.accept_word_key" => "accept_word_key",
+        "git.external_editor" => "external_editor",
+        "plugins.index_url" => "index_url",
+        "delegation.max_concurrent" => "deleg_concurrent",
+        "delegation.timeout_secs" => "deleg_timeout",
+        "delegation.daily_token_budget" => "deleg_budget",
+        "delegation.weekly_usage_threshold_percent" => "deleg_weekly",
+        "delegation.approval_timeout_secs" => "deleg_approval",
+        "delegation.extra_agents" => "extra_agent_add",
+        other => other,
+    }
+    .to_string()
+}
+
 fn friendly(problem: &str) -> FieldError {
     let key = problem.split([' ', '=']).next().unwrap_or("").to_string();
     let known = |k: &str| key == k;
@@ -166,6 +212,30 @@ mod tests {
         assert!(e.message.contains("nombre"));
 
         assert!(first_error(&Config::default()).is_none());
+    }
+
+    #[test]
+    fn store_paths_land_on_their_row() {
+        assert_eq!(row_key("delegation.timeout_secs"), "deleg_timeout");
+        assert_eq!(
+            row_key("delegation.approval_timeout_secs"),
+            "deleg_approval"
+        );
+        assert_eq!(row_key("appearance.accent"), "accent_hex");
+        assert_eq!(row_key("profiles.2"), "profile.2");
+        assert_eq!(row_key("appearance.mono_size"), "appearance.mono_size");
+    }
+
+    #[test]
+    fn timeouts_follow_the_store_ranges() {
+        assert_eq!(timeout_secs_from_minutes(0.1), None, "6 s");
+        assert_eq!(timeout_secs_from_minutes(10.0 / 60.0), Some(10));
+        assert_eq!(timeout_secs_from_minutes(1440.0), Some(86_400));
+        assert_eq!(timeout_secs_from_minutes(1441.0), None);
+        assert_eq!(approval_secs(4), None);
+        assert_eq!(approval_secs(5), Some(5));
+        assert_eq!(approval_secs(3_600), Some(3_600));
+        assert_eq!(approval_secs(3_601), None);
     }
 
     #[test]

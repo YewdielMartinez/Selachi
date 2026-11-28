@@ -816,6 +816,7 @@ impl AppShell {
                     .new_tab_menu
                     .then(|| self.new_tab_menu_el(window, cx)),
             )
+            .children(self.project_overlays(window, cx))
             .children(whats_new_el)
             // The palette is the last child: an absolute full-window overlay (nothing while closed).
             .child(self.palette.clone())

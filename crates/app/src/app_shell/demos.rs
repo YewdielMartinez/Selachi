@@ -8,6 +8,7 @@
 //! | `copy` | A chat with the scripted agent, a text selection and the message's "..." copy menu open (needs `SELACHI_CHAT_FAKE=1`) |
 //! | `delegation-settings` | Settings -> Agentes, scrolled to Delegación |
 //! | `update` | Settings -> General at Actualizaciones and the "Actualización 0.2.0 lista" card |
+//! | `settings:<section>[:<scroll>]` | Settings on `general`, `appearance`, `design`, `terminal`, `agents`, `profiles` (Agentes > Perfiles), `git`, `processes`, `plugins`, `keyboard` or `about`, scrolled `<scroll>` logical px (or `end`). `SELACHI_DEMO_SIZE=1100x900` resizes the window (logical px), `SELACHI_DEMO_INVALID=1` types invalid text in the number fields of Agentes > Delegación so their errors show. The pane width is written to `<data dir>/demo-pane.txt` |
 //! | `whatsnew` | The "Novedades" screen with sample release notes |
 //!
 //! The demo threads are written to the data folder like real delegations (chat.db + `agent-runs`),
@@ -150,7 +151,55 @@ fn seed(store: &ChatStore, root: PathBuf) -> Option<(ThreadId, ThreadId, ThreadI
         0.12,
         "",
     ));
+    write_demo_events(&reg, gemini.id, now);
     Some((parent.id, codex.id, gemini.id))
+}
+
+/// The events log (`<run id>.events.jsonl`, the harness' own format) of the demo's running run: what
+/// the map's Actividad tab shows (messages, commands with their state, an edit, an approval).
+fn write_demo_events(reg: &Registry, run: ThreadId, now: i64) {
+    let t = |ago_s: i64| now - ago_s * 1000;
+    let lines = [
+        format!(r#"{{"t":{},"type":"status","status":"working"}}"#, t(44)),
+        format!(
+            r#"{{"t":{},"type":"message_delta","text":"Voy a leer el módulo de sesiones y luego correr las pruebas de expiración."}}"#,
+            t(42)
+        ),
+        format!(
+            r#"{{"t":{},"type":"tool_start","id":"c1","kind":"command","command":"cargo test -p auth --lib","title":"cargo test -p auth --lib"}}"#,
+            t(38)
+        ),
+        format!(
+            r#"{{"t":{},"type":"tool_end","id":"c1","exit_code":0,"duration_ms":9000,"output_tail":"running 14 tests\ntest session::tests::expires_after_ttl ... ok\ntest result: ok. 14 passed; 0 failed","ok":true}}"#,
+            t(29)
+        ),
+        format!(
+            r#"{{"t":{},"type":"tool_start","id":"e1","kind":"edit","path":"crates/auth/src/session.rs","title":"crates/auth/src/session.rs"}}"#,
+            t(24)
+        ),
+        format!(
+            r#"{{"t":{},"type":"tool_end","id":"e1","duration_ms":120,"output_tail":"","ok":true}}"#,
+            t(24)
+        ),
+        format!(
+            r#"{{"t":{},"type":"file_edit","path":"crates/auth/src/session.rs","added":12,"removed":3}}"#,
+            t(24)
+        ),
+        format!(
+            r#"{{"t":{},"type":"approval","request":"cargo clippy -p auth","decision":"allowed","mode":"ask"}}"#,
+            t(15)
+        ),
+        format!(
+            r#"{{"t":{},"type":"tool_start","id":"c2","kind":"command","command":"cargo clippy -p auth -- -D warnings","title":"cargo clippy -p auth -- -D warnings"}}"#,
+            t(14)
+        ),
+        format!(
+            r#"{{"t":{},"type":"message_delta","text":"Las pruebas pasan; ahora reviso los avisos de clippy."}}"#,
+            t(6)
+        ),
+    ];
+    let path = reg.events_file(&run.0.to_string());
+    let _ = std::fs::write(path, lines.join("\n") + "\n");
 }
 
 struct ThreadRecordLite {
@@ -227,8 +276,85 @@ impl AppShell {
                 self.show_whats_new("0.2.0", SAMPLE_NOTES, window, cx);
                 true
             }
+            other if other.starts_with("settings:") => {
+                self.demo_settings(&other["settings:".len()..], window, cx);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// `SELACHI_DEMO=settings:<section>[:<scroll>]`: the real settings tab of the real shell, so a
+    /// screenshot shows what the user sees (zone width, tab host, the platform text shaper).
+    fn demo_settings(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use ui_settings::{AgentsTab, Section};
+        if let Some((w, h)) = std::env::var("SELACHI_DEMO_SIZE")
+            .ok()
+            .as_deref()
+            .and_then(|v| v.split_once('x'))
+            .and_then(|(w, h)| Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?)))
+        {
+            window.resize(gpui::size(gpui::px(w), gpui::px(h)));
+        }
+        let mut parts = spec.split(':');
+        let name = parts.next().unwrap_or("general");
+        let scroll = parts.next().map(str::to_string);
+        let (section, tab) = match name {
+            "appearance" => (Section::Appearance, AgentsTab::General),
+            "design" => (Section::Design, AgentsTab::General),
+            "terminal" => (Section::Terminal, AgentsTab::General),
+            "agents" => (Section::Agents, AgentsTab::General),
+            "profiles" => (Section::Agents, AgentsTab::Profiles),
+            "git" => (Section::Git, AgentsTab::General),
+            "processes" => (Section::Processes, AgentsTab::General),
+            "plugins" => (Section::Plugins, AgentsTab::General),
+            "keyboard" => (Section::Keyboard, AgentsTab::General),
+            "about" => (Section::About, AgentsTab::General),
+            _ => (Section::General, AgentsTab::General),
+        };
+        self.open_settings(window, cx);
+        let invalid = std::env::var_os("SELACHI_DEMO_INVALID").is_some();
+        if let Some(v) = self.settings_view() {
+            v.update(cx, |s, cx| {
+                if section == Section::Agents {
+                    s.set_agents_tab(tab, cx);
+                } else {
+                    s.set_section(section, cx);
+                }
+            });
+        }
+        // The page is laid out for the first time a few frames later: scroll and the invalid
+        // values wait for it.
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            this.update(cx, |s, cx| {
+                if let Some(dir) = data_dir() {
+                    let _ = std::fs::write(
+                        dir.join("demo-pane.txt"),
+                        format!("{:.0}", s.main_pane_width()),
+                    );
+                }
+                if let Some(v) = s.settings_view() {
+                    if invalid {
+                        v.update(cx, |s, cx| s.demo_invalid_values(cx));
+                    }
+                    match scroll.as_deref() {
+                        Some("end") => v.read(cx).scroll_to_end(),
+                        Some(y) => {
+                            if let Ok(y) = y.parse::<f32>() {
+                                v.read(cx).scroll_to(y);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn demo_delegation(
@@ -269,7 +395,7 @@ impl AppShell {
                 .background_executor()
                 .spawn(async move { seed(&store, root) })
                 .await;
-            let Some((parent, codex, _gemini)) = ids else {
+            let Some((parent, codex, gemini)) = ids else {
                 return;
             };
             this.update_in(cx, |shell, window, cx| {
@@ -277,6 +403,15 @@ impl AppShell {
                 shell.open_chat_thread(parent, window, cx);
                 if with_map {
                     shell.set_agentmap_root(Some(ui_agentmap::NodeKey::Thread(parent)), cx);
+                    if let Some(model) = cx
+                        .try_global::<crate::services::Services>()
+                        .map(|s| s.agentmap.clone())
+                    {
+                        model.update(cx, |m, cx| {
+                            m.open_run(gemini, cx);
+                            m.set_inspector_tab(ui_agentmap::InspectorTab::Activity, cx);
+                        });
+                    }
                 }
                 if with_cards {
                     shell.deleg.approvals.update(cx, |q, cx| {

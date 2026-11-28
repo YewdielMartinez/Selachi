@@ -764,8 +764,7 @@ impl ThreadListView {
                     })),
             )
             .child(
-                // TODO-SVG: `assets/icons/archive.svg` (16x16). Placeholder: the folder icon.
-                IconButton::new(format!("thr-archive-{}", id.0), &t, Icon::Folder)
+                IconButton::new(format!("thr-archive-{}", id.0), &t, Icon::Archive)
                     .passthrough(true)
                     .size(26.0)
                     .icon_size(14.0)

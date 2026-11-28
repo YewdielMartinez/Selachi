@@ -72,7 +72,7 @@ function Find-Iscc {
     if ($env:ISCC) { $cands += $env:ISCC }
     $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
     if ($cmd) { $cands += $cmd.Source }
-    foreach ($root in @($env:LOCALAPPDATA + '\Programs', ${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+    foreach ($root in @(($env:LOCALAPPDATA + '\Programs'), ${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
         if (-not $root) { continue }
         foreach ($v in '7', '6') { $cands += (Join-Path $root "Inno Setup $v\ISCC.exe") }
     }

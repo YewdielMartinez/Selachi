@@ -89,12 +89,36 @@ fn kind_for(name: &str, path: &Path) -> AgentKind {
     }
 }
 
+/// Where the executable of a known agent is (`claude`, `codex`, `opencode`, `gemini`, `agy`), without
+/// starting it. `None` when it is not installed.
+pub fn locate(name: &str) -> Option<PathBuf> {
+    match name {
+        "opencode" => opencode::resolve(),
+        "agy" => antigravity::resolve(),
+        "claude" | "codex" | "gemini" => proc::resolve_executable(name),
+        _ => None,
+    }
+}
+
+/// The spawnable [`AgentKind`] of a known agent by name, or `None` when it is not installed. Gemini
+/// carries the flag that switches it into ACP mode.
+pub fn kind_of(name: &str) -> Option<AgentKind> {
+    let path = locate(name)?;
+    Some(match (name, kind_for(name, &path)) {
+        ("gemini", AgentKind::Acp { command }) => AgentKind::Acp {
+            command: format!("{command} {GEMINI_ACP_FLAG}"),
+        },
+        (_, kind) => kind,
+    })
+}
+
+/// Flag that switches the Gemini CLI into ACP mode. Version dependent (older builds used
+/// `--experimental-acp`, which current ones still accept); override the whole command with
+/// `acp:<command line>`.
+pub const GEMINI_ACP_FLAG: &str = "--experimental-acp";
+
 fn probe(name: &'static str) -> Option<DetectedAgent> {
-    let path = match name {
-        "opencode" => opencode::resolve()?,
-        "agy" => antigravity::resolve()?,
-        _ => proc::resolve_executable(name)?,
-    };
+    let path = locate(name)?;
     let mut cmd = proc::command_for(&path);
     cmd.arg("--version");
     let version = proc::run_capture(cmd, VERSION_TIMEOUT)

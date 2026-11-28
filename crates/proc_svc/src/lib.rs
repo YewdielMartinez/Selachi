@@ -45,6 +45,6 @@ pub use snapshot::{
     snapshot, snapshot_with, start_time_of, try_snapshot, ProcInfo, SnapshotOptions,
 };
 pub use tracker::{
-    heuristic_from, Attribution, OwnerId, OwnerMeta, OwnerReport, ProcState, TrackedProc, Tracker,
-    TrackingMode, UntrackedProc, TREE_POLL_INTERVAL,
+    heuristic_from, Attribution, DetachedOwner, OwnerId, OwnerMeta, OwnerReport, ProcState,
+    TrackedProc, Tracker, TrackingMode, UntrackedProc, TREE_POLL_INTERVAL,
 };

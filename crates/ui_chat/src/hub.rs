@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agents_driver::{AgentKind, DetectedAgent};
+use agents_driver::{AgentKind, DetectedAgent, PermissionMode};
 use chat_core::{
     ChatStore, DeleteOptions, DeletePreview, DeleteReport, ThreadFilter, ThreadId, ThreadRecord,
     ThreadUpdate, now_ms,
@@ -80,9 +80,14 @@ pub struct ChatHub {
     agents: Vec<AgentOption>,
     projects: Vec<PathBuf>,
     default_project: Option<PathBuf>,
+    /// Permission a new thread starts with (`[agents] permission_default`); existing threads keep
+    /// their own.
+    default_permission: PermissionMode,
     files: HashMap<String, FileSlot>,
     /// What the harness run registry says about each delegated thread (fed by the host).
     runs: HashMap<ThreadId, DelegationRun>,
+    /// Agents a thread's session launched outside Selachi (fed by the host from the map's feed).
+    externals: HashMap<ThreadId, crate::lineage::ExternalNote>,
     /// Models each agent told us (`agents_driver::probe_models`), by [`agent_key`]. An entry
     /// (even empty) means the agent was asked once: no retry this session.
     models: HashMap<String, Vec<agents_driver::ModelInfo>>,
@@ -149,8 +154,10 @@ impl ChatHub {
             agents: default_agents(),
             projects: Vec::new(),
             default_project: None,
+            default_permission: PermissionMode::Ask,
             files: HashMap::new(),
             runs: HashMap::new(),
+            externals: HashMap::new(),
             models: HashMap::new(),
             probe_models: true,
             copy: CopySettings::default(),
@@ -246,6 +253,17 @@ impl ChatHub {
         self.default_project = project;
     }
 
+    /// The permission a new thread starts with.
+    pub fn default_permission(&self) -> PermissionMode {
+        self.default_permission
+    }
+
+    /// Sets the permission new threads start with. Threads that already exist, and drafts that are
+    /// already open, are not touched.
+    pub fn set_default_permission(&mut self, mode: PermissionMode) {
+        self.default_permission = mode;
+    }
+
     // ----- delegation lineage ----------------------------------------------------------------
 
     /// Replaces what the host knows about delegated runs (from the harness run registry). Views
@@ -257,6 +275,24 @@ impl ChatHub {
             self.runs = map;
             cx.notify();
         }
+    }
+
+    /// Replaces what the host saw of agents launched outside Selachi, per parent thread. Views
+    /// repaint only when something changed.
+    pub fn set_external_notes(
+        &mut self,
+        notes: HashMap<ThreadId, crate::lineage::ExternalNote>,
+        cx: &mut Context<Self>,
+    ) {
+        if notes != self.externals {
+            self.externals = notes;
+            cx.notify();
+        }
+    }
+
+    /// The agents `thread` launched outside Selachi, once the host has seen them.
+    pub fn external_note(&self, thread: ThreadId) -> Option<&crate::lineage::ExternalNote> {
+        self.externals.get(&thread)
     }
 
     /// The run record of a delegated thread, when the registry has one.
@@ -335,8 +371,8 @@ impl ChatHub {
     ) -> TabHandle {
         let hub = cx.entity();
         let project = project.or_else(|| self.default_project().map(Path::to_path_buf));
-        let theme = self.theme;
-        TabHandle::new(cx.new(|cx| ChatTab::draft(hub, theme, project, cx)))
+        let (theme, permission) = (self.theme, self.default_permission);
+        TabHandle::new(cx.new(|cx| ChatTab::draft(hub, theme, project, permission, cx)))
     }
 
     /// What the agent told us about its models (empty until asked, or when it has none).
@@ -370,8 +406,18 @@ impl ChatHub {
             cwd.or_else(|| std::env::current_dir().ok())
                 .unwrap_or_default(),
         );
+        // the shared catalog: cached on disk with a TTL, so a second launch (or the profile editor)
+        // does not start the agent again
         let task = cx.background_spawn(async move {
-            agents_driver::probe_models(kind, cwd, std::time::Duration::from_secs(20))
+            match store::paths::app_data_dir() {
+                Ok(dir) => agents_driver::catalog::models_for_kind(
+                    &dir,
+                    &kind,
+                    &cwd,
+                    std::time::Duration::from_secs(25),
+                ),
+                Err(_) => agents_driver::probe_models(kind, cwd, std::time::Duration::from_secs(20)),
+            }
         });
         cx.spawn(async move |this, cx| match task.await {
             Ok(models) => {

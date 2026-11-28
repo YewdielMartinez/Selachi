@@ -5,6 +5,7 @@
 //! the rows are rebuilt from `ThreadState` when the view is painted. A hidden thread is never
 //! painted, so it reads nothing. Only the rows whose fingerprint changed are re-measured.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -108,6 +109,9 @@ struct Meta {
     plan: Option<Plan>,
 }
 
+/// Where the hover action bar of a message is painted this frame, shared with its probe.
+pub(crate) type BarZone = Rc<RefCell<Option<(RowKey, gpui::Bounds<gpui::Pixels>)>>>;
+
 pub struct ChatView {
     pub(crate) hub: Entity<ChatHub>,
     pub(crate) theme: Theme,
@@ -138,7 +142,14 @@ pub struct ChatView {
     /// Rows the list asked for since the last `render` (see [`Self::prune_selections`]).
     pub(crate) frame_rows: HashSet<RowKey>,
     pub(crate) hover_row: Option<RowKey>,
-    pub(crate) hover_bar: Option<RowKey>,
+    /// Where the bar of `hover_row` is painted (filled by the bar while it is built).
+    pub(crate) bar_zone: BarZone,
+    /// Hides the bar a moment after the pointer left its row (see `copy_ui`).
+    pub(crate) hover_leave: Option<Task<()>>,
+    /// Focus scope of each bar that was built: focus inside it keeps it open.
+    pub(crate) bar_focus: HashMap<RowKey, gpui::FocusHandle>,
+    /// The row whose action bar was built in the last frame.
+    pub(crate) bar_built: Option<RowKey>,
     pub(crate) menu: Option<crate::copy_ui::CopyMenu>,
     pub(crate) toast: Option<crate::copy_ui::Toast>,
     pub(crate) toast_task: Option<Task<()>>,
@@ -202,7 +213,10 @@ impl ChatView {
             selections: HashMap::new(),
             frame_rows: HashSet::new(),
             hover_row: None,
-            hover_bar: None,
+            bar_zone: Rc::new(RefCell::new(None)),
+            hover_leave: None,
+            bar_focus: HashMap::new(),
+            bar_built: None,
             menu: None,
             toast: None,
             toast_task: None,
@@ -228,11 +242,27 @@ impl ChatView {
         project: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let permission = hub.read(cx).default_permission();
+        Self::draft_with(hub, theme, project, permission, cx)
+    }
+
+    /// [`ChatView::draft`] with the starting permission given (the hub cannot be read while it is
+    /// being updated, which is where tabs are created).
+    pub(crate) fn draft_with(
+        hub: Entity<ChatHub>,
+        theme: Theme,
+        project: Option<PathBuf>,
+        permission: PermissionMode,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // A new thread starts with the permission the user picked in Ajustes → Agentes.
+        let mut spec = DraftSpec::new(project);
+        spec.permission = permission;
         Self::base(
             hub,
             theme,
             ViewMode::Draft {
-                spec: DraftSpec::new(project),
+                spec,
                 creating: false,
                 error: None,
             },
@@ -537,7 +567,7 @@ impl ChatView {
         }
     }
 
-    fn composer_state(&self, cx: &App) -> ComposerState {
+    pub(crate) fn composer_state(&self, cx: &App) -> ComposerState {
         let hub = self.hub.read(cx);
         let agents = hub.agents().to_vec();
         match (&self.mode, &self.record) {
@@ -1052,7 +1082,7 @@ impl ChatView {
         } else {
             list(
                 self.list.clone(),
-                cx.processor(|this, ix: usize, _w, cx| this.render_row(ix, cx)),
+                cx.processor(|this, ix: usize, w, cx| this.render_row(ix, w, cx)),
             )
             .size_full()
             .into_any_element()
@@ -1074,7 +1104,15 @@ impl ChatView {
             .flex()
             .flex_col()
             .child(header)
-            .child(div().flex_1().w_full().min_w_0().min_h_0().child(body))
+            .child(
+                div()
+                    .debug_selector(|| "thread-body".to_string())
+                    .flex_1()
+                    .w_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(body),
+            )
             .child(composer)
             .into_any_element()
     }
@@ -1273,7 +1311,7 @@ impl ChatView {
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_w = f32::from(window.viewport_size().width);
-        self.prune_selections(window);
+        self.prune_selections(window, cx);
         self.viewport_w = self.measured.width().unwrap_or(self.window_w);
         let t = self.theme;
         let c = t.colors;
@@ -1373,6 +1411,53 @@ impl ChatView {
         self.open_delegations.contains(&child)
     }
 
+    /// "Lanzó agy fuera de Selachi · 3 procesos" with "Ver en el mapa": agent CLIs this session's
+    /// agent started with its own shell tool, as the host saw them while the map was open. Muted,
+    /// one line, no expansion.
+    fn external_row(
+        &mut self,
+        note: &crate::lineage::ExternalNote,
+        parent: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let c = t.colors;
+        let ty = t.typography;
+        let mark = ui_kit::AgentMark::from_name(note.agents.first().map_or("", String::as_str));
+        div()
+            .id(("deleg-external", parent.0 as usize))
+            .debug_selector(|| "deleg-external".to_string())
+            .w_full()
+            .h(px(32.0))
+            .px(px(10.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.0))
+            .child(agent_icon(mark, 16.0, c.outline))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(ty.ui_size_md))
+                    .text_color(c.outline)
+                    .child(SharedString::from(crate::lineage::external_note_line(note))),
+            )
+            .child(
+                Button::ghost("deleg-external-map", &t, "Ver en el mapa").on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        this.hub.update(cx, |h, cx| {
+                            h.emit_event(ChatEvent::OpenAgentMap(parent), cx)
+                        });
+                    },
+                )),
+            )
+            .into_any_element()
+    }
+
     /// One row per delegated child, between the conversation and the composer.
     fn delegation_block(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let parent = self.record.as_ref()?.id;
@@ -1384,7 +1469,8 @@ impl ChatView {
                 .map(|t| (t.clone(), hub.delegation_run(t.id).cloned()))
                 .collect()
         };
-        if kids.is_empty() {
+        let external = self.hub.read(cx).external_note(parent).cloned();
+        if kids.is_empty() && external.is_none() {
             return None;
         }
         let t = self.theme;
@@ -1530,6 +1616,9 @@ impl ChatView {
                 );
             }
             col = col.child(row);
+        }
+        if let Some(note) = external {
+            col = col.child(self.external_row(&note, parent, cx));
         }
         Some(col.into_any_element())
     }

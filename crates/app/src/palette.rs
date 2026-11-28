@@ -25,6 +25,7 @@ pub mod id {
     pub const SETTINGS_OPEN: &str = "settings.open";
     pub const SIDEBAR_TOGGLE: &str = "sidebar.toggle";
     pub const AGENTMAP_OPEN: &str = "agentmap.open";
+    pub const PROJECT_ADD: &str = "project.add";
     pub const PANEL_PREFIX: &str = "panel.";
 }
 
@@ -32,56 +33,76 @@ pub mod id {
 pub fn base_actions() -> Vec<ActionEntry> {
     vec![
         ActionEntry::new(id::TAB_NEW, "Nueva pestaña")
-            .shortcut("Ctrl+N")
             .icon(Icon::Plus)
             .keywords("terminal chat crear abrir"),
         ActionEntry::new(id::TAB_NEW_TERMINAL, "Nueva terminal")
-            .shortcut("Ctrl+Shift+N")
             .icon(Icon::Terminal)
             .keywords("pestaña shell crear abrir"),
         ActionEntry::new(id::CHAT_NEW, "Nuevo chat con un agente")
             .icon(Icon::Agents)
             .keywords("hilo conversación claude codex opencode agente"),
+        ActionEntry::new(id::PROJECT_ADD, "Agregar proyecto…")
+            .icon(Icon::Folder)
+            .keywords("carpeta proyecto abrir crear nuevo espacio"),
         ActionEntry::new(id::TAB_CLOSE, "Cerrar pestaña")
-            .shortcut("Ctrl+W")
             .icon(Icon::Close)
             .keywords("terminal"),
-        ActionEntry::new(id::TAB_NEXT, "Pestaña siguiente")
-            .shortcut("Ctrl+Tab")
-            .icon(Icon::ChevronRight),
-        ActionEntry::new(id::TAB_PREV, "Pestaña anterior")
-            .shortcut("Ctrl+Shift+Tab")
-            .icon(Icon::ChevronRight),
+        ActionEntry::new(id::TAB_NEXT, "Pestaña siguiente").icon(Icon::ChevronRight),
+        ActionEntry::new(id::TAB_PREV, "Pestaña anterior").icon(Icon::ChevronRight),
         ActionEntry::new(id::LAYOUT_TOGGLE, "Panel de layout")
-            .shortcut("Ctrl+Shift+L")
             .icon(Icon::Layout)
             .keywords("diseño preset"),
         ActionEntry::new(id::THEME_TOGGLE, "Cambiar tema")
-            .shortcut("Ctrl+Shift+T")
             .icon(Icon::Settings)
             .keywords("claro oscuro oled"),
         ActionEntry::new(id::REVIEW_OPEN, "Revisar cambios")
             .icon(Icon::Review)
             .keywords("diff notas agente review"),
         ActionEntry::new(id::ATTENTION_NEXT, "Siguiente en atención")
-            .shortcut("Ctrl+Shift+A")
             .icon(Icon::Attention)
             .keywords("cola espera aprobación"),
         ActionEntry::new(id::SETTINGS_OPEN, "Ajustes")
-            .shortcut("Ctrl+,")
             .icon(Icon::Settings)
             .keywords("configuración opciones preferencias"),
         ActionEntry::new(id::AGENTMAP_OPEN, "Mapa de subagentes")
             .icon(ui_agentmap::MAP_ICON)
             .keywords("delegaciones árbol grafo agentes harness orquestador"),
         ActionEntry::new(id::SIDEBAR_TOGGLE, "Plegar la barra lateral")
-            .shortcut("Ctrl+B")
             .icon(Icon::Layout)
             .keywords("sidebar iconos colapsar"),
-        ActionEntry::new(id::FULLSCREEN, "Pantalla completa")
-            .shortcut("F11")
-            .icon(Icon::Maximize),
+        ActionEntry::new(id::FULLSCREEN, "Pantalla completa").icon(Icon::Maximize),
     ]
+}
+
+/// The palette's actions: the host's, one per right-panel provider, each with the shortcut it
+/// has **now** (`overrides` is `[keybindings]`; an unbound or clashing action shows none).
+pub fn palette_actions(
+    overrides: &std::collections::BTreeMap<String, String>,
+    cx: &gpui::App,
+) -> Vec<ActionEntry> {
+    let mut actions: Vec<ActionEntry> = base_actions()
+        .into_iter()
+        .map(|mut e| {
+            e.shortcut = crate::keybindings::shortcut_label(overrides, &e.id).map(Into::into);
+            e
+        })
+        .collect();
+    if let Some(reg) = cx.try_global::<panel_api::PanelRegistry>() {
+        for p in reg.for_zone(panel_api::PanelZone::Right) {
+            // The map has its own action (it also picks the session to show).
+            if p.id().as_str() == ui_agentmap::PANEL_ID {
+                continue;
+            }
+            actions.push(
+                ActionEntry::new(
+                    format!("{}{}", id::PANEL_PREFIX, p.id().as_str()),
+                    format!("Panel: {}", p.title()),
+                )
+                .icon(p.icon()),
+            );
+        }
+    }
+    actions
 }
 
 /// A PowerShell single-quoted literal (`'it''s'`).

@@ -40,7 +40,7 @@ use gpui::{
     Context, Div, ElementId, Entity, FocusHandle, Hsla, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task, Window,
-    WindowBackgroundAppearance, actions, canvas, div, prelude::*, px, relative,
+    WindowAppearance, WindowBackgroundAppearance, actions, canvas, div, prelude::*, px, relative,
 };
 use panel_api::{
     CloseCheck, PanelCtx, PanelId, PanelRegistry, PanelZone, TabHandle, TabId, TabInfo, WidthClass,
@@ -72,7 +72,7 @@ use crate::sidebar_view::{SidebarEvent, SidebarOpts, SidebarView};
 use crate::splits::{PaneSet, clamp_ratio, pane_count};
 use crate::status_bar::StatusBar;
 use crate::terminal_tab::TerminalTab;
-use crate::terminal_view::TermEnv;
+use crate::terminal_view::{TermEnv, TermSettings};
 use crate::titlebar::TITLEBAR_H;
 use crate::titlebar_view::{TitleBarEvent, TitleBarView};
 use crate::usage_monitor::UsageMonitor;
@@ -86,7 +86,9 @@ mod integrations;
 mod layout;
 #[cfg(test)]
 mod profile_parity;
+mod projects;
 mod render;
+mod shortcuts;
 mod tabs;
 mod updates;
 
@@ -335,8 +337,8 @@ struct Prompts {
 struct SpaceData {
     /// Spaces (keys of [`crate::spaces::Space`]) folded in the unified sidebar.
     folded: HashSet<PathBuf>,
-    /// Favorite and recent projects (path, label): listed as spaces without tabs.
-    known: Vec<(PathBuf, String)>,
+    /// The projects the user added, then the recent ones: listed as spaces without tabs.
+    known: Vec<crate::projects::Known>,
     task: Option<Task<()>>,
 }
 
@@ -412,6 +414,8 @@ pub struct AppShell {
     layout_panel: Option<AnyView>,
     cfg_save: ConfigSave,
     spaces: SpaceData,
+    /// The selected project (where new terminals and chats open), the add menu and the dialog.
+    projects: projects::ProjectsState,
     /// Ctrl+B: the sidebar shows only icons even when there is room for it.
     sidebar_collapsed: bool,
     modes: Modes,
@@ -467,24 +471,51 @@ fn hsla(c: theme::Rgba) -> Hsla {
     c.into()
 }
 
-/// The theme mode of a configured one (a "System" theme is dark until the OS is followed).
-pub(crate) fn mode_of(mode: ThemeMode) -> Mode {
+/// The theme mode of a configured one. "Sistema" follows the OS light / dark setting
+/// (`appearance`); Light, Dark and OLED are explicit and ignore it.
+pub(crate) fn mode_of(mode: ThemeMode, appearance: WindowAppearance) -> Mode {
     match mode {
         ThemeMode::Light => Mode::Light,
         ThemeMode::Oled => Mode::Oled,
-        ThemeMode::Dark | ThemeMode::System => Mode::Dark,
+        ThemeMode::Dark => Mode::Dark,
+        ThemeMode::System => match appearance {
+            WindowAppearance::Light | WindowAppearance::VibrantLight => Mode::Light,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => Mode::Dark,
+        },
     }
 }
 
-/// The theme of a configuration: its mode, with its `[appearance] accent`.
-pub(crate) fn theme_for(config: &Config) -> Theme {
-    themed(mode_of(config.appearance.mode), config)
+/// The theme of a configuration: its mode (resolved against the OS `appearance`), with its
+/// `[appearance] accent`.
+pub(crate) fn theme_for(config: &Config, appearance: WindowAppearance) -> Theme {
+    themed(mode_of(config.appearance.mode, appearance), config)
 }
 
 /// `mode` with the configured accent (the Ctrl+Shift+T cycle and the wizard's preview keep the
 /// accent while the mode changes).
 pub(crate) fn themed(mode: Mode, config: &Config) -> Theme {
-    Theme::for_mode(mode).with_accent_str(&config.appearance.accent)
+    let mut theme = Theme::for_mode(mode).with_accent_str(&config.appearance.accent);
+    theme.typography = typography_for(config);
+    theme
+}
+
+/// The typography of a configuration: its `[appearance]` fonts, terminal size and line height. A
+/// font that is not installed falls back to the default one (see `theme::fonts::resolve`).
+pub(crate) fn typography_for(config: &Config) -> theme::Typography {
+    let a = &config.appearance;
+    theme::Typography::new().with_fonts(
+        &a.ui_font,
+        &a.mono_font,
+        a.mono_size as f32,
+        a.line_height as f32,
+    )
+}
+
+/// Lets `[appearance]` fonts be checked against the installed ones (listed the first time a font
+/// other than the embedded ones is configured, never at startup).
+pub(crate) fn register_installed_fonts(cx: &App) {
+    let text_system = cx.text_system().clone();
+    theme::fonts::register_source(move || text_system.all_font_names());
 }
 
 /// [`adapt_layout`] plus what only the shell knows: Ctrl+B folds a docked sidebar to its icon
@@ -586,6 +617,8 @@ impl AppShell {
         status.update(cx, |s, cx| s.set_active(focused, cx));
         // A window that opens already focused gets no activation event: tell the monitor now.
         usage.update(cx, |u, cx| u.set_active(focused, cx));
+        // `[agents] usage_week_start` / `show_estimates`.
+        usage.update(cx, |u, cx| u.apply_agents_config(&config.agents, cx));
         if let Some(services) = cx.try_global::<Services>().cloned() {
             let weak = cx.weak_entity();
             status.update(cx, |s, cx| {
@@ -637,6 +670,11 @@ impl AppShell {
         });
 
         let mut subs = vec![
+            // "Sistema" follows Windows' light / dark setting: the OS tells the window when it
+            // changes (WM_SETTINGCHANGE), so nothing polls.
+            cx.observe_window_appearance(window, |this, window, cx| {
+                this.os_appearance_changed(window.appearance(), cx)
+            }),
             // Usage is rescanned every 60 s only while the window is focused.
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
@@ -645,6 +683,8 @@ impl AppShell {
                 this.status.update(cx, |s, cx| s.set_active(active, cx));
                 if active {
                     this.git_window_focus(cx);
+                    // A project folder may have been deleted while the app was in the background.
+                    this.refresh_missing(cx);
                 }
                 // The tree poll ends by itself when the window loses focus: restart it here.
                 this.sync_tree_poll(cx);
@@ -657,6 +697,8 @@ impl AppShell {
         notify::set_window_active(window.is_window_active());
         // New tabs read the completion settings from `[terminal.completion]`.
         cx.set_global(TermEnv(config.completion_env()));
+        // ... and the shell, scrollback, cursor and clipboard settings of `[terminal]`.
+        cx.set_global(TermSettings::from_config(&config));
         // A click on a long-command toast brings the window and its tab forward.
         let mut clicks = notify::click_receiver();
         let toast_task = cx.spawn_in(window, async move |this, cx| {
@@ -673,6 +715,7 @@ impl AppShell {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |this, cx| {
+                this.flush_selected(cx);
                 this.save_session_now(true, cx);
                 // "Al cerrar": the update installs now, in the background of the closing app.
                 this.install_update_on_exit(cx);
@@ -685,22 +728,7 @@ impl AppShell {
             restore,
         } = session;
         // The command palette (Ctrl+K): host actions plus one per panel that can live on the right.
-        let mut actions = palette::base_actions();
-        if let Some(reg) = cx.try_global::<PanelRegistry>() {
-            for p in reg.for_zone(PanelZone::Right) {
-                // The map has its own action (it also picks the session to show).
-                if p.id().as_str() == ui_agentmap::PANEL_ID {
-                    continue;
-                }
-                actions.push(
-                    ui_palette::ActionEntry::new(
-                        format!("{}{}", action_id::PANEL_PREFIX, p.id().as_str()),
-                        format!("Panel: {}", p.title()),
-                    )
-                    .icon(p.icon()),
-                );
-            }
-        }
+        let actions = palette::palette_actions(&config.keybindings, cx);
         let custom: Vec<String> = config
             .layout
             .custom_presets
@@ -731,6 +759,12 @@ impl AppShell {
         let updates_host = cx.new(|_| {
             crate::update_host::UpdateHost::new(updates::CURRENT_VERSION, &config.updates)
         });
+        // The project selected last time (one small read, like the session itself).
+        let selected = session_db
+            .as_ref()
+            .and_then(|db| db.meta_get(store::db::SELECTED_PROJECT).ok().flatten())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from);
         let session_entity = cx.new(|_| SessionPersistence::new(session_db));
         subs.push(
             cx.subscribe(&session_entity, |this, _, _: &SessionEvent, cx| {
@@ -799,6 +833,7 @@ impl AppShell {
             layout_panel: None,
             cfg_save: ConfigSave::default(),
             spaces: SpaceData::default(),
+            projects: projects::ProjectsState::new(selected, cx.focus_handle()),
             sidebar_collapsed: false,
             modes: Modes::default(),
             prompts: Prompts {
@@ -849,6 +884,7 @@ impl AppShell {
     fn finish_startup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mount_panels(window, cx);
         self.load_known_projects(cx);
+        self.refresh_missing(cx);
         let db = self.session.read(cx).db().cloned();
         if let Some(db) = db
             && std::env::var_os("SELACHI_DEMO").is_none()

@@ -29,9 +29,9 @@ pub use chart::{bar_geometry, slot_tone};
 pub use data::{
     AGENT_ORDER, AgentTotals, CHART_DAYS, CostInfo, CostKind, DayUsage, ForecastLine, LIMIT_AGENTS,
     LimitState, LimitWindow, UNKNOWN_RESET_MAX_AGE_MS, UsageQuery, UsageRange, UsageSnapshot,
-    aggregate_agents, breakdown_tooltip, chart_day_bounds, cost_label, cost_short, day_tooltip,
-    forecast_line, forecast_lines, freshness_label, limit_agents, limit_state, reset_label,
-    stack_cells,
+    aggregate_agents, branch_cost_if, breakdown_tooltip, breakdown_tooltip_if, chart_day_bounds,
+    cost_label, cost_label_if, cost_short, day_tooltip, forecast_line, forecast_lines,
+    freshness_label, limit_agents, limit_state, reset_label, stack_cells,
 };
 pub use fmt::{
     compact_tokens, day_label, events_label, format_age, format_cost, format_duration, format_when,

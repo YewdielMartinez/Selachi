@@ -146,11 +146,90 @@ pub fn externals_by_parent(
     out
 }
 
-/// One sample, blocking: meant for the background executor.
-pub fn sample(
-    tracker: &SharedTracker,
-    cpu: &Mutex<CpuSampler>,
-) -> Vec<(NodeKey, Vec<ExternalProc>)> {
+/// Most descendants listed per external agent (what `agy` started: its shells, `cargo`, `git`...).
+pub const MAX_CHILDREN_PER_AGENT: usize = 48;
+
+/// The processes below each external agent, from the same snapshot as the agents themselves: what
+/// the map's Activity tab shows as the agent's commands. Pure.
+///
+/// Every descendant (child, grandchild...) is listed once, oldest first, except the other external
+/// agents and what runs under them (they are map nodes of their own). A parent that started *after*
+/// its child is a recycled pid and is not followed. Each agent is listed even with no children, so
+/// the map can mark the ones that ended. Command lines are redacted here (the map redacts again).
+pub fn children_of_externals(
+    rows: &[(NodeKey, Vec<ExternalProc>)],
+    procs: &[ProcInfo],
+    cpu_by_pid: &HashMap<u32, f32>,
+) -> Vec<(NodeKey, Vec<ExternalChild>)> {
+    let mut kids_of: HashMap<u32, Vec<&ProcInfo>> = HashMap::new();
+    for p in procs {
+        kids_of.entry(p.ppid).or_default().push(p);
+    }
+    let agent_pids: HashSet<u32> = rows
+        .iter()
+        .flat_map(|(_, l)| l.iter().map(|e| e.pid))
+        .collect();
+    let by_pid: HashMap<u32, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
+    let mut out = Vec::new();
+    for (_, list) in rows {
+        for ext in list {
+            let mut found: Vec<&ProcInfo> = Vec::new();
+            let mut queue = vec![ext.pid];
+            let mut seen: HashSet<u32> = HashSet::from([ext.pid]);
+            while let Some(parent) = queue.pop() {
+                let parent_start = by_pid.get(&parent).and_then(|p| p.start_time);
+                for k in kids_of.get(&parent).map(Vec::as_slice).unwrap_or(&[]) {
+                    // pid-reuse guard, like `proc_svc`: a real child never starts before its parent
+                    let ok =
+                        matches!((parent_start, k.start_time), (Some(ps), Some(ks)) if ks >= ps);
+                    if !ok || agent_pids.contains(&k.pid) || !seen.insert(k.pid) {
+                        continue;
+                    }
+                    found.push(k);
+                    queue.push(k.pid);
+                }
+            }
+            found.sort_by_key(|k| (k.start_time, k.pid));
+            let excess = found.len().saturating_sub(MAX_CHILDREN_PER_AGENT);
+            found.drain(..excess); // keep the newest
+            out.push((
+                ext.key(),
+                found
+                    .into_iter()
+                    .map(|k| {
+                        let cmd = k.cmdline.as_deref().filter(|c| !c.trim().is_empty());
+                        ExternalChild {
+                            pid: k.pid,
+                            cmdline_redacted: store::redact(cmd.unwrap_or(&k.name)).text,
+                            started_ms: k
+                                .start_time
+                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                .map_or(0, |d| d.as_millis() as i64),
+                            ended_ms: None,
+                            exit_code: None,
+                            cpu_pct: cpu_by_pid.get(&k.pid).copied(),
+                            rss_bytes: k.working_set,
+                        }
+                    })
+                    .collect(),
+            ));
+        }
+    }
+    out
+}
+
+/// One sample of the map's feed.
+#[derive(Default)]
+pub struct Sample {
+    /// The external agents of every parent.
+    pub rows: Vec<(NodeKey, Vec<ExternalProc>)>,
+    /// The processes under each external agent (`ExternalProc::key()` -> children).
+    pub children: Vec<(NodeKey, Vec<ExternalChild>)>,
+}
+
+/// One sample, blocking: meant for the background executor. `extra_agents` is
+/// `[delegation] extra_agents` of the config.
+pub fn sample(tracker: &SharedTracker, cpu: &Mutex<CpuSampler>, extra_agents: &[String]) -> Sample {
     // Heavy syscalls first, with no lock held.
     let procs = proc_svc::snapshot();
     let cores = proc_svc::logical_cores().max(1) as f32;
@@ -165,7 +244,77 @@ pub fn sample(
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .report_from(&procs, &HashMap::new());
-    externals_by_parent(&reports, &procs, &cpu_by_pid)
+    let rows = externals_by_parent(&reports, &procs, &cpu_by_pid, extra_agents);
+    let children = children_of_externals(&rows, &procs, &cpu_by_pid);
+    Sample { rows, children }
+}
+
+/// What the map saw of the agents a session launched outside Selachi: the data of the chat row
+/// «Lanzó agy fuera de Selachi · 3 procesos» and of the sidebar's map icon.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ExternalSeen {
+    /// Distinct agent ids in the order they were first seen.
+    pub agents: Vec<String>,
+    /// Processes detected, the finished ones included.
+    pub count: usize,
+}
+
+/// Summary of the external agents the map holds for one parent (`None` when there are none).
+pub fn seen_of(procs: &[ExternalProc]) -> Option<ExternalSeen> {
+    if procs.is_empty() {
+        return None;
+    }
+    let mut agents: Vec<String> = Vec::new();
+    for p in procs {
+        if !agents.contains(&p.agent) {
+            agents.push(p.agent.clone());
+        }
+    }
+    Some(ExternalSeen {
+        agents,
+        count: procs.len(),
+    })
+}
+
+/// The ingested-usage agent an external process belongs to (`None` for agents whose sessions
+/// `agents_svc` does not ingest, like Gemini, and for configured extras).
+pub fn usage_agent(agent: &str) -> Option<agents_svc::Agent> {
+    match agent.trim().to_ascii_lowercase().as_str() {
+        "agy" | "antigravity" => Some(agents_svc::Agent::Antigravity),
+        "codex" => Some(agents_svc::Agent::Codex),
+        "claude" | "claude-code" => Some(agents_svc::Agent::Claude),
+        "opencode" => Some(agents_svc::Agent::OpenCode),
+        _ => None,
+    }
+}
+
+/// The external processes whose usage is still to be looked up: not looked up yet, or looked up
+/// for a different end time (it was running, now it ended). `done` maps a node to the `ended_ms` its
+/// lookup was made for. Agents without ingested sessions are never listed.
+pub fn usage_todo<'a>(
+    done: &HashMap<NodeKey, Option<i64>>,
+    procs: &'a [ExternalProc],
+) -> Vec<&'a ExternalProc> {
+    procs
+        .iter()
+        .filter(|p| usage_agent(&p.agent).is_some())
+        .filter(|p| done.get(&p.key()) != Some(&p.ended_ms))
+        .collect()
+}
+
+/// Tokens (billable) and the estimated cost of the session an external agent ran in, from the usage
+/// `agents_svc` already ingested. Blocking (opens the database): background executor only.
+/// `end_ms` is the process end, or now while it runs.
+pub fn lookup_usage(
+    db: &std::path::Path,
+    agent: &str,
+    cwd: &str,
+    start_ms: i64,
+    end_ms: i64,
+) -> Option<(u64, Option<f64>)> {
+    let agent = usage_agent(agent)?;
+    let u = agents_svc::usage_for_external(db, agent, cwd, start_ms, end_ms)?;
+    Some((u.billable_tokens(), u.cost))
 }
 
 /// The sampling loop of the map: alive only while a map view is on screen.
@@ -177,6 +326,12 @@ pub struct AgentMapFeed {
     pub(crate) cpu: std::sync::Arc<Mutex<CpuSampler>>,
     /// Parents that were fed at some point: the ones that vanish from the tracker are cleared.
     pub(crate) fed: HashSet<NodeKey>,
+    /// External agents whose usage was looked up (node -> the `ended_ms` it was looked up for);
+    /// forgotten when the loop stops.
+    pub(crate) usage: HashMap<NodeKey, Option<i64>>,
+    /// What the map last saw of each parent. Kept after the map closes: the chat row and the
+    /// sidebar icon only know what the feed found while it ran (nothing else watches for them).
+    pub(crate) seen: HashMap<NodeKey, ExternalSeen>,
 }
 
 impl AgentMapFeed {
@@ -187,6 +342,7 @@ impl AgentMapFeed {
     /// Ends the loop and forgets the CPU baseline (the next sample would span minutes).
     pub fn stop(&mut self) {
         self.task = None;
+        self.usage.clear();
         self.cpu.lock().unwrap_or_else(|p| p.into_inner()).reset();
     }
 }
@@ -366,6 +522,211 @@ mod tests {
         let by_pid: HashMap<u32, &ProcInfo> = procs.iter().map(|x| (x.pid, x)).collect();
         let agents: HashSet<u32> = [11, 12].into();
         assert!(!has_agent_ancestor(12, &by_pid, &agents));
+    }
+
+    fn ext_proc(agent: &str, pid: u32, started_ms: i64, ended: Option<i64>) -> ExternalProc {
+        ExternalProc {
+            agent: agent.into(),
+            pid,
+            cmdline_redacted: format!("{agent} -p x"),
+            cwd: None,
+            model: None,
+            effort: None,
+            started_ms,
+            ended_ms: ended,
+            exit_code: None,
+            cpu_pct: None,
+            rss_bytes: 1 << 20,
+        }
+    }
+
+    #[test]
+    fn the_processes_under_an_external_agent_are_its_children_but_other_agents_are_not() {
+        // claude (chat root) -> bash -> agy(120) -> cmd -> cargo -> rustc ; agy(121) alone ;
+        // agy(120) also started codex(125) (another external node of its own, with a child)
+        let procs = vec![
+            p(100, 4, "claude.exe", "claude", 10),
+            p(110, 100, "bash.exe", "bash -c agy", 20),
+            p(120, 110, "agy.exe", "agy -p x", 30),
+            p(
+                122,
+                120,
+                "cmd.exe",
+                "cmd /c cargo test --token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+                31,
+            ),
+            p(123, 122, "cargo.exe", "cargo test", 32),
+            p(124, 123, "rustc.exe", "rustc x", 33),
+            p(125, 120, "codex.exe", "codex exec y", 34),
+            p(126, 125, "git.exe", "git status", 35),
+            p(121, 110, "agy.exe", "agy -p z", 31),
+            // a recycled parent pid: the "child" started before its parent
+            p(127, 120, "old.exe", "old", 5),
+        ];
+        let cpu: HashMap<u32, f32> = [(123, 12.5)].into();
+        let rows = externals_by_parent(&[report(OWNER_BASE | 5, &procs[0])], &procs, &cpu, &[]);
+        let kids = children_of_externals(&rows, &procs, &cpu);
+        let of = |pid: u32| -> Vec<u32> {
+            kids.iter()
+                .find(|(k, _)| matches!(k, NodeKey::External { pid: p, .. } if *p == pid))
+                .map(|(_, l)| l.iter().map(|c| c.pid).collect())
+                .unwrap_or_else(|| panic!("agent {pid} is listed"))
+        };
+        assert_eq!(
+            of(120),
+            [122, 123, 124],
+            "the shell, cargo and rustc; not codex nor old.exe"
+        );
+        assert_eq!(of(125), [126], "codex has its own children");
+        assert!(
+            of(121).is_empty(),
+            "an agent with no children is still listed (so it can end)"
+        );
+        let find = |pid: u32| {
+            kids.iter()
+                .flat_map(|(_, l)| l)
+                .find(|c| c.pid == pid)
+                .unwrap()
+        };
+        assert_eq!(find(123).cpu_pct, Some(12.5));
+        assert_eq!(find(123).started_ms, 32_000);
+        assert!(
+            !find(122)
+                .cmdline_redacted
+                .contains("abcdefghijklmnopqrstuvwxyz0123456789"),
+            "{}",
+            find(122).cmdline_redacted
+        );
+    }
+
+    #[test]
+    fn extra_agents_from_the_config_are_found_and_shells_are_ignored() {
+        let procs = vec![
+            p(100, 4, "claude.exe", "claude", 10),
+            p(110, 100, "aider.exe", "aider --yes", 20),
+            p(111, 100, "node.exe", "node build.js", 21),
+        ];
+        let owners = [report(OWNER_BASE | 5, &procs[0])];
+        let none = externals_by_parent(&owners, &procs, &HashMap::new(), &[]);
+        assert!(none[0].1.is_empty(), "aider is not an agent by default");
+        let extra = vec!["aider".to_string(), "node".to_string()];
+        let rows = externals_by_parent(&owners, &procs, &HashMap::new(), &extra);
+        assert_eq!(
+            rows[0].1.iter().map(|e| e.pid).collect::<Vec<_>>(),
+            [110],
+            "aider is found, node (a runtime) is refused even when configured"
+        );
+        assert_eq!(rows[0].1[0].agent, "aider");
+    }
+
+    #[test]
+    fn what_the_map_saw_summarizes_per_parent() {
+        assert_eq!(seen_of(&[]), None);
+        let seen = seen_of(&[
+            ext_proc("agy", 1, 10, None),
+            ext_proc("codex", 2, 11, Some(20)),
+            ext_proc("agy", 3, 12, None),
+        ])
+        .unwrap();
+        assert_eq!(seen.agents, ["agy", "codex"]);
+        assert_eq!(seen.count, 3, "finished processes count too");
+    }
+
+    #[test]
+    fn usage_is_looked_up_once_per_process_and_again_only_when_it_ends() {
+        assert_eq!(usage_agent("agy"), Some(agents_svc::Agent::Antigravity));
+        assert_eq!(usage_agent("Codex"), Some(agents_svc::Agent::Codex));
+        assert_eq!(usage_agent("claude"), Some(agents_svc::Agent::Claude));
+        assert_eq!(usage_agent("opencode"), Some(agents_svc::Agent::OpenCode));
+        assert_eq!(usage_agent("gemini"), None, "its sessions are not ingested");
+        assert_eq!(usage_agent("aider"), None);
+
+        let running = ext_proc("agy", 1, 1_000, None);
+        let gemini = ext_proc("gemini", 2, 1_000, None);
+        let mut done: HashMap<NodeKey, Option<i64>> = HashMap::new();
+        let list = [running.clone(), gemini];
+        assert_eq!(
+            usage_todo(&done, &list).len(),
+            1,
+            "only agents with ingested sessions"
+        );
+        done.insert(running.key(), None);
+        assert!(
+            usage_todo(&done, &list).is_empty(),
+            "already looked up while running"
+        );
+        let ended = ext_proc("agy", 1, 1_000, Some(9_000));
+        assert_eq!(
+            usage_todo(&done, std::slice::from_ref(&ended)).len(),
+            1,
+            "its end time changed: look again for the final numbers"
+        );
+        done.insert(ended.key(), Some(9_000));
+        assert!(usage_todo(&done, &[ended]).is_empty());
+    }
+
+    /// `2026-05-01T11:00:00Z` -> unix ms, without a date crate for one test.
+    fn unix_ms(s: &str) -> i64 {
+        let (date, time) = s.trim_end_matches('Z').split_once('T').unwrap();
+        let d: Vec<i64> = date.split('-').map(|x| x.parse().unwrap()).collect();
+        let t: Vec<i64> = time.split(':').map(|x| x.parse().unwrap()).collect();
+        // days from civil (Howard Hinnant)
+        let (y, m, dd) = (d[0] - i64::from(d[1] <= 2), d[1], d[2]);
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + dd - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146_097 + doe - 719_468;
+        ((days * 24 + t[0]) * 60 + t[1]) * 60_000 + t[2] * 1000
+    }
+
+    /// The numbers come from the ingested logs (a synthetic Claude session) as billable tokens and
+    /// an estimated cost; another folder, an unsupported agent or a missing database find nothing.
+    #[test]
+    fn usage_comes_from_the_ingested_session_of_that_folder_and_window() {
+        use std::io::Write as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude").join("p");
+        std::fs::create_dir_all(&claude).unwrap();
+        let cwd = r"C:\work\app";
+        let mut f = std::fs::File::create(claude.join("a.jsonl")).unwrap();
+        for (ts, id, out) in [
+            ("2026-05-01T11:00:00Z", "m1", 200),
+            ("2026-05-01T11:05:00Z", "m2", 300),
+        ] {
+            writeln!(
+                f,
+                r#"{{"type":"assistant","timestamp":"{ts}","sessionId":"s1","cwd":"{}","gitBranch":"main","requestId":"r-{id}","uuid":"u-{id}","message":{{"id":"{id}","model":"claude-opus-5-5","usage":{{"input_tokens":10,"output_tokens":{out},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[]}}}}"#,
+                cwd.replace('\\', "\\\\")
+            )
+            .unwrap();
+        }
+        drop(f);
+        let db = tmp.path().join("t.db");
+        let mut ing = agents_svc::Ingestor::open(
+            &db,
+            agents_svc::IngestConfig {
+                claude_projects: Some(tmp.path().join("claude")),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        ing.scan().unwrap();
+        drop(ing);
+        let (start, end) = (
+            unix_ms("2026-05-01T10:59:00Z"),
+            unix_ms("2026-05-01T11:10:00Z"),
+        );
+        let (tokens, cost) = lookup_usage(&db, "claude", cwd, start, end).expect("the session");
+        assert_eq!(
+            tokens,
+            10 + 200 + 10 + 300,
+            "input + output of both responses"
+        );
+        assert!(cost.is_some_and(|c| c > 0.0), "{cost:?}");
+        assert!(lookup_usage(&db, "claude", r"C:\elsewhere", start, end).is_none());
+        assert!(lookup_usage(&db, "gemini", cwd, start, end).is_none());
+        assert!(lookup_usage(&tmp.path().join("none.db"), "claude", cwd, start, end).is_none());
     }
 
     #[test]

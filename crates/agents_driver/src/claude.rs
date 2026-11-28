@@ -509,6 +509,7 @@ impl ClaudeDriver {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        proc::apply_env(&mut cmd, &cfg.env);
         let mut child = proc::spawn_in_job(&mut cmd, opts.job)?;
         let pid = child.id();
         let stdin = child.stdin.take();

@@ -6,7 +6,7 @@
 //! * chat composer: attached to the message (and `@mentioned` when they are inside the project, see
 //!   `ui_chat`);
 //! * file tree / viewer: opened in the viewer;
-//! * a space row of the sidebar: a new terminal tab in that folder, when the drop is a folder.
+//! * the project list of the sidebar: every dropped folder becomes a project (`folders`).
 
 use std::path::{Path, PathBuf};
 
@@ -65,9 +65,9 @@ pub fn quote_paths(kind: ShellKind, paths: &[PathBuf]) -> String {
         .join(" ")
 }
 
-/// A drop on a space row: the folder to open a terminal in (the first dropped folder).
-pub fn folder_to_open(paths: &[PathBuf]) -> Option<PathBuf> {
-    paths.iter().find(|p| p.is_dir()).cloned()
+/// A drop on the project list: every dropped folder becomes a project (files are ignored).
+pub fn folders(paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths.iter().filter(|p| p.is_dir()).cloned().collect()
 }
 
 /// A drop on the file tree / viewer, split into what opens now.
@@ -163,12 +163,8 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let missing = dir.join("nope");
         let all = [file.clone(), dir.clone(), missing];
-        assert_eq!(folder_to_open(&all), Some(dir.clone()));
-        assert_eq!(
-            folder_to_open(std::slice::from_ref(&file)),
-            None,
-            "a file does not open a terminal"
-        );
+        assert_eq!(folders(&all), vec![dir.clone()]);
+        assert!(folders(std::slice::from_ref(&file)).is_empty());
         let v = split_for_viewer(&all);
         assert_eq!(v.files, vec![file]);
         assert_eq!(v.folders, vec![dir.clone()]);

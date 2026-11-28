@@ -11,6 +11,8 @@ workspace = true
 # Lets `LocalFetcher` serve the plugin index from a `file://` URL and map archive URLs onto a
 # local folder. For debug examples and tests only: never enable it in a release build.
 dev-file-urls = []
+# `layout_checks`: the layout contract of a settings screen, for the tests of the host (the app).
+test-support = ["ui_kit/test-support", "gpui/test-support"]
 
 [dependencies]
 gpui.workspace = true

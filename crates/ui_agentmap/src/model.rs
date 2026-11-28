@@ -25,6 +25,7 @@ use crate::activity::{
 };
 use crate::events::AgentMapEvent;
 use crate::events_log::{LogBatch, LogEvent, LogReader};
+use crate::prefs::{MapPrefs, MapSession};
 use crate::registry::{ApprovalEntry, read_runs};
 use crate::source::SessionSource;
 use crate::tree::{
@@ -69,6 +70,11 @@ impl InspectorTab {
 /// The forest changed (a reload finished).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapChanged;
+
+/// The preferences changed: the host keeps this JSON (see [`MapPrefs::to_json`]) and gives it back
+/// with [`AgentMapModel::set_prefs_json`] at the next start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrefsChanged(pub String);
 
 /// Where the prompt shown in the inspector came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +158,10 @@ pub struct AgentMapModel {
     pending_focus: Option<NodeKey>,
     /// The inspector tab (shared by every view, like `selected`).
     tab: InspectorTab,
+    /// How the map is organized and where it lives (remembered between runs).
+    prefs: MapPrefs,
+    /// Search text and "hide old" (only while the app runs).
+    session: MapSession,
     /// Child processes of external agents (fed by the host; only kept while a view is attached).
     ext_children: HashMap<NodeKey, Vec<ExternalChild>>,
     /// The status line of external nodes (their newest running child).
@@ -298,6 +308,7 @@ fn registry_signature(dir: &Path) -> u64 {
 }
 
 impl EventEmitter<MapChanged> for AgentMapModel {}
+impl EventEmitter<PrefsChanged> for AgentMapModel {}
 /// The views forward the actions of the inspector here: the host subscribes to the model once.
 impl EventEmitter<AgentMapEvent> for AgentMapModel {}
 
@@ -328,6 +339,8 @@ impl AgentMapModel {
             selected: None,
             pending_focus: None,
             tab: InspectorTab::Summary,
+            prefs: MapPrefs::default(),
+            session: MapSession::default(),
             ext_children: HashMap::new(),
             live_ext: HashMap::new(),
             live: HashMap::new(),
@@ -347,6 +360,16 @@ impl AgentMapModel {
 
     pub fn forest(&self) -> &Arc<Forest> {
         &self.forest
+    }
+
+    /// How the map is organized (shared by every view).
+    pub fn prefs(&self) -> &MapPrefs {
+        &self.prefs
+    }
+
+    /// The search text and the "hide old" choice of this run.
+    pub fn session(&self) -> &MapSession {
+        &self.session
     }
 
     /// A first load finished.
@@ -473,6 +496,37 @@ impl AgentMapModel {
     }
 
     // ----- host controls ----------------------------------------------------------------------
+
+    /// Loads the preferences the host kept (start-up). Does not emit [`PrefsChanged`].
+    pub fn set_prefs_json(&mut self, json: &str, cx: &mut Context<Self>) {
+        let prefs = MapPrefs::from_json(json);
+        if prefs != self.prefs {
+            self.prefs = prefs;
+            cx.notify();
+        }
+    }
+
+    /// Changes the preferences; when something changed every view repaints and the host is told to
+    /// keep the new JSON.
+    pub fn update_prefs(&mut self, f: impl FnOnce(&mut MapPrefs), cx: &mut Context<Self>) {
+        let mut next = self.prefs.clone();
+        f(&mut next);
+        if next != self.prefs {
+            self.prefs = next;
+            cx.emit(PrefsChanged(self.prefs.to_json()));
+            cx.notify();
+        }
+    }
+
+    /// Changes the search text / "hide old" (not remembered between runs).
+    pub fn update_session(&mut self, f: impl FnOnce(&mut MapSession), cx: &mut Context<Self>) {
+        let mut next = self.session.clone();
+        f(&mut next);
+        if next != self.session {
+            self.session = next;
+            cx.notify();
+        }
+    }
 
     /// Shows the session of this orchestrator (the active thread or tab). It is part of the map even
     /// when it has not delegated yet. `None` goes back to the automatic choice.
@@ -669,7 +723,13 @@ impl AgentMapModel {
     /// Writes the matched usage into the external nodes of the forest (a node that is not in the
     /// forest yet gets it when it is).
     fn apply_ext_usage(&mut self) {
-        if self.ext_usage.is_empty() && self.forest.nodes.iter().all(|n| n.tokens.is_none() || !n.is_external()) {
+        if self.ext_usage.is_empty()
+            && self
+                .forest
+                .nodes
+                .iter()
+                .all(|n| n.tokens.is_none() || !n.is_external())
+        {
             return;
         }
         let f = Arc::make_mut(&mut self.forest);

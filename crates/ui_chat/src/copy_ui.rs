@@ -6,8 +6,9 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, IntoElement, ParentElement as _,
-    SharedString, Styled as _, div, prelude::*, px,
+    AnyElement, App, Bounds, ClickEvent, ClipboardItem, Context, DispatchPhase, IntoElement,
+    MouseExitEvent, MouseMoveEvent, ParentElement as _, Pixels, Point, SharedString, Styled as _,
+    Window, canvas, div, prelude::*, px,
 };
 use theme::Radius;
 use ui_kit::{
@@ -22,6 +23,11 @@ use crate::copy::{
 use crate::hub::ChatEvent;
 use crate::rows::{ChatRow, RowKey, RowKind};
 use crate::widgets::menu_row;
+
+/// How long a message's action bar outlives the pointer leaving its row (and its bar): long
+/// enough to cross a gap or overshoot, short enough to feel immediate. The timer only runs while
+/// the pointer is away.
+const BAR_GRACE: Duration = Duration::from_millis(150);
 
 /// Which text a "Copiar" of a message produces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,8 +83,13 @@ impl ChatView {
     /// hundreds of MB. A group that is focused or holds a selection stays (the user is using it);
     /// a dropped one is created again, from the model, when its row comes back. Copying a row
     /// that is off screen never needed a group: it reads the text from `rows`.
-    pub(crate) fn prune_selections(&mut self, window: &gpui::Window) {
+    pub(crate) fn prune_selections(&mut self, window: &Window, cx: &App) {
+        self.bar_built = None;
+        // The bar of the new frame fills this in while it is built (see `message_bar`).
+        *self.bar_zone.borrow_mut() = None;
         let seen = std::mem::take(&mut self.frame_rows);
+        self.bar_focus
+            .retain(|k, h| seen.contains(k) || h.contains_focused(window, cx));
         if self.selections.is_empty() || seen.is_empty() {
             return;
         }
@@ -206,30 +217,117 @@ impl ChatView {
         });
     }
 
-    /// Hover tracking of the rows that have an action bar. Both the row and the bar report, so
-    /// the bar survives the pointer moving onto it (a button hides its parent's hover).
-    pub(crate) fn set_hover(&mut self, key: &RowKey, bar: bool, on: bool, cx: &mut Context<Self>) {
-        let slot = if bar {
-            &mut self.hover_bar
-        } else {
-            &mut self.hover_row
+    /// An invisible element filling the hover area of a message row. It decides which row owns
+    /// the pointer **geometrically** (the row's bounds plus the painted bar's), on every mouse
+    /// move, instead of asking gpui which hitbox is `hovered`: a hitbox that `occlude`s (every
+    /// button does) hides its ancestors' hover, so the bar's own buttons used to un-hover the bar
+    /// and the row and the bar was torn down under the pointer, then rebuilt on the next move.
+    pub(crate) fn hover_probe(&self, key: &RowKey, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let key = key.clone();
+        canvas(
+            |bounds, _, _| bounds,
+            move |bounds, _, window, _| {
+                // A row half scrolled out is only hoverable where it is visible.
+                let row = bounds.intersect(&window.content_mask().bounds);
+                let (t, k) = (this.clone(), key.clone());
+                window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        t.update(cx, |v, cx| v.pointer_moved(&k, row, ev.position, cx))
+                            .ok();
+                    }
+                });
+                let (t, k) = (this, key);
+                window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        t.update(cx, |v, cx| v.pointer_exit(&k, cx)).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+        .into_any_element()
+    }
+
+    /// The pointer is at `at`; `row` is the hover area of message `key`.
+    pub(crate) fn pointer_moved(
+        &mut self,
+        key: &RowKey,
+        row: Bounds<Pixels>,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let zone = self.bar_zone.borrow().clone();
+        let bar_of = |k: &RowKey| {
+            zone.as_ref()
+                .filter(|(z, _)| z == k)
+                .map(|(_, b)| *b)
+                .filter(|b| b.contains(&at))
         };
-        let want = on.then(|| key.clone());
-        let changed = if on {
-            *slot != want
-        } else {
-            slot.as_ref() == Some(key)
-        };
-        if changed {
-            *slot = want;
+        // The bar hangs over the row above: there the bar (of the row that owns the pointer) wins.
+        let covered = self
+            .hover_row
+            .as_ref()
+            .filter(|h| *h != key)
+            .and_then(bar_of)
+            .is_some();
+        if bar_of(key).is_some() || (row.contains(&at) && !covered) {
+            self.pointer_enter(key, cx);
+        } else if self.hover_row.as_ref() == Some(key) {
+            self.pointer_leave(cx);
+        }
+    }
+
+    /// The pointer left the window.
+    pub(crate) fn pointer_exit(&mut self, key: &RowKey, cx: &mut Context<Self>) {
+        if self.hover_row.as_ref() == Some(key) {
+            self.pointer_leave(cx);
+        }
+    }
+
+    fn pointer_enter(&mut self, key: &RowKey, cx: &mut Context<Self>) {
+        self.hover_leave = None;
+        if self.hover_row.as_ref() != Some(key) {
+            self.hover_row = Some(key.clone());
             cx.notify();
         }
     }
 
-    fn bar_visible(&self, key: &RowKey) -> bool {
+    /// Starts the grace timer (once): the bar goes away when it fires, unless the pointer came
+    /// back first. No timer runs while the pointer is over a row.
+    fn pointer_leave(&mut self, cx: &mut Context<Self>) {
+        if self.hover_leave.is_some() {
+            return;
+        }
+        self.hover_leave = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(BAR_GRACE).await;
+            this.update(cx, |v, cx| {
+                if let Some(done) = v.hover_leave.take() {
+                    done.detach();
+                }
+                if v.hover_row.take().is_some() {
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Is the bar of `key` up? While the pointer is on the row or its bar (or in the grace after
+    /// leaving), while its menu is open, and while the message or the bar holds the keyboard
+    /// focus (so `Tab` can reach "Copiar").
+    fn bar_visible(&self, key: &RowKey, window: &Window, cx: &App) -> bool {
         self.hover_row.as_ref() == Some(key)
-            || self.hover_bar.as_ref() == Some(key)
             || self.menu == Some(CopyMenu::Message(key.clone()))
+            || self
+                .selections
+                .get(&(key.clone(), 0))
+                .is_some_and(|g| g.focus_handle().is_focused(window))
+            || self
+                .bar_focus
+                .get(key)
+                .is_some_and(|h| h.contains_focused(window, cx))
     }
 
     /// The floating "Copiar" / `⋯` bar of a message, only while the row is hovered or its menu
@@ -238,15 +336,24 @@ impl ChatView {
         &mut self,
         row: &ChatRow,
         id: usize,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !matches!(row.kind, RowKind::Text { .. } | RowKind::User { .. }) {
             return None;
         }
         let key = row.key.clone();
-        if !self.bar_visible(&key) {
+        if !self.bar_visible(&key, window, cx) {
             return None;
         }
+        self.bar_built = Some(key.clone());
+        let focus = self
+            .bar_focus
+            .entry(key.clone())
+            .or_insert_with(|| cx.focus_handle())
+            .clone();
+        let zone = self.bar_zone.clone();
+        let zone_key = key.clone();
         let t = self.theme;
         let c = t.colors;
         let settings = self.settings(cx);
@@ -255,8 +362,7 @@ impl ChatView {
         let k_copy = key.clone();
         let k_plain = key.clone();
         let k_md = key.clone();
-        let k_open = key.clone();
-        let k_hover = key;
+        let k_open = key;
         let menu_row_id = |name: &'static str| (name, id);
         let menu = Popover::new(format!("msg-pop-{id}"), &t)
             .open(open)
@@ -326,6 +432,7 @@ impl ChatView {
         Some(
             div()
                 .id(("msg-bar", id))
+                .debug_selector(move || format!("msg-bar-{id}"))
                 .absolute()
                 .top(px(-10.0))
                 .right(px(4.0))
@@ -339,9 +446,18 @@ impl ChatView {
                 .border_1()
                 .border_color(c.outline_soft)
                 .occlude()
-                .on_hover(cx.listener(move |this, on: &bool, _, cx| {
-                    this.set_hover(&k_hover, true, *on, cx)
-                }))
+                .track_focus(&focus)
+                // Reports where the bar is so the pointer can travel row -> bar -> its buttons.
+                .child(
+                    canvas(
+                        move |bounds, _, _| {
+                            *zone.borrow_mut() = Some((zone_key, bounds));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
                 .child(
                     Button::ghost(format!("msg-copy-{id}"), &t, "Copiar")
                         .tooltip("Copiar el mensaje (Markdown original)")
@@ -455,31 +571,40 @@ impl ChatView {
         let t = self.theme;
         let c = t.colors;
         let tone = if toast.hidden { c.warning } else { c.muted };
+        // An overlay hung from a zero-height anchor above the composer: showing or hiding it must
+        // not resize the conversation (every row would jump under the pointer).
+        let pill = div()
+            .id("chat-toast")
+            .absolute()
+            .bottom(px(6.0))
+            .left_0()
+            .right_0()
+            .px(px(14.0))
+            .py(px(7.0))
+            .rounded(px(Radius::XS))
+            .bg(c.surface_1)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .text_size(px(12.5))
+            .text_color(tone)
+            .child(icon(
+                if toast.hidden {
+                    Icon::Alert
+                } else {
+                    Icon::Check
+                },
+                16.0,
+                tone,
+            ))
+            .child(SharedString::from(toast.text));
         Some(
             div()
-                .id("chat-toast")
+                .relative()
                 .w_full()
-                .mb(px(6.0))
-                .px(px(14.0))
-                .py(px(7.0))
-                .rounded(px(Radius::XS))
-                .bg(c.surface_1)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .text_size(px(12.5))
-                .text_color(tone)
-                .child(icon(
-                    if toast.hidden {
-                        Icon::Alert
-                    } else {
-                        Icon::Check
-                    },
-                    16.0,
-                    tone,
-                ))
-                .child(SharedString::from(toast.text))
+                .h(px(0.0))
+                .child(pill)
                 .into_any_element(),
         )
     }

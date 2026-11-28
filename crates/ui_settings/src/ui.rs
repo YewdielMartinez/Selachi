@@ -8,12 +8,16 @@ use gpui::{
     AnyElement, Div, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
 };
 use theme::{Radius, Rgba, Theme};
+use ui_kit::layout_probe::{BoxKind, mark};
 use ui_kit::{Icon, SettingRow, icon};
 
 /// Content width above which the content column stops growing (docs/DESIGN.md, Responsive: XL).
 pub const MAX_CONTENT_WIDTH: f32 = 860.0;
 /// Window widths below this fold the section list into a top menu (class XS).
 pub const NARROW_BELOW: f32 = 720.0;
+/// View widths below this stack every row's control under its text: with the section list open
+/// the rows are `view - 304` wide, and a 420 px field plus a readable text column needs ~560.
+pub const STACK_BELOW: f32 = 900.0;
 /// Width of the section list.
 pub const NAV_WIDTH: f32 = 208.0;
 
@@ -30,9 +34,6 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
         .pb(px(8.0))
         .child(
             div()
-                .block()
-                .w_full()
-                .min_w_0()
                 .text_size(px(ty.ui_size_xl))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c.text)
@@ -40,9 +41,6 @@ pub fn page_header(theme: &Theme, title: &str, subtitle: &str) -> Div {
         )
         .child(
             div()
-                .block()
-                .w_full()
-                .min_w_0()
                 .text_size(px(ty.ui_size_md))
                 .text_color(c.muted)
                 .child(SharedString::from(subtitle.to_string())),
@@ -64,7 +62,12 @@ pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
                 .child(SharedString::from(t.to_string())),
         );
     }
-    wrap.child(
+    wrap.child(card(theme, title.unwrap_or(""), rows))
+}
+
+/// The `surface_1` card that holds a group's rows.
+fn card(theme: &Theme, title: &str, rows: Vec<AnyElement>) -> Div {
+    mark(
         div()
             .flex()
             .flex_col()
@@ -72,8 +75,11 @@ pub fn group(theme: &Theme, title: Option<&str>, rows: Vec<AnyElement>) -> Div {
             .min_w_0()
             .py(px(6.0))
             .rounded(px(Radius::MD))
-            .bg(c.surface_1)
+            .bg(theme.colors.surface_1)
             .children(rows),
+        BoxKind::Card,
+        title,
+        false,
     )
 }
 
@@ -102,26 +108,21 @@ pub fn group_with_action(
                 .min_w_0()
                 .px(px(4.0))
                 .child(
+                    // a group title is one line: it gives way (ellipsis) to the action, never wraps
                     div()
+                        .flex_1()
                         .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
                         .text_size(px(ty.ui_size_xs))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.muted)
                         .child(SharedString::from(title.to_string())),
                 )
-                .child(action),
+                .child(div().flex_none().child(action)),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .min_w_0()
-                .py(px(6.0))
-                .rounded(px(Radius::MD))
-                .bg(c.surface_1)
-                .children(rows),
-        )
+        .child(card(theme, title, rows))
 }
 
 /// One setting: title + description on the left, the control on the right (below at narrow
@@ -155,7 +156,8 @@ pub fn plain_row(content: impl IntoElement) -> Div {
         .child(content)
 }
 
-/// Small rounded label ("Listo", "v0.24.2", "Instalado").
+/// Small rounded label ("Listo", "v0.24.2", "Instalado"). It is as wide as its label and never
+/// stretches to the width of the column it sits in (a stacked row's control column is full width).
 pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone) -> Div {
     let c = theme.colors;
     let ty = theme.typography;
@@ -171,6 +173,7 @@ pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone)
         .items_center()
         .gap(px(5.0))
         .h(px(22.0))
+        .whitespace_nowrap()
         .px(px(9.0))
         .rounded(px(Radius::CONTROL))
         .bg(bg)
@@ -180,7 +183,12 @@ pub fn status_pill(theme: &Theme, text: impl Into<SharedString>, tone: PillTone)
         // A signal dot (progress / ready) is where the accent belongs.
         d = d.child(div().size(px(6.0)).rounded_full().bg(c.accent));
     }
-    d.child(text.into())
+    // A flex row around the pill: its own width is its content, whatever the parent does.
+    div()
+        .flex()
+        .flex_row()
+        .min_w_0()
+        .child(d.child(text.into()))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -221,9 +229,6 @@ pub fn banner(
                 .gap(px(2.0))
                 .child(
                     div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
                         .text_size(px(ty.ui_size_md))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(c.text)
@@ -231,9 +236,6 @@ pub fn banner(
                 )
                 .child(
                     div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
                         .text_size(px(ty.ui_size_sm))
                         .text_color(c.muted)
                         .child(SharedString::from(body.to_string())),
@@ -259,9 +261,6 @@ pub fn value_label(theme: &Theme, text: impl Into<SharedString>) -> Div {
 pub fn note(theme: &Theme, text: impl Into<SharedString>) -> Div {
     let ty = theme.typography;
     div()
-        .block()
-        .w_full()
-        .min_w_0()
         .px(px(4.0))
         .text_size(px(ty.ui_size_sm))
         .text_color(theme.colors.muted)

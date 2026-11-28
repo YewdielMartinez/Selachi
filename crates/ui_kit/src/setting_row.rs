@@ -15,8 +15,14 @@ use gpui::{
 };
 use theme::Theme;
 
+use crate::layout_probe::{BoxKind, mark};
+
 /// Gap between the text and the control column.
 pub const SETTING_ROW_GAP: f32 = 16.0;
+/// The text column of a side-by-side row is at least this wide (a wide fixed control used to
+/// squeeze it to a column of single letters). Hosts stack the row when its width cannot give the
+/// text this much plus the control (settings: `ui::STACK_BELOW`).
+pub const TEXT_MIN_WIDTH: f32 = 120.0;
 
 /// How a row distributes its two columns, as plain data (tested without a window).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,18 +126,17 @@ impl RenderOnce for SettingRow {
         let c = self.theme.colors;
         let ty = self.theme.typography;
         let g = RowGeometry::new(self.stacked);
+        let label_probe = self.label.clone();
         let text = div()
             .flex()
             .flex_col()
             .gap(px(2.0))
             .min_w_0()
+            .when(!g.stacked, |d| d.min_w(px(TEXT_MIN_WIDTH)))
             .when(g.text_flexes && !g.stacked, |d| d.flex_1())
             .when(g.stacked, |d| d.w_full())
             .child(
                 div()
-                    .block()
-                    .w_full()
-                    .min_w_0()
                     .text_size(px(ty.ui_size_md))
                     .font_weight(self.weight)
                     .text_color(c.text)
@@ -140,9 +145,6 @@ impl RenderOnce for SettingRow {
             .when_some(self.description, |d, t| {
                 d.child(
                     div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
                         .text_size(px(ty.ui_size_sm))
                         .line_height(px(17.0))
                         .text_color(c.muted)
@@ -152,21 +154,20 @@ impl RenderOnce for SettingRow {
             .when_some(self.error, |d, e| {
                 d.child(
                     div()
-                        .block()
-                        .w_full()
-                        .min_w_0()
                         .text_size(px(ty.ui_size_sm))
                         .text_color(c.error)
                         .child(e),
                 )
             });
+        let text = mark(text, BoxKind::Text, label_probe.clone(), g.stacked);
         let control: Div = div()
             .min_w_0()
             .max_w_full()
             .when(g.control_fixed, |d| d.flex_none())
             .when(g.stacked, |d| d.w_full())
             .child(self.control);
-        div()
+        let control = mark(control, BoxKind::Control, label_probe.clone(), g.stacked);
+        let row = div()
             .flex()
             .w_full()
             .min_w_0()
@@ -176,7 +177,8 @@ impl RenderOnce for SettingRow {
             .when(g.stacked, |d| d.flex_col())
             .when(!g.stacked, |d| d.flex_row().items_center())
             .child(text)
-            .child(control)
+            .child(control);
+        mark(row, BoxKind::Row, label_probe, g.stacked)
     }
 }
 

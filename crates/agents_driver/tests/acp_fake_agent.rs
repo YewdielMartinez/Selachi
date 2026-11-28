@@ -211,6 +211,17 @@ fn fake_agent_main() {
                         );
                     }
                     "model" => chunk(sid, &format!("model:{model}")),
+                    "env" => {
+                        let var = |k: &str| std::env::var(k).unwrap_or_else(|_| "-".into());
+                        chunk(
+                            sid,
+                            &format!(
+                                "env:{}|{}",
+                                var("SELACHI_TEST_SET"),
+                                var("SELACHI_TEST_STALE")
+                            ),
+                        );
+                    }
                     "slow" => {
                         chunk(sid, "working");
                         let cancelled = read_until(&mut lines, |v| v["method"] == "session/cancel");
@@ -556,4 +567,22 @@ fn command_line_parsing_resolves_quoted_program() {
         AcpCommand::from_command_line("no-such-acp-binary-xyz", &cfg),
         Err(DriverError::NotFound(_))
     ));
+}
+
+#[test]
+fn the_agent_process_gets_the_configured_environment() {
+    // a stale value inherited from the host must not reach the agent; a configured one must
+    std::env::set_var("SELACHI_TEST_STALE", "old");
+    std::env::set_var("SELACHI_TEST_SET", "inherited");
+    let ws = workspace("env");
+    let mut cfg = ThreadConfig::new(&ws);
+    cfg.env = vec![
+        ("SELACHI_TEST_SET".into(), Some("from-config".into())),
+        ("SELACHI_TEST_STALE".into(), None),
+    ];
+    let (mut d, mut rx) = start(&cfg);
+    d.send("env").unwrap();
+    let evs = collect_until(&mut rx, is_done);
+    assert_eq!(text_of(&evs), "env:from-config|-");
+    d.shutdown();
 }

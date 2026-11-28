@@ -353,12 +353,16 @@ impl StatusBar {
     }
 
     /// The per-agent block of the full bar.
-    fn agent_block(&self, name: &'static str, info: &UsageInfo) -> impl IntoElement {
+    fn agent_block(
+        &self,
+        name: &'static str,
+        info: &UsageInfo,
+        show_estimates: bool,
+    ) -> impl IntoElement {
         let c = self.theme.colors;
         let ty = self.theme.typography;
-        let week = info
-            .fresh_official()
-            .is_none()
+        // Without an official figure the week total is an estimate: `[agents] show_estimates`.
+        let week = (info.fresh_official().is_none() && show_estimates)
             .then(|| format!("{} sem · estimado", compact_tokens(info.week.billable())));
         div()
             .id(SharedString::from(format!("agent-{name}")))
@@ -421,6 +425,7 @@ impl Render for StatusBar {
             visible_pieces(f32::from(window.viewport_size().width));
         let git = self.git.as_ref().and_then(|g| g.read(cx).info().cloned());
         let usage = self.usage.read(cx).info().cloned();
+        let show_estimates = self.usage.read(cx).show_estimates();
         let orphans = self.orphan_pill(cx);
         let orphans_compact = self.orphan_pill(cx);
         let attention = self.attention_pill(cx);
@@ -441,7 +446,11 @@ impl Render for StatusBar {
                 .px(px(8.0))
                 .font_family(ty.ui_family)
                 .text_size(px(ty.ui_size_sm))
-                .children(usage.as_ref().map(|u| self.agent_block("Claude", u)))
+                .children(
+                    usage
+                        .as_ref()
+                        .map(|u| self.agent_block("Claude", u, show_estimates)),
+                )
                 .children(usage.is_none().then(|| {
                     div()
                         .text_color(self.theme.colors.muted)
@@ -476,7 +485,9 @@ impl Render for StatusBar {
             .children(attention_compact)
             .children(
                 usage
-                    .filter(|_| usage_fits && !self.dedupe_usage)
+                    .filter(|u| {
+                        usage_fits && !self.dedupe_usage && u.week_total_visible(show_estimates)
+                    })
                     .map(|u| self.usage_pill(&u)),
             )
             .child(div().flex_1())

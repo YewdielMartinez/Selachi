@@ -537,3 +537,67 @@ fn tree_only_late_report_still_finds_orphan() {
     });
     assert!(ok, "{:?}", guard.tracker.report()[0].processes);
 }
+
+#[test]
+fn stopping_a_detached_owner_ends_its_processes_and_never_a_neighbours() {
+    let mut tracker = Tracker::new();
+    for (owner, label) in [(1, "thread-a"), (2, "thread-b")] {
+        tracker
+            .create_owner(
+                owner,
+                OwnerMeta {
+                    agent: Some("claude".into()),
+                    label: label.into(),
+                    cwd: None,
+                },
+                JobOptions {
+                    kill_on_close: true,
+                    ..Default::default()
+                },
+            )
+            .expect("owner");
+    }
+    let mut a = tracker.spawn(1, &mut ping_cmd()).expect("spawn a");
+    let mut b = tracker.spawn(2, &mut ping_cmd()).expect("spawn b");
+    let (a_pid, b_pid) = (a.id(), b.id());
+    assert!(
+        wait_until(Duration::from_secs(10), || {
+            tracker.job(1).unwrap().members().len() >= 2
+                && tracker.job(2).unwrap().members().len() >= 2
+        }),
+        "both jobs hold cmd + ping"
+    );
+    let a_members = tracker.job(1).unwrap().members();
+
+    let detached = tracker.detach_for_stop(1).expect("owner 1");
+    assert_eq!(detached.label(), "thread-a");
+    assert!(
+        tracker.job(1).is_none(),
+        "taken out: the tracker lock is free while it stops"
+    );
+    let out = detached
+        .terminate(&TerminateOptions {
+            grace: Duration::from_millis(300),
+            ..Default::default()
+        })
+        .expect("terminate");
+    assert!(!out.targeted.is_empty() && out.failed.is_empty(), "{out:?}");
+    assert!(
+        wait_until(Duration::from_secs(10), || a_members
+            .iter()
+            .all(|p| !alive(*p))),
+        "everything the thread started is gone"
+    );
+    let _ = a.wait();
+    assert!(alive(b_pid), "the other owner's process is untouched");
+    assert!(!tracker.job(2).unwrap().members().is_empty());
+
+    // A failed stop can put the owner back.
+    let again = tracker.detach_for_stop(2).unwrap();
+    tracker.reattach(again);
+    assert!(tracker.job(2).is_some());
+    assert!(tracker.detach_for_stop(99).is_none());
+    let _ = b.kill();
+    let _ = b.wait();
+    assert!(!alive(a_pid));
+}

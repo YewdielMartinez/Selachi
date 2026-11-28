@@ -442,7 +442,10 @@ mod queue_tests {
     fn the_profile_of_a_run_is_attached_to_its_card(cx: &mut TestAppContext) {
         let queue = cx.new(|cx| ApprovalQueue::new(None, cx));
         queue.update(cx, |q, cx| q.add_demo(req("r1", "Bash"), cx));
-        assert_eq!(queue.read_with(cx, |q, _| q.pending()[0].profile.clone()), None);
+        assert_eq!(
+            queue.read_with(cx, |q, _| q.pending()[0].profile.clone()),
+            None
+        );
         queue.update(cx, |q, cx| {
             q.set_profile("other", Some("X".into()), cx);
             q.set_profile("r1", Some("Tests".into()), cx);
@@ -452,7 +455,10 @@ mod queue_tests {
             Some("Tests".to_string())
         );
         queue.update(cx, |q, cx| q.set_profile("r1", None, cx));
-        assert_eq!(queue.read_with(cx, |q, _| q.pending()[0].profile.clone()), None);
+        assert_eq!(
+            queue.read_with(cx, |q, _| q.pending()[0].profile.clone()),
+            None
+        );
     }
 
     #[gpui::test]

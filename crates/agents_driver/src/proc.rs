@@ -20,6 +20,16 @@ pub fn hide_window(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Apply [`crate::ThreadConfig::env`] to `cmd`: `Some(value)` sets, `None` removes.
+pub fn apply_env(cmd: &mut Command, env: &[(String, Option<String>)]) {
+    for (k, v) in env {
+        match v {
+            Some(v) => cmd.env(k, v),
+            None => cmd.env_remove(k),
+        };
+    }
+}
+
 #[cfg(windows)]
 const EXTS: &[&str] = &[".exe", ".cmd", ".bat", ".com"];
 #[cfg(not(windows))]
@@ -216,6 +226,29 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_env_sets_and_removes() {
+        let mut cmd = Command::new("x");
+        apply_env(
+            &mut cmd,
+            &[
+                ("SELACHI_A".into(), Some("1".into())),
+                ("SELACHI_B".into(), None),
+            ],
+        );
+        let got: Vec<(String, Option<String>)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(got.contains(&("SELACHI_A".to_string(), Some("1".to_string()))));
+        assert!(got.contains(&("SELACHI_B".to_string(), None)));
+    }
 
     #[test]
     fn truncate_is_char_safe() {

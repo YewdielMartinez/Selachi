@@ -10,18 +10,22 @@
 //! first when something is running) and the zone itself can be focused as a whole
 //! ([`SidebarView::focus_first`]: Ctrl+Shift+E, F6).
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Hsla, InteractiveElement,
-    IntoElement, MouseButton, Render, Stateful, Subscription, Window, actions, div, prelude::*, px,
+    AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FocusHandle, Hsla,
+    InteractiveElement, IntoElement, MouseButton, Pixels, Point, Render, Stateful, Subscription,
+    Window, actions, div, prelude::*, px,
 };
 use panel_api::{TabId, TabInfo};
 use store::{ResolvedLayout, SidebarSide, TabsPosition};
 use theme::{Radius, Theme};
 use ui_kit::{Logo, glass_selected};
 
+use crate::projects::{Dest, Known};
 use crate::rail::{RailAction, RailItem};
 use crate::sidebar::{SidebarProps, sidebar_collapsed, sidebar_content};
 use crate::spaces::{self, GitSummary};
@@ -35,7 +39,9 @@ actions!(
     sidebar,
     [
         /// `Delete` on a focused row: close its tab (asks first when it is running).
-        CloseFocusedRow
+        CloseFocusedRow,
+        /// `Shift+F10` / the menu key on a focused project header: its menu.
+        OpenSpaceMenu
     ]
 );
 
@@ -67,6 +73,10 @@ pub struct ChildRow {
     pub subtitle: gpui::SharedString,
     /// 0 = delegated by the parent tab itself, 1 = delegated by that child...
     pub depth: usize,
+    /// In flight (running or waiting for an approval): it can be cancelled.
+    pub running: bool,
+    /// Ended (done, failed or cancelled): «Archivar terminados» takes it away.
+    pub finished: bool,
 }
 
 /// The parent -> child delegations of the open chat tabs.
@@ -76,6 +86,9 @@ pub struct Lineage {
     pub children: HashMap<TabId, Vec<ChildRow>>,
     /// Open tabs that are children of an open tab: shown nested, not as a top-level row too.
     pub nested: HashSet<TabId>,
+    /// Tabs whose session launched agent CLIs outside Selachi (as far as the map has seen): their row
+    /// gets the map icon even without harness delegations.
+    pub mapped: HashSet<TabId>,
 }
 
 /// Everything the sidebar paints that comes from the shell. Pushed with
@@ -89,8 +102,14 @@ pub struct SidebarModel {
     pub active: Option<TabId>,
     /// Branch and dirty flag of the repositories the open terminals are in.
     pub git: HashMap<PathBuf, GitSummary>,
-    /// Favorite and recent projects (listed as spaces without tabs).
-    pub known: Vec<(PathBuf, String)>,
+    /// The projects the user added and the recent ones (listed as spaces without tabs).
+    pub known: Vec<Known>,
+    /// The project that new terminals and chats open in.
+    pub selected: Option<PathBuf>,
+    /// Where "Nueva pestaña" sends things (the selected project, or the fallback).
+    pub dest: Dest,
+    /// Projects whose folder was not found at the last check (muted, never a destination).
+    pub missing: HashSet<PathBuf>,
     /// Keys of the folded spaces.
     pub folded: HashSet<PathBuf>,
     pub panel_items: Vec<RailItem>,
@@ -113,6 +132,9 @@ impl SidebarModel {
             active: None,
             git: HashMap::new(),
             known: Vec::new(),
+            selected: None,
+            dest: Dest::None,
+            missing: HashSet::new(),
             folded: HashSet::new(),
             panel_items: Vec::new(),
             opts: SidebarOpts::default(),
@@ -130,8 +152,17 @@ pub enum SidebarEvent {
     Close(TabId),
     /// A new terminal in the active tab's folder.
     NewHere,
-    /// A new terminal in this folder (the "+" of a space, or a project without tabs).
-    NewIn(PathBuf),
+    /// A click on a project header: it becomes the destination of new terminals and chats.
+    SelectSpace(PathBuf),
+    /// The "+" of the "Espacios" header (or the empty state's button): add a project. `at` is
+    /// where the menu opens.
+    AddProjectMenu(Point<Pixels>),
+    /// The menu of a project header: `full` adds "Quitar de la lista" to the new terminal / chat.
+    SpaceMenu {
+        root: PathBuf,
+        at: Point<Pixels>,
+        full: bool,
+    },
     ToggleSpace(PathBuf),
     /// "Nueva pestaña": the Terminal / Chat menu.
     NewMenu,
@@ -148,6 +179,13 @@ pub enum SidebarEvent {
     OpenThread(i64),
     /// The map icon of a parent row: the subagent map on that tab's session.
     OpenAgentMap(TabId),
+    /// Right click on a delegated row: its menu (Abrir hilo, Ver en el mapa, Cancelar, Archivar
+    /// terminados). `parent` is the tab it is listed under.
+    ChildMenu {
+        thread: i64,
+        parent: TabId,
+        at: Point<Pixels>,
+    },
 }
 
 /// Emits `ev` from `view` (what the row callbacks of [`crate::sidebar`] and
@@ -189,6 +227,12 @@ pub struct SidebarView {
     hovered_row: Option<TabId>,
     /// The space header under the pointer, by its key (the project path).
     hovered_space: Option<PathBuf>,
+    /// Where each project header was last painted (the keyboard menu opens under it).
+    header_bounds: Rc<RefCell<HashMap<PathBuf, Bounds<Pixels>>>>,
+    /// Parent rows whose list of subagents is folded behind its chip, and those that show every
+    /// subagent instead of the first five (what only this view cares about: not part of the model).
+    kids_folded: HashSet<TabId>,
+    kids_all: HashSet<TabId>,
     usage: Entity<UsageMonitor>,
     focus: FocusHandle,
     _usage_sub: Subscription,
@@ -204,6 +248,9 @@ impl SidebarView {
             model,
             hovered_row: None,
             hovered_space: None,
+            header_bounds: Rc::default(),
+            kids_folded: HashSet::new(),
+            kids_all: HashSet::new(),
             usage,
             focus: cx.focus_handle().tab_index(0).tab_stop(false),
             _usage_sub: usage_sub,
@@ -224,6 +271,32 @@ impl SidebarView {
             self.hovered_row = next;
             cx.notify();
         }
+    }
+
+    /// The chip of a parent row: folds or unfolds its subagents.
+    pub fn toggle_kids(&mut self, id: TabId, cx: &mut Context<Self>) {
+        if !self.kids_folded.remove(&id) {
+            self.kids_folded.insert(id);
+        }
+        cx.notify();
+    }
+
+    /// «Ver todos» / «Ver menos» of a long list of subagents.
+    pub fn toggle_kids_all(&mut self, id: TabId, cx: &mut Context<Self>) {
+        if !self.kids_all.remove(&id) {
+            self.kids_all.insert(id);
+        }
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub fn kids_folded(&self, id: TabId) -> bool {
+        self.kids_folded.contains(&id)
+    }
+
+    #[cfg(test)]
+    pub fn kids_all(&self, id: TabId) -> bool {
+        self.kids_all.contains(&id)
     }
 
     /// The pointer entered / left a space header (keyed by the space's path).
@@ -268,22 +341,32 @@ impl SidebarView {
     }
 
     fn usage_summary(&self, cx: &App) -> Usage {
-        match self.usage.read(cx).info() {
-            Some(u) => match u.fresh_five_hour().or_else(|| u.fresh_official()) {
-                Some(o) => Usage {
-                    fraction: Some((o.percent / 100.0).clamp(0.0, 1.0) as f32),
-                    label: format!("{:.0} %", o.percent).into(),
-                },
-                None => Usage {
-                    fraction: None,
-                    label: "estimado".into(),
-                },
+        let monitor = self.usage.read(cx);
+        usage_of(monitor.info(), monitor.show_estimates())
+    }
+}
+
+/// The footer meter: an official percentage, else the word "estimado" (hidden, as "—", when
+/// `[agents] show_estimates` is off).
+pub(crate) fn usage_of(
+    info: Option<&crate::usage_monitor::UsageInfo>,
+    show_estimates: bool,
+) -> Usage {
+    match info {
+        Some(u) => match u.fresh_five_hour().or_else(|| u.fresh_official()) {
+            Some(o) => Usage {
+                fraction: Some((o.percent / 100.0).clamp(0.0, 1.0) as f32),
+                label: format!("{:.0} %", o.percent).into(),
             },
             None => Usage {
                 fraction: None,
-                label: "…".into(),
+                label: if show_estimates { "estimado" } else { "—" }.into(),
             },
-        }
+        },
+        None => Usage {
+            fraction: None,
+            label: "…".into(),
+        },
     }
 }
 
@@ -342,6 +425,15 @@ impl Render for SidebarView {
         }
 
         let body: AnyElement = if unified {
+            let mut spaces = spaces::build_spaces(&m.infos, l.sidebar.group_by, &m.git, &m.known);
+            for sp in &mut spaces {
+                sp.missing = !sp.root.as_os_str().is_empty()
+                    && m.missing
+                        .iter()
+                        .any(|x| crate::paths::same_path(x, &sp.root));
+            }
+            // No project was added by hand: the list explains how (open tabs still show as spaces).
+            let known_empty = !m.known.iter().any(|k| k.explicit);
             let up = UnifiedProps {
                 theme,
                 layout: l,
@@ -349,9 +441,15 @@ impl Render for SidebarView {
                 active: m.active,
                 view: &me,
                 glass: tint.is_some(),
-                spaces: spaces::build_spaces(&m.infos, l.sidebar.group_by, &m.git, &m.known),
+                spaces,
+                selected: m.selected.as_ref(),
+                dest: &m.dest,
+                known_empty,
+                header_bounds: &self.header_bounds,
                 folded: &m.folded,
                 lineage: &m.lineage,
+                kids_folded: &self.kids_folded,
+                kids_all: &self.kids_all,
                 hovered_row: self.hovered_row,
                 hovered_space: self.hovered_space.clone(),
                 usage: self.usage_summary(cx),

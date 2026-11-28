@@ -147,6 +147,7 @@ impl SettingsView {
             .on_click(cx.listener(|s, _, _, cx| s.reset_all_bindings(cx)));
         let mut rows: Vec<AnyElement> = Vec::new();
         let catalog = self.catalog.clone();
+        let (_, clashes) = keys::plan(&catalog, &self.cfg.keybindings);
         for a in &catalog {
             let chord = keys::effective(&catalog, &self.cfg.keybindings, &a.id);
             let overridden = keys::is_overridden(&self.cfg.keybindings, &a.id);
@@ -201,7 +202,14 @@ impl SettingsView {
                 .on_click(cx.listener(move |s, _, _, cx| s.reset_binding(&id, cx)))
             });
 
-            let mut message: Option<AnyElement> = None;
+            let mut message: Option<AnyElement> =
+                keys::clash_note(&catalog, &clashes, &a.id).map(|note| {
+                    div()
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.error)
+                        .child(SharedString::from(note))
+                        .into_any_element()
+                });
             if let Some(cap) = &capturing {
                 if let Some(e) = &cap.error {
                     message = Some(

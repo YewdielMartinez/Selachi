@@ -27,6 +27,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod activity;
+mod camera;
 mod activity_ui;
 mod events;
 mod events_log;
@@ -34,9 +35,13 @@ mod fmt;
 mod graph_ui;
 mod inspector;
 mod model;
+mod organize;
 mod parts;
+mod prefs;
 mod registry;
 mod source;
+mod title;
+mod toolbar;
 mod tree;
 mod tree_ui;
 mod view;
@@ -54,14 +59,24 @@ pub use inspector::{
 };
 pub use model::{
     ACTIVITY_DEBOUNCE, AgentMapModel, CHAT_DEBOUNCE, InspectorTab, MapChanged, NodeDetail,
-    ProfileSeed, PromptInfo, PromptSource, WATCH_DEBOUNCE,
+    PrefsChanged, ProfileSeed, PromptInfo, PromptSource, WATCH_DEBOUNCE,
 };
+pub use organize::{
+    Dir, GroupHeader, LaneRow, ListRow, Query, Scope, filter_counts, group_collapse_id, keep_flags,
+    list_rows, nav_target, node_collapse_id, node_matches, scope_nodes, scope_totals,
+    timeline_lanes,
+};
+pub use prefs::{
+    GroupBy, HIDE_OLDER_CHOICES, MAX_COLLAPSED, MapPrefs, MapSession, Placement as MapPlacement, SortBy,
+    StatusFilter, hide_older_label,
+};
+pub use title::{MAX_TITLE_CHARS, TitleInput, external_title, meaningful_sentence, strip_agent_prefix, task_title};
 pub use registry::{ApprovalEntry, DiffStatInfo, ResultInfo, RunInfo, RunStatus, read_runs};
 pub use source::{ChatStoreSource, SessionSource};
 pub use tree::{
     Bar, ExternalProc, Forest, ForestInput, GraphLayout, MAX_EXTERNAL_PER_SESSION, MapNode,
     NodeKey, NodeKind, NodeStatus, Placed, Row, Timeline, Totals, agent_display, agent_id,
-    build_forest, derive_status, graph_layout, timeline, visible_rows,
+    build_forest, derive_status, graph_layout, graph_layout_of, timeline, timeline_of, visible_rows,
 };
 pub use view::{
     AgentMapPanelProvider, AgentMapView, INSPECTOR_WIDTH, MAP_ICON, MapMode, PANEL_ID, SPLIT_FROM,

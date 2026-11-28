@@ -658,7 +658,7 @@ fn code_block(lang: Option<&str>, text: &str, r: &MdRender<'_>) -> AnyElement {
         .text_color(c.muted)
         .hover(move |s| s.bg(c.surface_3).text_color(c.text))
         .tooltip(ui_kit::Tooltip::text(&theme, "Copiar código"))
-        // TODO-SVG: `assets/icons/copy.svg` (16x16). Until it exists the button is text only.
+        .child(icon(Icon::Copy, 12.0, c.muted))
         .child("Copiar")
         .on_click(move |_, window, cx| match &copy_group {
             Some(g) => g.copy_text(copy_text.clone(), window, cx),

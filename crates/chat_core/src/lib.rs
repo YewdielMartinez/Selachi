@@ -24,6 +24,7 @@
 
 mod chat_store;
 mod db;
+pub mod delegation_env;
 mod error;
 pub mod handoff;
 mod hooks;
@@ -44,13 +45,14 @@ pub use hooks::{
     SpawnedAgent,
 };
 pub use model::{
-    agent_label, group_by_project, now_ms, should_checkpoint, ApprovalDecision, Archived,
-    CostSource, Role, ThreadFilter, ThreadGroup, ThreadGroups, ThreadId, ThreadLink, ThreadRecord,
-    ThreadSpec, ThreadStatus, UNTITLED,
+    agent_label, group_by_project, now_ms, permission_for_new_thread, should_checkpoint,
+    ApprovalDecision, Archived, CostSource, Role, ThreadFilter, ThreadGroup, ThreadGroups,
+    ThreadId, ThreadLink, ThreadRecord, ThreadSpec, ThreadStatus, UNTITLED,
 };
 pub use runtime::{ThreadHandle, ThreadRuntime, ThreadUpdate, MIN_UPDATE_INTERVAL};
 pub use state::{
     classify, ApprovalRow, ApprovalState, Block, Changed, CheckpointRef, ContextUsage, CostPolicy,
-    ExploreCounts, ExploreGroup, Message, MessageCost, MessageUsage, Plan, PlanItem, ThinkingBlock,
-    ThreadState, ToolClass, ToolRun, ToolStatus, UsageTotals, MAX_TOOL_INPUT_BYTES,
+    ExploreCounts, ExploreGroup, Message, MessageCost, MessageUsage, Plan, PlanItem, PolicyDenial,
+    ThinkingBlock, ThreadState, ToolClass, ToolRun, ToolStatus, UsageTotals, MAX_POLICY_DENIALS,
+    MAX_TOOL_INPUT_BYTES,
 };

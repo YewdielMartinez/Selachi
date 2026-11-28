@@ -225,6 +225,16 @@ fn open_view<'a>(
     })
 }
 
+/// The graph measures its viewport while painting and fits on the next frame: draw that frame.
+fn show_graph(view: &Entity<AgentMapView>, vcx: &mut VisualTestContext) {
+    view.update(vcx, |v, cx| v.set_mode(MapMode::Graph, cx));
+    vcx.run_until_parked();
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------------------------
@@ -621,7 +631,7 @@ fn the_three_views_render_and_select(cx: &mut TestAppContext) {
     m.update(vcx, |m, cx| m.refresh(cx));
     vcx.run_until_parked();
     assert!(testing::bounds_of(vcx, "agentmap-row-2").is_some());
-    view.update(vcx, |v, cx| v.set_mode(MapMode::Graph, cx));
+    show_graph(&view, vcx);
     vcx.run_until_parked();
     assert!(testing::bounds_of(vcx, "agentmap-node-2").is_some());
     testing::click_id(vcx, "agentmap-node-3");
@@ -902,7 +912,7 @@ fn external_node_renders_in_all_views_and_inspector_emits_events(cx: &mut TestAp
 
     // Renders in Tree, Graph, and Timeline.
     assert!(testing::bounds_of(vcx, "agentmap-row-ext-4321-4000").is_some());
-    view.update(vcx, |v, cx| v.set_mode(MapMode::Graph, cx));
+    show_graph(&view, vcx);
     vcx.run_until_parked();
     assert!(testing::bounds_of(vcx, "agentmap-node-ext-4321-4000").is_some());
     view.update(vcx, |v, cx| v.set_mode(MapMode::Timeline, cx));
@@ -1542,4 +1552,283 @@ fn external_usage_lands_on_the_node_survives_reloads_and_is_not_kept_hidden(
         m.detach(cx);
     });
     assert_eq!(cx.read_entity(&m, |m, _| m.external_usage(&key)), None);
+}
+
+/// The three lines of a graph card (title, model, meta) are each fully inside the card and never
+/// overlap: with gpui's default 1.618 line height they used to add up to more than the card.
+#[gpui::test]
+fn graph_card_lines_do_not_overlap(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let (view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| m.refresh(cx));
+    vcx.run_until_parked();
+    show_graph(&view, vcx);
+    vcx.run_until_parked();
+    gpui::text_probe::start();
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+    let texts = gpui::text_probe::take();
+    for id in ["agentmap-node-2", "agentmap-node-3"] {
+        let card = testing::bounds_of(vcx, id).expect("card");
+        let mut lines: Vec<_> = texts
+            .iter()
+            .filter(|t| {
+                t.bounds.top() >= card.top() - gpui::px(0.5)
+                    && t.bounds.top() < card.bottom()
+                    && t.bounds.left() >= card.left()
+                    && t.bounds.left() < card.right()
+                    && !t.text.is_empty()
+            })
+            .collect();
+        lines.sort_by(|a, b| f32::from(a.bounds.top()).total_cmp(&f32::from(b.bounds.top())));
+        assert!(lines.len() >= 2, "{id}: {} text lines", lines.len());
+        for t in &lines {
+            assert!(
+                t.bounds.bottom() <= card.bottom() + gpui::px(0.5)
+                    && t.bounds.right() <= card.right() + gpui::px(0.5),
+                "{id}: `{}` {:?} leaves the card {card:?}",
+                t.text,
+                t.bounds
+            );
+            assert_eq!(t.rows, 1, "{id}: `{}` wrapped", t.text);
+        }
+        for w in lines.windows(2) {
+            let same_row = (f32::from(w[0].bounds.top()) - f32::from(w[1].bounds.top())).abs() < 4.0;
+            if same_row {
+                // the chip and the metrics share a row: side by side, never over each other
+                let (l, r) = if w[0].bounds.left() <= w[1].bounds.left() { (w[0], w[1]) } else { (w[1], w[0]) };
+                assert!(l.bounds.right() <= r.bounds.left() + gpui::px(0.5), "{id}: `{}` overlaps `{}`", l.text, r.text);
+            } else {
+                assert!(
+                    w[0].bounds.bottom() <= w[1].bounds.top() + gpui::px(0.5),
+                    "{id}: `{}` overlaps `{}`",
+                    w[0].text,
+                    w[1].text
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ola 11: titles, organization, remembered folds, placement, graph navigation
+// ---------------------------------------------------------------------------------------------
+
+/// Is the node a line of the list the view shows now? (The debug bounds of a frame are never
+/// cleared, so absence is read from the rows, presence also from the painted frame.)
+fn listed(view: &Entity<AgentMapView>, vcx: &mut VisualTestContext, id: i64) -> bool {
+    view.read_with(vcx, |v, cx| {
+        let shown = v.shown(cx);
+        shown
+            .rows()
+            .iter()
+            .filter_map(crate::organize::ListRow::node)
+            .any(|n| shown.forest.nodes[n].key == NodeKey::Thread(ThreadId(id)))
+    })
+}
+
+use crate::prefs::{GroupBy, Placement as MapPlacement, SortBy, StatusFilter};
+
+#[gpui::test]
+fn a_delegation_is_named_after_its_task_not_after_the_raw_prompt(cx: &mut TestAppContext) {
+    let rig = rig();
+    rig.source.threads.lock().unwrap().push(record(
+        4,
+        "agy: Repo: C:\\Users\\vent",
+        AgentKind::Acp {
+            command: "agy acp".into(),
+        },
+        child_of(1),
+    ));
+    write_run(
+        &rig.runs(),
+        4,
+        r#"{"run_id":"4","thread_id":4,"agent":"agy","started_ms":4000,"status":"running","parent_thread_id":1,
+        "prompt":"Repo: C:\\Users\\venta\\Desktop\\Terminal\nHARD RULES\n- No edites\n\nRevisa la migración de sesiones. Cita líneas."}"#,
+    );
+    let m = model(cx, &rig);
+    let (_view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| m.refresh(cx));
+    vcx.run_until_parked();
+    m.read_with(vcx, |m, _| {
+        let f = m.forest();
+        let n = &f.nodes[f.index_of(&NodeKey::Thread(ThreadId(4))).unwrap()];
+        assert_eq!(n.title, "Revisa la migración de sesiones");
+        // the profile is the second choice when the prompt says nothing usable
+        let two = &f.nodes[f.index_of(&NodeKey::Thread(ThreadId(2))).unwrap()];
+        assert_eq!(two.title, "Tests");
+    });
+}
+
+#[gpui::test]
+fn folds_filters_and_groups_are_remembered_and_applied(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let changes: Rc<RefCell<Vec<String>>> = Rc::default();
+    {
+        let c = changes.clone();
+        cx.update(|cx| {
+            cx.subscribe(&m, move |_, ev: &crate::model::PrefsChanged, _| {
+                c.borrow_mut().push(ev.0.clone())
+            })
+            .detach();
+        });
+    }
+    let (view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| m.refresh(cx));
+    vcx.run_until_parked();
+    assert!(listed(&view, vcx, 2));
+
+    // fold the orchestrator: its delegations leave the list, and the choice is announced
+    view.update(vcx, |v, cx| v.toggle_node(&NodeKey::Thread(ThreadId(1)), cx));
+    vcx.run_until_parked();
+    vcx.update(|w, _| w.refresh());
+    vcx.run_until_parked();
+    assert!(!listed(&view, vcx, 2));
+    assert!(listed(&view, vcx, 1));
+    let json = changes.borrow().last().cloned().expect("prefs announced");
+
+    // a new run of the app: the model gets the saved JSON back and the fold is still there
+    let m2 = model(cx, &rig);
+    let (v2, vcx) = open_view(cx, &m2);
+    m2.update(vcx, |m, cx| {
+        m.set_prefs_json(&json, cx);
+        m.refresh(cx);
+    });
+    vcx.run_until_parked();
+    assert!(listed(&v2, vcx, 1));
+    assert!(!listed(&v2, vcx, 2));
+    m2.update(vcx, |m, cx| {
+        m.update_prefs(
+            |p| {
+                p.toggle_collapsed("n:t:1");
+            },
+            cx,
+        )
+    });
+    vcx.run_until_parked();
+    assert!(listed(&v2, vcx, 2));
+
+    // status filter: only what is running
+    m2.update(vcx, |m, cx| {
+        m.update_prefs(|p| p.filter = StatusFilter::Running, cx)
+    });
+    vcx.run_until_parked();
+    assert!(!listed(&v2, vcx, 2));
+    assert!(listed(&v2, vcx, 3));
+    // search narrows it further, and clearing brings everything back
+    m2.update(vcx, |m, cx| {
+        m.update_prefs(|p| p.filter = StatusFilter::All, cx);
+        m.update_session(|s| s.query = "opencode".into(), cx)
+    });
+    vcx.run_until_parked();
+    assert!(!listed(&v2, vcx, 2));
+    assert!(listed(&v2, vcx, 3));
+    m2.update(vcx, |m, cx| m.update_session(|s| s.query.clear(), cx));
+
+    // group by agent: a header per agent that folds its rows
+    m2.update(vcx, |m, cx| {
+        m.update_prefs(
+            |p| {
+                p.group = GroupBy::Agent;
+                p.sort = SortBy::Recent;
+            },
+            cx,
+        )
+    });
+    vcx.run_until_parked();
+    assert!(testing::bounds_of(vcx, "agentmap-group-g:agent:codex").is_some());
+    testing::click_id(vcx, "agentmap-group-g:agent:codex");
+    assert!(
+        !listed(&v2, vcx, 2),
+        "folded group"
+    );
+    assert!(listed(&v2, vcx, 3));
+}
+
+#[gpui::test]
+fn nothing_matching_shows_a_way_out_and_a_hidden_view_listens_to_nothing(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let (view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| m.refresh(cx));
+    vcx.run_until_parked();
+    m.update(vcx, |m, cx| {
+        m.update_session(|s| s.query = "zzzz".into(), cx)
+    });
+    vcx.run_until_parked();
+    assert!(!listed(&view, vcx, 2));
+    assert!(testing::bounds_of(vcx, "agentmap-clear").is_some());
+    testing::click_id(vcx, "agentmap-clear");
+    assert!(listed(&view, vcx, 2));
+
+    // a view hosted by a tab that is not in front detaches; coming back attaches again
+    assert!(m.read_with(vcx, |m, _| m.is_watching()));
+    view.update(vcx, |v, cx| v.set_active(false, cx));
+    assert!(!m.read_with(vcx, |m, _| m.is_watching() || m.is_visible()));
+    view.update(vcx, |v, cx| v.set_active(true, cx));
+    assert!(m.read_with(vcx, |m, _| m.is_visible()));
+}
+
+#[gpui::test]
+fn the_placement_button_asks_the_host_to_move_the_map(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let seen = events(cx, &m);
+    let (_view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| m.refresh(cx));
+    vcx.run_until_parked();
+    // the test view lives in the main zone: it offers to dock itself
+    testing::click_id(vcx, "agentmap-place");
+    assert_eq!(seen.borrow().last(), Some(&AgentMapEvent::DockRight));
+    m.update(vcx, |m, cx| {
+        m.update_prefs(|p| p.placement = MapPlacement::Tab, cx)
+    });
+    assert_eq!(
+        m.read_with(vcx, |m, _| m.prefs().placement),
+        MapPlacement::Tab
+    );
+}
+
+#[gpui::test]
+fn the_graph_zooms_pans_and_moves_between_nodes_with_the_keyboard(cx: &mut TestAppContext) {
+    let rig = rig();
+    let m = model(cx, &rig);
+    let (view, vcx) = open_view(cx, &m);
+    m.update(vcx, |m, cx| m.refresh(cx));
+    vcx.run_until_parked();
+    show_graph(&view, vcx);
+    // small map in a big window: fitted, not magnified
+    let cam = view.read_with(vcx, |v, _| v.cam);
+    assert!(cam.fit && (cam.zoom - 1.0).abs() < 1e-6);
+    // `+` zooms (and stops following the content), `0` fits again
+    view.update(vcx, |v, cx| assert!(v.graph_key("+", cx)));
+    let z = view.read_with(vcx, |v, _| v.cam);
+    assert!(z.zoom > 1.0 && !z.fit);
+    view.update(vcx, |v, cx| assert!(v.graph_key("0", cx)));
+    assert!(view.read_with(vcx, |v, _| v.cam.fit));
+    // arrows: from the orchestrator to its first delegation and down to the next one
+    view.update(vcx, |v, cx| {
+        v.select(Some(NodeKey::Thread(ThreadId(1))), cx)
+    });
+    view.update(vcx, |v, cx| assert!(v.graph_key("right", cx)));
+    assert_eq!(
+        view.read_with(vcx, |v, cx| v.selected(cx)),
+        Some(NodeKey::Thread(ThreadId(2)))
+    );
+    view.update(vcx, |v, cx| {
+        v.graph_key("down", cx);
+    });
+    assert_eq!(
+        view.read_with(vcx, |v, cx| v.selected(cx)),
+        Some(NodeKey::Thread(ThreadId(3)))
+    );
+    view.update(vcx, |v, cx| {
+        v.graph_key("left", cx);
+    });
+    assert_eq!(
+        view.read_with(vcx, |v, cx| v.selected(cx)),
+        Some(NodeKey::Thread(ThreadId(1)))
+    );
 }

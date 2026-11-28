@@ -192,14 +192,6 @@ impl SettingsView {
                 s.edit_cfg(cx, |c| c.agents.permission_default = p);
             },
         );
-        let hook = self.toggle(
-            cx,
-            "statusline-hook",
-            self.cfg.agents.claude_statusline_hook,
-            |s, on, cx| {
-                s.edit_cfg(cx, |c| c.agents.claude_statusline_hook = on);
-            },
-        );
         let week_value = WEEK_DAYS
             .iter()
             .find(|(_, _, w)| *w == self.cfg.agents.usage_week_start)
@@ -240,7 +232,7 @@ impl SettingsView {
                         &t,
                         narrow,
                         "Permiso por defecto",
-                        Some("Para hilos nuevos. «Acceso completo» deja que el agente actúe sin pedir confirmación.".into()),
+                        Some("Con qué permiso empiezan los hilos nuevos (los existentes no cambian). «Acceso completo» no se aplica solo: se elige en cada hilo, y aquí los hilos nuevos empiezan en «Aceptar ediciones».".into()),
                         permission,
                         None,
                     )
@@ -252,25 +244,13 @@ impl SettingsView {
                 &t,
                 Some("Uso"),
                 vec![
-                    row(
-                        &t,
-                        narrow,
-                        "Hook statusLine de Claude",
-                        Some(
-                            "Opcional. Añade un hook statusLine a la configuración de Claude Code para leer el contexto y el coste exactos de cada sesión. Está apagado por defecto y se puede quitar apagándolo."
-                                .into(),
-                        ),
-                        hook,
-                        None,
-                    )
-                    .into_any_element(),
-                    row(&t, narrow, "La semana empieza el", Some("Para el resumen semanal de uso.".into()), week, None)
+                    row(&t, narrow, "La semana empieza el", Some("Primer día de la semana del resumen semanal de uso (panel de uso y barra).".into()), week, None)
                         .into_any_element(),
                     row(
                         &t,
                         narrow,
                         "Mostrar estimados",
-                        Some("Cuando no hay datos oficiales, muestra una estimación marcada como tal. Nunca se inventa un porcentaje.".into()),
+                        Some("Cuando no hay datos oficiales, muestra una estimación marcada como tal (costes, pronóstico y el total semanal local). Desactivado, solo se ven cifras oficiales o declaradas por el agente. Nunca se inventa un porcentaje.".into()),
                         estimates,
                         None,
                     )

@@ -185,5 +185,6 @@ pub fn apply_env(builder: HarnessBuilder) -> Result<HarnessBuilder, String> {
         serde_json::from_str(&text).map_err(|e| format!("{ENV_FAKE}: bad script: {e}"))?;
     Ok(builder
         .factory(Arc::new(FakeFactory(script)))
+        .models(Arc::new(crate::models::NoModels))
         .resolver(Arc::new(FakeResolver)))
 }

@@ -71,10 +71,21 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+/// The default opening shortcut, in gpui's keystroke syntax.
+pub const DEFAULT_TOGGLE_KEY: &str = "ctrl-k";
+
+/// The binding of [`TogglePalette`] to `keystroke` (gpui syntax, `ctrl-k`), everywhere. A host
+/// with rebindable shortcuts builds this one from its keymap instead of calling
+/// [`bind_toggle_key`], so the palette follows the same mechanism as every other shortcut.
+pub fn toggle_binding(keystroke: &str) -> KeyBinding {
+    KeyBinding::new(keystroke, TogglePalette, None)
+}
+
 /// Binds `Ctrl+K` (everywhere) to [`TogglePalette`]. The host handles the action with
-/// `cx.on_action(|_: &TogglePalette, cx| ...)`.
+/// `cx.on_action(|_: &TogglePalette, cx| ...)`. Hosts that let the user rebind it use
+/// [`toggle_binding`] instead.
 pub fn bind_toggle_key(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("ctrl-k", TogglePalette, None)]);
+    cx.bind_keys([toggle_binding(DEFAULT_TOGGLE_KEY)]);
 }
 
 /// What the host tells the palette when it opens.

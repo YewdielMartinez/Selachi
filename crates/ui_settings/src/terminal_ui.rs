@@ -141,7 +141,7 @@ impl SettingsView {
                         &t,
                         narrow,
                         "Shell por defecto",
-                        Some("El que se abre con «Nueva pestaña». «Automático» detecta pwsh, PowerShell, cmd y WSL.".into()),
+                        Some("El que abren las pestañas nuevas (las abiertas no cambian). «Automático» usa pwsh o, si no está, Windows PowerShell. Si el programa de un perfil no existe, se abre el automático y se avisa en la terminal.".into()),
                         default_shell,
                         None,
                     )
@@ -150,9 +150,9 @@ impl SettingsView {
                         &t,
                         narrow,
                         "Líneas de historial (scrollback)",
-                        Some("Se guardan en memoria, nunca en disco. Máximo 1 000 000.".into()),
+                        Some("Se guardan en memoria, nunca en disco. Máximo 1 000 000. Vale para las pestañas nuevas.".into()),
                         scrollback,
-                        self.error_for("terminal.scrollback"),
+                        self.error_for("scrollback"),
                     )
                     .into_any_element(),
                     row(&t, narrow, "Cursor", None, cursor, None).into_any_element(),
@@ -192,7 +192,7 @@ impl SettingsView {
                         "Aceptar una palabra",
                         Some("Tecla que acepta la siguiente palabra de la sugerencia. «native» deja la del shell.".into()),
                         accept,
-                        self.error_for("terminal.completion.accept_word_key"),
+                        self.error_for("accept_word_key"),
                     )
                     .into_any_element(),
                     ui::plain_row(note(&t, "Los cambios de completado se aplican a las pestañas nuevas.")).into_any_element(),

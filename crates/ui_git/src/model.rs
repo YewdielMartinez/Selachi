@@ -185,6 +185,9 @@ pub struct GitModel {
     diff_task: Option<Task<()>>,
     checkpoint_view: Option<CheckpointView>,
     exec_mode: ExecMode,
+    /// `[git] confirm_sensitive`: `false` lets the non-destructive sensitive operations (commit,
+    /// push, pull, publish, switch) run without the card. Destructive ones always confirm.
+    confirm_sensitive: bool,
     read_only: bool,
     editor: Editor,
     stats: Stats,
@@ -240,6 +243,7 @@ impl GitModel {
             diff_task: None,
             checkpoint_view: None,
             exec_mode: ExecMode::Direct,
+            confirm_sensitive: true,
             read_only: false,
             editor: Editor::VsCode,
             stats: Stats::default(),
@@ -272,6 +276,18 @@ impl GitModel {
 
     pub fn set_exec_mode(&mut self, mode: ExecMode) {
         self.exec_mode = mode;
+    }
+
+    /// `[git] confirm_sensitive` (default `true`). Off: commit, push, pull, publish and switch run
+    /// without the card; worktree removal, checkpoint restore and checkout (force push, hard reset,
+    /// discard and branch delete, when they exist) always keep it. See
+    /// [`GitOp::may_skip_confirmation`].
+    pub fn set_confirm_sensitive(&mut self, confirm: bool) {
+        self.confirm_sensitive = confirm;
+    }
+
+    pub fn confirm_sensitive(&self) -> bool {
+        self.confirm_sensitive
     }
 
     /// Editor for "Abrir en editor" (default VS Code).
@@ -664,8 +680,9 @@ impl GitModel {
         self.quiet_error = None;
         self.gate_epoch += 1;
         let epoch = self.gate_epoch;
-        match self.gate.begin(op, epoch) {
+        match self.gate.begin_with(op, epoch, self.confirm_sensitive) {
             Step::Run(op) => self.enqueue(op, cx),
+            Step::Release(op) => self.release(op, cx),
             Step::Busy => {}
             Step::Preflight { op, epoch } => {
                 let model_epoch = self.epoch;
@@ -693,6 +710,14 @@ impl GitModel {
         let Some(op) = self.gate.confirm() else {
             return;
         };
+        self.release(op, cx);
+        cx.notify();
+    }
+
+    /// Runs an operation the gate released (confirmed on the card, or skipped by
+    /// `[git] confirm_sensitive = false`): in the terminal when that is the mode, else in the
+    /// background.
+    fn release(&mut self, op: GitOp, cx: &mut Context<Self>) {
         if self.exec_mode == ExecMode::Terminal && !op.argv_steps().is_empty() {
             for argv in op.argv_steps() {
                 self.emit_terminal(argv, cx);
@@ -717,7 +742,6 @@ impl GitModel {
         } else {
             self.enqueue(op, cx);
         }
-        cx.notify();
     }
 
     /// "Cancelar" / dismisses the banner and the quiet error.

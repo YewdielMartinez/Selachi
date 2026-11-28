@@ -48,6 +48,32 @@ impl DelegationRun {
     }
 }
 
+/// Agent CLIs a session started outside Selachi (`agy -p ...` from its Bash tool), as the host saw
+/// them while the subagent map was open (the map's process feed; nothing else watches for them).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ExternalNote {
+    /// Distinct agent ids (`agy`, `codex`), in the order they were first seen.
+    pub agents: Vec<String>,
+    /// Processes detected (the ones that already ended included).
+    pub count: usize,
+}
+
+/// "Lanzó agy fuera de Selachi · 3 procesos" (names: up to two, then "y otros").
+pub fn external_note_line(note: &ExternalNote) -> String {
+    let names = match note.agents.as_slice() {
+        [] => "otros agentes".to_string(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} y {b}"),
+        [a, b, ..] => format!("{a}, {b} y otros"),
+    };
+    let procs = if note.count == 1 {
+        "1 proceso".to_string()
+    } else {
+        format!("{} procesos", note.count)
+    };
+    format!("Lanzó {names} fuera de Selachi · {procs}")
+}
+
 /// "1 archivo" / "3 archivos".
 pub fn files_label(n: usize) -> String {
     match n {
@@ -184,6 +210,69 @@ pub fn nest(list: Vec<ThreadRecord>) -> Vec<(ThreadRecord, usize)> {
     out
 }
 
+/// Children listed under a parent before «Ver todos» folds the rest.
+pub const COLLAPSE_AFTER: usize = 5;
+
+/// `3 subagentes · 1 en marcha` (the chip of a parent row that delegated).
+pub fn subagents_summary(total: usize, running: usize) -> String {
+    let noun = if total == 1 {
+        "1 subagente".to_string()
+    } else {
+        format!("{total} subagentes")
+    };
+    if running == 0 {
+        noun
+    } else {
+        format!("{noun} · {running} en marcha")
+    }
+}
+
+/// Which rows of a parent's list to draw. `depths[i]` is the nesting depth of row `i` (0 = delegated
+/// by the parent itself) and `running[i]` whether it is in flight. Up to [`COLLAPSE_AFTER`] top-level
+/// delegations are kept unless `show_all`: the running ones first, then the newest (rows come oldest
+/// first). A kept delegation brings its own sub-delegations. Indices come back in the original order.
+pub fn visible_rows(depths: &[usize], running: &[bool], show_all: bool) -> Vec<usize> {
+    let n = depths.len().min(running.len());
+    if show_all || n == 0 {
+        return (0..n).collect();
+    }
+    // groups: (first row, end row exclusive, any running)
+    let mut groups: Vec<(usize, usize, bool)> = Vec::new();
+    for i in 0..n {
+        if depths[i] == 0 || groups.is_empty() {
+            groups.push((i, i + 1, running[i]));
+        } else if let Some(g) = groups.last_mut() {
+            g.1 = i + 1;
+            g.2 |= running[i];
+        }
+    }
+    if groups.len() <= COLLAPSE_AFTER {
+        return (0..n).collect();
+    }
+    let mut keep: Vec<usize> = Vec::new();
+    // running ones first (oldest running first), then fill with the newest
+    keep.extend(
+        groups
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.2)
+            .map(|(k, _)| k)
+            .take(COLLAPSE_AFTER),
+    );
+    for k in (0..groups.len()).rev() {
+        if keep.len() >= COLLAPSE_AFTER {
+            break;
+        }
+        if !keep.contains(&k) {
+            keep.push(k);
+        }
+    }
+    keep.sort_unstable();
+    keep.into_iter()
+        .flat_map(|k| groups[k].0..groups[k].1)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use agents_driver::{AgentKind, PermissionMode};
@@ -314,6 +403,28 @@ mod tests {
         assert!((total - 0.40).abs() < 1e-9, "{total}");
         assert_eq!(delegation_cost(&threads, &runs, ThreadId(4)), 0.0);
         assert_eq!(crate::util::format_cost(total), "$0.40");
+    }
+
+    #[test]
+    fn the_chip_counts_subagents_and_the_running_ones() {
+        assert_eq!(subagents_summary(1, 0), "1 subagente");
+        assert_eq!(subagents_summary(3, 1), "3 subagentes · 1 en marcha");
+        assert_eq!(subagents_summary(7, 0), "7 subagentes");
+    }
+
+    #[test]
+    fn long_lists_keep_five_with_the_running_ones_first() {
+        // 8 top-level delegations; #1 (old) is running, #6 has a sub-delegation
+        let depths = [0, 0, 0, 0, 0, 0, 1, 0, 0];
+        let mut running = [false; 9];
+        running[1] = true;
+        let got = visible_rows(&depths, &running, false);
+        // groups: 0,1,2,3,4,(5,6),7,8 -> running (1) + newest four (8,7,5-6,4)
+        assert_eq!(got, vec![1, 4, 5, 6, 7, 8]);
+        assert_eq!(visible_rows(&depths, &running, true).len(), 9);
+        // up to five groups nothing is hidden
+        assert_eq!(visible_rows(&[0, 0, 1, 0], &[false; 4], false), vec![0, 1, 2, 3]);
+        assert!(visible_rows(&[], &[], false).is_empty());
     }
 
     #[test]

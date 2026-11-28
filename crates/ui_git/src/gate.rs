@@ -290,6 +290,9 @@ pub enum Step {
     Run(GitOp),
     /// Sensitive: compute the preflight for this epoch, then call [`Gate::preflight_ready`].
     Preflight { op: GitOp, epoch: u64 },
+    /// `[git] confirm_sensitive = false` and the operation is one that setting may skip
+    /// ([`GitOp::may_skip_confirmation`]): release it as if it had been confirmed.
+    Release(GitOp),
     /// Another confirmation or run is in progress.
     Busy,
 }
@@ -297,6 +300,20 @@ pub enum Step {
 impl Gate {
     /// Starts an operation. Sensitive ones go through the preflight and the card; the others run.
     pub fn begin(&mut self, op: GitOp, epoch: u64) -> Step {
+        self.begin_with(op, epoch, true)
+    }
+
+    /// [`Gate::begin`] with `[git] confirm_sensitive`. With it off, only the operations
+    /// [`GitOp::may_skip_confirmation`] allows skip the card; every other sensitive operation
+    /// goes through the preflight and the card exactly as when it is on.
+    pub fn begin_with(&mut self, op: GitOp, epoch: u64, confirm_sensitive: bool) -> Step {
+        if !confirm_sensitive && op.is_sensitive() && op.may_skip_confirmation() {
+            if matches!(self, Gate::Preflighting { .. } | Gate::Running { .. }) {
+                return Step::Busy;
+            }
+            *self = Gate::Running { op: op.clone() };
+            return Step::Release(op);
+        }
         // One sensitive flow at a time. A quiet operation (stage, fetch...) never waits for it.
         if op.is_sensitive() && matches!(self, Gate::Preflighting { .. } | Gate::Running { .. }) {
             return Step::Busy;
@@ -496,6 +513,40 @@ mod tests {
             g.begin(GitOp::Action(GitAction::Fetch), 1),
             Step::Run(GitOp::Action(GitAction::Fetch))
         );
+    }
+
+    #[test]
+    fn relaxing_confirmation_only_releases_the_allowlisted_operations() {
+        // Off: a commit is released at once (the gate is Running, so a second one is Busy)...
+        let mut g = Gate::default();
+        assert_eq!(
+            g.begin_with(commit("m"), 1, false),
+            Step::Release(commit("m"))
+        );
+        assert_eq!(g, Gate::Running { op: commit("m") });
+        assert_eq!(g.begin_with(commit("n"), 2, false), Step::Busy);
+        // ...but a destructive operation still gets its preflight and card.
+        for op in [
+            GitOp::RemoveWorktree {
+                path: "w".into(),
+                force: true,
+            },
+            GitOp::RestoreCheckpoint { id: "1".into() },
+            GitOp::Action(GitAction::Checkout { target: "x".into() }),
+        ] {
+            let mut g = Gate::default();
+            assert!(
+                matches!(g.begin_with(op.clone(), 3, false), Step::Preflight { .. }),
+                "{op:?}"
+            );
+            assert!(matches!(g, Gate::Preflighting { .. }));
+        }
+        // On: the commit asks.
+        let mut g = Gate::default();
+        assert!(matches!(
+            g.begin_with(commit("m"), 4, true),
+            Step::Preflight { .. }
+        ));
     }
 
     #[test]

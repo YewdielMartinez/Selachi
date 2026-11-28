@@ -6,24 +6,30 @@
 //! the tabs' own `TabInfo`. Nothing here ticks: the elapsed time is recomputed on render and the
 //! only animation is the shark-bars spinner of a tab that is running a command.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    App, ClickEvent, Div, Entity, Hsla, IntoElement, SharedString, Stateful, Transformation,
-    Window, div, prelude::*, px, radians,
+    App, Bounds, ClickEvent, Div, Entity, Hsla, IntoElement, Pixels, Point, SharedString, Stateful,
+    Transformation, Window, canvas, div, point, prelude::*, px, radians,
 };
 use panel_api::{TabId, TabInfo};
 use store::ResolvedLayout;
 use theme::{Radius, Theme};
 use ui_kit::{
-    DitherMeter, Icon, IconButton, SectionLabel, StatusGlyph, glass_hover, glass_selected, icon,
+    Button, DitherMeter, EmptyState, Icon, IconButton, SectionLabel, StatusGlyph, glass_hover,
+    glass_selected, icon,
 };
 
+use crate::paths::same_path;
+use crate::projects::Dest;
 use crate::rail::RailItem;
 use crate::sidebar_view::{
-    ChildRow, CloseFocusedRow, Lineage, RowFocus, SidebarEvent, SidebarView, focus_bg, send,
+    ChildRow, CloseFocusedRow, Lineage, OpenSpaceMenu, RowFocus, SidebarEvent, SidebarView,
+    focus_bg, send,
 };
 use crate::spaces::{Space, row_subtitle, row_time};
 
@@ -41,10 +47,21 @@ pub struct UnifiedProps<'a> {
     pub folded: &'a HashSet<PathBuf>,
     /// Delegations nested under their parent tab.
     pub lineage: &'a Lineage,
+    /// Parent rows whose subagents are folded behind the chip / that list every one of them.
+    pub kids_folded: &'a HashSet<TabId>,
+    pub kids_all: &'a HashSet<TabId>,
     /// The tab row under the pointer (state kept by the shell).
     pub hovered_row: Option<TabId>,
     /// The space header under the pointer (by its key, not its position).
     pub hovered_space: Option<PathBuf>,
+    /// The project new terminals and chats go to (its header is tinted).
+    pub selected: Option<&'a PathBuf>,
+    /// What "Nueva pestaña" says about where a new tab goes.
+    pub dest: &'a Dest,
+    /// No project was added by hand: the list shows its empty state.
+    pub known_empty: bool,
+    /// Where each project header was painted (for the keyboard menu).
+    pub header_bounds: &'a Rc<RefCell<HashMap<PathBuf, Bounds<Pixels>>>>,
     pub usage: Usage,
 }
 
@@ -91,12 +108,13 @@ pub fn hover_transition<K: PartialEq + Copy>(
 
 type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// "Nueva pestaña  Ctrl+N" / "Buscar  Ctrl+K".
+/// "Nueva pestaña  Ctrl+N" / "Buscar  Ctrl+K". `detail` is a muted second line ("en TRON Project").
 fn action_row(
     p: &UnifiedProps,
     id: &'static str,
     ic: Icon,
     label: &'static str,
+    detail: Option<String>,
     chord: &'static str,
     on_click: Click,
 ) -> Stateful<Div> {
@@ -108,7 +126,7 @@ fn action_row(
         .id(id)
         .occlude()
         .w_full()
-        .h(px(32.0))
+        .h(px(if detail.is_some() { 44.0 } else { 32.0 }))
         .px(px(10.0))
         .flex()
         .flex_row()
@@ -122,7 +140,23 @@ fn action_row(
         .on_click(move |e, w, cx| on_click(e, w, cx))
         .tab_stop_row(focus_bg(t, p.glass))
         .child(icon(ic, 16.0, c.muted))
-        .child(div().flex_1().child(label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(label)
+                .children(detail.map(|d| {
+                    div()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(ty.ui_size_sm))
+                        .text_color(c.muted)
+                        .child(SharedString::from(d))
+                })),
+        )
         .child(
             div()
                 .text_size(px(ty.ui_size_sm))
@@ -178,7 +212,7 @@ fn tab_row(
         p.view.clone(),
         p.view.clone(),
     );
-    let has_children = p.lineage.children.contains_key(&id);
+    let has_children = p.lineage.children.contains_key(&id) || p.lineage.mapped.contains(&id);
     let show_close = close_visible(selected, p.hovered_row, id);
     let lead = crate::agents::lead_icon(&info.icon, 16.0, if selected { c.text } else { c.muted });
     let bg = pill_bg(t, p.glass, selected);
@@ -327,18 +361,187 @@ struct ChildRowEl {
     view: Entity<SidebarView>,
     row: ChildRow,
     selected: bool,
+    /// The tab it is listed under.
+    parent: TabId,
 }
 
 impl ChildRowEl {
-    fn new(p: &UnifiedProps, row: &ChildRow) -> Self {
+    fn new(p: &UnifiedProps, row: &ChildRow, parent: TabId) -> Self {
         Self {
             theme: *p.theme,
             glass: p.glass,
             view: p.view.clone(),
             selected: row.tab.is_some() && row.tab == p.active,
             row: row.clone(),
+            parent,
         }
     }
+}
+
+/// What a line of the subagents list does when clicked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KidsAction {
+    /// The chip: fold / unfold the list.
+    Fold,
+    /// «Ver todos» / «Ver menos».
+    More,
+}
+
+/// The chip «3 subagentes · 1 en marcha» under a parent row, and the «Ver todos» line at the end of a
+/// long list. A tab stop with the standard keyboard ring.
+#[derive(IntoElement)]
+struct KidsLine {
+    theme: Theme,
+    glass: bool,
+    view: Entity<SidebarView>,
+    parent: TabId,
+    label: SharedString,
+    /// The chevron of the chip (`None`: a plain line).
+    open: Option<bool>,
+    running: bool,
+    action: KidsAction,
+}
+
+impl RenderOnce for KidsLine {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = self.theme;
+        let c = t.colors;
+        let ty = t.typography;
+        let tag = match self.action {
+            KidsAction::Fold => "fold",
+            KidsAction::More => "more",
+        };
+        let id = gpui::ElementId::from(SharedString::from(format!(
+            "ukids-{tag}-{}",
+            self.parent.as_u64()
+        )));
+        let handle = ui_kit::focus::handle(window, cx, &id);
+        let bg = pill_bg(&t, self.glass, false);
+        let (view, parent, action) = (self.view.clone(), self.parent, self.action);
+        let el = div()
+            .id(id.clone())
+            .occlude()
+            .w_full()
+            .h(px(24.0))
+            .my(px(1.0))
+            .pl(px(36.0))
+            .pr(px(10.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .rounded(px(Radius::PILL))
+            .cursor_pointer()
+            .hover(move |s| s.bg(bg))
+            .on_click(move |_, _, cx| {
+                view.update(cx, |v, cx| match action {
+                    KidsAction::Fold => v.toggle_kids(parent, cx),
+                    KidsAction::More => v.toggle_kids_all(parent, cx),
+                })
+            })
+            .children(self.open.map(|open| {
+                icon(
+                    if open { Icon::ChevronDown } else { Icon::ChevronRight },
+                    12.0,
+                    c.muted,
+                )
+            }))
+            .child(
+                div()
+                    .text_size(px(ty.ui_size_xs))
+                    .text_color(if self.running { c.accent } else { c.muted })
+                    .child(self.label.clone()),
+            );
+        ui_kit::focus::wire(el, Some(handle), &id, Radius::PILL, c.accent)
+    }
+}
+
+/// What is listed under a parent row that delegated: the chip, which subagents, and the extra line.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct KidsPlan {
+    /// `3 subagentes · 1 en marcha`.
+    pub summary: String,
+    pub running: usize,
+    /// Indices into the parent's rows; empty while the chip is folded.
+    pub rows: Vec<usize>,
+    /// `Ver todos (8)` / `Ver menos`.
+    pub more: Option<String>,
+}
+
+/// Pure: the chip, the first five subagents (the running ones first) and «Ver todos». `None` when
+/// the row delegated nothing.
+pub(crate) fn kids_plan(rows: &[ChildRow], folded: bool, all: bool) -> Option<KidsPlan> {
+    if rows.is_empty() {
+        return None;
+    }
+    let running = rows.iter().filter(|r| r.running).count();
+    let summary = ui_chat::subagents_summary(rows.len(), running);
+    if folded {
+        return Some(KidsPlan {
+            summary,
+            running,
+            rows: Vec::new(),
+            more: None,
+        });
+    }
+    let depths: Vec<usize> = rows.iter().map(|r| r.depth).collect();
+    let flags: Vec<bool> = rows.iter().map(|r| r.running).collect();
+    let keep = ui_chat::visible_rows(&depths, &flags, all);
+    let more = if keep.len() < rows.len() {
+        Some(format!("Ver todos ({})", rows.len()))
+    } else if all && depths.iter().filter(|d| **d == 0).count() > ui_chat::COLLAPSE_AFTER {
+        Some("Ver menos".to_string())
+    } else {
+        None
+    };
+    Some(KidsPlan {
+        summary,
+        running,
+        rows: keep,
+        more,
+    })
+}
+
+/// The lines under a parent row: the chip, up to five subagents (the running ones first) and
+/// «Ver todos». Nothing when the row delegated nothing.
+fn kids_block(p: &UnifiedProps, parent: TabId) -> Vec<gpui::AnyElement> {
+    let Some(rows) = p.lineage.children.get(&parent) else {
+        return Vec::new();
+    };
+    let folded = p.kids_folded.contains(&parent);
+    let all = p.kids_all.contains(&parent);
+    let Some(plan) = kids_plan(rows, folded, all) else {
+        return Vec::new();
+    };
+    let running = plan.running;
+    let line = |label: String, open: Option<bool>, running: bool, action: KidsAction| {
+        KidsLine {
+            theme: *p.theme,
+            glass: p.glass,
+            view: p.view.clone(),
+            parent,
+            label: label.into(),
+            open,
+            running,
+            action,
+        }
+        .into_any_element()
+    };
+    let mut out = vec![line(
+        plan.summary.clone(),
+        Some(!folded),
+        running > 0,
+        KidsAction::Fold,
+    )];
+    out.extend(
+        plan.rows
+            .iter()
+            .map(|i| ChildRowEl::new(p, &rows[*i], parent).into_any_element()),
+    );
+    if let Some(more) = plan.more {
+        out.push(line(more, None, false, KidsAction::More));
+    }
+    out
 }
 
 impl RenderOnce for ChildRowEl {
@@ -346,8 +549,9 @@ impl RenderOnce for ChildRowEl {
         let t = self.theme;
         let c = t.colors;
         let ty = t.typography;
-        let (thread, tab) = (self.row.thread, self.row.tab);
+        let (thread, tab, parent) = (self.row.thread, self.row.tab, self.parent);
         let id = gpui::ElementId::from(SharedString::from(format!("uchild-{thread}")));
+        let view_menu = self.view.clone();
         let handle = ui_kit::focus::handle(window, cx, &id);
         let bg = pill_bg(&t, self.glass, self.selected);
         let view = self.view.clone();
@@ -371,6 +575,17 @@ impl RenderOnce for ChildRowEl {
             .on_click(move |_, _, cx| match tab {
                 Some(tab) => send(&view, cx, SidebarEvent::Select(tab)),
                 None => send(&view, cx, SidebarEvent::OpenThread(thread)),
+            })
+            .on_mouse_down(gpui::MouseButton::Right, move |e, _, cx| {
+                send(
+                    &view_menu,
+                    cx,
+                    SidebarEvent::ChildMenu {
+                        thread,
+                        parent,
+                        at: e.position,
+                    },
+                );
             })
             .child(ui_kit::agent_icon(
                 mark,
@@ -407,7 +622,11 @@ impl RenderOnce for ChildRowEl {
     }
 }
 
-/// A space header: fold chevron, name, branch and dirty dot, and "+" (a new tab there).
+/// A space header. A project: its folder name, branch and dirty dot; a click selects it (it is
+/// where new terminals and chats go: tinted with the accent, which the active tab's grey pill
+/// never is), the chevron folds it, and on hover a "+" (new terminal / chat here) and a "..." (the
+/// menu, also on right click and Shift+F10) appear over its right edge. A status / agent group
+/// (no folder) just folds.
 fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement + use<> {
     let t = p.theme;
     let c = t.colors;
@@ -415,17 +634,27 @@ fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement +
     let key = s.key();
     let root = s.root.clone();
     let open = s.is_open();
+    let project = !root.as_os_str().is_empty();
+    let selected = project && p.selected.is_some_and(|sel| same_path(sel, &root));
+    let missing = s.missing;
     let hover = pill_bg(t, p.glass, false);
-    let show_plus = p.hovered_space.as_ref() == Some(&key);
-    let (view, view_plus, view_hover, view_drop) = (
+    let tint: Hsla = Hsla {
+        a: 0.17,
+        ..Hsla::from(c.accent)
+    };
+    let show_buttons = project && p.hovered_space.as_ref() == Some(&key);
+    let (view, view_chev, view_plus, view_more, view_hover, view_right, view_menu) = (
+        p.view.clone(),
+        p.view.clone(),
+        p.view.clone(),
         p.view.clone(),
         p.view.clone(),
         p.view.clone(),
         p.view.clone(),
     );
-    let theme = *t;
     let chevron = {
-        let g = icon(Icon::ChevronRight, 12.0, c.muted);
+        let tone = if selected { c.accent } else { c.muted };
+        let g = icon(Icon::ChevronRight, 12.0, tone);
         if open && !folded {
             g.with_transformation(Transformation::rotate(radians(std::f32::consts::FRAC_PI_2)))
         } else {
@@ -439,12 +668,26 @@ fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement +
             .rounded_full()
             .bg(gpui::rgb(t.terminal.ansi[3]))
     });
-    let can_add = !root.as_os_str().is_empty();
     // Ids and hover are keyed by the space (its project path), never by its position: spaces
     // fold, reorder and appear while the pointer is over the list.
     let key_str = key.to_string_lossy().into_owned();
     let hover_key = key.clone();
     let focus = focus_bg(t, p.glass);
+    let name_color = if missing {
+        c.outline
+    } else if selected {
+        c.accent
+    } else if open || project {
+        c.text
+    } else {
+        c.muted
+    };
+    let bounds = p.header_bounds.clone();
+    let bounds_key = root.clone();
+    let (root_click, root_key, root_menu) = (root.clone(), root.clone(), root.clone());
+    let (root_plus, root_more) = (root.clone(), root.clone());
+    let click_key = key.clone();
+    let chev_key = key;
     div()
         .id(SharedString::from(format!("space:{key_str}")))
         .relative()
@@ -455,27 +698,108 @@ fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement +
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(6.0))
+        .gap(px(4.0))
         .rounded(px(Radius::CONTROL))
         .cursor_pointer()
-        .hover(move |st| st.bg(hover))
+        .when(selected, move |d| d.bg(tint))
+        .when(!selected, move |d| d.hover(move |st| st.bg(hover)))
         .on_hover(move |hovered, _, cx| {
             view_hover.update(cx, |v, cx| v.set_space_hover(&hover_key, *hovered, cx))
         })
         .on_click(move |_, _, cx| {
-            let (key, root) = (key.clone(), root.clone());
             send(
                 &view,
                 cx,
-                if open {
-                    SidebarEvent::ToggleSpace(key)
+                if project {
+                    SidebarEvent::SelectSpace(root_click.clone())
                 } else {
-                    SidebarEvent::NewIn(root)
+                    SidebarEvent::ToggleSpace(click_key.clone())
                 },
             );
         })
+        .on_mouse_down(gpui::MouseButton::Right, move |e, _, cx| {
+            if project {
+                send(
+                    &view_right,
+                    cx,
+                    SidebarEvent::SpaceMenu {
+                        root: root_menu.clone(),
+                        at: e.position,
+                        full: true,
+                    },
+                );
+            }
+        })
         .tab_stop_row(focus)
-        .child(chevron)
+        .key_context("SidebarSpace")
+        .on_action(move |_: &OpenSpaceMenu, _, cx| {
+            if !project {
+                return;
+            }
+            let at = bounds
+                .borrow()
+                .get(&bounds_key)
+                .map_or_else(Point::default, |b| {
+                    b.bottom_left() + point(px(16.0), px(2.0))
+                });
+            send(
+                &view_menu,
+                cx,
+                SidebarEvent::SpaceMenu {
+                    root: root_key.clone(),
+                    at,
+                    full: true,
+                },
+            );
+        })
+        .debug_selector({
+            let k = key_str.clone();
+            move || format!("space-{k}")
+        })
+        // Where the header was painted: the keyboard menu opens right under it.
+        .child({
+            let bounds = p.header_bounds.clone();
+            let k = root;
+            canvas(
+                move |b, _, _| {
+                    if project {
+                        bounds.borrow_mut().insert(k.clone(), b);
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        })
+        .child(if open {
+            // The chevron folds; the rest of the header selects.
+            div()
+                .id(SharedString::from(format!("space-fold:{key_str}")))
+                .debug_selector({
+                    let k = key_str.clone();
+                    move || format!("space-fold-{k}")
+                })
+                .occlude()
+                .size(px(18.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(Radius::CHIP))
+                .when(project, |d| d.hover(move |st| st.bg(hover)))
+                .tooltip(ui_kit::Tooltip::text(
+                    t,
+                    if folded { "Desplegar" } else { "Plegar" },
+                ))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    send(&view_chev, cx, SidebarEvent::ToggleSpace(chev_key.clone()));
+                })
+                .child(chevron)
+                .into_any_element()
+        } else {
+            div().size(px(18.0)).flex_none().into_any_element()
+        })
         .child(
             div()
                 .min_w_0()
@@ -485,10 +809,17 @@ fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement +
                 .whitespace_nowrap()
                 .text_size(px(ty.ui_size_md))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(if open { c.text } else { c.muted })
+                .text_color(name_color)
                 .child(SharedString::from(s.name.clone())),
         )
-        .children(s.branch.clone().map(|b| {
+        .children(missing.then(|| {
+            div()
+                .text_size(px(ty.ui_size_sm))
+                .text_color(c.outline)
+                .whitespace_nowrap()
+                .child("no encontrada")
+        }))
+        .children(s.branch.clone().filter(|_| !missing).map(|b| {
             div()
                 .max_w(px(90.0))
                 .overflow_hidden()
@@ -499,43 +830,108 @@ fn space_header(p: &UnifiedProps, s: &Space, folded: bool) -> impl IntoElement +
                 .child(SharedString::from(b))
         }))
         .children(dirty_dot)
-        .children(can_add.then(|| {
-            let root = s.root.clone();
-            // Reserved when hidden: the "+" appearing never reflows the name / branch.
-            if !show_plus {
-                return div().size(px(22.0)).flex_none();
-            }
-            div().child(
-                IconButton::new(
-                    SharedString::from(format!("space-add:{key_str}")),
-                    t,
-                    Icon::Plus,
+        .children(show_buttons.then(|| {
+            let bg: Hsla = if p.glass {
+                glass_selected(t)
+            } else {
+                c.surface_3.into()
+            };
+            div()
+                .absolute()
+                .right(px(4.0))
+                .top_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(1.0))
+                        .rounded(px(Radius::CHIP))
+                        .bg(bg)
+                        .when(!missing, |d| {
+                            d.child(
+                                IconButton::new(
+                                    SharedString::from(format!("space-add:{key_str}")),
+                                    t,
+                                    Icon::Plus,
+                                )
+                                .glass(p.glass)
+                                .passthrough(true)
+                                .size(22.0)
+                                .icon_size(12.0)
+                                .tooltip("Nueva terminal o chat aquí")
+                                .on_click(move |e, _, cx| {
+                                    cx.stop_propagation();
+                                    send(
+                                        &view_plus,
+                                        cx,
+                                        SidebarEvent::SpaceMenu {
+                                            root: root_plus.clone(),
+                                            at: e.position(),
+                                            full: false,
+                                        },
+                                    );
+                                }),
+                            )
+                        })
+                        .child(
+                            IconButton::new(
+                                SharedString::from(format!("space-more:{key_str}")),
+                                t,
+                                Icon::Dots,
+                            )
+                            .glass(p.glass)
+                            .passthrough(true)
+                            .size(22.0)
+                            .icon_size(12.0)
+                            .tooltip("Más opciones del proyecto")
+                            .on_click(move |e, _, cx| {
+                                cx.stop_propagation();
+                                send(
+                                    &view_more,
+                                    cx,
+                                    SidebarEvent::SpaceMenu {
+                                        root: root_more.clone(),
+                                        at: e.position(),
+                                        full: true,
+                                    },
+                                );
+                            }),
+                        ),
                 )
-                .glass(p.glass)
-                .passthrough(true)
-                .size(22.0)
-                .icon_size(12.0)
-                .tooltip("Nueva pestaña aquí")
-                .on_click(move |_, _, cx| {
-                    cx.stop_propagation();
-                    let root = root.clone();
-                    send(&view_plus, cx, SidebarEvent::NewIn(root));
-                }),
-            )
         }))
-        .child(
-            ui_kit::DropZone::new(
-                SharedString::from(format!("space-drop:{key_str}")),
-                &theme,
-                "Soltar para abrir una terminal aquí",
-            )
-            .radius(8.0)
-            .compact(true)
-            .on_drop(move |paths, _, cx| {
-                let paths = paths.to_vec();
-                send(&view_drop, cx, SidebarEvent::DropOnSpace(paths));
-            }),
-        )
+}
+
+/// The "+" of the "Espacios" header: add a project (the menu opens under it).
+fn add_project_button(p: &UnifiedProps) -> impl IntoElement + use<> {
+    let view = p.view.clone();
+    IconButton::new("sb-add-project", p.theme, Icon::FolderPlus)
+        .glass(p.glass)
+        .size(22.0)
+        .icon_size(12.0)
+        .tooltip("Agregar proyecto")
+        .on_click(move |e, _, cx| send(&view, cx, SidebarEvent::AddProjectMenu(e.position())))
+}
+
+/// No project was ever added or opened: a short explanation and the one thing to do about it.
+fn empty_projects(p: &UnifiedProps) -> impl IntoElement + use<> {
+    let view = p.view.clone();
+    div().id("sb-empty-projects").px(px(4.0)).child(
+        EmptyState::new(p.theme, "Sin proyectos agregados")
+            .icon(Icon::Folder)
+            .icon_size(24.0)
+            .body("Agrega una carpeta: las nuevas terminales y chats se abrirán dentro de ella.")
+            .padding_y(12.0)
+            .action(
+                Button::tonal("sb-empty-add", p.theme, "Agregar proyecto")
+                    .icon(Icon::Plus)
+                    .on_click(move |e, _, cx| {
+                        send(&view, cx, SidebarEvent::AddProjectMenu(e.position()))
+                    }),
+            ),
+    )
 }
 
 fn footer(p: &UnifiedProps) -> impl IntoElement + use<> {
@@ -640,6 +1036,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
                     "sb-act-new",
                     Icon::Plus,
                     "Nueva pestaña",
+                    Some(p.dest.line()),
                     "Ctrl+N",
                     Box::new(move |_, _, cx| send(&a, cx, SidebarEvent::NewMenu)),
                 ))
@@ -648,6 +1045,7 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
                     "sb-act-search",
                     Icon::Search,
                     "Buscar",
+                    None,
                     "Ctrl+K",
                     Box::new(move |_, _, cx| send(&b, cx, SidebarEvent::Palette)),
                 )),
@@ -659,10 +1057,16 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
     let mut spaces = div().flex().flex_col().gap(px(4.0));
     spaces = spaces.child(
         div()
-            .px(px(10.0))
+            .pl(px(10.0))
+            .pr(px(2.0))
             .pt(px(2.0))
             .pb(px(2.0))
-            .child(SectionLabel::new(t, "Espacios").uppercase(true)),
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(SectionLabel::new(t, "Espacios").uppercase(true))
+            .child(add_project_button(p)),
     );
     for s in &p.spaces {
         let folded = p.folded.contains(&s.key());
@@ -685,13 +1089,26 @@ pub fn unified_content(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Stateful
                     continue;
                 }
                 block = block.child(tab_row(p, &p.tabs[ti], true, now));
-                for child in p.lineage.children.get(&id).into_iter().flatten() {
-                    block = block.child(ChildRowEl::new(p, child));
+                for el in kids_block(p, id) {
+                    block = block.child(el);
                 }
             }
         }
         spaces = spaces.child(block);
     }
+    if p.known_empty {
+        spaces = spaces.child(empty_projects(p));
+    }
+    // A folder dropped anywhere on the list is added as a project.
+    let view_drop = p.view.clone();
+    spaces = spaces.relative().child(
+        ui_kit::DropZone::new("spaces-drop", t, "Soltar para agregar como proyecto")
+            .radius(10.0)
+            .on_drop(move |paths, _, cx| {
+                let paths = paths.to_vec();
+                send(&view_drop, cx, SidebarEvent::DropOnSpace(paths));
+            }),
+    );
     body = body.child(spaces);
     let mut col = div().id("usb").size_full().flex().flex_col().child(body);
     if l.footer_usage {
@@ -747,6 +1164,15 @@ pub fn unified_collapsed(p: &UnifiedProps, panel_items: Vec<RailItem>) -> Statef
                     .tooltip("Buscar (Ctrl+K)")
                     .on_click(move |_, _, cx| send(&b, cx, SidebarEvent::Palette)),
             );
+        let c_view = view.clone();
+        top = top.child(
+            IconButton::new("sb-c-add-project", t, Icon::FolderPlus)
+                .glass(p.glass)
+                .tooltip("Agregar proyecto")
+                .on_click(move |e, _, cx| {
+                    send(&c_view, cx, SidebarEvent::AddProjectMenu(e.position()))
+                }),
+        );
     }
     if l.panel_icons {
         for item in panel_items {
@@ -823,6 +1249,45 @@ mod tests {
         );
         assert!(!close_visible(false, None, id(1)));
         assert!(!close_visible(false, Some(id(2)), id(1)));
+    }
+
+    fn kid(thread: i64, depth: usize, running: bool, finished: bool) -> ChildRow {
+        ChildRow {
+            thread,
+            tab: None,
+            title: format!("hijo {thread}").into(),
+            agent: "codex".into(),
+            status: None,
+            subtitle: "".into(),
+            depth,
+            running,
+            finished,
+        }
+    }
+
+    #[test]
+    fn subagents_nest_under_their_parent_behind_a_counting_chip() {
+        assert_eq!(kids_plan(&[], false, false), None);
+        let rows = vec![kid(1, 0, false, true), kid(2, 0, true, false), kid(3, 1, false, true)];
+        let plan = kids_plan(&rows, false, false).unwrap();
+        assert_eq!(plan.summary, "3 subagentes · 1 en marcha");
+        assert_eq!(plan.rows, vec![0, 1, 2]);
+        assert_eq!(plan.more, None);
+        // the chip folds the list but keeps counting
+        let folded = kids_plan(&rows, true, false).unwrap();
+        assert!(folded.rows.is_empty() && folded.running == 1);
+    }
+
+    #[test]
+    fn long_lists_fold_after_five_and_ver_todos_shows_the_rest() {
+        let rows: Vec<ChildRow> = (1..=8).map(|i| kid(i, 0, i == 2, i != 2)).collect();
+        let plan = kids_plan(&rows, false, false).unwrap();
+        assert_eq!(plan.rows.len(), 5);
+        assert!(plan.rows.contains(&1), "the running one is never hidden");
+        assert_eq!(plan.more.as_deref(), Some("Ver todos (8)"));
+        let all = kids_plan(&rows, false, true).unwrap();
+        assert_eq!(all.rows.len(), 8);
+        assert_eq!(all.more.as_deref(), Some("Ver menos"));
     }
 
     #[test]

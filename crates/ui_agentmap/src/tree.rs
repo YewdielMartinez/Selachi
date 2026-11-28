@@ -9,6 +9,7 @@ use chat_core::{ThreadId, ThreadRecord, ThreadStatus, agent_label};
 use ui_kit::{AgentMark, RowStatus};
 
 use crate::registry::{RunInfo, RunStatus};
+use crate::title::{TitleInput, task_title};
 
 /// Deepest nesting the map walks (the policy allows two hops; this is a safety net against bad data).
 pub const MAX_DEPTH: usize = 8;
@@ -31,6 +32,15 @@ impl NodeKey {
         match self {
             NodeKey::Thread(t) => Some(t.0.to_string()),
             NodeKey::Tab(_) | NodeKey::External { .. } => None,
+        }
+    }
+
+    /// Stable text id of the node (what the collapsed set of the preferences stores).
+    pub fn id_string(&self) -> String {
+        match self {
+            NodeKey::Thread(t) => format!("t:{}", t.0),
+            NodeKey::Tab(s) => format!("b:{s}"),
+            NodeKey::External { pid, started_ms } => format!("e:{pid}:{started_ms}"),
         }
     }
 
@@ -243,6 +253,8 @@ pub struct MapNode {
     pub cost_usd: Option<f64>,
     pub files: usize,
     pub worktree: Option<PathBuf>,
+    /// The project folder it works on (what «Agrupar por proyecto» uses).
+    pub project: Option<PathBuf>,
     pub launcher: Option<String>,
     pub profile: Option<String>,
     pub permission: Option<String>,
@@ -321,17 +333,6 @@ pub struct Totals {
     pub files: usize,
 }
 
-fn first_line(text: &str, max: usize) -> String {
-    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-    let line = line.trim();
-    if line.chars().count() <= max {
-        line.to_string()
-    } else {
-        let cut: String = line.chars().take(max.saturating_sub(1)).collect();
-        format!("{cut}…")
-    }
-}
-
 fn permission_word(mode: &str) -> String {
     match mode {
         "ReadOnly" => "read-only".into(),
@@ -371,7 +372,17 @@ fn make_node(
         NodeKey::Tab(_) => NodeKind::Tab,
         NodeKey::Thread(_) | NodeKey::External { .. } => NodeKind::Thread,
     };
+    // A delegated run is named after its task (profile, first meaningful sentence of the prompt),
+    // not after the raw first line the harness stored as the thread title; an orchestrator keeps
+    // its own title.
+    let delegated = run.is_some() || thread.is_some_and(ThreadRecord::is_delegation);
     let title = match (&key, thread) {
+        (NodeKey::Thread(_), t) if delegated => task_title(&TitleInput {
+            prompt: run.and_then(|r| r.prompt.as_deref()),
+            profile: run.and_then(|r| r.profile.as_deref()),
+            thread_title: t.map(|t| t.title.as_str()),
+            agent: &agent,
+        }),
         (_, Some(t)) => t.display_title().to_string(),
         (NodeKey::Tab(id), None) => tab_titles.get(id).cloned().unwrap_or_else(|| {
             if id.is_empty() {
@@ -380,11 +391,7 @@ fn make_node(
                 "Terminal".to_string()
             }
         }),
-        (NodeKey::Thread(id), None) => run
-            .and_then(|r| r.prompt.as_deref())
-            .map(|p| first_line(p, 60))
-            .filter(|p| !p.is_empty())
-            .unwrap_or_else(|| format!("Hilo {}", id.0)),
+        (NodeKey::Thread(id), None) => format!("Hilo {}", id.0),
         (NodeKey::External { pid, .. }, None) => format!("Agente · PID {pid}"),
     };
     let files = result
@@ -424,6 +431,9 @@ fn make_node(
         worktree: run
             .and_then(|r| r.worktree().map(PathBuf::from))
             .or_else(|| thread.and_then(|t| t.worktree_path.clone())),
+        project: thread
+            .map(|t| t.project_root.clone())
+            .or_else(|| run.and_then(|r| r.project_root.clone())),
         launcher: run
             .and_then(|r| r.launcher.clone())
             .or_else(|| thread.and_then(|t| t.link.delegated_by.clone())),
@@ -451,7 +461,8 @@ fn make_external_node(ext: &ExternalProc) -> MapNode {
         parent: None,
         children: Vec::new(),
         depth: 0,
-        title: format!("{display} · PID {}", ext.pid),
+        title: crate::title::external_title(&ext.cmdline_redacted)
+            .unwrap_or_else(|| format!("{display} · PID {}", ext.pid)),
         agent,
         mark,
         model: ext.model.clone(),
@@ -463,6 +474,7 @@ fn make_external_node(ext: &ExternalProc) -> MapNode {
         cost_usd: None,
         files: 0,
         worktree: None,
+        project: ext.cwd.clone(),
         launcher: None,
         profile: None,
         permission: None,
@@ -831,18 +843,45 @@ pub struct GraphLayout {
 
 /// Columns by depth, leaves on consecutive rows, parents centered on their children.
 pub fn graph_layout(forest: &Forest, root: usize, collapsed: &HashSet<NodeKey>) -> GraphLayout {
+    graph_layout_of(
+        forest,
+        &[root],
+        &|k| collapsed.contains(k),
+        None,
+        crate::prefs::SortBy::Start,
+        forest.now_ms,
+    )
+}
+
+/// [`graph_layout`] for several orchestrators stacked one under the other, hiding the nodes `keep`
+/// rejects (`None`: all) and ordering the siblings by `sort`.
+pub fn graph_layout_of(
+    forest: &Forest,
+    roots: &[usize],
+    is_collapsed: &dyn Fn(&NodeKey) -> bool,
+    keep: Option<&[bool]>,
+    sort: crate::prefs::SortBy,
+    now_ms: i64,
+) -> GraphLayout {
     let mut layout = GraphLayout::default();
     let mut next_leaf = 0.0f32;
 
+    struct Ctx<'a> {
+        forest: &'a Forest,
+        is_collapsed: &'a dyn Fn(&NodeKey) -> bool,
+        keep: Option<&'a [bool]>,
+        sort: crate::prefs::SortBy,
+        now_ms: i64,
+    }
+
     fn place(
-        forest: &Forest,
+        cx: &Ctx<'_>,
         n: usize,
         col: usize,
-        collapsed: &HashSet<NodeKey>,
         next_leaf: &mut f32,
         layout: &mut GraphLayout,
     ) -> usize {
-        let node = &forest.nodes[n];
+        let node = &cx.forest.nodes[n];
         let slot = layout.placed.len();
         layout.placed.push(Placed {
             node: n,
@@ -850,22 +889,22 @@ pub fn graph_layout(forest: &Forest, root: usize, collapsed: &HashSet<NodeKey>) 
             row: 0.0,
         });
         layout.cols = layout.cols.max(col + 1);
-        let hide = collapsed.contains(&node.key) || col >= MAX_DEPTH;
-        if node.children.is_empty() || hide {
+        let kids = crate::organize::ordered_children(cx.forest, n, cx.keep, cx.sort, cx.now_ms);
+        let hide = (cx.is_collapsed)(&node.key) || col >= MAX_DEPTH;
+        if kids.is_empty() || hide {
             layout.placed[slot].row = *next_leaf;
             *next_leaf += 1.0;
             return slot;
         }
-        let kids: Vec<usize> = node
-            .children
+        let slots: Vec<usize> = kids
             .iter()
-            .map(|c| place(forest, *c, col + 1, collapsed, next_leaf, layout))
+            .map(|c| place(cx, *c, col + 1, next_leaf, layout))
             .collect();
-        for k in &kids {
+        for k in &slots {
             layout.edges.push((slot, *k));
         }
-        let first = layout.placed[kids[0]].row;
-        let last = layout.placed[kids[kids.len() - 1]].row;
+        let first = layout.placed[slots[0]].row;
+        let last = layout.placed[slots[slots.len() - 1]].row;
         layout.placed[slot].row = (first + last) / 2.0;
         slot
     }
@@ -873,7 +912,16 @@ pub fn graph_layout(forest: &Forest, root: usize, collapsed: &HashSet<NodeKey>) 
     if forest.nodes.is_empty() {
         return layout;
     }
-    place(forest, root, 0, collapsed, &mut next_leaf, &mut layout);
+    let cx = Ctx {
+        forest,
+        is_collapsed,
+        keep,
+        sort,
+        now_ms,
+    };
+    for root in roots {
+        place(&cx, *root, 0, &mut next_leaf, &mut layout);
+    }
     layout.rows = next_leaf;
     layout
 }
@@ -912,10 +960,19 @@ impl Timeline {
 
 /// One bar per delegation under `root` (the root itself is the whole session and has none).
 pub fn timeline(forest: &Forest, root: usize, now_ms: i64) -> Timeline {
-    let mut bars: Vec<Bar> = forest
+    let nodes: Vec<usize> = forest
         .subtree(root)
         .into_iter()
         .filter(|n| *n != root)
+        .collect();
+    timeline_of(forest, &nodes, now_ms)
+}
+
+/// One bar per node of `nodes` that has a start time.
+pub fn timeline_of(forest: &Forest, nodes: &[usize], now_ms: i64) -> Timeline {
+    let mut bars: Vec<Bar> = nodes
+        .iter()
+        .copied()
         .filter_map(|n| {
             let node = &forest.nodes[n];
             let start = node.started_ms?;

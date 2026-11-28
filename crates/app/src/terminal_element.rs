@@ -26,8 +26,10 @@ use gpui::{
 use term_core::{BlockState, CellFlags, CellView, Rgb8, Snapshot};
 use theme::TerminalColors;
 
+use store::config::CursorStyle;
+
 use crate::block_layout;
-use crate::terminal_view::{TerminalView, hsla};
+use crate::terminal_view::{TermSettings, TerminalView, hsla};
 
 pub struct TerminalElement {
     view: Entity<TerminalView>,
@@ -78,6 +80,8 @@ pub struct Frame {
     cell_width: Pixels,
     cell_height: Pixels,
     cursor: Option<PaintQuad>,
+    /// The selected cells (one quad per row), under the text.
+    selection: Vec<PaintQuad>,
     /// Gutter markers of the command blocks (one thin bar per run of rows).
     gutter: Vec<PaintQuad>,
     /// Underline of the Ctrl-hovered path.
@@ -290,7 +294,11 @@ impl gpui::Element for TerminalElement {
         let default_bg = rgb8_of(theme.terminal.background);
         let cursor_color = hsla(rgb8_of(theme.terminal.cursor));
         let focused = view.focus_handle.is_focused(window) && window.is_window_active();
-        let block_cursor = focused;
+        let cursor_style = cx
+            .try_global::<TermSettings>()
+            .map_or(CursorStyle::Block, |s| s.cursor_style);
+        // Only a block cursor inverts the glyph under it (the bar and the underline leave it).
+        let block_cursor = focused && cursor_style == CursorStyle::Block;
         let font_size = px(theme.typography.mono_size);
         let origin = bounds.origin;
 
@@ -433,6 +441,7 @@ impl gpui::Element for TerminalElement {
 
         // Cursor.
         view.cursor_bounds.set(None);
+        view.cursor_shape.set(None);
         let cursor_vis = snap.cursor.and_then(|(cr, cc)| {
             vis.iter()
                 .position(|v| v.term_row == Some(cr))
@@ -450,11 +459,29 @@ impl gpui::Element for TerminalElement {
                 size(width, ch),
             );
             view.cursor_bounds.set(Some(cb));
-            frame.cursor = Some(if block_cursor {
-                fill(cb, cursor_color)
-            } else {
-                outline(cb, cursor_color, BorderStyle::Solid)
+            let shape = cursor_shape(cursor_style, cb);
+            view.cursor_shape.set(Some(shape));
+            frame.cursor = Some(match (cursor_style, focused) {
+                (CursorStyle::Block, true) => fill(shape, cursor_color),
+                (CursorStyle::Block, false) => outline(shape, cursor_color, BorderStyle::Solid),
+                (_, true) => fill(shape, cursor_color),
+                (_, false) => fill(shape, cursor_color.opacity(0.5)),
             });
+        }
+
+        // Selection: the cells between the anchor and the pointer, a quad per row.
+        if let Some(sel) = snap.selection {
+            let color = hsla(rgb8_of(theme.terminal.selection));
+            for (vi, v) in vis.iter().enumerate() {
+                let Some(r) = v.term_row else { continue };
+                if let Some(cols) = sel.cols_in(r, snap.cols) {
+                    let bounds = Bounds::new(
+                        point(origin.x + cw * cols.start as f32, origin.y + ch * vi as f32),
+                        size(cw * (cols.end - cols.start) as f32, ch),
+                    );
+                    frame.selection.push(fill(bounds, color));
+                }
+            }
         }
         frame
     }
@@ -481,6 +508,9 @@ impl gpui::Element for TerminalElement {
             for &(start, end, color) in &row.backgrounds {
                 window.paint_quad(bg_quad(x0, *y, cw, ch, start, end, color));
             }
+        }
+        for q in frame.selection.drain(..) {
+            window.paint_quad(q);
         }
         if let Some(cursor) = frame.cursor.take() {
             window.paint_quad(cursor);
@@ -574,6 +604,27 @@ fn build_row(
     }
     flush(&mut seg, &mut out, window);
     out
+}
+
+/// Thickness of the bar and underline cursors, in logical pixels.
+const CURSOR_THIN: f32 = 2.0;
+
+/// The part of the cell `cell` a cursor of `style` covers.
+pub(crate) fn cursor_shape(style: CursorStyle, cell: Bounds<Pixels>) -> Bounds<Pixels> {
+    match style {
+        CursorStyle::Block => cell,
+        CursorStyle::Bar => Bounds::new(
+            cell.origin,
+            size(px(CURSOR_THIN).min(cell.size.width), cell.size.height),
+        ),
+        CursorStyle::Underline => {
+            let h = px(CURSOR_THIN).min(cell.size.height);
+            Bounds::new(
+                point(cell.origin.x, cell.origin.y + cell.size.height - h),
+                size(cell.size.width, h),
+            )
+        }
+    }
 }
 
 impl IntoElement for TerminalElement {

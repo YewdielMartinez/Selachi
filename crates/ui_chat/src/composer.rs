@@ -1501,13 +1501,7 @@ impl Composer {
             _ => (c.text, c.bg),
         };
         let inner: AnyElement = match mode {
-            // TODO-SVG: `assets/icons/stop.svg` (16x16, currentColor). Until it exists the stop mark
-            // is a plain rounded square.
-            ButtonMode::Stop => div()
-                .size(px(11.0))
-                .rounded(px(2.5))
-                .bg(fg)
-                .into_any_element(),
+            ButtonMode::Stop => icon(Icon::Stop, 16.0, fg).into_any_element(),
             _ => icon(Icon::Send, 16.0, fg).into_any_element(),
         };
         let tip = match mode {

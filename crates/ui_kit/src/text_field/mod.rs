@@ -847,6 +847,10 @@ impl Render for TextField {
 
         let mut field = div()
             .id(id)
+            .debug_selector({
+                let id = cx.entity_id().as_u64();
+                move || format!("text-field-{id}")
+            })
             .when_some(full, |d, text| {
                 d.tooltip(crate::Tooltip::text(&theme, text))
             })
@@ -1011,6 +1015,12 @@ impl Render for TextField {
                 )
         };
 
+        let field = crate::layout_probe::mark(
+            field,
+            crate::layout_probe::BoxKind::Field,
+            String::new(),
+            false,
+        );
         let error = self.chrome.then(|| self.error.clone()).flatten();
         div()
             .flex()

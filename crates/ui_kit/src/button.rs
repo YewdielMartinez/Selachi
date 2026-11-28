@@ -365,6 +365,7 @@ impl RenderOnce for Button {
             .occlude()
             .h(px(self.height))
             .flex_none()
+            .whitespace_nowrap()
             .px(px(14.0))
             .flex()
             .flex_row()

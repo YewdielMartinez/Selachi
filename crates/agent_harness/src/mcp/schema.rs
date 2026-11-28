@@ -49,7 +49,11 @@ pub fn tools() -> Vec<Value> {
                 "properties": {
                     "models": {
                         "type": "boolean",
-                        "description": "Also ask each installed agent for its models (a handshake, no prompt is sent; can take several seconds). Default false. ES: incluir los modelos de cada agente (más lento)."
+                        "description": "Also list each installed agent's models and efforts, as the agent itself reports them (cached for 24 h in Selachi's catalog; the first call may take several seconds). Each entry has id, label, efforts, default and available; pass id as `model` and one of its efforts as `effort` to run_agent. Default false. ES: incluir los modelos y esfuerzos de cada agente."
+                    },
+                    "refresh": {
+                        "type": "boolean",
+                        "description": "With models: ask every agent again instead of using the cache. Default false. ES: con models, volver a preguntar a los agentes."
                     }
                 },
                 "additionalProperties": false
@@ -84,7 +88,7 @@ pub fn tools() -> Vec<Value> {
              yours, isolated worktree on request, timeout, token budget, secrets redacted, approvals go to the Selachi window). \
              Blocks until the agent finishes unless async is true; then use agent_status / agent_result. \
              The prompt must be self-contained and must NOT contain secrets. Returns run_id, status, summary, files_changed, \
-             diff_stat, usage, cost and worktree_path. With permission accept_edits use worktree=true and review with \
+             diff_stat, usage, cost, worktree_path, permission (the one that applied) and permission_reason (why; read it before retrying).              A read_only agent only runs inspection commands (list, read, search, git log/diff/status); the others are refused and reported; an agent that ends without any answer is status error, never done. With permission accept_edits use worktree=true and review with \
              get_diff before apply_changes. Prefer a `profile` (see list_profiles) when one fits: it brings its own agent, model, \
              instructions and limits, and can only narrow yours. ES: delega una tarea autocontenida en otro agente; nunca incluyas secretos en el prompt.",
             json!({
@@ -112,7 +116,16 @@ pub fn tools() -> Vec<Value> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model for the agent (see list_agents models=true; Claude accepts sonnet | opus | haiku). Optional. ES: modelo opcional."
+                        "description": "Model for the agent, as listed by list_agents models=true (a family such as gemini-4-neon, or a full id such as gemini-4-neon-medium; Claude accepts sonnet | opus | haiku or a full name). An unknown model is refused with the valid ones. Optional. ES: modelo opcional."
+                    },
+                    "effort": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "xhigh", "max"],
+                        "description": "Reasoning effort, separate from the model; only the levels that model offers (list_agents models=true) are accepted, `max` maps to the highest offered. Optional. ES: esfuerzo de razonamiento, separado del modelo."
+                    },
+                    "wait_for_background": {
+                        "type": "boolean",
+                        "description": "Default true: if the agent ends its turn while a command is still running (or says it is waiting for one), it is asked once to wait and report; if it still has not finished the run is status error (Incompleto), never done. false keeps the agent's turn as is. ES: pedir al agente que espere comandos en segundo plano; por defecto sí."
                     },
                     "permission": {
                         "type": "string",

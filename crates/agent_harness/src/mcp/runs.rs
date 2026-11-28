@@ -46,6 +46,9 @@ pub struct Spec {
     pub prompt: String,
     pub cwd: PathBuf,
     pub model: Option<String>,
+    pub effort: Option<String>,
+    /// `None` = the profile's / the default (true).
+    pub wait_for_background: Option<bool>,
     /// `None` = not given (with a profile, the profile's permission applies).
     pub permission: Option<String>,
     pub worktree: bool,
@@ -87,6 +90,12 @@ pub fn child_args(spec: &Spec) -> Vec<String> {
     }
     if let Some(m) = &spec.model {
         a.push(format!("--model={m}"));
+    }
+    if let Some(e) = &spec.effort {
+        a.push(format!("--effort={e}"));
+    }
+    if let Some(w) = spec.wait_for_background {
+        a.push(format!("--wait-for-background={w}"));
     }
     if spec.worktree {
         a.push("--worktree".into());
@@ -263,6 +272,8 @@ mod tests {
             prompt: "x".into(),
             cwd: PathBuf::from("C:/my project"),
             model: Some("--worktree".into()),
+            effort: Some("high".into()),
+            wait_for_background: Some(false),
             permission: Some("read_only".into()),
             worktree: true,
             timeout_s: Some(30),
@@ -278,6 +289,8 @@ mod tests {
             "agent and prompt marker come after `--`"
         );
         assert!(a.contains(&"--model=--worktree".to_string()));
+        assert!(a.contains(&"--effort=high".to_string()));
+        assert!(a.contains(&"--wait-for-background=false".to_string()));
         assert!(a.contains(&"--cwd=C:/my project".to_string()));
         assert!(a.contains(&"--timeout=30s".to_string()));
         assert!(!a.iter().any(|x| x.starts_with("--approvals")));
@@ -296,6 +309,8 @@ mod tests {
             prompt: "x".into(),
             cwd: PathBuf::from("C:/p"),
             model: None,
+            effort: None,
+            wait_for_background: None,
             permission: None,
             worktree: false,
             timeout_s: None,

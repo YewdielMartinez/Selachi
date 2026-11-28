@@ -56,6 +56,7 @@ use serde_json::{json, Value};
 use crate::coalesce::{self, Coalescer};
 use crate::opencode;
 use crate::proc::{self, truncate};
+use crate::shell_safety::{read_only_verdict, ReadScope};
 use crate::types::*;
 
 /// ACP protocol version this client speaks.
@@ -85,11 +86,20 @@ enum Req {
     Prompt,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Auto {
     Allow,
-    Reject,
+    /// Refuse on our own; the event says why (`None`: nothing to report).
+    Reject(Option<Refusal>),
     Ask,
+}
+
+/// An automatic refusal, as reported to the host ([`AgentEvent::PolicyDenied`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Refusal {
+    command: String,
+    reason: String,
+    blocked: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,6 +342,10 @@ pub struct AcpSession {
     permissions: HashMap<String, PendingPermission>,
     writes: HashMap<String, PendingWrite>,
     approved_paths: HashSet<String>,
+    /// Where a read-only command may look (the project and the cargo registry sources).
+    read_scope: ReadScope,
+    /// `interrupt` asked the agent to cancel: its `cancelled` stop reason is not news.
+    cancel_requested: bool,
     // usage bookkeeping
     cost_total: f64,
     cost_reported: f64,
@@ -342,6 +356,7 @@ pub struct AcpSession {
 impl AcpSession {
     pub fn new(cfg: &ThreadConfig) -> Self {
         let cwd_canon = std::fs::canonicalize(&cfg.cwd).unwrap_or_else(|_| cfg.cwd.clone());
+        let read_scope = ReadScope::for_cwd(cwd_canon.clone());
         Self {
             cwd: cfg.cwd.clone(),
             cwd_canon,
@@ -374,6 +389,8 @@ impl AcpSession {
             permissions: HashMap::new(),
             writes: HashMap::new(),
             approved_paths: HashSet::new(),
+            read_scope,
+            cancel_requested: false,
             cost_total: 0.0,
             cost_reported: 0.0,
             cost_seen: false,
@@ -477,6 +494,7 @@ impl AcpSession {
                 .push(Self::reply_err(&w.rpc_id, ERR_INTERNAL, "cancelled"));
         }
         if self.busy {
+            self.cancel_requested = true;
             if let Some(sid) = &self.session_id {
                 step.outgoing.push(Self::notification(
                     "session/cancel",
@@ -843,11 +861,27 @@ impl AcpSession {
                 context_window: self.context_size,
             });
         }
-        match s(result, "stopReason") {
+        let stop = s(result, "stopReason");
+        let asked_to_cancel = std::mem::take(&mut self.cancel_requested);
+        match stop {
             Some("refusal") => step.events.push(AgentEvent::Status(AgentStatus::Error(
                 "the agent refused to continue".into(),
             ))),
             _ => {
+                // `cancelled` that we did not ask for (the agent gave up, e.g. after a permission
+                // answered as cancelled), `max_tokens`, `max_turn_requests`: say so before `Done`
+                if let Some(reason) = stop {
+                    let unusual = match reason {
+                        "cancelled" => !asked_to_cancel,
+                        "max_tokens" | "max_turn_requests" => true,
+                        _ => false,
+                    };
+                    if unusual {
+                        step.events.push(AgentEvent::TurnEnded {
+                            stop_reason: reason.to_string(),
+                        });
+                    }
+                }
                 if let Some(next) = self.queue.pop_front() {
                     self.dispatch(&next, step);
                 } else {
@@ -994,13 +1028,40 @@ impl AcpSession {
         }
     }
 
-    fn auto_decision(&self, kind: &str) -> Auto {
+    fn auto_decision(&self, kind: &str, tc: &Value) -> Auto {
         let editish = matches!(kind, "edit" | "delete" | "move");
         match self.mode {
             PermissionMode::Full => Auto::Allow,
             PermissionMode::AcceptEdits if editish => Auto::Allow,
-            PermissionMode::ReadOnly if editish || kind == "execute" => Auto::Reject,
+            PermissionMode::ReadOnly if editish => Auto::Reject(Some(Refusal {
+                command: permission_detail(tc),
+                reason: "solo lectura: este modo no permite crear, editar ni borrar archivos"
+                    .into(),
+                blocked: false,
+            })),
+            PermissionMode::ReadOnly if kind == "execute" => self.read_only_command(tc),
             _ => Auto::Ask,
+        }
+    }
+
+    /// Read-only mode: a command that only inspects the project runs, anything else is refused
+    /// (and reported).
+    fn read_only_command(&self, tc: &Value) -> Auto {
+        let Some(command) = permission_command(tc) else {
+            return Auto::Reject(Some(Refusal {
+                command: permission_detail(tc),
+                reason: "solo lectura: no se pudo leer el comando como texto, así que no se puede comprobar"
+                    .into(),
+                blocked: false,
+            }));
+        };
+        match read_only_verdict(&command, &self.read_scope) {
+            Ok(()) => Auto::Allow,
+            Err(d) => Auto::Reject(Some(Refusal {
+                command,
+                reason: format!("solo lectura: {}", d.reason),
+                blocked: d.credential,
+            })),
         }
     }
 
@@ -1023,7 +1084,7 @@ impl AcpSession {
             })
             .unwrap_or_default();
         let paths = self.permission_paths(tc);
-        match self.auto_decision(kind) {
+        match self.auto_decision(kind, tc) {
             Auto::Ask => {
                 let key = format!("acp-perm-{}", id_key(id));
                 step.events.push(AgentEvent::ApprovalRequest {
@@ -1044,6 +1105,14 @@ impl AcpSession {
             }
             decision => {
                 let allow = decision == Auto::Allow;
+                if let Auto::Reject(Some(r)) = decision {
+                    step.events.push(AgentEvent::PolicyDenied {
+                        tool: title,
+                        command: truncate(&r.command, 2000),
+                        reason: r.reason,
+                        blocked: r.blocked,
+                    });
+                }
                 let outcome = match pick_option(&options, allow, false) {
                     Some(opt) => json!({ "outcome": "selected", "optionId": opt }),
                     None => json!({ "outcome": "cancelled" }),
@@ -1163,6 +1232,12 @@ impl AcpSession {
                 .approved_paths
                 .contains(&path_key(&path.to_string_lossy()));
         if self.mode == PermissionMode::ReadOnly {
+            step.events.push(AgentEvent::PolicyDenied {
+                tool: "write_text_file".into(),
+                command: truncate(&path.to_string_lossy(), 400),
+                reason: "solo lectura: este modo no permite escribir archivos".into(),
+                blocked: false,
+            });
             step.outgoing.push(Self::reply_err(
                 id,
                 ERR_AUTH_REQUIRED,
@@ -1230,6 +1305,26 @@ fn chunk_text(u: &Value) -> Option<String> {
             .map(|n| format!("[{n}]")),
         _ => None,
     }
+}
+
+/// The command line a permission request is about. The raw input is what will run: when it is
+/// there it wins over the title (a title that disagrees is just a label), and a raw input that is
+/// not text (an argv array) cannot be checked, so there is no command. Without raw input the title
+/// is the command (agents such as Antigravity put the whole command line in it).
+fn permission_command(tc: &Value) -> Option<String> {
+    const KEYS: [&str; 4] = ["command", "cmd", "commandLine", "script"];
+    if let Some(inp) = tc.get("rawInput").filter(|v| v.is_object()) {
+        if KEYS.iter().any(|k| inp.get(*k).is_some()) {
+            return KEYS
+                .iter()
+                .find_map(|k| s(inp, k))
+                .map(str::to_string)
+                .filter(|c| !c.trim().is_empty());
+        }
+    }
+    s(tc, "title")
+        .map(str::to_string)
+        .filter(|c| !c.trim().is_empty())
 }
 
 /// One-line, content-free-ish description of what a permission is about.
@@ -1461,6 +1556,7 @@ impl AcpDriver {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        proc::apply_env(&mut c, &cfg.env);
         let mut child = proc::spawn_in_job(&mut c, opts.job)?;
         let pid = child.id();
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
@@ -2010,7 +2106,18 @@ mod tests {
             let req = sess.on_message(&perm_request(1, kind));
             match expect {
                 Some(opt) => {
-                    assert!(req.events.is_empty(), "{mode:?}/{kind}");
+                    // an automatic refusal is never silent
+                    let refused = opt == "reject";
+                    assert_eq!(
+                        req.events
+                            .iter()
+                            .filter(|e| matches!(e, AgentEvent::PolicyDenied { .. }))
+                            .count(),
+                        usize::from(refused),
+                        "{mode:?}/{kind}: {:?}",
+                        req.events
+                    );
+                    assert_eq!(req.events.len(), usize::from(refused), "{mode:?}/{kind}");
                     assert_eq!(
                         req.outgoing[0]["result"]["outcome"]["optionId"], opt,
                         "{mode:?}/{kind}"
@@ -2022,6 +2129,173 @@ mod tests {
                 ),
             }
         }
+    }
+
+    fn perm_cmd(id: i64, kind: &str, command: &str) -> Value {
+        let mut r = perm_request(id, kind);
+        r["params"]["toolCall"]["rawInput"] = json!({ "command": command });
+        r
+    }
+
+    fn read_only() -> ThreadConfig {
+        let mut c = cfg();
+        c.permission_mode = PermissionMode::ReadOnly;
+        c
+    }
+
+    fn chosen(step: &Step) -> Option<String> {
+        step.outgoing
+            .first()
+            .and_then(|m| m["result"]["outcome"]["optionId"].as_str())
+            .map(str::to_string)
+    }
+
+    fn denied(step: &Step) -> Vec<(String, String, String, bool)> {
+        step.events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::PolicyDenied {
+                    tool,
+                    command,
+                    reason,
+                    blocked,
+                } => Some((tool.clone(), command.clone(), reason.clone(), *blocked)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn read_only_runs_inspection_commands_without_asking() {
+        let (mut sess, _) = ready(&read_only());
+        for (n, cmd) in [
+            "Get-ChildItem -Recurse -File | Select-Object -First 5",
+            "rg -n \"fn main\" crates",
+            "git log --oneline -n 10",
+            "Get-Content Cargo.toml -TotalCount 20",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let step = sess.on_message(&perm_cmd(10 + n as i64, "execute", cmd));
+            assert!(step.events.is_empty(), "{cmd}: {:?}", step.events);
+            assert_eq!(chosen(&step).as_deref(), Some("once"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn read_only_refusal_of_a_command_is_visible() {
+        let (mut sess, _) = ready(&read_only());
+        let step = sess.on_message(&perm_cmd(7, "execute", "Remove-Item -Recurse src"));
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+        let d = denied(&step);
+        assert_eq!(d.len(), 1, "{:?}", step.events);
+        let (tool, command, reason, blocked) = &d[0];
+        assert_eq!(tool, "bash");
+        assert_eq!(command, "Remove-Item -Recurse src");
+        assert!(reason.starts_with("solo lectura"), "{reason}");
+        assert!(!blocked);
+        // a redirection hides inside an otherwise harmless command
+        let step = sess.on_message(&perm_cmd(8, "execute", "Get-ChildItem > out.txt"));
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+        assert_eq!(denied(&step).len(), 1);
+    }
+
+    #[test]
+    fn read_only_credential_files_are_hard_blocked() {
+        let (mut sess, _) = ready(&read_only());
+        let step = sess.on_message(&perm_cmd(7, "execute", "Get-Content .env"));
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+        let d = denied(&step);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].3, "blocked: {:?}", d[0]);
+        assert!(d[0].2.starts_with("solo lectura"), "{}", d[0].2);
+    }
+
+    #[test]
+    fn read_only_reads_the_command_from_the_title_when_there_is_no_raw_input() {
+        let (mut sess, _) = ready(&read_only());
+        let mut r = perm_request(3, "execute");
+        r["params"]["toolCall"] =
+            json!({"toolCallId":"t","title":"git status -s","kind":"execute"});
+        let step = sess.on_message(&r);
+        assert_eq!(chosen(&step).as_deref(), Some("once"));
+        // a title the agent cut short is not the command that will run
+        let mut r = perm_request(4, "execute");
+        r["params"]["toolCall"] =
+            json!({"toolCallId":"t","title":"git log --format=abcdefghijkl…","kind":"execute"});
+        let step = sess.on_message(&r);
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+        assert_eq!(denied(&step).len(), 1);
+        // a raw input that is not text (argv) cannot be checked: it wins over a harmless title
+        let mut r = perm_request(5, "execute");
+        r["params"]["toolCall"] = json!({"toolCallId":"t","title":"git status","kind":"execute",
+            "rawInput":{"command":["rm","-rf","x"]}});
+        let step = sess.on_message(&r);
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+        // raw input and title disagree: the raw input is what runs
+        let mut r = perm_request(6, "execute");
+        r["params"]["toolCall"] = json!({"toolCallId":"t","title":"git status","kind":"execute",
+            "rawInput":{"command":"Remove-Item x"}});
+        let step = sess.on_message(&r);
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+    }
+
+    #[test]
+    fn read_only_edit_requests_and_writes_are_refused_visibly() {
+        let (mut sess, _) = ready(&read_only());
+        let step = sess.on_message(&perm_request(2, "edit"));
+        assert_eq!(chosen(&step).as_deref(), Some("reject"));
+        let d = denied(&step);
+        assert_eq!(d.len(), 1, "{:?}", step.events);
+        assert!(d[0].2.starts_with("solo lectura"));
+        let path = std::env::temp_dir().join("x.txt");
+        let step = sess.on_message(
+            &json!({"jsonrpc":"2.0","id":9,"method":"fs/write_text_file",
+            "params":{"sessionId":"s1","path":path,"content":"x"}}),
+        );
+        assert!(step.outgoing[0].get("error").is_some());
+        let d = denied(&step);
+        assert_eq!(d.len(), 1, "{:?}", step.events);
+        assert_eq!(d[0].0, "write_text_file");
+        assert!(d[0].2.starts_with("solo lectura"));
+    }
+
+    #[test]
+    fn a_reject_without_a_reject_option_still_says_what_happened() {
+        let (mut sess, _) = ready(&read_only());
+        let mut r = perm_cmd(3, "execute", "Remove-Item x");
+        r["params"]["options"] = json!([{"optionId":"o","kind":"allow_once"}]);
+        let step = sess.on_message(&r);
+        assert_eq!(
+            step.outgoing[0]["result"]["outcome"],
+            json!({"outcome":"cancelled"})
+        );
+        assert_eq!(denied(&step).len(), 1);
+    }
+
+    #[test]
+    fn unusual_stop_reasons_are_reported_before_done() {
+        for reason in ["max_tokens", "max_turn_requests", "cancelled"] {
+            let (mut sess, _) = ready(&cfg());
+            sess.user_message("go");
+            let done = sess.on_message(&json!({"id":2,"result":{"stopReason":reason}}));
+            assert_eq!(
+                done.events,
+                vec![
+                    AgentEvent::TurnEnded {
+                        stop_reason: reason.into()
+                    },
+                    AgentEvent::Status(AgentStatus::Done)
+                ],
+                "{reason}"
+            );
+        }
+        // a normal end says nothing extra
+        let (mut sess, _) = ready(&cfg());
+        sess.user_message("go");
+        let done = sess.on_message(&json!({"id":2,"result":{"stopReason":"end_turn"}}));
+        assert_eq!(done.events, vec![AgentEvent::Status(AgentStatus::Done)]);
     }
 
     #[test]

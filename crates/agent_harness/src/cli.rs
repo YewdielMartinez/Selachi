@@ -22,7 +22,7 @@ use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::agents::list_agents;
+use crate::agents::{list_agents, ModelsMode};
 use crate::apply::{Confirmation, Risk};
 use crate::approval_policy::ApprovalMode;
 use crate::control::CancelOutcome;
@@ -35,7 +35,7 @@ pub const USAGE: &str = "\
 selachi-agent: delegate work to another coding agent (Claude Code, Codex, OpenCode, Gemini, Antigravity)
 
 USAGE
-  selachi-agent list   [--json] [--models]
+  selachi-agent list   [--json] [--models [--refresh]]   (--models: the models and efforts each agent itself reports, cached 24 h; --refresh asks them again)
   selachi-agent run    <agent> [options] \"<prompt>\"        (use - to read the prompt from stdin)
   selachi-agent run    --profile <name> [options] \"<prompt>\"  (agent, model, limits and instructions from a profile)
   selachi-agent profiles list    [--cwd <dir>] [--json]
@@ -55,7 +55,12 @@ RUN OPTIONS
                             it can only narrow the limits, never raise them
   --agent <name>            agent to use (overrides the profile's)
   --cwd <dir>               project directory (default: the current directory)
-  --model <name>            model for the agent
+  --model <name>            model for the agent (a family such as gemini-4-neon, or a full id such as gemini-4-neon-medium);
+                            checked against what the agent itself lists (`list --models`)
+  --effort <level>          low | medium | high | xhigh | max, separate from the model; the harness maps the pair to the
+                            agent's real id (agy: gemini-4-neon + medium = gemini-4-neon-medium) and refuses what it does not offer
+  --wait-for-background <b> true (default) | false: a turn that ends while a command is still running gets one automatic
+                            follow-up to wait for it, and is an error (not done) if it is still unfinished
   --permission <mode>       read-only (default) | ask | accept-edits.  Never more than the calling session
                             (SELACHI_PARENT_PERMISSION, default read-only); full is never delegable
   --worktree                run in a new git worktree + branch, apply the result later with `apply`
@@ -87,6 +92,7 @@ pub enum Command {
     List {
         json: bool,
         models: bool,
+        refresh: bool,
     },
     Run(RunArgs),
     Profiles(ProfilesCmd),
@@ -127,6 +133,9 @@ pub struct RunArgs {
     pub prompt: String,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
+    pub effort: Option<String>,
+    /// `--wait-for-background`; `None` = the profile's / the default (true).
+    pub wait_for_background: Option<bool>,
     pub permission: Permission,
     /// `--permission` was given (with a profile it can only narrow the profile's).
     pub permission_explicit: bool,
@@ -179,6 +188,8 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     let value_flags = [
         "--cwd",
         "--model",
+        "--effort",
+        "--wait-for-background",
         "--permission",
         "--timeout",
         "--budget-tokens",
@@ -227,10 +238,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             .and_then(|(_, v)| v.clone())
     };
     let allowed: &[&str] = match sub {
-        "list" => &["--json", "--models"],
+        "list" => &["--json", "--models", "--refresh"],
         "run" => &[
             "--cwd",
             "--model",
+            "--effort",
+            "--wait-for-background",
             "--permission",
             "--worktree",
             "--timeout",
@@ -271,9 +284,13 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             if !positional.is_empty() {
                 return Err("`list` takes no arguments".into());
             }
+            if has("--refresh") && !has("--models") {
+                return Err("`list --refresh` needs --models".into());
+            }
             Command::List {
                 json: has("--json"),
                 models: has("--models"),
+                refresh: has("--refresh"),
             }
         }
         "run" => {
@@ -351,6 +368,14 @@ pub(crate) fn build_run_args(
         prompt,
         cwd: val("--cwd").map(PathBuf::from),
         model: val("--model"),
+        effort: val("--effort"),
+        wait_for_background: val("--wait-for-background")
+            .map(|v| match v.trim().to_ascii_lowercase().as_str() {
+                "true" | "yes" | "1" | "on" => Ok(true),
+                "false" | "no" | "0" | "off" => Ok(false),
+                _ => Err(format!("--wait-for-background `{v}` must be true or false")),
+            })
+            .transpose()?,
         permission,
         permission_explicit: has("--permission"),
         worktree: has("--worktree"),
@@ -422,7 +447,11 @@ pub fn run_cli(args: &[String]) -> i32 {
 fn execute(cmd: Command) -> Result<i32, String> {
     match cmd {
         Command::Help | Command::Version => Ok(0),
-        Command::List { json, models } => {
+        Command::List {
+            json,
+            models,
+            refresh,
+        } => {
             let h = harness(false)?;
             warn_config(&h);
             let list = list_agents(
@@ -430,7 +459,11 @@ fn execute(cmd: Command) -> Result<i32, String> {
                 h.caller(),
                 h.usage_probe().as_ref(),
                 h.data_dir(),
-                models,
+                match (models, refresh) {
+                    (false, _) => ModelsMode::Off,
+                    (true, false) => ModelsMode::Cached,
+                    (true, true) => ModelsMode::Refresh,
+                },
             );
             if json {
                 println!(
@@ -463,6 +496,8 @@ fn execute(cmd: Command) -> Result<i32, String> {
             let mut req = RunRequest::new(a.agent.unwrap_or_default(), prompt, cwd);
             req.profile = a.profile;
             req.model = a.model;
+            req.effort = a.effort;
+            req.wait_for_background = a.wait_for_background;
             req.permission = a.permission;
             req.permission_explicit = a.permission_explicit;
             req.worktree = a.worktree;
@@ -720,7 +755,8 @@ mod tests {
             p("list --json --models").unwrap(),
             Command::List {
                 json: true,
-                models: true
+                models: true,
+                refresh: false
             }
         );
         assert_eq!(

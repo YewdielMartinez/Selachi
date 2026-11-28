@@ -154,6 +154,7 @@ impl RenderOnce for ActionButton {
             .occlude()
             .h(px(self.size.height()))
             .flex_none()
+            .whitespace_nowrap()
             .px(px(18.0))
             .flex()
             .flex_row()

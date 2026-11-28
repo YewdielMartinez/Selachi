@@ -123,6 +123,8 @@ pub enum RefusalCode {
     UnknownProfile,
     /// The profile exists but cannot be applied (a context file outside the project, a bad schema...).
     InvalidProfile,
+    /// The model or the effort is not one the agent offers (its catalog lists the valid ones).
+    UnknownModel,
 }
 
 /// A refusal: a stable code plus a sentence that says what to change.

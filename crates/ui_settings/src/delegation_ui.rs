@@ -13,6 +13,7 @@ use ui_kit::{AgentMark, Button, GhostButton, Placement, Popover};
 
 use crate::registration::{McpTarget, RegPhase};
 use crate::ui::{self, PillTone, row, status_pill};
+use crate::validate::{APPROVAL_HELP, TIMEOUT_HELP};
 use crate::view::SettingsView;
 
 /// Agents a delegation can target: `(config id, label)`.
@@ -150,7 +151,11 @@ fn typed_stem(text: &str) -> String {
     } else {
         t.split_whitespace().next().unwrap_or("")
     };
-    let seg = first.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase();
+    let seg = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     for ext in [".exe", ".cmd", ".bat", ".com", ".ps1"] {
         if let Some(s) = seg.strip_suffix(ext) {
             return s.to_string();
@@ -159,12 +164,16 @@ fn typed_stem(text: &str) -> String {
     seg
 }
 
-/// Minutes as the field shows them (`15`, `7,5`).
+/// Minutes as the field shows them (`15`, `7,5`, `0,17` for 10 s). Two decimals at most, so the
+/// text reads back as the same number of seconds.
 pub fn minutes_text(secs: u64) -> String {
     if secs.is_multiple_of(60) {
         (secs / 60).to_string()
     } else {
-        format!("{:.1}", secs as f64 / 60.0).replace('.', ",")
+        let text = format!("{:.2}", secs as f64 / 60.0);
+        text.trim_end_matches('0')
+            .trim_end_matches('.')
+            .replace('.', ",")
     }
 }
 
@@ -341,7 +350,7 @@ impl SettingsView {
                     &t,
                     narrow,
                     "Tiempo máximo (minutos)",
-                    Some("Por ejecución; al agotarse se interrumpe al agente.".into()),
+                    Some(format!("Por ejecución; al agotarse se interrumpe al agente. {TIMEOUT_HELP}").into()),
                     timeout,
                     self.error_for("deleg_timeout"),
                 )
@@ -368,7 +377,7 @@ impl SettingsView {
                     &t,
                     narrow,
                     "Tiempo para responder una aprobación (s)",
-                    Some("Si no contestas a lo que pide el agente hijo, se rechaza.".into()),
+                    Some(format!("Si no contestas a lo que pide el agente hijo, se rechaza. {APPROVAL_HELP}").into()),
                     approval,
                     self.error_for("deleg_approval"),
                 )
@@ -393,12 +402,7 @@ impl SettingsView {
         let c = t.colors;
         let ty = t.typography;
         let list = self.cfg.delegation.extra_agents.clone();
-        let mut wrap = div()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(8.0));
+        let mut wrap = div().w_full().min_w_0().flex().flex_col().gap(px(8.0));
         if !list.is_empty() {
             let mut chips = div()
                 .w_full()
@@ -427,10 +431,7 @@ impl SettingsView {
                         .child(
                             div()
                                 .id(SharedString::from(format!("extra-agent-x-{i}")))
-                                .debug_selector({
-                                    let id = format!("extra-agent-x-{i}");
-                                    move || id.clone()
-                                })
+                                .debug_selector(move || format!("extra-agent-x-{i}"))
                                 .size(px(16.0))
                                 .flex()
                                 .items_center()
@@ -730,7 +731,6 @@ mod tests {
         assert!(help.contains("No preguntar: ") && help.contains("git push"));
     }
 
-
     #[test]
     fn extra_agents_follow_what_the_map_will_read() {
         // a plain name, a path, an acp command: all become the executable stem
@@ -777,5 +777,13 @@ mod tests {
         assert_eq!(minutes_text(900), "15");
         assert_eq!(minutes_text(450), "7,5");
         assert_eq!(minutes_text(60), "1");
+        // the shortest allowed timeout reads back as the same seconds
+        assert_eq!(minutes_text(10), "0,17");
+        assert_eq!(
+            crate::validate::timeout_secs_from_minutes(
+                minutes_text(10).replace(',', ".").parse().unwrap()
+            ),
+            Some(10)
+        );
     }
 }

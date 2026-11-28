@@ -1,0 +1,12 @@
+name = "Neon medio"
+description = "Auditor de solo lectura: Antigravity con Gemini 4 Neon, esfuerzo medio"
+agent = "agy"
+model = "gemini-4-neon"
+effort = "medium"
+permission = "read-only"
+timeout = "14m"
+instructions = """
+Solo lectura: no edites archivos, no hagas commits, no compiles ni ejecutes cargo.
+No generes SVG. Responde conciso, con referencias archivo:linea verificadas leyendo el codigo.
+Distingue lo que has comprobado de lo que supones.
+"""

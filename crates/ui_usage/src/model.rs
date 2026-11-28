@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agents_svc::Store;
+use chrono::Weekday;
 use gpui::{Context, SharedString, Task};
 
 use crate::data::{UsageQuery, UsageRange, UsageSnapshot};
@@ -24,6 +25,11 @@ pub struct UsageModel {
     project_root: Option<String>,
     snapshot: Option<Arc<UsageSnapshot>>,
     error: Option<SharedString>,
+    /// First day of the week of the "Semana" range (`[agents] usage_week_start`); `None` until the
+    /// host says (Monday).
+    week_start: Option<Weekday>,
+    /// `[agents] show_estimates`: when false the panel hides every estimated figure.
+    show_estimates: bool,
     visible: bool,
     viewers: usize,
     /// Inputs changed (or a scan happened) since the last query started.
@@ -49,6 +55,8 @@ impl UsageModel {
             project_root: None,
             snapshot: None,
             error: None,
+            week_start: None,
+            show_estimates: true,
             visible: false,
             viewers: 0,
             dirty: true,
@@ -80,9 +88,40 @@ impl UsageModel {
 
     /// Any query implementation (tests, demos).
     pub fn set_source(&mut self, source: Arc<dyn UsageSource>, cx: &mut Context<Self>) {
+        if let Some(w) = self.week_start {
+            source.set_week_start(w);
+        }
         self.source = Some(source);
         self.snapshot = None;
         self.request(cx);
+    }
+
+    /// The first day of the week of the "Semana" range. Refreshes (when visible) only if it changed.
+    pub fn set_week_start(&mut self, week_start: Weekday, cx: &mut Context<Self>) {
+        if self.week_start == Some(week_start) {
+            return;
+        }
+        self.week_start = Some(week_start);
+        if let Some(source) = &self.source {
+            source.set_week_start(week_start);
+        }
+        self.request(cx);
+    }
+
+    /// `[agents] show_estimates`: shows or hides the estimated figures (costs, forecast).
+    pub fn set_show_estimates(&mut self, show: bool, cx: &mut Context<Self>) {
+        if self.show_estimates != show {
+            self.show_estimates = show;
+            cx.notify();
+        }
+    }
+
+    pub fn show_estimates(&self) -> bool {
+        self.show_estimates
+    }
+
+    pub fn week_start(&self) -> Option<Weekday> {
+        self.week_start
     }
 
     /// The host finished a scan of the agents' logs: new events may exist. Refreshes only when the

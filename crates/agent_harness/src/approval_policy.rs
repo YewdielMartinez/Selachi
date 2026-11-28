@@ -730,53 +730,9 @@ fn classify_path(p: &str, scope: Scope<'_>) -> PathClass {
     PathClass::Outside
 }
 
-const CREDENTIAL_NAMES: &[&str] = &[
-    ".env",
-    ".npmrc",
-    ".netrc",
-    "_netrc",
-    ".git-credentials",
-    ".pgpass",
-    ".credentials.json",
-    "credentials.json",
-    "auth.json",
-    "id_rsa",
-    "id_dsa",
-    "id_ecdsa",
-    "id_ed25519",
-    "secrets.json",
-    "secrets.yml",
-    "secrets.yaml",
-    "secrets.toml",
-];
-const CREDENTIAL_DIRS: &[&str] = &[".ssh", ".aws", ".gnupg", ".azure", ".kube"];
-const CREDENTIAL_EXTS: &[&str] = &[".pem", ".pfx", ".p12", ".ppk", ".key"];
-const TEMPLATE_SUFFIXES: &[&str] = &[".example", ".sample", ".template", ".dist", ".defaults"];
-
-/// The credential-looking thing `token` names, if it does.
-fn credential_path(token: &str) -> Option<String> {
-    let mut t = token.trim().trim_matches(['"', '\'']).to_lowercase();
-    // `--flag=path`
-    if t.starts_with('-') {
-        t = t.split_once('=')?.1.trim_matches(['"', '\'']).to_string();
-    }
-    let t = t.replace('\\', "/");
-    let comps: Vec<&str> = t.split('/').filter(|c| !c.is_empty()).collect();
-    let last = comps.last()?;
-    if let Some(d) = comps.iter().find(|c| CREDENTIAL_DIRS.contains(c)) {
-        return Some(format!("`{d}`"));
-    }
-    if CREDENTIAL_NAMES.contains(last) {
-        return Some(format!("`{last}`"));
-    }
-    if last.starts_with(".env.") && !TEMPLATE_SUFFIXES.iter().any(|s| last.ends_with(s)) {
-        return Some(format!("`{last}`"));
-    }
-    if CREDENTIAL_EXTS.iter().any(|e| last.ends_with(e)) && last.len() > 4 {
-        return Some(format!("`{last}`"));
-    }
-    None
-}
+// The credential rules live in `agents_driver::shell_safety`: the driver's read-only classifier
+// and this blocklist must agree on what a credentials file is.
+use agents_driver::shell_safety::credential_path;
 
 /// `(project_root, run_dir)` as roots, for callers that hold both.
 pub fn roots_of<'a>(project_root: &'a Path, run_dir: &'a Path) -> Vec<&'a Path> {

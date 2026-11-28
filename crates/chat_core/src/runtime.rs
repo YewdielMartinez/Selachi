@@ -686,6 +686,7 @@ impl Worker {
         cfg.effort = rec.effort.clone();
         cfg.permission_mode = rec.permission;
         cfg.resume_session = rec.agent_session_id.clone();
+        cfg.env = crate::delegation_env::delegation_env(rec.id.0, rec.permission, rec.link.depth);
         let spawned = shared
             .factory
             .spawn(&rec.agent, &cfg, self.job)

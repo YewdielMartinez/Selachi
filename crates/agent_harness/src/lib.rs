@@ -61,16 +61,18 @@ pub mod events;
 pub mod fake;
 pub mod jobs;
 pub mod mcp;
+pub mod models;
 pub mod output;
 pub mod policy;
 pub mod profiles;
 pub mod registry;
 pub mod run;
 pub mod slots;
+pub mod turns;
 pub mod usage;
 
 pub use agents::{
-    agent_name, canonical_name, list_agents, AgentList, AgentResolver, SystemResolver,
+    agent_name, canonical_name, list_agents, AgentList, AgentResolver, ModelsMode, SystemResolver,
 };
 pub use apply::{ApplyPlan, ApplyReport, Confirmation, Risk};
 pub use approval_policy::{effective_mode, ApprovalMode};
@@ -79,6 +81,7 @@ pub use approvals::{
     DenyAll, PipeBroker, ServerMessage, Verdict, PROTOCOL_VERSION,
 };
 pub use control::{CancelOutcome, StatusOut};
+pub use models::{ChosenModel, DiskModels, FixedModels, ModelSource, NoModels};
 pub use output::{DiffStat, RunResult, RunStatus, UsageOut};
 pub use policy::{Caller, DelegationConfig, Permission, Policy, Refusal, RefusalCode};
 pub use profiles::{Library, Profile, ProfileError};

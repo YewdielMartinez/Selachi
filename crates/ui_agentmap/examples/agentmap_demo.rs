@@ -6,6 +6,8 @@
 //! cargo run -p ui_agentmap --example agentmap_demo -- [dark|light] [--mode tree|graph|timeline]
 //!     [--select <thread id>] [--zone main|right] [--size WxH] [--external] [--select-external <pid>]
 //!     [--activity] [--tab summary|activity|prompt] [--live]
+//!     [--many] [--group parent|agent|status|project] [--sort start|recent|duration]
+//!     [--filter running|failed|done|external] [--query text] [--hide-older MIN] [--options]
 //!
 //! `--external` adds three FAKE `agy` processes launched outside the harness under the orchestrator
 //! (two running, one finished); `--select-external 4120` opens the inspector of the first one.
@@ -15,6 +17,9 @@
 //! opens that tab. With `--external` the first external agent also gets fake child processes.
 //! `--live` keeps appending fake message lines to `3.events.jsonl` every 1.5 s (push check).
 //! ```
+//!
+//! `--many` adds nine FAKE `agy` runs as the harness records them (raw prompts with `Repo:` / `HARD RULES`)
+//! in two projects: what the map has to tidy up.
 //!
 //! Thread ids: 1 orchestrator, 2 tests (done), 3 docs (running), 4 security (waiting for an
 //! approval), 5 lint (failed), 6 migration (done, with a child), 7 its review (done), 8 (cancelled).
@@ -34,7 +39,7 @@ use panel_api::{PanelCtx, PanelProvider, PanelZone, WidthClass};
 use theme::{Mode, Theme};
 use ui_agentmap::{
     AgentMapEvent, AgentMapModel, AgentMapPanelProvider, AgentMapView, ChatStoreSource,
-    ExternalChild, ExternalProc, InspectorTab, MapMode, NodeKey,
+    ExternalChild, ExternalProc, GroupBy, InspectorTab, MapMode, NodeKey, SortBy, StatusFilter,
 };
 use ui_kit::{Assets, Card, CardTone};
 
@@ -234,7 +239,70 @@ fn specs() -> Vec<Spec> {
     ]
 }
 
-fn build_fake_data(root: &Path) -> (ChatStore, std::path::PathBuf) {
+/// FAKE "real data" load: many `agy` runs under the orchestrator, the way the harness records them
+/// (thread titled `agy: <first prompt line>`, prompts that start with `Repo:` and `HARD RULES`), in
+/// two projects and with a mix of states.
+fn add_many(store: &ChatStore, runs: &Path, root: &Path, parent: i64) {
+    let now = now_ms();
+    let min = |m: f64| (m * 60_000.0) as i64;
+    let tasks = [
+        ("Audita el manejo de errores del cliente HTTP.", "done", 1.4, 22.0, "proyecto"),
+        ("Revisa la cobertura de tests del módulo de sesiones.", "done", 2.2, 21.0, "proyecto"),
+        ("Busca usos de unwrap en crates de servicios.", "error", 0.6, 19.0, "proyecto"),
+        ("Documenta la API pública de store.", "done", 3.8, 18.0, "api"),
+        ("Compara el esquema de la base con las migraciones.", "done", 1.1, 16.0, "api"),
+        ("Lista los TODO del repositorio y agrúpalos por crate.", "done", 0.9, 14.0, "proyecto"),
+        ("Revisa la accesibilidad del panel de ajustes.", "running", 0.0, 6.0, "proyecto"),
+        ("Prueba el flujo de actualización en una instalación limpia.", "running", 0.0, 4.0, "api"),
+        ("Resume los cambios de la rama para el PR.", "cancelled", 0.4, 12.0, "proyecto"),
+    ];
+    for (i, (task, status, ran, ago, project)) in tasks.iter().enumerate() {
+        let proj = root.join(project);
+        std::fs::create_dir_all(&proj).expect("project");
+        let prompt = format!(
+            "Repo: C:\\\\Users\\\\venta\\\\Desktop\\\\{project}\\nHARD RULES\\n- Solo lectura\\n- No ejecutes comandos destructivos\\n\\n{task} Cita archivo y línea."
+        );
+        let mut spec = ThreadSpec::new(&proj, AgentKind::Acp { command: "agy acp".into() });
+        spec.title = Some("agy: Repo: C:\\Users\\vent…".into());
+        spec.model = Some("gemini-3-pro".into());
+        spec.effort = Some(if i % 3 == 0 { "high" } else { "medium" }.into());
+        spec.permission = PermissionMode::ReadOnly;
+        spec.link = Some(ThreadLink {
+            parent_thread_id: Some(ThreadId(parent)),
+            parent_tab: None,
+            depth: 1,
+            delegated_by: Some("mcp".into()),
+        });
+        let rec = store.create_thread(spec).expect("thread");
+        let id = rec.id.0;
+        let started = now - min(*ago);
+        let fin = (*status != "running").then(|| started + min(*ran));
+        let json = format!(
+            r#"{{"run_id":"{id}","thread_id":{id},"agent":"agy","model":"gemini-3-pro","effort":"medium","permission":"read-only",
+            "cwd":"C:/Users/demo/{project}","project_root":"C:/Users/demo/{project}","prompt":"{prompt}","parent_thread_id":{parent},
+            "depth":1,"started_ms":{started},{f}"status":"{status}","launcher":"mcp","deadline_ms":{dl},
+            "result":{{"summary":"ok","files_changed":[],"usage":{{"billable":{tok}}},"cost":{{"usd":{cost},"exact":false}},"notes":[]}}}}"#,
+            f = fin.map(|f| format!(r#""finished_ms":{f},"#)).unwrap_or_default(),
+            dl = started + min(15.0),
+            tok = 8_000 + 3_000 * i as u64,
+            cost = 0.05 + 0.03 * i as f64,
+        );
+        std::fs::write(runs.join(format!("{id}.json")), json).expect("run");
+        let db = ChatDb::open_with(&root.join("chat.db"), false).expect("db");
+        db.set_status(
+            ThreadId(id),
+            match *status {
+                "running" => ThreadStatus::Working,
+                "error" => ThreadStatus::Error,
+                "cancelled" => ThreadStatus::Idle,
+                _ => ThreadStatus::Done,
+            },
+        )
+        .expect("status");
+    }
+}
+
+fn build_fake_data(root: &Path, many: bool) -> (ChatStore, std::path::PathBuf) {
     let project = root.join("proyecto");
     std::fs::create_dir_all(&project).expect("project");
     let db_path = root.join("chat.db");
@@ -351,6 +419,9 @@ fn build_fake_data(root: &Path) -> (ChatStore, std::path::PathBuf) {
         std::fs::write(runs.join(format!("{id}.json")), json).expect("run record");
     }
     drop(db);
+    if many {
+        add_many(&store, &runs, root, ids[0]);
+    }
     (store, runs)
 }
 
@@ -488,6 +559,28 @@ fn main() {
         _ => PanelZone::Main,
     };
     let external = args.iter().any(|a| a == "--external");
+    let many = args.iter().any(|a| a == "--many");
+    let options = args.iter().any(|a| a == "--options");
+    let group = match arg_value(&args, "--group") {
+        Some("agent") => GroupBy::Agent,
+        Some("status") => GroupBy::Status,
+        Some("project") => GroupBy::Project,
+        _ => GroupBy::Parent,
+    };
+    let sort = match arg_value(&args, "--sort") {
+        Some("recent") => SortBy::Recent,
+        Some("duration") => SortBy::Duration,
+        _ => SortBy::Start,
+    };
+    let filter = match arg_value(&args, "--filter") {
+        Some("running") => StatusFilter::Running,
+        Some("failed") => StatusFilter::Failed,
+        Some("done") => StatusFilter::Done,
+        Some("external") => StatusFilter::External,
+        _ => StatusFilter::All,
+    };
+    let query = arg_value(&args, "--query").unwrap_or("").to_string();
+    let hide_older: Option<u32> = arg_value(&args, "--hide-older").and_then(|s| s.parse().ok());
     let activity = args.iter().any(|a| a == "--activity");
     let live = args.iter().any(|a| a == "--live");
     let tab = match arg_value(&args, "--tab") {
@@ -503,7 +596,7 @@ fn main() {
         .unwrap_or((1180.0, 700.0));
 
     let dir = tempfile::tempdir().expect("temp dir");
-    let (store, runs) = build_fake_data(dir.path());
+    let (store, runs) = build_fake_data(dir.path(), many);
     eprintln!("fake data in {}", dir.path().display());
     if activity {
         write_fake_events(&runs);
@@ -559,8 +652,23 @@ fn main() {
                     let ctx = PanelCtx::new(zone, WidthClass::from_width(w), theme);
                     let panel = provider.build(ctx, window, cx);
                     if let Ok(v) = panel.clone().downcast::<AgentMapView>() {
-                        v.update(cx, |v, cx| v.set_mode(map_mode, cx));
+                        v.update(cx, |v, cx| {
+                            v.set_mode(map_mode, cx);
+                            v.set_options_open(options, cx);
+                            v.set_search_text(&query, cx);
+                        });
                     }
+                    model.update(cx, |m, cx| {
+                        m.update_prefs(
+                            |p| {
+                                p.group = group;
+                                p.sort = sort;
+                                p.filter = filter;
+                            },
+                            cx,
+                        );
+                        m.update_session(|s| s.hide_older_min = hide_older, cx);
+                    });
                     model.update(cx, |m, cx| {
                         m.set_inspector_tab(tab, cx);
                         if external {

@@ -151,6 +151,9 @@ impl RenderOnce for SegmentedControl {
                     .occlude()
                     .h(px(28.0))
                     .px(px(14.0))
+                    // A segment is as wide as its label and the label never wraps.
+                    .flex_none()
+                    .whitespace_nowrap()
                     .flex()
                     .flex_row()
                     .items_center()

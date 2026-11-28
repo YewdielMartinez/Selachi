@@ -449,3 +449,717 @@
  }
  
  #[inline]
+--- a/src/elements/text.rs
++++ b/src/elements/text.rs
+@@ -3,7 +3,7 @@
+     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
+     TextRun, TextStyle, TooltipId, WhiteSpace, Window, WrappedLine, WrappedLineLayout,
+-    register_tooltip_mouse_handlers, set_tooltip_on_window,
++    px, register_tooltip_mouse_handlers, set_tooltip_on_window,
+ };
+ use anyhow::Context as _;
+ use smallvec::SmallVec;
+@@ -46,10 +46,10 @@
+         _inspector_id: Option<&InspectorElementId>,
+         bounds: Bounds<Pixels>,
+         text_layout: &mut Self::RequestLayoutState,
+-        _window: &mut Window,
+-        _cx: &mut App,
++        window: &mut Window,
++        cx: &mut App,
+     ) {
+-        text_layout.prepaint(bounds, self)
++        text_layout.prepaint(bounds, self, window, cx)
+     }
+ 
+     fn paint(
+@@ -112,10 +112,10 @@
+         _inspector_id: Option<&InspectorElementId>,
+         bounds: Bounds<Pixels>,
+         text_layout: &mut Self::RequestLayoutState,
+-        _window: &mut Window,
+-        _cx: &mut App,
++        window: &mut Window,
++        cx: &mut App,
+     ) {
+-        text_layout.prepaint(bounds, self.as_ref())
++        text_layout.prepaint(bounds, self.as_ref(), window, cx)
+     }
+ 
+     fn paint(
+@@ -279,10 +279,10 @@
+         _inspector_id: Option<&InspectorElementId>,
+         bounds: Bounds<Pixels>,
+         _: &mut Self::RequestLayoutState,
+-        _window: &mut Window,
+-        _cx: &mut App,
++        window: &mut Window,
++        cx: &mut App,
+     ) {
+-        self.layout.prepaint(bounds, &self.text)
++        self.layout.prepaint(bounds, &self.text, window, cx)
+     }
+ 
+     fn paint(
+@@ -311,13 +311,213 @@
+ #[derive(Default, Clone)]
+ pub struct TextLayout(Rc<RefCell<Option<TextLayoutInner>>>);
+ 
++/// Tolerance, in pixels, when comparing the width a text was shaped for with the width its box
++/// finally got (DPI rounding: a box 0.5 px narrower than the text must not wrap its last word).
++const FIT_TOLERANCE: f32 = 1.0;
++
++/// What a [`TextLayout`] needs to shape its text again (at the final width, in `prepaint`).
++struct Shaping {
++    text: SharedString,
++    runs: Vec<TextRun>,
++    font_size: Pixels,
++    wraps: bool,
++    line_clamp: Option<usize>,
++    /// `Some(suffix)` when the text style truncates with an ellipsis.
++    truncate_with: Option<SharedString>,
++}
++
++/// The inputs a measure call shapes with: wrap width and truncate width.
++type ShapeKey = (Option<Pixels>, Option<Pixels>);
++
+ struct TextLayoutInner {
+     len: usize,
+     lines: SmallVec<[WrappedLine; 1]>,
+     line_height: Pixels,
++    /// Wrap width the `lines` were shaped with.
+     wrap_width: Option<Pixels>,
++    /// Truncate width the `lines` were shaped with.
++    truncate_width: Option<Pixels>,
++    /// The `lines` were cut short with an ellipsis.
++    truncated: bool,
++    /// Size of `lines`; `None` until something was shaped.
+     size: Option<Size<Pixels>>,
+     bounds: Option<Bounds<Pixels>>,
++    shaping: Shaping,
++    /// Answers given to earlier measure calls, by exact key. Taffy asks the same text for its
++    /// min-content, max-content and several definite widths while it lays a flex row out; every
++    /// query gets the size for *its* width, never the one shaped for the previous query.
++    measures: SmallVec<[(ShapeKey, Size<Pixels>); 4]>,
++}
++
++struct Shaped {
++    lines: SmallVec<[WrappedLine; 1]>,
++    len: usize,
++    size: Size<Pixels>,
++    truncated: bool,
++}
++
++impl Shaping {
++    fn shape(
++        &self,
++        wrap_width: Option<Pixels>,
++        truncate_width: Option<Pixels>,
++        line_height: Pixels,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Option<Shaped> {
++        // `truncate_line` rewrites the runs: every call gets its own copy.
++        let mut runs = self.runs.clone();
++        let (text, truncated) = match (truncate_width, &self.truncate_with) {
++            (Some(width), Some(suffix)) => {
++                let mut line_wrapper = cx
++                    .text_system()
++                    .line_wrapper(window.text_style().font(), self.font_size);
++                let cut = line_wrapper.truncate_line(self.text.clone(), width, suffix, &mut runs);
++                let truncated = cut.len() != self.text.len();
++                (cut, truncated)
++            }
++            _ => (self.text.clone(), false),
++        };
++        let len = text.len();
++        let lines = window
++            .text_system()
++            .shape_text(
++                text,
++                self.font_size,
++                &runs,
++                wrap_width,      // Wrap if we know the width.
++                self.line_clamp, // Limit the number of lines if line_clamp is set.
++            )
++            .log_err()?;
++        let mut size: Size<Pixels> = Size::default();
++        for line in &lines {
++            let line_size = line.size(line_height);
++            size.height += line_size.height;
++            size.width = size.width.max(line_size.width).ceil();
++        }
++        Some(Shaped {
++            lines,
++            len,
++            size,
++            truncated,
++        })
++    }
++}
++
++impl TextLayoutInner {
++    /// Width of the widest unbreakable word of the text, cached across frames (the text element
++    /// is rebuilt every frame and taffy asks for this on every layout).
++    fn min_content_width(&self, window: &mut Window, cx: &mut App) -> Pixels {
++        let key = min_content::key(&self.shaping.text, self.shaping.font_size, &self.shaping.runs);
++        if let Some(w) = min_content::get(key) {
++            return w;
++        }
++        let Some(shaped) = self.shaping.shape(None, None, self.line_height, window, cx) else {
++            return Pixels::ZERO;
++        };
++        let width = shaped
++            .lines
++            .iter()
++            .map(|l| min_content::widest_word(&l.text, &l.unwrapped_layout))
++            .fold(Pixels::ZERO, Pixels::max)
++            .ceil();
++        min_content::put(key, width);
++        width
++    }
++
++    fn store(&mut self, key: ShapeKey, shaped: Shaped) {
++        self.lines = shaped.lines;
++        self.len = shaped.len;
++        self.size = Some(shaped.size);
++        self.truncated = shaped.truncated;
++        self.wrap_width = key.0;
++        self.truncate_width = key.1;
++    }
++
++    /// The key the text must be shaped with for a box `width` wide, when the shaping it holds does
++    /// not already serve that box. `None`: keep the lines.
++    fn key_for_final_width(&self, width: Pixels) -> Option<ShapeKey> {
++        let wrap = self.shaping.wraps.then_some(width);
++        let max_lines = self.shaping.line_clamp.map_or(1.0, |n| n as f32);
++        let truncate = self
++            .shaping
++            .truncate_with
++            .as_ref()
++            .map(|_| width * max_lines);
++        let fit = ShapeFit {
++            wraps: self.shaping.wraps,
++            truncates: self.shaping.truncate_with.is_some(),
++            measured: self.size.is_some(),
++            content_width: self
++                .lines
++                .iter()
++                .map(|l| l.width())
++                .fold(Pixels::ZERO, Pixels::max),
++            widest_unwrapped: self
++                .lines
++                .iter()
++                .map(|l| l.unwrapped_layout.width)
++                .fold(Pixels::ZERO, Pixels::max),
++            has_wraps: self.lines.iter().any(|l| !l.wrap_boundaries().is_empty()),
++            wrap_width: self.wrap_width,
++            truncate_width: self.truncate_width,
++            truncated: self.truncated,
++        };
++        fit.is_stale_for(width, max_lines)
++            .then_some((wrap, truncate))
++    }
++}
++
++/// What a shaped text knows about itself, to decide whether it still serves the box it ended up
++/// in. Plain data so the rule is testable without a window.
++#[doc(hidden)]
++#[derive(Clone, Copy, Debug)]
++pub struct ShapeFit {
++    /// The text style wraps (`white-space: normal`).
++    pub wraps: bool,
++    /// The text style truncates with an ellipsis.
++    pub truncates: bool,
++    /// Something was shaped at all.
++    pub measured: bool,
++    /// Width the lines paint (`min(wrap width, text width)`, not rounded up).
++    pub content_width: Pixels,
++    /// Widest line before wrapping.
++    pub widest_unwrapped: Pixels,
++    /// Some line was soft-wrapped.
++    pub has_wraps: bool,
++    /// Wrap width the lines were shaped with.
++    pub wrap_width: Option<Pixels>,
++    /// Truncate width the lines were shaped with.
++    pub truncate_width: Option<Pixels>,
++    /// The lines were cut short with an ellipsis.
++    pub truncated: bool,
++}
++
++impl ShapeFit {
++    /// Must the text be shaped again for a box `width` wide?
++    ///
++    /// * painting wider than the box (past a 1 px tolerance: a box 0.5 px narrower than its text
++    ///   keeps the text on one line) -> yes;
++    /// * wrapped for a narrower width than the box now has -> yes (it would stay wrapped);
++    /// * cut short with an ellipsis for a narrower width -> yes (it would hide text that fits);
++    /// * nowrap text without truncation -> never (nothing could change).
++    pub fn is_stale_for(&self, width: Pixels, max_lines: f32) -> bool {
++        if !self.measured {
++            return true;
++        }
++        if !self.wraps && !self.truncates {
++            return false;
++        }
++        let tol = px(FIT_TOLERANCE);
++        let stale_wrap = self.wraps
++            && (self.content_width > width + tol
++                || (self.has_wraps && self.wrap_width.is_none_or(|w| w < width - tol)));
++        let truncate = width * max_lines;
++        let stale_truncate = self.truncates
++            && (self.widest_unwrapped > truncate + tol
++                || (self.truncated && self.truncate_width.is_none_or(|w| w < truncate - tol)));
++        stale_wrap || stale_truncate
++    }
+ }
+ 
+ impl TextLayout {
+@@ -334,17 +534,63 @@
+             .line_height
+             .to_pixels(font_size.into(), window.rem_size());
+ 
+-        let mut runs = if let Some(runs) = runs {
++        let runs = if let Some(runs) = runs {
+             runs
+         } else {
+             vec![text_style.to_run(text.len())]
+         };
+ 
++        let wraps = text_style.white_space == WhiteSpace::Normal;
++        let line_clamp = text_style.line_clamp;
++        let truncate_with = text_style
++            .text_overflow
++            .clone()
++            .map(|TextOverflow::Truncate(s)| s);
++        let len = text.len();
++        *self.0.borrow_mut() = Some(TextLayoutInner {
++            len,
++            lines: SmallVec::new(),
++            line_height,
++            wrap_width: None,
++            truncate_width: None,
++            truncated: false,
++            size: None,
++            bounds: None,
++            shaping: Shaping {
++                text,
++                runs,
++                font_size,
++                wraps,
++                line_clamp,
++                truncate_with,
++            },
++            measures: SmallVec::new(),
++        });
++
+         window.request_measured_layout(Default::default(), {
+             let element_state = self.clone();
+ 
+             move |known_dimensions, available_space, window, cx| {
+-                let wrap_width = if text_style.white_space == WhiteSpace::Normal {
++                let mut guard = element_state.0.borrow_mut();
++                let Some(inner) = guard.as_mut() else {
++                    return Size::default();
++                };
++                // Min-content of wrapping text = its widest unbreakable word (CSS). Taffy uses it as
++                // the automatic minimum size of a flex item, so answering max-content (upstream)
++                // pushed items out of their row, and answering 0 collapsed pills, fields and error
++                // texts into columns of one letter. Nothing is stored: the real shaping happens
++                // for the definite width (a word wider than that box is broken then, not before).
++                if inner.shaping.wraps
++                    && known_dimensions.width.is_none()
++                    && matches!(available_space.width, crate::AvailableSpace::MinContent)
++                {
++                    let width = inner.min_content_width(window, cx);
++                    return Size {
++                        width,
++                        height: inner.line_height,
++                    };
++                }
++                let wrap_width = if inner.shaping.wraps {
+                     known_dimensions.width.or(match available_space.width {
+                         crate::AvailableSpace::Definite(x) => Some(x),
+                         _ => None,
+@@ -353,93 +599,72 @@
+                     None
+                 };
+ 
+-                let (truncate_width, truncation_suffix) =
+-                    if let Some(text_overflow) = text_style.text_overflow.clone() {
+-                        let width = known_dimensions.width.or(match available_space.width {
+-                            crate::AvailableSpace::Definite(x) => match text_style.line_clamp {
+-                                Some(max_lines) => Some(x * max_lines),
+-                                None => Some(x),
+-                            },
+-                            _ => None,
+-                        });
+-
+-                        match text_overflow {
+-                            TextOverflow::Truncate(s) => (width, s),
+-                        }
+-                    } else {
+-                        (None, "".into())
+-                    };
+-
+-                if let Some(text_layout) = element_state.0.borrow().as_ref()
+-                    && text_layout.size.is_some()
+-                    && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
+-                {
+-                    return text_layout.size.unwrap();
+-                }
+-
+-                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+-                let text = if let Some(truncate_width) = truncate_width {
+-                    line_wrapper.truncate_line(
+-                        text.clone(),
+-                        truncate_width,
+-                        &truncation_suffix,
+-                        &mut runs,
+-                    )
++                let truncate_width = if inner.shaping.truncate_with.is_some() {
++                    known_dimensions.width.or(match available_space.width {
++                        crate::AvailableSpace::Definite(x) => match inner.shaping.line_clamp {
++                            Some(max_lines) => Some(x * max_lines),
++                            None => Some(x),
++                        },
++                        _ => None,
++                    })
+                 } else {
+-                    text.clone()
++                    None
+                 };
+-                let len = text.len();
+ 
+-                let Some(lines) = window
+-                    .text_system()
+-                    .shape_text(
+-                        text,
+-                        font_size,
+-                        &runs,
+-                        wrap_width,            // Wrap if we know the width.
+-                        text_style.line_clamp, // Limit the number of lines if line_clamp is set.
+-                    )
+-                    .log_err()
++                let key = (wrap_width, truncate_width);
++                if let Some((_, size)) = inner.measures.iter().find(|(k, _)| *k == key) {
++                    return *size;
++                }
++
++                let line_height = inner.line_height;
++                let Some(shaped) =
++                    inner
++                        .shaping
++                        .shape(wrap_width, truncate_width, line_height, window, cx)
+                 else {
+-                    element_state.0.borrow_mut().replace(TextLayoutInner {
+-                        lines: Default::default(),
+-                        len: 0,
+-                        line_height,
+-                        wrap_width,
+-                        size: Some(Size::default()),
+-                        bounds: None,
+-                    });
++                    inner.lines = SmallVec::new();
++                    inner.len = 0;
++                    inner.size = Some(Size::default());
++                    inner.wrap_width = wrap_width;
++                    inner.truncate_width = truncate_width;
++                    inner.truncated = false;
+                     return Size::default();
+                 };
+-
+-                let mut size: Size<Pixels> = Size::default();
+-                for line in &lines {
+-                    let line_size = line.size(line_height);
+-                    size.height += line_size.height;
+-                    size.width = size.width.max(line_size.width).ceil();
++                let size = shaped.size;
++                inner.store(key, shaped);
++                if inner.measures.len() == inner.measures.capacity() {
++                    inner.measures.remove(0);
+                 }
+-
+-                element_state.0.borrow_mut().replace(TextLayoutInner {
+-                    lines,
+-                    len,
+-                    line_height,
+-                    wrap_width,
+-                    size: Some(size),
+-                    bounds: None,
+-                });
+-
++                inner.measures.push((key, size));
+                 size
+             }
+         })
+     }
+ 
+-    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str) {
++    /// Records the final bounds. Taffy answers some layouts from its own cache, so the lines left
++    /// by the last measure call can belong to another width than `bounds`: when they do not serve
++    /// it (they would paint past the box, or stay wrapped for a narrower one), shape again for it.
++    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str, window: &mut Window, cx: &mut App) {
+         let mut element_state = self.0.borrow_mut();
+         let element_state = element_state
+             .as_mut()
+             .with_context(|| format!("measurement has not been performed on {text}"))
+             .unwrap();
+         element_state.bounds = Some(bounds);
++        if bounds.size.width <= Pixels::ZERO {
++            return;
++        }
++        if let Some(key) = element_state.key_for_final_width(bounds.size.width) {
++            let line_height = element_state.line_height;
++            if let Some(shaped) = element_state
++                .shaping
++                .shape(key.0, key.1, line_height, window, cx)
++            {
++                element_state.store(key, shaped);
++            }
++        }
++        #[cfg(any(test, feature = "test-support"))]
++        text_probe::record(element_state, bounds);
+     }
+ 
+     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {
+@@ -912,3 +1137,238 @@
+         self
+     }
+ }
++
++
++/// Min-content width of wrapping text: the widest run of characters the line wrapper cannot break.
++pub(crate) mod min_content {
++    use crate::{LineLayout, Pixels, TextRun, text_system::LineWrapper};
++    use std::{
++        cell::RefCell,
++        collections::HashMap,
++        hash::{Hash, Hasher},
++        ops::Range,
++    };
++
++    /// Cached widths are tiny (a key and a float); the cache is emptied when it grows past this.
++    const CACHE_LIMIT: usize = 4096;
++
++    thread_local! {
++        static CACHE: RefCell<HashMap<u64, Pixels>> = RefCell::new(HashMap::new());
++    }
++
++    /// Key of a text with its style: text, font size and the fonts / lengths of its runs.
++    pub(crate) fn key(text: &str, font_size: Pixels, runs: &[TextRun]) -> u64 {
++        let mut h = std::collections::hash_map::DefaultHasher::new();
++        text.hash(&mut h);
++        font_size.0.to_bits().hash(&mut h);
++        for run in runs {
++            run.len.hash(&mut h);
++            run.font.hash(&mut h);
++        }
++        h.finish()
++    }
++
++    pub(crate) fn get(key: u64) -> Option<Pixels> {
++        CACHE.with(|c| c.borrow().get(&key).copied())
++    }
++
++    pub(crate) fn put(key: u64, width: Pixels) {
++        CACHE.with(|c| {
++            let mut c = c.borrow_mut();
++            if c.len() >= CACHE_LIMIT {
++                c.clear();
++            }
++            c.insert(key, width);
++        });
++    }
++
++    /// The byte ranges between the places where the line wrapper may break `text` (the same rule
++    /// as `LineWrapper::wrap_line`: after a space that precedes a word, and before a character
++    /// that is not a word character, never before the first non-space). Trailing spaces belong to
++    /// the segment they follow.
++    pub(crate) fn segments(text: &str) -> Vec<Range<usize>> {
++        let mut out = Vec::new();
++        let mut start = 0;
++        let mut seen = false;
++        let mut prev = '\0';
++        for (ix, c) in text.char_indices() {
++            if c == '\n' {
++                continue;
++            }
++            let candidate = seen
++                && if LineWrapper::is_word_char(c) {
++                    prev == ' ' && c != ' '
++                } else {
++                    c != ' '
++                };
++            if candidate && ix > start {
++                out.push(start..ix);
++                start = ix;
++            }
++            if c != ' ' {
++                seen = true;
++            }
++            prev = c;
++        }
++        if start < text.len() || out.is_empty() {
++            out.push(start..text.len());
++        }
++        out
++    }
++
++    /// Width of the widest [`segments`] of an already shaped, unwrapped line.
++    pub(crate) fn widest_word(text: &str, layout: &LineLayout) -> Pixels {
++        let segs = segments(text);
++        let mut bounds: Vec<usize> = segs.iter().map(|s| s.start).collect();
++        bounds.push(text.len());
++        // x of the first glyph at or after each boundary, in one pass over the glyphs.
++        let mut xs: Vec<Pixels> = Vec::with_capacity(bounds.len());
++        'glyphs: for run in &layout.runs {
++            for glyph in &run.glyphs {
++                while xs.len() < bounds.len() && glyph.index >= bounds[xs.len()] {
++                    xs.push(glyph.position.x);
++                }
++                if xs.len() == bounds.len() {
++                    break 'glyphs;
++                }
++            }
++        }
++        while xs.len() < bounds.len() {
++            xs.push(layout.width);
++        }
++        // the last boundary is the end of the text: the width of the line
++        let last = xs.len() - 1;
++        xs[last] = layout.width;
++        xs.windows(2)
++            .map(|w| w[1] - w[0])
++            .fold(Pixels::ZERO, Pixels::max)
++    }
++
++    #[cfg(test)]
++    mod tests {
++        use super::*;
++
++        fn words(text: &str) -> Vec<&str> {
++            segments(text).into_iter().map(|r| &text[r]).collect()
++        }
++
++        #[test]
++        fn words_keep_their_trailing_space() {
++            assert_eq!(
++                words("Escribe un número entero"),
++                ["Escribe ", "un ", "número ", "entero"]
++            );
++        }
++
++        #[test]
++        fn a_single_word_is_one_segment() {
++            assert_eq!(words("Próximamente"), ["Próximamente"]);
++            assert_eq!(words(""), [""]);
++        }
++
++        #[test]
++        fn leading_spaces_do_not_open_a_break() {
++            assert_eq!(words("  ab cd"), ["  ab ", "cd"]);
++        }
++
++        #[test]
++        fn word_characters_glue_hyphens_and_paths() {
++            // `-`, `_`, `.`, `:` and `=` are word characters for the wrapper
++            assert_eq!(words("pre-commit a_b.c"), ["pre-commit ", "a_b.c"]);
++            assert_eq!(words("--login -i"), ["--login ", "-i"]);
++        }
++
++        #[test]
++        fn a_non_word_character_may_start_a_line() {
++            // the wrapper breaks before `/` and `(`: the word before it is a segment of its own
++            assert_eq!(words("src/lib"), ["src", "/lib"]);
++        }
++    }
++}
++
++/// Test support: what every text element of a window painted, to assert layouts without pixels.
++///
++/// ```ignore
++/// gpui::text_probe::start();
++/// /* draw */
++/// for t in gpui::text_probe::take() { assert!(t.painted_width <= t.bounds.size.width + px(1.0)); }
++/// ```
++#[cfg(any(test, feature = "test-support"))]
++pub mod text_probe {
++    use super::TextLayoutInner;
++    use crate::{Bounds, Pixels};
++    use std::cell::RefCell;
++
++    /// One painted text element.
++    #[derive(Clone, Debug)]
++    pub struct TextProbe {
++        /// The text that was shaped (truncated text included, with its ellipsis).
++        pub text: String,
++        /// The box the element got.
++        pub bounds: Bounds<Pixels>,
++        /// Painted rows, soft wraps included.
++        pub rows: usize,
++        /// Width of the widest painted row.
++        pub painted_width: Pixels,
++        /// A soft wrap fell inside a word (between two non-space characters): the text was
++        /// squeezed into a box narrower than its longest word.
++        pub broke_a_word: bool,
++    }
++
++    thread_local! {
++        static PROBE: RefCell<Option<Vec<TextProbe>>> = const { RefCell::new(None) };
++    }
++
++    /// Starts (or restarts) recording on this thread.
++    pub fn start() {
++        PROBE.with(|p| *p.borrow_mut() = Some(Vec::new()));
++    }
++
++    /// Stops recording and returns what was recorded since [`start`].
++    pub fn take() -> Vec<TextProbe> {
++        PROBE.with(|p| p.borrow_mut().take().unwrap_or_default())
++    }
++
++    pub(super) fn record(inner: &TextLayoutInner, bounds: Bounds<Pixels>) {
++        PROBE.with(|p| {
++            if let Some(v) = p.borrow_mut().as_mut() {
++                v.push(TextProbe {
++                    text: inner
++                        .lines
++                        .iter()
++                        .map(|l| l.text.to_string())
++                        .collect::<Vec<_>>()
++                        .join("
++"),
++                    bounds,
++                    rows: inner
++                        .lines
++                        .iter()
++                        .map(|l| l.wrap_boundaries().len() + 1)
++                        .sum(),
++                    painted_width: inner
++                        .lines
++                        .iter()
++                        .map(|l| l.width())
++                        .fold(Pixels::ZERO, Pixels::max),
++                    broke_a_word: inner.lines.iter().any(|l| {
++                        l.wrap_boundaries().iter().any(|b| {
++                            let ix = l.unwrapped_layout.runs[b.run_ix].glyphs[b.glyph_ix].index;
++                            l.text.is_char_boundary(ix)
++                                && matches!(
++                                    (l.text[..ix].chars().next_back(), l.text[ix..].chars().next()),
++                                    (Some(a), Some(b)) if a.is_alphanumeric() && b.is_alphanumeric()
++                                )
++                        })
++                    }),
++                });
++            }
++        });
++    }
++}
++
++/// The unbreakable segments of `text` as the line wrapper sees them (tests of the hosts).
++#[doc(hidden)]
++pub fn min_content_segments(text: &str) -> Vec<Range<usize>> {
++    min_content::segments(text)
++}

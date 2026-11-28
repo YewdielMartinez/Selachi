@@ -1,10 +1,35 @@
 //! What each text field does with the text the user typed.
 
 use gpui::Context;
-use store::config::parse_hex_color;
 
-use crate::validate::{parse_count, split_args};
+use crate::validate::{
+    APPROVAL_HELP, TIMEOUT_HELP, approval_secs, parse_count, parse_number, split_args,
+    timeout_secs_from_minutes,
+};
 use crate::view::SettingsView;
+
+/// Fields that apply their text on Enter or when they lose focus, never per keystroke: a half-typed
+/// number, colour or URL is not a value yet (and every URL change refetches the plugin index).
+pub(crate) fn commits_on_leave(key: &str) -> bool {
+    matches!(
+        key,
+        "accent_hex"
+            | "scrollback"
+            | "deleg_concurrent"
+            | "deleg_timeout"
+            | "deleg_budget"
+            | "deleg_weekly"
+            | "deleg_approval"
+            | "index_url"
+    )
+}
+
+/// `#RRGGBB` exactly (the `#` and six hex digits), as the canonical upper case.
+pub(crate) fn full_hex(text: &str) -> Option<String> {
+    let digits = text.strip_prefix('#')?;
+    (digits.len() == 6 && digits.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| format!("#{}", digits.to_ascii_uppercase()))
+}
 
 /// Apply the text of field `key`. Invalid text leaves the config untouched and sets an inline
 /// error on the field; valid text is applied (and saved) immediately.
@@ -27,14 +52,15 @@ pub(crate) fn apply(
                 view.edit_field(key, cx, |c| c.appearance.mono_font = trimmed);
             }
         }
-        "accent_hex" => {
-            // Store the canonical `#RRGGBB`; anything else is handed to validate() as typed.
-            let value = match parse_hex_color(&trimmed) {
-                Some((r, g, b)) => format!("#{r:02X}{g:02X}{b:02X}"),
-                None => trimmed,
-            };
-            view.edit_field(key, cx, |c| c.appearance.accent = value);
-        }
+        "accent_hex" => match full_hex(&trimmed) {
+            Some(hex) => view.edit_field(key, cx, |c| c.appearance.accent = hex),
+            None => set_error(
+                view,
+                key,
+                "Escribe un color completo, por ejemplo #00AAFF.",
+                cx,
+            ),
+        },
         "scrollback" => match parse_count(&trimmed) {
             Ok(n) => view.edit_field(key, cx, |c| c.terminal.scrollback = n),
             Err(m) => set_error(view, key, &m, cx),
@@ -56,24 +82,26 @@ pub(crate) fn apply(
             Err(m) => set_error(view, key, &m, cx),
         },
         "deleg_approval" => match parse_count(&trimmed) {
-            Ok(n) => view.edit_field(key, cx, |c| {
-                c.delegation.approval_timeout_secs = u64::from(n)
-            }),
+            Ok(n) => match approval_secs(n) {
+                Some(secs) => {
+                    view.edit_field(key, cx, |c| c.delegation.approval_timeout_secs = secs)
+                }
+                None => set_error(view, key, APPROVAL_HELP, cx),
+            },
             Err(m) => set_error(view, key, &m, cx),
         },
         "deleg_budget" => match parse_count(&trimmed) {
             Ok(n) => view.edit_field(key, cx, |c| c.delegation.daily_token_budget = u64::from(n)),
             Err(m) => set_error(view, key, &m, cx),
         },
-        "deleg_timeout" => match crate::validate::parse_number(&trimmed) {
-            Ok(min) if (0.0..=1440.0).contains(&min) => {
-                let secs = (min * 60.0).round() as u64;
-                view.edit_field(key, cx, |c| c.delegation.timeout_secs = secs)
-            }
-            Ok(_) => set_error(view, key, "Entre 1 y 1440 minutos.", cx),
+        "deleg_timeout" => match parse_number(&trimmed) {
+            Ok(min) => match timeout_secs_from_minutes(min) {
+                Some(secs) => view.edit_field(key, cx, |c| c.delegation.timeout_secs = secs),
+                None => set_error(view, key, TIMEOUT_HELP, cx),
+            },
             Err(m) => set_error(view, key, &m, cx),
         },
-        "deleg_weekly" => match crate::validate::parse_number(&trimmed) {
+        "deleg_weekly" => match parse_number(&trimmed) {
             Ok(p) => view.edit_field(key, cx, |c| c.delegation.weekly_usage_threshold_percent = p),
             Err(m) => set_error(view, key, &m, cx),
         },

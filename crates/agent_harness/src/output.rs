@@ -157,6 +157,10 @@ pub struct RunResult {
     /// Name of the subagent profile the run used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Why `permission` is what it is (default, caller's cap, parent thread's current permission,
+    /// profile), so the caller does not retry blindly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_reason: Option<String>,
 }
 
 impl RunResult {
@@ -178,6 +182,7 @@ impl RunResult {
             code: None,
             notes: Vec::new(),
             profile: None,
+            permission_reason: None,
         }
     }
 
@@ -208,6 +213,9 @@ impl RunResult {
             ),
             None => writeln!(s, "run {id} · {} · {agent}", self.status.as_str()),
         };
+        if let (Some(p), Some(why)) = (&self.permission, &self.permission_reason) {
+            let _ = writeln!(s, "permission: {p} ({why})");
+        }
         if let Some(reason) = &self.reason {
             let _ = writeln!(s, "reason: {reason}");
         }

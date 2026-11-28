@@ -58,7 +58,7 @@ accept_word_key = "Ctrl+RightArrow"
 [agents]
 # Day the weekly usage window starts: "monday" .. "sunday"
 usage_week_start = "monday"
-# Show estimated cost (from the local pricing table) next to token counts.
+# Show the estimated figures (cost from the local pricing table, forecast, weekly total without an official limit).
 show_estimates = true
 # Starting permission mode for new agent threads:
 # "ask" | "accept_edits" | "read_only" | "full"
@@ -70,7 +70,9 @@ claude_statusline_hook = false
 oauth_usage_endpoint = false
 
 [git]
-# Ask before force-push, hard reset, branch delete and similar actions.
+# Pedir confirmación antes de commit, push, pull, publicar y cambiar de rama. En false esas se
+# ejecutan sin preguntar; las destructivas (force-push, reset --hard, descartar cambios, borrar una
+# rama, eliminar un worktree, restaurar un checkpoint) siempre piden confirmación.
 confirm_sensitive = true
 # Comando para abrir un archivo en tu editor, p. ej. "code -g". Vacío = el editor del sistema.
 external_editor = ""

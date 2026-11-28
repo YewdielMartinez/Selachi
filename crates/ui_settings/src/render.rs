@@ -10,6 +10,7 @@ use gpui::{
 use ui_kit::{Pill, SegmentedControl, Select, SelectEvent, SelectOption, Toggle};
 
 use crate::ui::{self, MAX_CONTENT_WIDTH, NARROW_BELOW, NAV_WIDTH};
+use crate::view::apply_error;
 use crate::view::{CONTEXT, FocusNextField, FocusPrevField, Section, SelectSlot, SettingsView};
 
 /// Width of a drop-down trigger in a setting row.
@@ -141,9 +142,12 @@ impl SettingsView {
             cx,
         );
         let message = self.errors.get(key).cloned();
-        field.update(cx, |f, cx| f.set_error(message, cx));
+        field.update(cx, |f, cx| apply_error(f, key, message, cx));
+        // The slot is exactly `width` (never shrinks to its content: a field is not a label) and
+        // never wider than its column.
         div()
             .w(px(width))
+            .flex_none()
             .max_w_full()
             .flex()
             .child(field)
@@ -160,6 +164,15 @@ impl SettingsView {
             Some(w) => w < NARROW_BELOW,
             None => self.measured.narrow(window),
         }
+    }
+
+    /// Rows stack their control under the text below [`ui::STACK_BELOW`] (the view's own width).
+    fn stack_rows(&self, window: &Window) -> bool {
+        let w = self
+            .width_hint
+            .or(self.measured.width())
+            .unwrap_or_else(|| f32::from(window.viewport_size().width));
+        w < ui::STACK_BELOW
     }
 
     fn render_section(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -265,6 +278,10 @@ impl SettingsView {
             .child(
                 div()
                     .min_w_0()
+                    .overflow_hidden()
+                    // one line, cut with an ellipsis: this note never becomes a column of words
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_size(px(ty.ui_size_xs))
                     .text_color(if is_err { c.error } else { c.muted })
                     .child(SharedString::from(status)),
@@ -278,7 +295,7 @@ impl Render for SettingsView {
         let t = self.theme;
         let c = t.colors;
         let narrow = self.is_narrow(window);
-        let blocks = self.render_section(narrow, cx);
+        let blocks = self.render_section(self.stack_rows(window), cx);
         let title = ui::page_header(&t, self.section.label(), self.section.subtitle());
         let content = div()
             .id("settings-scroll")

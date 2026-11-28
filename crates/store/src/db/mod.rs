@@ -25,7 +25,7 @@ pub use favorites::Favorite;
 pub use frecency::PathEntry;
 pub use history::{looks_sensitive, HistoryEntry, NewCommand};
 pub use layout::SessionLayout;
-pub use meta::{ONBOARDING_DONE, UPDATE_FROM, UPDATE_NOTES, WHATS_NEW_SEEN};
+pub use meta::{ONBOARDING_DONE, SELECTED_PROJECT, UPDATE_FROM, UPDATE_NOTES, WHATS_NEW_SEEN};
 pub use projects::{detect_project, discover_projects, DiscoveredProject, Project, ProjectKind};
 pub use retention::PruneStats;
 pub use schema::{latest_version, migrate};

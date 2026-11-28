@@ -76,8 +76,9 @@ pub use composer::{
 };
 pub use hub::{ChatEvent, ChatHub, FilesReady, ModelsReady};
 pub use lineage::{
-    DelegationRun, MAX_NEST_DEPTH, RunState, children_of, delegation_cost, delegation_line,
-    files_label, nest, run_state_label,
+    DelegationRun, ExternalNote, MAX_NEST_DEPTH, RunState, children_of, delegation_cost,
+    COLLAPSE_AFTER, delegation_line, external_note_line, files_label, nest, run_state_label,
+    subagents_summary, visible_rows,
 };
 pub use md::{MdBody, ParsedMd, parse_markdown, render_md, render_md_selectable};
 pub use mentions::{MentionQuery, filter_files, mention_at, walk_files};
@@ -103,18 +104,6 @@ pub fn init(cx: &mut gpui::App) {
 /// until they exist.
 pub fn needed_svgs() -> &'static [(&'static str, &'static str)] {
     &[
-        (
-            "stop.svg",
-            "round stop button of the composer while a turn runs (placeholder: a rounded square drawn with a div)",
-        ),
-        (
-            "copy.svg",
-            "copy button of code blocks (placeholder: the word \"Copiar\")",
-        ),
-        (
-            "archive.svg",
-            "archive action of a thread row (placeholder: the folder icon)",
-        ),
         (
             "attach.svg",
             "attach files: the + menu entry (placeholder: files.svg)",

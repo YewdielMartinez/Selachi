@@ -136,3 +136,36 @@ pub fn metrics(node: &MapNode, now_ms: i64) -> [Option<String>; 4] {
         (node.files > 0).then(|| fmt::files(node.files)),
     ]
 }
+
+/// Model and effort as a small chip (`gpt-5 · alto`): the second thing to read in a row, after the
+/// task. Truncates with an ellipsis inside `max_w`.
+pub fn model_chip(theme: &Theme, text: impl Into<SharedString>, max_w: f32) -> AnyElement {
+    let c = theme.colors;
+    let ty = theme.typography;
+    div()
+        .flex_none()
+        .max_w(px(max_w))
+        .h(px(18.0))
+        .px(px(6.0))
+        .flex()
+        .items_center()
+        .rounded(px(Radius::CHIP))
+        .bg(c.surface_3)
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
+        .text_size(px(ty.ui_size_xs))
+        .text_color(c.muted)
+        .child(text.into())
+        .into_any_element()
+}
+
+/// A small filled dot in the color of a status (graph cards: it scales with the zoom).
+pub fn status_dot(theme: &Theme, node: &MapNode, size: f32) -> AnyElement {
+    div()
+        .flex_none()
+        .size(px(size))
+        .rounded_full()
+        .bg(node_status_color(theme, node))
+        .into_any_element()
+}

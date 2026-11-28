@@ -579,6 +579,174 @@ impl DriverFactory for FakeFactory {
     }
 }
 
+/// `[processes] auto_stop_on_thread_close`: what happens to the processes a thread started when it
+/// closes (PLAN section 15). Only the closed thread's own Job Object is ever touched.
+pub mod thread_close {
+    use std::time::Duration;
+
+    use proc_svc::TerminateOptions;
+    use store::config::AutoStop;
+    use ui_procs::SharedTracker;
+
+    /// Leftovers are counted this long after the close: the agent itself needs a moment to exit and
+    /// must not be reported as something the thread "left running".
+    pub const KEEP_CHECK_DELAY: Duration = Duration::from_millis(1500);
+
+    /// What to do when a thread closes.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum OnClose {
+        /// Stop everything the thread started, now.
+        Stop,
+        /// Leave it running and say so (`offer_stop`: with a "Detener" button).
+        Keep { offer_stop: bool },
+    }
+
+    pub fn on_close(setting: AutoStop) -> OnClose {
+        match setting {
+            AutoStop::Always => OnClose::Stop,
+            AutoStop::Never => OnClose::Keep { offer_stop: false },
+            AutoStop::Ask => OnClose::Keep { offer_stop: true },
+        }
+    }
+
+    /// What [`apply`] did.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum Outcome {
+        /// The thread had no processes left (or no owner): nothing to do or to say.
+        Nothing,
+        /// Stopped `n` processes of the thread.
+        Stopped { label: String, n: usize },
+        /// Left `n` processes running.
+        Left {
+            label: String,
+            n: usize,
+            offer_stop: bool,
+        },
+        /// The stop failed; the owner stays attributed so the leftovers show in the panel.
+        Failed { label: String, why: String },
+    }
+
+    /// Blocking (a graceful stop waits for seconds): call it off the UI thread. Never holds the
+    /// tracker lock while waiting, and never reaches a process outside `owner`'s job.
+    pub fn apply(tracker: &SharedTracker, owner: u64, setting: AutoStop) -> Outcome {
+        apply_with(tracker, owner, setting, &TerminateOptions::default())
+    }
+
+    pub fn apply_with(
+        tracker: &SharedTracker,
+        owner: u64,
+        setting: AutoStop,
+        opts: &TerminateOptions,
+    ) -> Outcome {
+        let lock = || tracker.lock().unwrap_or_else(|p| p.into_inner());
+        match on_close(setting) {
+            OnClose::Keep { offer_stop } => {
+                let t = lock();
+                let n = t.job(owner).map_or(0, |j| j.members().len());
+                if n == 0 {
+                    return Outcome::Nothing;
+                }
+                let label = t.meta(owner).map(|m| m.label.clone()).unwrap_or_default();
+                Outcome::Left {
+                    label,
+                    n,
+                    offer_stop,
+                }
+            }
+            OnClose::Stop => stop(tracker, owner, opts),
+        }
+    }
+
+    /// Stops everything in `owner`'s job (the "Detener" button and `Always`).
+    pub fn stop(tracker: &SharedTracker, owner: u64, opts: &TerminateOptions) -> Outcome {
+        let Some(detached) = tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .detach_for_stop(owner)
+        else {
+            return Outcome::Nothing;
+        };
+        let label = detached.label().to_string();
+        let before = detached.live_members().len();
+        if before == 0 {
+            return Outcome::Nothing; // the job is empty: dropping the owner is all there is
+        }
+        match detached.terminate(opts) {
+            Ok(out) if out.failed.is_empty() => Outcome::Stopped {
+                label,
+                n: out.targeted.len(),
+            },
+            Ok(out) => {
+                let why = out
+                    .failed
+                    .iter()
+                    .map(|(pid, e)| format!("{pid}: {e}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                tracker
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .reattach(detached);
+                Outcome::Failed { label, why }
+            }
+            Err(e) => {
+                tracker
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .reattach(detached);
+                Outcome::Failed {
+                    label,
+                    why: e.to_string(),
+                }
+            }
+        }
+    }
+
+    /// The text of the notice for an [`Outcome`] (`None` = say nothing).
+    pub fn notice(outcome: &Outcome) -> Option<String> {
+        let procs = |n: usize| {
+            if n == 1 {
+                "1 proceso".to_string()
+            } else {
+                format!("{n} procesos")
+            }
+        };
+        let name = |l: &str| {
+            if l.trim().is_empty() {
+                "El hilo".to_string()
+            } else {
+                format!("«{}»", l.trim())
+            }
+        };
+        match outcome {
+            Outcome::Nothing => None,
+            Outcome::Stopped { label, n } => Some(format!(
+                "{} se cerró: se detuvieron {}.",
+                name(label),
+                procs(*n)
+            )),
+            Outcome::Left {
+                label,
+                n,
+                offer_stop,
+            } => Some(format!(
+                "{} dejó {} en marcha{}",
+                name(label),
+                procs(*n),
+                if *offer_stop {
+                    ". Siguen en el panel Procesos."
+                } else {
+                    ": siguen en el panel Procesos como huérfanos."
+                }
+            )),
+            Outcome::Failed { label, why } => Some(format!(
+                "No se pudieron detener los procesos de {}: {why}",
+                name(label)
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,5 +817,153 @@ mod tests {
             })
             .collect();
         assert_eq!(text, FAKE_TEXT);
+    }
+
+    // ---- `[processes] auto_stop_on_thread_close` (real processes, real Job Objects) -----------
+
+    mod thread_close_tests {
+        use std::os::windows::process::CommandExt as _;
+        use std::process::{Child, Command, Stdio};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        use proc_svc::{JobOptions, OwnerMeta, TerminateOptions, Tracker};
+        use store::config::AutoStop;
+
+        use super::super::thread_close::{OnClose, Outcome, apply_with, notice, on_close};
+        use super::*;
+
+        fn alive(pid: u32) -> bool {
+            proc_svc::snapshot().iter().any(|p| p.pid == pid)
+        }
+
+        fn wait_until(mut f: impl FnMut() -> bool) -> bool {
+            let end = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < end {
+                if f() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            f()
+        }
+
+        /// A tracker with two thread owners, each running `cmd /c ping` (cmd + ping in its job).
+        fn two_threads() -> (SharedTracker, [(u64, Child); 2]) {
+            let tracker: SharedTracker = Arc::new(Mutex::new(Tracker::new()));
+            let mut kids = Vec::new();
+            for (n, label) in [(1u64, "primero"), (2, "segundo")] {
+                let owner = owner_of(ThreadId(n as i64));
+                let mut t = tracker.lock().unwrap();
+                t.create_owner(
+                    owner,
+                    OwnerMeta {
+                        agent: Some("claude".into()),
+                        label: label.into(),
+                        cwd: None,
+                    },
+                    JobOptions {
+                        kill_on_close: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut c = Command::new("cmd");
+                c.args(["/c", "ping", "-n", "40", "127.0.0.1"])
+                    .creation_flags(0x0800_0000)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                kids.push((owner, t.spawn(owner, &mut c).unwrap()));
+            }
+            for (owner, _) in &kids {
+                assert!(wait_until(|| {
+                    tracker.lock().unwrap().job(*owner).unwrap().members().len() >= 2
+                }));
+            }
+            let b = kids.pop().unwrap();
+            let a = kids.pop().unwrap();
+            (tracker, [a, b])
+        }
+
+        fn members(t: &SharedTracker, owner: u64) -> Vec<u32> {
+            t.lock().unwrap().job(owner).map_or(vec![], |j| j.members())
+        }
+
+        #[test]
+        fn the_setting_picks_stop_or_keep() {
+            assert_eq!(on_close(AutoStop::Always), OnClose::Stop);
+            assert_eq!(
+                on_close(AutoStop::Never),
+                OnClose::Keep { offer_stop: false }
+            );
+            assert_eq!(on_close(AutoStop::Ask), OnClose::Keep { offer_stop: true });
+        }
+
+        #[test]
+        fn always_stops_the_threads_own_processes_and_nobody_elses() {
+            let (tracker, [(a, mut ca), (b, mut cb)]) = two_threads();
+            let a_members = members(&tracker, a);
+            let opts = TerminateOptions {
+                grace: Duration::from_millis(300),
+                ..Default::default()
+            };
+            let out = apply_with(&tracker, a, AutoStop::Always, &opts);
+            assert!(
+                matches!(out, Outcome::Stopped { ref label, n } if label == "primero" && n >= 2),
+                "{out:?}"
+            );
+            assert!(wait_until(|| a_members.iter().all(|p| !alive(*p))));
+            assert!(alive(cb.id()), "the other thread's process keeps running");
+            assert!(!members(&tracker, b).is_empty());
+            assert!(
+                tracker.lock().unwrap().job(a).is_none(),
+                "the stopped owner is gone from the tracker"
+            );
+            let _ = ca.wait();
+            let _ = cb.kill();
+            let _ = cb.wait();
+        }
+
+        #[test]
+        fn never_and_ask_leave_the_processes_running_and_say_so() {
+            let (tracker, [(a, mut ca), (b, mut cb)]) = two_threads();
+            for (setting, offer) in [(AutoStop::Never, false), (AutoStop::Ask, true)] {
+                let out = apply_with(&tracker, a, setting, &TerminateOptions::default());
+                assert!(
+                    matches!(out, Outcome::Left { n, offer_stop, .. } if n >= 2 && offer_stop == offer),
+                    "{setting:?}: {out:?}"
+                );
+                assert!(alive(ca.id()), "{setting:?} must not stop anything");
+                let text = notice(&out).unwrap();
+                assert!(
+                    text.contains("primero") && text.contains("en marcha"),
+                    "{text}"
+                );
+            }
+            assert!(alive(cb.id()));
+            let _ = ca.kill();
+            let _ = cb.kill();
+            let _ = ca.wait();
+            let _ = cb.wait();
+            let _ = b;
+        }
+
+        #[test]
+        fn a_thread_without_processes_says_nothing() {
+            let tracker: SharedTracker = Arc::new(Mutex::new(Tracker::new()));
+            for s in [AutoStop::Always, AutoStop::Never, AutoStop::Ask] {
+                assert_eq!(
+                    apply_with(
+                        &tracker,
+                        owner_of(ThreadId(9)),
+                        s,
+                        &TerminateOptions::default()
+                    ),
+                    Outcome::Nothing
+                );
+            }
+            assert_eq!(notice(&Outcome::Nothing), None);
+        }
     }
 }

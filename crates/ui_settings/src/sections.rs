@@ -13,6 +13,9 @@ use crate::view::{Section, SettingsEvent, SettingsView};
 /// Language ids the UI can be translated to. Only Spanish exists today.
 pub const LANGUAGES: &[(&str, &str)] = &[("es", "Español")];
 
+/// General > Restaurar la sesión: the session is read at the next start, not applied now.
+pub const RESTORE_HELP: &str = "Se aplica la próxima vez que Selachi arranque. Reabre las pestañas, los paneles y sus carpetas. Nunca se guarda el contenido de la terminal.";
+
 /// Accent choices (the first is Selachi's brand accent, the default).
 pub const ACCENTS: [u32; 8] = [
     0x00AAFF, 0x4FC9D6, 0x7FCB8F, 0xE0B96A, 0xFF9AA2, 0xE8707B, 0xBC8CE8, 0xECEEF2,
@@ -21,20 +24,6 @@ pub const ACCENTS: [u32; 8] = [
 impl SettingsView {
     pub(crate) fn general(&mut self, narrow: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let t = self.theme;
-        let languages: Vec<(String, String)> = LANGUAGES
-            .iter()
-            .map(|(id, name)| ((*id).to_string(), (*name).to_string()))
-            .collect();
-        let lang = self.select(
-            cx,
-            "general-lang",
-            languages,
-            &self.cfg.general.language.clone(),
-            |s, v, cx| {
-                let v = v.to_string();
-                s.edit_cfg(cx, |c| c.general.language = v);
-            },
-        );
         let restore = self.toggle(
             cx,
             "restore-session",
@@ -79,17 +68,8 @@ impl SettingsView {
                     row(
                         &t,
                         narrow,
-                        "Idioma",
-                        Some("Solo español por ahora; el resto de idiomas llegará más adelante.".into()),
-                        lang,
-                        self.error_for("general.language"),
-                    )
-                    .into_any_element(),
-                    row(
-                        &t,
-                        narrow,
                         "Restaurar la sesión al abrir",
-                        Some("Reabre las pestañas, los paneles y sus carpetas. Nunca se guarda el contenido de la terminal.".into()),
+                        Some(RESTORE_HELP.into()),
                         restore,
                         None,
                     )
@@ -125,16 +105,6 @@ impl SettingsView {
         let check = self.toggle(cx, "updates-check", self.cfg.updates.check, |s, on, cx| {
             s.edit_cfg(cx, |c| c.updates.check = on);
         });
-        let channel = self.select(
-            cx,
-            "updates-channel",
-            vec![("stable".into(), "Estable".into())],
-            "stable",
-            |s, v, cx| {
-                let v = v.to_string();
-                s.edit_cfg(cx, |c| c.updates.channel = v);
-            },
-        );
         let install = self.segmented(
             cx,
             "updates-install",
@@ -184,15 +154,6 @@ impl SettingsView {
                     Some("Mira GitHub Releases (solo HTTPS) a los 30 s de abrir y luego cada 24 h. Apagado: Selachi no toca la red por esto.".into()),
                     check,
                     None,
-                )
-                .into_any_element(),
-                row(
-                    &t,
-                    narrow,
-                    "Canal",
-                    Some("Solo existe el estable (las releases publicadas, sin borradores ni prereleases).".into()),
-                    channel,
-                    self.error_for("updates.channel"),
                 )
                 .into_any_element(),
                 row(
@@ -415,12 +376,35 @@ impl SettingsView {
                 &t,
                 Some("Tipografía"),
                 vec![
-                    row(&t, narrow, "Fuente de la interfaz", None, ui_font, None).into_any_element(),
-                    row(&t, narrow, "Fuente de la terminal", None, mono_font, None)
+                    row(
+                        &t,
+                        narrow,
+                        "Fuente de la interfaz",
+                        Some(font_hint(
+                            &self.cfg.appearance.ui_font,
+                            theme::fonts::UI_FAMILY,
+                            "Menús y paneles. Se aplica al instante.",
+                        )),
+                        ui_font,
+                        None,
+                    )
+                    .into_any_element(),
+                    row(
+                        &t,
+                        narrow,
+                        "Fuente de la terminal",
+                        Some(font_hint(
+                            &self.cfg.appearance.mono_font,
+                            theme::fonts::MONO_FAMILY,
+                            "También la usan el chat y el visor para el código. Se aplica al instante.",
+                        )),
+                        mono_font,
+                        None,
+                    )
+                    .into_any_element(),
+                    row(&t, narrow, "Tamaño de la terminal", Some("Se aplica al instante a las terminales abiertas.".into()), size, self.error_for("appearance.mono_size"))
                         .into_any_element(),
-                    row(&t, narrow, "Tamaño de la terminal", None, size, self.error_for("appearance.mono_size"))
-                        .into_any_element(),
-                    row(&t, narrow, "Interlineado", None, leading, self.error_for("appearance.line_height"))
+                    row(&t, narrow, "Interlineado", Some("Se aplica al instante a las terminales abiertas.".into()), leading, self.error_for("appearance.line_height"))
                         .into_any_element(),
                 ],
             )
@@ -470,7 +454,7 @@ impl SettingsView {
                         &t,
                         narrow,
                         "Confirmar operaciones sensibles",
-                        Some("Pregunta antes de un force-push, un reset --hard, borrar una rama y similares.".into()),
+                        Some("Pide confirmación antes de commit, push, pull, publicar y cambiar de rama. Si lo desactivas, esas operaciones se ejecutan sin preguntar. Las destructivas o irreversibles (force-push, reset --hard, descartar o limpiar cambios, borrar una rama, eliminar un worktree, restaurar un checkpoint) siempre piden confirmación.".into()),
                         confirm,
                         None,
                     )
@@ -611,5 +595,45 @@ fn open_folder(dir: &std::path::Path) {
     let program = "xdg-open";
     if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
         eprintln!("ui_settings: could not open {}: {e}", dir.display());
+    }
+}
+
+/// Description of a font row: `what`, or a warning when `family` is not installed and `default`
+/// is used instead.
+fn font_hint(family: &str, default: &str, what: &str) -> SharedString {
+    if family.trim().is_empty() || theme::fonts::is_available(family) {
+        what.to_string().into()
+    } else {
+        format!("«{}» no está instalada: se usa {default}.", family.trim()).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_says_when_it_applies() {
+        assert!(RESTORE_HELP.contains("la próxima vez que Selachi arranque"));
+    }
+
+    #[test]
+    fn a_font_that_is_not_installed_is_flagged_in_its_row() {
+        theme::fonts::register_source(|| vec!["Cascadia Mono".to_string()]);
+        let what = "Menús y paneles.";
+        assert_eq!(font_hint("cascadia mono", "Geist Mono", what), what);
+        assert_eq!(font_hint("DM Sans", "DM Sans", what), what);
+        assert_eq!(
+            font_hint("", "DM Sans", what),
+            what,
+            "empty = the default, no warning"
+        );
+        let hint = font_hint("Nope Sans", "DM Sans", what);
+        assert!(
+            hint.contains("Nope Sans")
+                && hint.contains("no está instalada")
+                && hint.contains("DM Sans")
+        );
+        theme::fonts::clear_installed();
     }
 }

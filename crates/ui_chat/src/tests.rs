@@ -505,6 +505,52 @@ fn a_draft_needs_a_project_then_creates_the_thread_on_send(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn a_new_draft_starts_with_the_configured_permission_and_existing_threads_keep_theirs(
+    cx: &mut TestAppContext,
+) {
+    let e = env(
+        cx,
+        FakeFactory::new(|_, _| vec![Step::now(AgentEvent::Status(AgentStatus::Done))]),
+    );
+    // a thread created before the setting changed
+    let old = e
+        .store
+        .create_thread(ThreadSpec::new(e.project(), AgentKind::ClaudeCode))
+        .unwrap();
+    assert_eq!(old.permission, PermissionMode::Ask);
+
+    e.hub.update(cx, |h, _| {
+        h.set_default_permission(PermissionMode::ReadOnly)
+    });
+    // A tab made by the hub (the real path: created while the hub is being updated)...
+    let handle = e
+        .hub
+        .update(cx, |h, cx| h.new_thread_tab(Some(e.project()), cx));
+    let tab = handle.downcast::<crate::tab::ChatTab>().unwrap();
+    let tab_view = tab.read_with(cx, |t, _| t.view().clone());
+    let tab_spec = tab_view.read_with(cx, |v, _| v.draft_spec().cloned().unwrap());
+    assert_eq!(tab_spec.permission, PermissionMode::ReadOnly);
+    // ...and a view made directly.
+    let hub = e.hub.clone();
+    let (view, vcx) =
+        cx.add_window_view(move |_, cx| ChatView::draft(hub, Theme::dark(), None, cx));
+    let spec = view.read_with(vcx, |v, _| v.draft_spec().cloned().unwrap());
+    assert_eq!(spec.permission, PermissionMode::ReadOnly);
+    // the composer shows it and the thread is created with it
+    let state = view.read_with(vcx, |v, cx| v.composer_state(cx));
+    assert_eq!(state.permission, PermissionMode::ReadOnly);
+    let mut spec = spec;
+    spec.project = Some(e.project());
+    assert_eq!(
+        spec.to_thread_spec().unwrap().permission,
+        PermissionMode::ReadOnly
+    );
+    // the old thread did not change
+    let again = e.store.get_thread(old.id).unwrap().unwrap();
+    assert_eq!(again.permission, PermissionMode::Ask);
+}
+
+#[gpui::test]
 fn the_hub_list_follows_thread_status(cx: &mut TestAppContext) {
     let e = env(cx, approval_script());
     let (view, vcx, rt) = thread_view(cx, &e);
@@ -523,6 +569,71 @@ fn the_hub_list_follows_thread_status(cx: &mut TestAppContext) {
 // ---------------------------------------------------------------------------------------------
 // Delegation lineage (PLAN section 20)
 // ---------------------------------------------------------------------------------------------
+
+#[gpui::test]
+fn a_session_that_launched_agents_outside_selachi_says_so_and_opens_the_map(
+    cx: &mut TestAppContext,
+) {
+    use crate::lineage::{ExternalNote, external_note_line};
+
+    // the wording
+    let one = ExternalNote {
+        agents: vec!["agy".into()],
+        count: 1,
+    };
+    assert_eq!(
+        external_note_line(&one),
+        "Lanzó agy fuera de Selachi · 1 proceso"
+    );
+    let many = ExternalNote {
+        agents: vec!["agy".into(), "codex".into(), "aider".into()],
+        count: 3,
+    };
+    assert_eq!(
+        external_note_line(&many),
+        "Lanzó agy, codex y otros fuera de Selachi · 3 procesos"
+    );
+
+    let e = env(cx, FakeFactory::new(|_, _| Vec::new()));
+    let (_view, vcx, rt) = thread_view(cx, &e);
+    let parent = rt.record().id;
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+    assert!(
+        ui_kit::testing::bounds_of(vcx, "deleg-external").is_none(),
+        "nothing detected: no row"
+    );
+    e.hub.update(vcx, |h, cx| {
+        h.set_external_notes(
+            std::collections::HashMap::from([(
+                parent,
+                ExternalNote {
+                    agents: vec!["agy".into()],
+                    count: 3,
+                },
+            )]),
+            cx,
+        )
+    });
+    vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+    assert!(
+        ui_kit::testing::bounds_of(vcx, "deleg-external").is_some(),
+        "the muted row is painted"
+    );
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let _sub = e.hub.update(vcx, |_, cx| {
+        cx.subscribe(&e.hub, move |_, _, ev: &crate::hub::ChatEvent, _| {
+            log.borrow_mut().push(ev.clone())
+        })
+    });
+    ui_kit::testing::click_id(vcx, "deleg-external-map");
+    assert_eq!(
+        seen.borrow().as_slice(),
+        [crate::hub::ChatEvent::OpenAgentMap(parent)]
+    );
+}
 
 #[gpui::test]
 fn a_parent_chat_lists_its_delegations_and_sums_their_cost(cx: &mut TestAppContext) {

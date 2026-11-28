@@ -121,6 +121,34 @@ impl Typography {
     }
 }
 
+impl Typography {
+    /// The default typography with the user's fonts and terminal metrics (`[appearance]`). A family
+    /// that is not available (see [`fonts::resolve`]) falls back to the default one; the size and
+    /// the line height are clamped to what the config accepts (4..=96 pt, 0.8..=3.0).
+    pub fn with_fonts(
+        self,
+        ui_font: &str,
+        mono_font: &str,
+        mono_size: f32,
+        line_height: f32,
+    ) -> Self {
+        let clamp = |v: f32, lo: f32, hi: f32, default: f32| {
+            if v.is_finite() {
+                v.clamp(lo, hi)
+            } else {
+                default
+            }
+        };
+        Self {
+            ui_family: fonts::resolve(ui_font, fonts::UI_FAMILY),
+            mono_family: fonts::resolve(mono_font, fonts::MONO_FAMILY),
+            mono_size: clamp(mono_size, 4.0, 96.0, self.mono_size),
+            mono_line_height: clamp(line_height, 0.8, 3.0, self.mono_line_height),
+            ..self
+        }
+    }
+}
+
 impl Default for Typography {
     fn default() -> Self {
         Self::new()
@@ -922,6 +950,21 @@ mod tests {
         assert_eq!(Spacing::S16, 64.0);
         assert_eq!(Radius::XXXXL, Radius::R4XL);
         assert_eq!(Radius::XS, 8.0);
+    }
+
+    #[test]
+    fn typography_follows_the_configured_fonts_size_and_leading() {
+        let base = Typography::new();
+        let t = base.with_fonts("DM Sans", "geist mono", 16.0, 1.5);
+        assert_eq!((t.mono_size, t.mono_line_height), (16.0, 1.5));
+        assert_eq!((t.ui_family, t.mono_family), ("DM Sans", "Geist Mono"));
+        // out-of-range numbers are clamped like the config validation, NaN keeps the default
+        let t = base.with_fonts("", "", 500.0, 0.1);
+        assert_eq!((t.mono_size, t.mono_line_height), (96.0, 0.8));
+        let t = base.with_fonts("", "", f32::NAN, f32::INFINITY);
+        assert_eq!((t.mono_size, t.mono_line_height), (13.0, 1.35));
+        // the rest of the scale is untouched
+        assert_eq!(t.ui_size_md, base.ui_size_md);
     }
 
     /// Alpha-composites `fg` (straight alpha) over an opaque `base`.

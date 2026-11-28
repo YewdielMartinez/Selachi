@@ -89,8 +89,81 @@ impl AppShell {
             ChatHostEvent::OwnerClosed(owner) => {
                 self.closed_owners.push(*owner);
                 self.prune_closed_owners(cx);
+                self.on_thread_procs_closed(*owner, cx);
             }
         }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // `[processes] auto_stop_on_thread_close`
+    // ------------------------------------------------------------------------------------
+
+    /// A chat thread closed: stop what it started, or leave it and say so, per the setting. Only
+    /// the thread's own Job Object is touched. Nothing runs until a thread closes.
+    fn on_thread_procs_closed(&mut self, owner: u64, cx: &mut Context<Self>) {
+        use chat_host::thread_close::{self as tc, OnClose};
+        let Some(tracker) = cx.try_global::<Services>().map(|s| s.tracker.clone()) else {
+            return;
+        };
+        let setting = self.config.processes.auto_stop_on_thread_close;
+        let delay = match tc::on_close(setting) {
+            OnClose::Stop => std::time::Duration::ZERO,
+            OnClose::Keep { .. } => tc::KEEP_CHECK_DELAY,
+        };
+        cx.spawn(async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { tc::apply(&tracker, owner, setting) })
+                .await;
+            this.update(cx, |shell, cx| {
+                shell.thread_procs_outcome(owner, outcome, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The hint's "Detener": stops what the closed thread left running.
+    pub(super) fn stop_thread_procs(&mut self, owner: u64, cx: &mut Context<Self>) {
+        use chat_host::thread_close as tc;
+        let Some(tracker) = cx.try_global::<Services>().map(|s| s.tracker.clone()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { tc::stop(&tracker, owner, &Default::default()) })
+                .await;
+            this.update(cx, |shell, cx| {
+                shell.thread_procs_outcome(owner, outcome, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn thread_procs_outcome(
+        &mut self,
+        owner: u64,
+        outcome: chat_host::thread_close::Outcome,
+        cx: &mut Context<Self>,
+    ) {
+        use chat_host::thread_close::{self as tc, Outcome};
+        self.prune_closed_owners(cx);
+        let Some(text) = tc::notice(&outcome) else {
+            return;
+        };
+        let hint = match outcome {
+            Outcome::Left {
+                offer_stop: true, ..
+            } => Hint::text(text)
+                .with_action("Detener", crate::hint::HintAction::StopThreadProcs(owner)),
+            _ => Hint::text(text),
+        };
+        self.show_hint(hint, cx);
     }
 
     /// A session that waited for the hub (its chat tabs need it) is restored now; so is the folder
@@ -142,7 +215,7 @@ impl AppShell {
             let i = t.handle.info(cx);
             i.project_root.or(i.cwd)
         });
-        for p in open.chain(self.spaces.known.iter().map(|(p, _)| p.clone())) {
+        for p in open.chain(self.spaces.known.iter().map(|k| k.path.clone())) {
             if !projects
                 .iter()
                 .any(|q| crate::paths::is_within(q, &p) && crate::paths::is_within(&p, q))
@@ -150,7 +223,11 @@ impl AppShell {
                 projects.push(p);
             }
         }
-        let default = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
+        // A new chat starts in the selected project; without one, in the active tab's.
+        let default = match self.dest() {
+            crate::projects::Dest::Project(p) => Some(p),
+            _ => self.active_info(cx).and_then(|i| i.project_root.or(i.cwd)),
+        };
         self.chat
             .update(cx, |c, cx| c.sync_projects(projects, default, cx));
     }
@@ -165,7 +242,13 @@ impl AppShell {
             return;
         };
         let settings = copy_settings_of(&self.config.chat);
-        hub.update(cx, |h, cx| h.set_copy_settings(settings, cx));
+        // New chats start with `[agents] permission_default` (same hooks: startup, hub ready, reload).
+        let permission =
+            chat_core::permission_for_new_thread(self.config.agents.permission_default);
+        hub.update(cx, |h, cx| {
+            h.set_copy_settings(settings, cx);
+            h.set_default_permission(permission);
+        });
     }
 
     /// The user flipped a toggle in a chat menu: keep it in the config and write it back to
@@ -417,6 +500,7 @@ impl AppShell {
             Ok("chat") if chat_host::fake_requested() => {
                 self.run_chat_intent(ChatIntent::Demo, window, cx)
             }
+            Ok(name) if self.run_projects_demo(name, window, cx) => {}
             Ok(other) => {
                 self.run_delegation_demo(other, window, cx);
             }
@@ -652,7 +736,7 @@ impl AppShell {
     fn pick_new_tab(&mut self, chat: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.prompts.new_tab_menu = false;
         if chat {
-            let project = self.active_info(cx).and_then(|i| i.project_root.or(i.cwd));
+            let project = self.new_chat_project(cx);
             self.new_chat_tab(project, window, cx);
         } else {
             self.new_tab_here(window, cx);
@@ -710,6 +794,18 @@ impl AppShell {
                             .p(px(4.0))
                             .flex()
                             .flex_col()
+                            // Where the new tab goes: the selected project, or the current folder.
+                            .child(
+                                div()
+                                    .px(px(10.0))
+                                    .py(px(6.0))
+                                    .text_size(px(self.theme.typography.ui_size_sm))
+                                    .text_color(self.theme.colors.muted)
+                                    .child(SharedString::from(format!(
+                                        "Destino · {}",
+                                        self.dest().line()
+                                    ))),
+                            )
                             .child(
                                 row(
                                     "nt-terminal",

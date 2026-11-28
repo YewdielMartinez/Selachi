@@ -65,9 +65,10 @@ impl ChatTab {
         hub: Entity<ChatHub>,
         theme: Theme,
         project: Option<PathBuf>,
+        permission: agents_driver::PermissionMode,
         cx: &mut Context<Self>,
     ) -> Self {
-        let view = cx.new(|cx| ChatView::draft(hub.clone(), theme, project, cx));
+        let view = cx.new(|cx| ChatView::draft_with(hub.clone(), theme, project, permission, cx));
         Self::with_view(hub, view, cx)
     }
 

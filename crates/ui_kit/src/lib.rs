@@ -43,6 +43,7 @@ mod empty_state;
 mod file_icon;
 pub mod focus;
 mod icon;
+pub mod layout_probe;
 mod list;
 mod logo;
 mod measure;
@@ -63,6 +64,8 @@ mod wireframe;
 pub mod testing;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_layout_tests;
 
 pub use action_button::{ActionButton, ActionSize};
 pub use agent_mark::{AgentMark, agent_icon};

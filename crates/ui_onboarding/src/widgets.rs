@@ -2,6 +2,7 @@
 
 use gpui::{Div, ElementId, FontWeight, IntoElement, SharedString, Stateful, div, prelude::*, px};
 use theme::{Radius, Theme};
+use ui_kit::{Icon, icon};
 
 /// Widest content column (px).
 pub const COLUMN_WIDTH: f32 = 560.0;
@@ -155,9 +156,6 @@ pub fn radio(t: &Theme, selected: bool) -> Div {
 }
 
 /// Star toggle of a project row.
-///
-/// TODO-SVG: `assets/icons/star.svg` and `star-filled.svg` (16x16, `currentColor`). Until they
-/// exist the text glyphs are drawn.
 pub fn star(id: impl Into<ElementId>, t: &Theme, on: bool) -> Stateful<Div> {
     let c = t.colors;
     div()
@@ -172,10 +170,12 @@ pub fn star(id: impl Into<ElementId>, t: &Theme, on: bool) -> Stateful<Div> {
         .justify_center()
         .rounded(px(Radius::CONTROL))
         .cursor_pointer()
-        .text_size(px(t.typography.ui_size_lg))
-        .text_color(if on { c.warning } else { c.muted })
         .hover(move |s| s.bg(c.surface_3))
-        .child(if on { "★" } else { "☆" })
+        .child(icon(
+            if on { Icon::StarFilled } else { Icon::Star },
+            16.0,
+            if on { c.warning } else { c.muted },
+        ))
 }
 
 /// Small tonal badge ("Rust", "git", "Recomendado").

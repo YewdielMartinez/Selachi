@@ -28,26 +28,45 @@ impl KeyAction {
     }
 }
 
-/// The actions the app binds today (ids match the palette's).
+/// Every shortcut the app binds, in the order Teclado lists them. This is the **single source of
+/// truth** for ids, labels and default chords: the app builds its key bindings from it (see
+/// `selachi::keybindings`, which also checks that every id here has a real action), so a default
+/// cannot drift between what Ajustes shows and what the window does. Ids match the palette's.
 pub fn default_catalog() -> Vec<KeyAction> {
-    vec![
+    let mut v = vec![
         KeyAction::new("palette.toggle", "Paleta de comandos", "ctrl+k"),
-        KeyAction::new("tab.new", "Nueva pestaña", "ctrl+shift+n"),
+        KeyAction::new("tab.new", "Nueva pestaña (terminal o chat)", "ctrl+n"),
+        KeyAction::new("tab.new_terminal", "Nueva terminal", "ctrl+shift+n"),
         KeyAction::new("tab.close", "Cerrar pestaña", "ctrl+w"),
         KeyAction::new("tab.next", "Pestaña siguiente", "ctrl+tab"),
         KeyAction::new("tab.prev", "Pestaña anterior", "ctrl+shift+tab"),
+    ];
+    for n in 1..=9 {
+        v.push(KeyAction::new(
+            &format!("tab.jump.{n}"),
+            &format!("Ir a la pestaña {n}"),
+            &format!("ctrl+{n}"),
+        ));
+    }
+    v.extend([
         KeyAction::new("layout.toggle", "Panel de layout", "ctrl+shift+l"),
         KeyAction::new("theme.toggle", "Cambiar tema", "ctrl+shift+t"),
         KeyAction::new("window.fullscreen", "Pantalla completa", "f11"),
         KeyAction::new("settings.open", "Abrir Ajustes", "ctrl+,"),
+        KeyAction::new("sidebar.toggle", "Plegar la barra lateral", "ctrl+b"),
         KeyAction::new(
             "attention.next",
             "Siguiente agente que espera",
             "ctrl+shift+a",
         ),
+        KeyAction::new("zone.next", "Siguiente zona (barra, terminal, panel)", "f6"),
+        KeyAction::new("zone.prev", "Zona anterior", "shift+f6"),
+        KeyAction::new("focus.sidebar", "Foco en la barra lateral", "ctrl+shift+e"),
+        KeyAction::new("focus.terminal", "Foco en la terminal", "ctrl+shift+`"),
         KeyAction::new("block.prev", "Bloque anterior", "ctrl+up"),
         KeyAction::new("block.next", "Bloque siguiente", "ctrl+down"),
-    ]
+    ]);
+    v
 }
 
 /// Why a captured keystroke cannot be a shortcut.
@@ -195,9 +214,63 @@ pub fn display_chord(chord: &str) -> String {
         .join("+")
 }
 
-/// The chord in effect for `id`: the override or the default.
+/// Can `chord` (canonical form) be a global shortcut? It must parse as a keystroke and either
+/// carry Ctrl / Alt / Win or be a function key: a bare letter would steal typing from the
+/// terminal. Hand-edited `[keybindings]` can hold anything, so the app checks before binding.
+pub fn is_bindable(chord: &str) -> bool {
+    let Some((ctrl, alt, _shift, win, key)) = split_chord(chord) else {
+        return false;
+    };
+    (ctrl || alt || win || is_function_key(key)) && gpui::Keystroke::parse(&to_gpui(chord)).is_ok()
+}
+
+/// `(ctrl, alt, shift, win, key)` of a canonical chord (`ctrl+shift+t`, `ctrl++`).
+fn split_chord(chord: &str) -> Option<(bool, bool, bool, bool, &str)> {
+    let (mut ctrl, mut alt, mut shift, mut win) = (false, false, false, false);
+    let mut rest = chord;
+    loop {
+        if let Some(r) = rest.strip_prefix("ctrl+") {
+            ctrl = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("alt+") {
+            alt = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("shift+") {
+            shift = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("win+") {
+            win = true;
+            rest = r;
+        } else {
+            break;
+        }
+    }
+    (!rest.is_empty()).then_some((ctrl, alt, shift, win, rest))
+}
+
+/// The chord in gpui's keystroke syntax: `ctrl+shift+t` -> `ctrl-shift-t`, `ctrl+,` -> `ctrl-,`.
+pub fn to_gpui(chord: &str) -> String {
+    let Some((ctrl, alt, shift, win, key)) = split_chord(chord) else {
+        return chord.to_string();
+    };
+    let mut out = String::new();
+    for (on, name) in [(ctrl, "ctrl"), (alt, "alt"), (shift, "shift"), (win, "win")] {
+        if on {
+            out.push_str(name);
+            out.push('-');
+        }
+    }
+    out.push_str(key);
+    out
+}
+
+/// The chord in effect for `id`: the override (when it can be a shortcut) or the default.
 pub fn effective(catalog: &[KeyAction], overrides: &BTreeMap<String, String>, id: &str) -> String {
-    if let Some(c) = overrides.get(id).and_then(|c| normalize_chord(c)) {
+    if let Some(c) = overrides
+        .get(id)
+        .and_then(|c| normalize_chord(c))
+        .filter(|c| is_bindable(c))
+    {
         return c;
     }
     catalog
@@ -205,6 +278,92 @@ pub fn effective(catalog: &[KeyAction], overrides: &BTreeMap<String, String>, id
         .find(|a| a.id == id)
         .map(|a| a.default.clone())
         .unwrap_or_default()
+}
+
+/// Two or more actions that ended up on the same chord.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clash {
+    pub chord: String,
+    /// The action that keeps the chord: one the user bound explicitly beats a default; among
+    /// equals the first of the catalog.
+    pub winner: String,
+    /// The actions that lost it: they are not bound until one of them changes.
+    pub losers: Vec<String>,
+}
+
+/// The shortcuts the window should have: `(action id, chord)` for every action with a chord that
+/// does not lose a [`Clash`], plus the clashes themselves. Never two actions on one chord.
+pub fn plan(
+    catalog: &[KeyAction],
+    overrides: &BTreeMap<String, String>,
+) -> (Vec<(String, String)>, Vec<Clash>) {
+    let mut by_chord: Vec<(String, Vec<&KeyAction>)> = Vec::new();
+    for a in catalog {
+        let chord = effective(catalog, overrides, &a.id);
+        if chord.is_empty() {
+            continue;
+        }
+        match by_chord.iter_mut().find(|(c, _)| *c == chord) {
+            Some((_, v)) => v.push(a),
+            None => by_chord.push((chord, vec![a])),
+        }
+    }
+    let mut bound = Vec::new();
+    let mut clashes = Vec::new();
+    for (chord, group) in by_chord {
+        let winner = group
+            .iter()
+            .find(|a| overrides.contains_key(&a.id))
+            .or(group.first())
+            .map(|a| a.id.clone())
+            .unwrap_or_default();
+        if group.len() > 1 {
+            clashes.push(Clash {
+                chord: chord.clone(),
+                winner: winner.clone(),
+                losers: group
+                    .iter()
+                    .filter(|a| a.id != winner)
+                    .map(|a| a.id.clone())
+                    .collect(),
+            });
+        }
+        bound.push((winner, chord));
+    }
+    // Keep the catalog order (stable bindings, stable tests).
+    bound.sort_by_key(|(id, _)| catalog.iter().position(|a| &a.id == id));
+    (bound, clashes)
+}
+
+/// What Teclado says on the row of `id` when it is part of a [`Clash`] (hand-edited config:
+/// the UI itself never creates one), or `None`.
+pub fn clash_note(catalog: &[KeyAction], clashes: &[Clash], id: &str) -> Option<String> {
+    let label = |i: &str| {
+        catalog
+            .iter()
+            .find(|a| a.id == i)
+            .map_or_else(|| i.to_string(), |a| a.label.clone())
+    };
+    let clash = clashes
+        .iter()
+        .find(|c| c.winner == id || c.losers.iter().any(|l| l == id))?;
+    let chord = display_chord(&clash.chord);
+    Some(if clash.winner == id {
+        let others: Vec<String> = clash
+            .losers
+            .iter()
+            .map(|l| format!("«{}»", label(l)))
+            .collect();
+        format!(
+            "{chord} también está en {}: solo funciona aquí. Cambia el otro atajo.",
+            others.join(", ")
+        )
+    } else {
+        format!(
+            "{chord} ya es el atajo de «{}»: este no funciona hasta que cambies uno de los dos.",
+            label(&clash.winner)
+        )
+    })
 }
 
 /// The *other* action already using `chord`, if any.
@@ -327,7 +486,7 @@ mod tests {
     fn effective_uses_override_then_default() {
         let cat = default_catalog();
         let mut ov = BTreeMap::new();
-        assert_eq!(effective(&cat, &ov, "tab.new"), "ctrl+shift+n");
+        assert_eq!(effective(&cat, &ov, "tab.new_terminal"), "ctrl+shift+n");
         ov.insert("tab.new".into(), "Ctrl+T".into());
         assert_eq!(effective(&cat, &ov, "tab.new"), "ctrl+t");
         assert_eq!(effective(&cat, &ov, "nope"), "");
@@ -362,13 +521,13 @@ mod tests {
         let mut ov = BTreeMap::new();
         set_binding(&cat, &mut ov, "tab.new", "ctrl+t");
         assert_eq!(ov.get("tab.new").map(String::as_str), Some("ctrl+t"));
-        set_binding(&cat, &mut ov, "tab.new", "ctrl+shift+n");
+        set_binding(&cat, &mut ov, "tab.new", "ctrl+n");
         assert!(ov.is_empty());
 
-        // tab.new takes ctrl+w from tab.close; tab.close gets ctrl+shift+n.
+        // tab.new takes ctrl+w from tab.close; tab.close gets ctrl+n.
         swap_bindings(&cat, &mut ov, "tab.new", "tab.close", "ctrl+w");
         assert_eq!(effective(&cat, &ov, "tab.new"), "ctrl+w");
-        assert_eq!(effective(&cat, &ov, "tab.close"), "ctrl+shift+n");
+        assert_eq!(effective(&cat, &ov, "tab.close"), "ctrl+n");
         // No two actions share a chord afterwards.
         let mut seen = std::collections::HashSet::new();
         for a in &cat {
@@ -393,5 +552,108 @@ mod tests {
                 Some(a.default.as_str())
             );
         }
+    }
+
+    #[test]
+    fn every_default_can_be_bound() {
+        for a in default_catalog() {
+            assert!(is_bindable(&a.default), "{} -> {}", a.id, a.default);
+        }
+    }
+
+    #[test]
+    fn chords_translate_to_gpui_syntax() {
+        assert_eq!(to_gpui("ctrl+shift+t"), "ctrl-shift-t");
+        assert_eq!(to_gpui("f11"), "f11");
+        assert_eq!(to_gpui("ctrl+,"), "ctrl-,");
+        assert_eq!(to_gpui("ctrl+shift+`"), "ctrl-shift-`");
+        assert_eq!(to_gpui("ctrl+-"), "ctrl--");
+        assert_eq!(to_gpui("ctrl++"), "ctrl-+");
+        for c in [
+            "ctrl+shift+t",
+            "f11",
+            "ctrl+,",
+            "ctrl+shift+`",
+            "ctrl+-",
+            "ctrl++",
+        ] {
+            assert!(gpui::Keystroke::parse(&to_gpui(c)).is_ok(), "{c}");
+        }
+    }
+
+    #[test]
+    fn bare_keys_cannot_be_shortcuts() {
+        assert!(!is_bindable("a"));
+        assert!(!is_bindable("shift+a"));
+        assert!(!is_bindable("enter"));
+        assert!(is_bindable("f6"));
+        assert!(is_bindable("alt+a"));
+        // A hand-edited bare key is ignored: the default stays in effect.
+        let cat = default_catalog();
+        let mut ov = BTreeMap::new();
+        ov.insert("tab.close".into(), "a".into());
+        assert_eq!(effective(&cat, &ov, "tab.close"), "ctrl+w");
+    }
+
+    #[test]
+    fn the_plan_binds_every_action_once_and_reports_clashes() {
+        let cat = default_catalog();
+        let (bound, clashes) = plan(&cat, &BTreeMap::new());
+        assert!(clashes.is_empty());
+        assert_eq!(bound.len(), cat.len(), "every default is bound");
+
+        // theme.toggle is hand-edited onto ctrl+w, which tab.close has by default.
+        let mut ov = BTreeMap::new();
+        ov.insert("theme.toggle".to_string(), "ctrl+w".to_string());
+        let (bound, clashes) = plan(&cat, &ov);
+        assert_eq!(
+            clashes,
+            vec![Clash {
+                chord: "ctrl+w".into(),
+                winner: "theme.toggle".into(),
+                losers: vec!["tab.close".into()],
+            }]
+        );
+        let ctrl_w: Vec<_> = bound.iter().filter(|(_, c)| c == "ctrl+w").collect();
+        assert_eq!(ctrl_w.len(), 1, "never two actions on one chord");
+        assert_eq!(ctrl_w[0].0, "theme.toggle");
+        assert!(bound.iter().all(|(id, _)| id != "tab.close"));
+        assert!(
+            bound.iter().any(|(id, _)| id == "tab.next"),
+            "the rest still work"
+        );
+    }
+
+    #[test]
+    fn two_defaults_or_two_overrides_on_one_chord_keep_the_first_in_the_catalog() {
+        let cat = vec![
+            KeyAction::new("a", "A", "ctrl+x"),
+            KeyAction::new("b", "B", "ctrl+y"),
+        ];
+        let mut ov = BTreeMap::new();
+        ov.insert("b".to_string(), "ctrl+x".to_string());
+        // `b` was chosen by the user, `a` is a default: `b` wins.
+        let (bound, clashes) = plan(&cat, &ov);
+        assert_eq!(bound, vec![("b".to_string(), "ctrl+x".to_string())]);
+        assert_eq!(clashes[0].losers, vec!["a".to_string()]);
+        ov.insert("a".to_string(), "ctrl+x".to_string());
+        let (bound, _) = plan(&cat, &ov);
+        assert_eq!(bound, vec![("a".to_string(), "ctrl+x".to_string())]);
+    }
+
+    #[test]
+    fn clash_notes_name_the_other_action() {
+        let cat = default_catalog();
+        let mut ov = BTreeMap::new();
+        ov.insert("theme.toggle".to_string(), "ctrl+w".to_string());
+        let (_, clashes) = plan(&cat, &ov);
+        let loser = clash_note(&cat, &clashes, "tab.close").unwrap();
+        assert!(
+            loser.contains("Cambiar tema") && loser.contains("Ctrl+W"),
+            "{loser}"
+        );
+        let winner = clash_note(&cat, &clashes, "theme.toggle").unwrap();
+        assert!(winner.contains("Cerrar pestaña"), "{winner}");
+        assert_eq!(clash_note(&cat, &clashes, "tab.next"), None);
     }
 }

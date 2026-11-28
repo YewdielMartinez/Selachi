@@ -649,6 +649,12 @@ impl Render for Select {
                 Radius::PILL,
                 c.accent,
             ));
+        let trigger = crate::layout_probe::mark(
+            trigger,
+            crate::layout_probe::BoxKind::Select,
+            String::new(),
+            false,
+        );
         let trigger = trigger.debug_selector({
             let id = format!(
                 "{}",

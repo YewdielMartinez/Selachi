@@ -106,6 +106,26 @@ impl GitOp {
         }
     }
 
+    /// May `[git] confirm_sensitive = false` skip the confirmation card of this operation?
+    ///
+    /// An allowlist on purpose: only operations that publish or record state without deleting or
+    /// overwriting anything. Removing a worktree, restoring a checkpoint, `checkout` (it can
+    /// overwrite files) and anything added later (force push, `reset --hard`, discard / clean,
+    /// branch delete) keep the card whatever the setting says.
+    pub fn may_skip_confirmation(&self) -> bool {
+        match self {
+            GitOp::Action(a) => matches!(
+                a,
+                git_svc::GitAction::Commit { .. }
+                    | git_svc::GitAction::Push
+                    | git_svc::GitAction::Pull
+                    | git_svc::GitAction::Switch { .. }
+            ),
+            GitOp::CommitAndPush { .. } | GitOp::PublishBranch { .. } => true,
+            _ => false,
+        }
+    }
+
     /// The command lines this operation runs, in order, for display and for running them visibly
     /// in a terminal. Empty for operations that are not a git command line (worktrees,
     /// checkpoints).
@@ -376,6 +396,37 @@ mod tests {
         ] {
             assert!(!op.is_sensitive(), "{op:?}");
         }
+    }
+
+    #[test]
+    fn only_non_destructive_operations_may_skip_the_card() {
+        let skippable = [
+            GitOp::Action(GitAction::Commit {
+                message: "m".into(),
+            }),
+            GitOp::Action(GitAction::Push),
+            GitOp::Action(GitAction::Pull),
+            GitOp::Action(GitAction::Switch { branch: "b".into() }),
+            GitOp::CommitAndPush {
+                message: "m".into(),
+            },
+            GitOp::PublishBranch { branch: "b".into() },
+        ];
+        for op in &skippable {
+            assert!(op.is_sensitive() && op.may_skip_confirmation(), "{op:?}");
+        }
+        for op in [
+            GitOp::RemoveWorktree {
+                path: "x".into(),
+                force: false,
+            },
+            GitOp::RestoreCheckpoint { id: "1".into() },
+            GitOp::Action(GitAction::Checkout { target: "x".into() }),
+        ] {
+            assert!(op.is_sensitive() && !op.may_skip_confirmation(), "{op:?}");
+        }
+        // quiet operations never had a card
+        assert!(!GitOp::Stage("a".into()).may_skip_confirmation());
     }
 
     #[test]

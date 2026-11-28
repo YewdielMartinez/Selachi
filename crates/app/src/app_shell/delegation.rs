@@ -366,10 +366,44 @@ impl AppShell {
     // Lineage
     // ------------------------------------------------------------------------------------
 
+    /// The menu of a delegated row (right click): open it, see it on the map, cancel it, archive the
+    /// finished siblings.
+    pub(super) fn open_child_menu(
+        &mut self,
+        thread: i64,
+        parent: TabId,
+        at: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lineage = self.compute_lineage(cx);
+        let rows = lineage.children.get(&parent).map(Vec::as_slice).unwrap_or(&[]);
+        let running = rows.iter().any(|r| r.thread == thread && r.running);
+        let finished: Vec<i64> = rows.iter().filter(|r| r.finished).map(|r| r.thread).collect();
+        let items = super::projects::child_items(thread, running, finished);
+        self.open_menu(items, Some(at), window, cx);
+    }
+
+    /// «Archivar terminados»: the finished delegations leave the lists (the threads are kept, archived).
+    pub(super) fn archive_threads(&mut self, ids: &[i64], cx: &mut Context<Self>) {
+        let Some(hub) = self.chat.read(cx).hub() else {
+            return;
+        };
+        hub.update(cx, |h, cx| {
+            for id in ids {
+                h.archive_thread(ThreadId(*id), cx);
+            }
+        });
+        self.refresh(cx);
+    }
+
     /// Delegated threads nested under the open chat tab that delegated them.
     pub(super) fn compute_lineage(&self, cx: &App) -> Lineage {
         let Some(hub) = self.chat.read(cx).hub() else {
-            return Lineage::default();
+            return Lineage {
+                mapped: self.tabs_with_external_agents(cx),
+                ..Lineage::default()
+            };
         };
         let hub = hub.read(cx);
         let mut tab_of: HashMap<ThreadId, TabId> = HashMap::new();
@@ -414,6 +448,9 @@ impl AppShell {
             out.nested.extend(rows.iter().filter_map(|r| r.tab));
             out.children.insert(tab, rows);
         }
+        // Sessions that only launched agents outside Selachi (seen by the map while it was open):
+        // no rows to nest, but the map icon.
+        out.mapped = self.tabs_with_external_agents(cx);
         out
     }
 }
@@ -472,14 +509,26 @@ fn push_child(
         subtitle.push_str(" · ");
         subtitle.push_str(&ui_chat::format_duration_ms(r.duration_ms(now)));
     }
+    let status = child_status(child, run);
+    let running = matches!(status, Some(RowStatus::Working | RowStatus::Waiting));
+    let finished = !running
+        && match run.map(|r| r.state) {
+            Some(state) => state != RunState::Running,
+            None => matches!(
+                child.status,
+                chat_core::ThreadStatus::Done | chat_core::ThreadStatus::Error
+            ),
+        };
     out.push(ChildRow {
         thread: child.id.0,
         tab: tab_of.get(&child.id).copied(),
         title: SharedString::from(child.display_title().to_string()),
         agent: chat_core::agent_label(&child.agent),
-        status: child_status(child, run),
+        status,
         subtitle: SharedString::from(subtitle),
         depth,
+        running,
+        finished,
     });
     if depth < MAX_LINEAGE_DEPTH {
         collect_children(hub, child.id, depth + 1, tab_of, seen, now, out);

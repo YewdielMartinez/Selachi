@@ -28,7 +28,12 @@ pub(crate) fn row_id(key: &RowKey) -> usize {
 
 impl ChatView {
     /// The list item of row `ix`, centered in the reading column.
-    pub(crate) fn render_row(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_row(
+        &mut self,
+        ix: usize,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(row) = self.rows.get(ix).cloned() else {
             return div().into_any_element();
         };
@@ -37,19 +42,16 @@ impl ChatView {
         let last = ix + 1 == self.rows.len();
         let body = self.row_body(&row, expanded, cx);
         let id = row_id(&row.key);
-        let bar = self.message_bar(&row, id, cx);
+        let bar = self.message_bar(&row, id, window, cx);
         let hoverable = matches!(row.kind, RowKind::Text { .. } | RowKind::User { .. });
         let key = row.key.clone();
         let body = div()
             .id(("row-hover", id))
+            .debug_selector(move || format!("row-hover-{id}"))
             .relative()
             .w_full()
             .min_w_0()
-            .when(hoverable, |d| {
-                d.on_hover(
-                    cx.listener(move |this, on: &bool, _, cx| this.set_hover(&key, false, *on, cx)),
-                )
-            })
+            .when(hoverable, |d| d.child(self.hover_probe(&key, cx)))
             .child(body)
             .children(bar);
         let col_max = self.column_max();

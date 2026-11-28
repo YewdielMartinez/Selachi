@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use agents_svc::{Agent, IngestConfig, Ingestor, LogWatcher, Range};
+use agents_svc::{Agent, IngestConfig, Ingestor, LogWatcher, Range, Weekday};
 use gpui::{Context, Task};
 
 /// While focused, changed logs are ingested at most this often.
@@ -102,6 +102,26 @@ impl UsageInfo {
         self.five_hour
             .as_ref()
             .filter(|o| o.resets_at_ms > now_ms())
+    }
+
+    /// Is the weekly token total drawn? Without a fresh official snapshot it is only an estimate
+    /// from the local logs, so `[agents] show_estimates = false` hides it.
+    pub fn week_total_visible(&self, show_estimates: bool) -> bool {
+        show_estimates || self.fresh_official().is_some()
+    }
+}
+
+/// The first day of the week `[agents] usage_week_start` names.
+pub fn weekday_of(w: store::config::WeekStart) -> Weekday {
+    use store::config::WeekStart as W;
+    match w {
+        W::Monday => Weekday::Mon,
+        W::Tuesday => Weekday::Tue,
+        W::Wednesday => Weekday::Wed,
+        W::Thursday => Weekday::Thu,
+        W::Friday => Weekday::Fri,
+        W::Saturday => Weekday::Sat,
+        W::Sunday => Weekday::Sun,
     }
 }
 
@@ -203,6 +223,7 @@ fn scan_job(
     cfg: &IngestConfig,
     work: &Work,
     resummarize: bool,
+    week_start: Weekday,
 ) -> ScanOutcome {
     let mut ing = match existing {
         Some(i) => i,
@@ -219,6 +240,7 @@ fn scan_job(
             }
         },
     };
+    ing.store_mut().set_week_start(week_start);
     let mut data_changed = false;
     let mut failed = false;
     let report = match work {
@@ -313,6 +335,12 @@ pub struct UsageMonitor {
     model: Option<gpui::Entity<ui_usage::UsageModel>>,
     /// Exists only while the window is focused; dropping it cancels the timer.
     tick: Option<Task<()>>,
+    /// `[agents] usage_week_start`: the first day of the week the weekly total sums from.
+    week_start: Weekday,
+    /// `[agents] show_estimates`: hide the figures that are only estimates.
+    show_estimates: bool,
+    /// The week start changed while a job was running: read the numbers again when it ends.
+    week_dirty: bool,
 }
 
 impl UsageMonitor {
@@ -333,6 +361,9 @@ impl UsageMonitor {
                 .try_global::<crate::services::Services>()
                 .map(|s| s.usage.clone()),
             tick: None,
+            week_start: Weekday::Mon,
+            show_estimates: true,
+            week_dirty: false,
         };
         // Init job: install the watchers and read the numbers already in the database. No log
         // is touched here; the first focus (or the pin) triggers the full scan.
@@ -340,12 +371,13 @@ impl UsageMonitor {
         #[cfg(not(test))]
         {
             let (db, cfg) = (monitor.db.clone(), monitor.cfg.clone());
+            let week_start = monitor.week_start;
             cx.spawn(async move |this, cx| {
                 let (watcher, out) = cx
                     .background_executor()
                     .spawn(async move {
                         let watcher = LogWatcher::start(&cfg);
-                        let out = scan_job(None, &db, &cfg, &Work::Summary, true);
+                        let out = scan_job(None, &db, &cfg, &Work::Summary, true, week_start);
                         (watcher, out)
                     })
                     .await;
@@ -353,6 +385,9 @@ impl UsageMonitor {
                     m.watcher = Some(Arc::new(watcher));
                     m.in_flight = false;
                     m.apply(out, false, cx);
+                    if std::mem::take(&mut m.week_dirty) {
+                        m.start(Work::Summary, true, cx);
+                    }
                     m.check(ACTIVATION_GAP, cx);
                 });
             })
@@ -370,6 +405,41 @@ impl UsageMonitor {
 
     pub fn info(&self) -> Option<&UsageInfo> {
         self.info.as_ref()
+    }
+
+    /// `[agents] show_estimates`.
+    pub fn show_estimates(&self) -> bool {
+        self.show_estimates
+    }
+
+    #[cfg(test)]
+    pub fn week_start(&self) -> Weekday {
+        self.week_start
+    }
+
+    /// Applies `[agents]` at startup and on every config change: the first day of the week (the
+    /// numbers are read again, in the background, only when it changed) and whether estimated
+    /// figures show. Also tells the usage panel's model.
+    pub fn apply_agents_config(&mut self, agents: &store::config::Agents, cx: &mut Context<Self>) {
+        let week_start = weekday_of(agents.usage_week_start);
+        if let Some(model) = &self.model {
+            model.update(cx, |m, cx| {
+                m.set_week_start(week_start, cx);
+                m.set_show_estimates(agents.show_estimates, cx);
+            });
+        }
+        if self.show_estimates != agents.show_estimates {
+            self.show_estimates = agents.show_estimates;
+            cx.notify();
+        }
+        if self.week_start != week_start {
+            self.week_start = week_start;
+            if self.in_flight {
+                self.week_dirty = true;
+            } else {
+                self.start(Work::Summary, true, cx);
+            }
+        }
     }
 
     /// Window focus changed. Regaining focus ingests whatever changed while it was away.
@@ -433,15 +503,19 @@ impl UsageMonitor {
         self.in_flight = true;
         let ingestor = self.ingestor.take();
         let (db, cfg) = (self.db.clone(), self.cfg.clone());
+        let week_start = self.week_start;
         let ingest = work != Work::Summary;
         cx.spawn(async move |this, cx| {
             let out = cx
                 .background_executor()
-                .spawn(async move { scan_job(ingestor, &db, &cfg, &work, resummarize) })
+                .spawn(async move { scan_job(ingestor, &db, &cfg, &work, resummarize, week_start) })
                 .await;
             let _ = this.update(cx, |m, cx| {
                 m.in_flight = false;
                 m.apply(out, ingest, cx);
+                if std::mem::take(&mut m.week_dirty) {
+                    m.start(Work::Summary, true, cx);
+                }
                 // A backlog (capped job): continue after a pause. Plain background timer.
                 if ingest && m.watcher.as_ref().is_some_and(|w| w.has_changes()) {
                     cx.spawn(async move |this, cx| {
@@ -514,7 +588,7 @@ mod tests {
         let db = Some(dir.join("t.db"));
 
         // Summary: touches no log, but computes the numbers.
-        let out = scan_job(None, &db, &cfg, &Work::Summary, true);
+        let out = scan_job(None, &db, &cfg, &Work::Summary, true, Weekday::Mon);
         assert!(!out.data_changed && !out.failed && out.info.is_some());
         // Naming the file ingests it.
         let out = scan_job(
@@ -523,10 +597,18 @@ mod tests {
             &cfg,
             &Work::Paths(vec![log.clone()]),
             false,
+            Weekday::Mon,
         );
         assert!(out.data_changed && out.info.is_some());
         // Same file again, unchanged: nothing stored, numbers not recomputed.
-        let out = scan_job(out.ingestor, &db, &cfg, &Work::Paths(vec![log]), false);
+        let out = scan_job(
+            out.ingestor,
+            &db,
+            &cfg,
+            &Work::Paths(vec![log]),
+            false,
+            Weekday::Mon,
+        );
         assert!(!out.data_changed && out.info.is_none());
         // An unrelated path is ignored.
         let out = scan_job(
@@ -535,6 +617,7 @@ mod tests {
             &cfg,
             &Work::Paths(vec![dir.join("claude").join("x.txt")]),
             false,
+            Weekday::Mon,
         );
         assert!(!out.data_changed && out.info.is_none());
         let _ = std::fs::remove_dir_all(&dir);
@@ -636,5 +719,110 @@ mod tests {
         );
         assert!(off.contains("oficial · 42 % del límite semanal · hace 2 min"));
         assert!(!off.contains("estimado"));
+    }
+
+    #[test]
+    fn the_weekly_total_sums_from_the_configured_first_day() {
+        use agents_svc::chrono::{Datelike as _, Duration, Local, TimeZone as _};
+        use agents_svc::{TokenCounts, UsageEvent};
+
+        let dir = temp_dir("weekstart");
+        let db = Some(dir.join("t.db"));
+        let cfg = IngestConfig::default();
+        let ing = open(&db, &cfg).unwrap();
+        // One Claude event at noon yesterday (local time).
+        let today = Local::now().date_naive();
+        let yesterday = today - Duration::days(1);
+        let noon = Local
+            .from_local_datetime(&yesterday.and_hms_opt(12, 0, 0).unwrap())
+            .earliest()
+            .unwrap();
+        ing.store()
+            .upsert_usage(&UsageEvent {
+                agent: Agent::Claude,
+                session_id: "s".into(),
+                ts_ms: noon.timestamp_millis(),
+                model: "claude-opus-5-5".into(),
+                tokens: TokenCounts {
+                    input: 1_000,
+                    output: 500,
+                    cache_create: 0,
+                    cache_create_1h: 0,
+                    cache_read: 0,
+                },
+                cwd: None,
+                git_branch: None,
+                msg_key: "k1".into(),
+            })
+            .unwrap();
+        // The week began today: yesterday is last week, so there is nothing to show.
+        let out = scan_job(Some(ing), &db, &cfg, &Work::Summary, true, today.weekday());
+        assert_eq!(out.info, Some(None));
+        // The week began yesterday: the event is in it.
+        let out = scan_job(
+            out.ingestor,
+            &db,
+            &cfg,
+            &Work::Summary,
+            true,
+            yesterday.weekday(),
+        );
+        let info = out.info.flatten().expect("numbers");
+        assert_eq!(info.week.billable(), 1_500);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn estimated_totals_are_hidden_unless_claude_reported_them() {
+        let week = TokenBreakdown {
+            input: 10,
+            output: 5,
+            cache_create: 0,
+            cache_read: 0,
+        };
+        let estimate_only = UsageInfo {
+            week,
+            official: None,
+            five_hour: None,
+        };
+        assert!(estimate_only.week_total_visible(true));
+        assert!(!estimate_only.week_total_visible(false));
+        let official = UsageInfo {
+            official: Some(Official {
+                percent: 10.0,
+                resets_at_ms: now_ms() + 3_600_000,
+                observed_ms: now_ms(),
+            }),
+            ..estimate_only
+        };
+        assert!(
+            official.week_total_visible(false),
+            "an official figure is not an estimate"
+        );
+    }
+
+    #[test]
+    fn the_sidebar_meter_says_estimado_only_when_estimates_are_shown() {
+        use crate::sidebar_view::usage_of;
+        let info = UsageInfo {
+            week: TokenBreakdown {
+                input: 10,
+                output: 5,
+                cache_create: 0,
+                cache_read: 0,
+            },
+            official: None,
+            five_hour: None,
+        };
+        assert_eq!(usage_of(Some(&info), true).label.as_ref(), "estimado");
+        assert_eq!(usage_of(Some(&info), false).label.as_ref(), "—");
+    }
+
+    #[test]
+    fn every_configured_day_maps_to_its_weekday() {
+        use store::config::WeekStart as W;
+        assert_eq!(weekday_of(W::Monday), Weekday::Mon);
+        assert_eq!(weekday_of(W::Saturday), Weekday::Sat);
+        assert_eq!(weekday_of(W::Sunday), Weekday::Sun);
     }
 }
